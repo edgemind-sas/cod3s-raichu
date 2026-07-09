@@ -1,0 +1,15 @@
+[package]
+name = "raichu-numeric"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "ODE integration with dense output and guaranteed event location (Dormand-Prince 4(5) behind a swappable solver trait)"
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

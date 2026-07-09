@@ -1,0 +1,2 @@
+# Default rustfmt style (project convention: no exotic overrides).
+edition = "2021"

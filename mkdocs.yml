@@ -1,0 +1,82 @@
+site_name: RAICHU
+site_description: >-
+  RAICHU — a native, open-source Rust engine for the hybrid simulation
+  of complex systems: discrete stochastic behaviour (failures, repairs,
+  reconfigurations) coupled with continuous (ODE) dynamics, with a
+  Python binding (pyraichu).
+site_author: Roland Donat
+repo_url: https://github.com/edgemind-sas/cod3s-raichu
+repo_name: edgemind-sas/cod3s-raichu
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: amber
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Tutorial:
+      - 1. Your first model: tutorial/01-first-model.md
+      - 2. Connecting components: tutorial/02-connecting-components.md
+      - 3. Stochastic & Monte-Carlo: tutorial/03-stochastic-and-monte-carlo.md
+      - 4. Going hybrid: tutorial/04-going-hybrid.md
+  - Model schema reference: reference/model-schema.md
+  - Advanced guides:
+      - Reproducibility: guides/reproducibility.md
+      - Numerical tuning: guides/numerical-tuning.md
+      - Causal journal: guides/causal-journal.md
+      - muscadet & plugins: guides/muscadet-and-plugins.md
+      - Parallelism: guides/parallelism.md
+  - Benchmarks:
+      - Cross-validation: benchmarks/cross-validation.md
+      - Performance: benchmarks/performance.md
+      - Accuracy–cost parity: benchmarks/accuracy-cost-parity.md
+  - For PyCATSHOO users:
+      - Concept mapping: pycatshoo/concept-mapping.md
+      - Migration guide: pycatshoo/migration-guide.md
+
+# Internal working docs (roadmap, dated write-ups, the pycatshoo-legacy
+# corpus incl. the EDF PDFs, and the pre-restructure root pages) are
+# excluded from the published site — never rendered.
+exclude_docs: |
+  brainstorms/
+  plans/
+  pycatshoo-legacy/
+  /roadmap.md
+  /concepts-mapping.md
+  /reproducibility.md
+  /validation-contract.md
+  /2026-*.md

@@ -1,0 +1,632 @@
+{
+  "name": "heated_room_s3",
+  "components": [
+    {
+      "name": "aMasterHeater",
+      "attributes": [
+        {
+          "name": "power",
+          "kind": "float",
+          "init": {
+            "kind": "float",
+            "value": 5.0
+          }
+        },
+        {
+          "name": "ko_out",
+          "kind": "bool",
+          "init": {
+            "kind": "bool",
+            "value": false
+          }
+        }
+      ],
+      "ports": [
+        {
+          "name": "request_out",
+          "dir": "out",
+          "attr": "ko_out"
+        },
+        {
+          "name": "power_out",
+          "dir": "out",
+          "attr": "power"
+        },
+        {
+          "name": "temp_in",
+          "dir": "in"
+        }
+      ],
+      "interfaces": [],
+      "automata": [
+        {
+          "name": "dysfunctional",
+          "states": [
+            "OK",
+            "KO"
+          ],
+          "init": "OK",
+          "transitions": [
+            {
+              "name": "OK_to_KO",
+              "source": "OK",
+              "targets": [
+                "KO"
+              ],
+              "distrib": "exp",
+              "rate": 0.01
+            },
+            {
+              "name": "KO_to_OK",
+              "source": "KO",
+              "targets": [
+                "OK"
+              ],
+              "distrib": "exp",
+              "rate": 0.1
+            }
+          ]
+        },
+        {
+          "name": "functional",
+          "states": [
+            "ON",
+            "OFF"
+          ],
+          "init": "ON",
+          "transitions": [
+            {
+              "name": "OFF_to_ON",
+              "source": "OFF",
+              "guard": {
+                "op": "bool",
+                "bool_op": "and",
+                "args": [
+                  {
+                    "op": "state_active",
+                    "state": {
+                      "component": "aMasterHeater",
+                      "automaton": "dysfunctional",
+                      "state": "OK"
+                    }
+                  },
+                  {
+                    "op": "const",
+                    "value": {
+                      "kind": "bool",
+                      "value": true
+                    }
+                  },
+                  {
+                    "op": "cmp",
+                    "cmp": "lt",
+                    "lhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "aMasterHeater",
+                        "port": "temp_in"
+                      },
+                      "agg": "sum"
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 15.0
+                      }
+                    }
+                  }
+                ]
+              },
+              "targets": [
+                "ON"
+              ],
+              "distrib": "watched"
+            },
+            {
+              "name": "ON_to_OFF",
+              "source": "ON",
+              "guard": {
+                "op": "bool",
+                "bool_op": "or",
+                "args": [
+                  {
+                    "op": "state_active",
+                    "state": {
+                      "component": "aMasterHeater",
+                      "automaton": "dysfunctional",
+                      "state": "KO"
+                    }
+                  },
+                  {
+                    "op": "const",
+                    "value": {
+                      "kind": "bool",
+                      "value": false
+                    }
+                  },
+                  {
+                    "op": "cmp",
+                    "cmp": "gt",
+                    "lhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "aMasterHeater",
+                        "port": "temp_in"
+                      },
+                      "agg": "sum"
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 20.0
+                      }
+                    }
+                  }
+                ]
+              },
+              "targets": [
+                "OFF"
+              ],
+              "distrib": "watched"
+            }
+          ]
+        }
+      ],
+      "sensitive_functions": [
+        {
+          "name": "update_power",
+          "effects": [
+            {
+              "target": {
+                "component": "aMasterHeater",
+                "attribute": "power"
+              },
+              "value": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "aMasterHeater",
+                    "automaton": "functional",
+                    "state": "ON"
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 5.0
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "update_ko_out",
+          "effects": [
+            {
+              "target": {
+                "component": "aMasterHeater",
+                "attribute": "ko_out"
+              },
+              "value": {
+                "op": "state_active",
+                "state": {
+                  "component": "aMasterHeater",
+                  "automaton": "dysfunctional",
+                  "state": "KO"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "equations": []
+    },
+    {
+      "name": "aSlaveHeater",
+      "attributes": [
+        {
+          "name": "power",
+          "kind": "float",
+          "init": {
+            "kind": "float",
+            "value": 0.0
+          }
+        },
+        {
+          "name": "ko_out",
+          "kind": "bool",
+          "init": {
+            "kind": "bool",
+            "value": false
+          }
+        }
+      ],
+      "ports": [
+        {
+          "name": "request_out",
+          "dir": "out",
+          "attr": "ko_out"
+        },
+        {
+          "name": "request_in",
+          "dir": "in"
+        },
+        {
+          "name": "power_out",
+          "dir": "out",
+          "attr": "power"
+        },
+        {
+          "name": "temp_in",
+          "dir": "in"
+        }
+      ],
+      "interfaces": [],
+      "automata": [
+        {
+          "name": "dysfunctional",
+          "states": [
+            "OK",
+            "KO"
+          ],
+          "init": "OK",
+          "transitions": [
+            {
+              "name": "OK_to_KO",
+              "source": "OK",
+              "targets": [
+                "KO"
+              ],
+              "distrib": "exp",
+              "rate": 0.01
+            },
+            {
+              "name": "KO_to_OK",
+              "source": "KO",
+              "targets": [
+                "OK"
+              ],
+              "distrib": "exp",
+              "rate": 0.1
+            }
+          ]
+        },
+        {
+          "name": "functional",
+          "states": [
+            "ON",
+            "OFF"
+          ],
+          "init": "OFF",
+          "transitions": [
+            {
+              "name": "OFF_to_ON",
+              "source": "OFF",
+              "guard": {
+                "op": "bool",
+                "bool_op": "and",
+                "args": [
+                  {
+                    "op": "state_active",
+                    "state": {
+                      "component": "aSlaveHeater",
+                      "automaton": "dysfunctional",
+                      "state": "OK"
+                    }
+                  },
+                  {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "aSlaveHeater",
+                      "port": "request_in"
+                    },
+                    "agg": "any"
+                  },
+                  {
+                    "op": "cmp",
+                    "cmp": "lt",
+                    "lhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "aSlaveHeater",
+                        "port": "temp_in"
+                      },
+                      "agg": "sum"
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 15.0
+                      }
+                    }
+                  }
+                ]
+              },
+              "targets": [
+                "ON"
+              ],
+              "distrib": "watched"
+            },
+            {
+              "name": "ON_to_OFF",
+              "source": "ON",
+              "guard": {
+                "op": "bool",
+                "bool_op": "or",
+                "args": [
+                  {
+                    "op": "state_active",
+                    "state": {
+                      "component": "aSlaveHeater",
+                      "automaton": "dysfunctional",
+                      "state": "KO"
+                    }
+                  },
+                  {
+                    "op": "bool",
+                    "bool_op": "not",
+                    "args": [
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "aSlaveHeater",
+                          "port": "request_in"
+                        },
+                        "agg": "any"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "cmp",
+                    "cmp": "gt",
+                    "lhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "aSlaveHeater",
+                        "port": "temp_in"
+                      },
+                      "agg": "sum"
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 20.0
+                      }
+                    }
+                  }
+                ]
+              },
+              "targets": [
+                "OFF"
+              ],
+              "distrib": "watched"
+            }
+          ]
+        }
+      ],
+      "sensitive_functions": [
+        {
+          "name": "update_power",
+          "effects": [
+            {
+              "target": {
+                "component": "aSlaveHeater",
+                "attribute": "power"
+              },
+              "value": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "aSlaveHeater",
+                    "automaton": "functional",
+                    "state": "ON"
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 5.0
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "update_ko_out",
+          "effects": [
+            {
+              "target": {
+                "component": "aSlaveHeater",
+                "attribute": "ko_out"
+              },
+              "value": {
+                "op": "state_active",
+                "state": {
+                  "component": "aSlaveHeater",
+                  "automaton": "dysfunctional",
+                  "state": "KO"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "equations": []
+    },
+    {
+      "name": "Room",
+      "attributes": [
+        {
+          "name": "temperature",
+          "kind": "float",
+          "init": {
+            "kind": "float",
+            "value": 17.0
+          }
+        }
+      ],
+      "ports": [
+        {
+          "name": "power_in",
+          "dir": "in"
+        },
+        {
+          "name": "temp_out",
+          "dir": "out",
+          "attr": "temperature"
+        }
+      ],
+      "interfaces": [],
+      "automata": [],
+      "sensitive_functions": [],
+      "equations": [
+        {
+          "target": "temperature",
+          "kind": "ode",
+          "expr": {
+            "op": "sub",
+            "lhs": {
+              "op": "port_agg",
+              "port": {
+                "component": "Room",
+                "port": "power_in"
+              },
+              "agg": "sum"
+            },
+            "rhs": {
+              "op": "mul",
+              "args": [
+                {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.1
+                  }
+                },
+                {
+                  "op": "sub",
+                  "lhs": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "Room",
+                      "attribute": "temperature"
+                    }
+                  },
+                  "rhs": {
+                    "op": "const",
+                    "value": {
+                      "kind": "float",
+                      "value": 13.0
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": {
+        "component": "aMasterHeater",
+        "port": "request_out"
+      },
+      "to": {
+        "component": "aSlaveHeater",
+        "port": "request_in"
+      }
+    },
+    {
+      "from": {
+        "component": "aMasterHeater",
+        "port": "power_out"
+      },
+      "to": {
+        "component": "Room",
+        "port": "power_in"
+      }
+    },
+    {
+      "from": {
+        "component": "aSlaveHeater",
+        "port": "power_out"
+      },
+      "to": {
+        "component": "Room",
+        "port": "power_in"
+      }
+    },
+    {
+      "from": {
+        "component": "Room",
+        "port": "temp_out"
+      },
+      "to": {
+        "component": "aMasterHeater",
+        "port": "temp_in"
+      }
+    },
+    {
+      "from": {
+        "component": "Room",
+        "port": "temp_out"
+      },
+      "to": {
+        "component": "aSlaveHeater",
+        "port": "temp_in"
+      }
+    }
+  ],
+  "indicators": [
+    {
+      "name": "aMasterHeater_power",
+      "target": "attribute",
+      "attr": {
+        "component": "aMasterHeater",
+        "attribute": "power"
+      }
+    },
+    {
+      "name": "aSlaveHeater_power",
+      "target": "attribute",
+      "attr": {
+        "component": "aSlaveHeater",
+        "attribute": "power"
+      }
+    },
+    {
+      "name": "Room_temperature",
+      "target": "attribute",
+      "attr": {
+        "component": "Room",
+        "attribute": "temperature"
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+name: Docs
+
+# Build the documentation site and deploy it to GitHub Pages on every
+# push to the default branch. A pull request only builds (strict), so a
+# broken site never merges.
+#
+# One-time setup by a maintainer: Settings → Pages → Source =
+# "GitHub Actions". Until then the `deploy` job is a no-op on forks/PRs.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel an in-flight deploy; queue instead.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (mkdocs --strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install mkdocs-material
+        run: pip install mkdocs-material
+      - name: Build (strict)
+        run: mkdocs build --strict
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to Pages
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

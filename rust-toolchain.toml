@@ -1,0 +1,5 @@
+[toolchain]
+# Pinned stable toolchain for reproducible builds (roadmap: reproducibility
+# by construction). Bump deliberately, never implicitly.
+channel = "1.92.0"
+components = ["rustfmt", "clippy"]

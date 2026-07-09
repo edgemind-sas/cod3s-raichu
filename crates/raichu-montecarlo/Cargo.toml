@@ -1,0 +1,23 @@
+[package]
+name = "raichu-montecarlo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Monte-Carlo driver: rayon-parallel replicas, per-replica RNG substreams, index-ordered reduction, estimators"
+
+[dependencies]
+raichu-core.workspace = true
+raichu-expr.workspace = true
+rayon = "1"
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+raichu-model.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

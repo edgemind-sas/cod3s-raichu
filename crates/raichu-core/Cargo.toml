@@ -1,0 +1,31 @@
+[package]
+name = "raichu-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Simulation cycle: scheduler, discrete evolution, sensitive-function fixpoint, continuous evolution, causal journal"
+
+[dependencies]
+raichu-expr.workspace = true
+raichu-model.workspace = true
+raichu-numeric.workspace = true
+raichu-rng.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rand_distr.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "engine"
+harness = false
+
+[lints]
+workspace = true

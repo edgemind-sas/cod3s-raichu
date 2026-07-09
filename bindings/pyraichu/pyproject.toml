@@ -1,0 +1,30 @@
+[build-system]
+requires = ["maturin>=1.11,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pyraichu"
+description = "Python binding for the RAICHU hybrid (PDMP) simulation engine"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Roland Donat", email = "roland.donat@gmail.com" }]
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/edgemind-sas/raichu"
+
+[tool.maturin]
+# The Rust extension is exposed as the private module `pyraichu._pyraichu`;
+# the pure-Python package under python/ wraps it (py.typed + stubs).
+python-source = "python"
+module-name = "pyraichu._pyraichu"
+features = ["pyo3/extension-module"]

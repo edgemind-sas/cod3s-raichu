@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: ["master", "main", "feat/**", "fix/**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+
+  wheel:
+    name: Python wheel (maturin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheel
+        run: pipx run maturin build -m bindings/pyraichu/Cargo.toml
+      - name: Smoke-test import
+        run: |
+          pip install target/wheels/pyraichu-*.whl
+          python -c "import pyraichu; print(pyraichu.__version__)"
+
+  docs:
+    name: Docs examples + RAICHU-side benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build and install the wheel
+        run: |
+          pipx run maturin build -m bindings/pyraichu/Cargo.toml
+          pip install target/wheels/pyraichu-*.whl pytest
+      # Executes every runnable code block in the documentation, guarding
+      # the docs against engine drift (pyraichu-only; no PyCATSHOO).
+      - name: Run documentation examples
+        run: pytest python/tests/docs -q
+      # Anti-regression smoke of the benchmark's RAICHU side (the
+      # PyCATSHOO side needs a licensed install and runs locally).
+      - name: RAICHU-side benchmark smoke
+        run: python benchmarks/pycatshoo-cpp/run_bench.py --raichu-only
+
+  # Cross-validation against PyCATSHOO needs a licensed PyCATSHOO install
+  # (cod3s/muscadet oracle); it runs on a self-hosted/local environment.
+  # Kept non-blocking until such a runner exists (M0 Phase 4 note).
+  validation:
+    name: Validation vs PyCATSHOO (placeholder)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Explain skip
+        run: echo "PyCATSHOO oracle unavailable on hosted runners; run 'uv run pytest python/tests/validation' locally."

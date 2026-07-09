@@ -1,0 +1,53 @@
+{
+  "name": "pure_exp",
+  "components": [
+    {
+      "name": "C",
+      "attributes": [],
+      "ports": [],
+      "interfaces": [],
+      "automata": [
+        {
+          "name": "aut",
+          "states": [
+            "OK",
+            "KO"
+          ],
+          "init": "OK",
+          "transitions": [
+            {
+              "name": "fail",
+              "source": "OK",
+              "targets": [
+                "KO"
+              ],
+              "distrib": "exp",
+              "rate": 0.01
+            },
+            {
+              "name": "repair",
+              "source": "KO",
+              "targets": [
+                "OK"
+              ],
+              "distrib": "exp",
+              "rate": 0.1
+            }
+          ]
+        }
+      ],
+      "sensitive_functions": [],
+      "equations": []
+    }
+  ],
+  "connections": [],
+  "indicators": [
+    {
+      "name": "C_ko",
+      "target": "state",
+      "component": "C",
+      "automaton": "aut",
+      "state": "KO"
+    }
+  ]
+}

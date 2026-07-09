@@ -1,0 +1,203 @@
+{
+  "name": "heaters_s1",
+  "components": [
+    {
+      "name": "aHeater",
+      "attributes": [
+        {
+          "name": "power",
+          "kind": "float",
+          "init": {
+            "kind": "float",
+            "value": 5.0
+          }
+        },
+        {
+          "name": "ko_out",
+          "kind": "bool",
+          "init": {
+            "kind": "bool",
+            "value": false
+          }
+        }
+      ],
+      "ports": [
+        {
+          "name": "request_out",
+          "dir": "out",
+          "attr": "ko_out"
+        }
+      ],
+      "interfaces": [],
+      "automata": [
+        {
+          "name": "dysfunctional",
+          "states": [
+            "OK",
+            "KO"
+          ],
+          "init": "OK",
+          "transitions": [
+            {
+              "name": "OK_to_KO",
+              "source": "OK",
+              "targets": [
+                "KO"
+              ],
+              "distrib": "exp",
+              "rate": 0.01
+            },
+            {
+              "name": "KO_to_OK",
+              "source": "KO",
+              "targets": [
+                "OK"
+              ],
+              "distrib": "exp",
+              "rate": 0.1
+            }
+          ]
+        },
+        {
+          "name": "functional",
+          "states": [
+            "ON",
+            "OFF"
+          ],
+          "init": "ON",
+          "transitions": [
+            {
+              "name": "OFF_to_ON",
+              "source": "OFF",
+              "guard": {
+                "op": "bool",
+                "bool_op": "and",
+                "args": [
+                  {
+                    "op": "state_active",
+                    "state": {
+                      "component": "aHeater",
+                      "automaton": "dysfunctional",
+                      "state": "OK"
+                    }
+                  },
+                  {
+                    "op": "const",
+                    "value": {
+                      "kind": "bool",
+                      "value": true
+                    }
+                  }
+                ]
+              },
+              "targets": [
+                "ON"
+              ],
+              "distrib": "inst",
+              "probs": []
+            },
+            {
+              "name": "ON_to_OFF",
+              "source": "ON",
+              "guard": {
+                "op": "bool",
+                "bool_op": "or",
+                "args": [
+                  {
+                    "op": "state_active",
+                    "state": {
+                      "component": "aHeater",
+                      "automaton": "dysfunctional",
+                      "state": "KO"
+                    }
+                  },
+                  {
+                    "op": "const",
+                    "value": {
+                      "kind": "bool",
+                      "value": false
+                    }
+                  }
+                ]
+              },
+              "targets": [
+                "OFF"
+              ],
+              "distrib": "inst",
+              "probs": []
+            }
+          ]
+        }
+      ],
+      "sensitive_functions": [
+        {
+          "name": "update_power",
+          "effects": [
+            {
+              "target": {
+                "component": "aHeater",
+                "attribute": "power"
+              },
+              "value": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "aHeater",
+                    "automaton": "functional",
+                    "state": "ON"
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 5.0
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "update_ko_out",
+          "effects": [
+            {
+              "target": {
+                "component": "aHeater",
+                "attribute": "ko_out"
+              },
+              "value": {
+                "op": "state_active",
+                "state": {
+                  "component": "aHeater",
+                  "automaton": "dysfunctional",
+                  "state": "KO"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "equations": []
+    }
+  ],
+  "connections": [],
+  "indicators": [
+    {
+      "name": "aHeater_power",
+      "target": "attribute",
+      "attr": {
+        "component": "aHeater",
+        "attribute": "power"
+      }
+    }
+  ]
+}

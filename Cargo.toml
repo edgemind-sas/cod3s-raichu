@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/raichu-model",
+    "crates/raichu-expr",
+    "crates/raichu-rng",
+    "crates/raichu-core",
+    "crates/raichu-io",
+    "crates/raichu-montecarlo",
+    "crates/raichu-numeric",
+    "crates/raichu",
+    "bindings/pyraichu",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+authors = ["Roland Donat <roland.donat@gmail.com>"]
+repository = "https://github.com/edgemind-sas/raichu"
+description = "RAICHU — native Rust engine for hybrid (PDMP) simulation of complex systems"
+
+[workspace.dependencies]
+# Internal crates
+raichu-model = { path = "crates/raichu-model", version = "0.1.0" }
+raichu-expr = { path = "crates/raichu-expr", version = "0.1.0" }
+raichu-rng = { path = "crates/raichu-rng", version = "0.1.0" }
+raichu-core = { path = "crates/raichu-core", version = "0.1.0" }
+raichu-io = { path = "crates/raichu-io", version = "0.1.0" }
+raichu-montecarlo = { path = "crates/raichu-montecarlo", version = "0.1.0" }
+raichu-numeric = { path = "crates/raichu-numeric", version = "0.1.0" }
+raichu = { path = "crates/raichu", version = "0.1.0" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Errors & logging
+thiserror = "2"
+tracing = "0.1"
+
+# RNG (reproducible; std_math kept OFF on rand_distr for cross-platform parity)
+rand = "0.9"
+rand_chacha = "0.9"
+rand_distr = { version = "0.5", default-features = false, features = ["alloc"] }
+
+# Property testing
+proptest = "1"
+
+# Benchmarks
+divan = "0.1"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
