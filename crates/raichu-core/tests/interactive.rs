@@ -318,19 +318,17 @@ fn fire_named_to_forces_the_ko_branch() {
 }
 
 #[test]
-fn natural_fire_of_nondeterministic_inst_is_rejected() {
-    // Without forcing, the deterministic engine refuses to *draw* a
-    // non-deterministic instantaneous branch — exactly the gap that
-    // interactive forcing (and later brique-2) fills.
+fn natural_fire_of_stochastic_inst_draws_a_branch() {
+    // Brique 2: a non-deterministic instantaneous branching now *draws*
+    // its destination from the RNG (it no longer errors). Forcing (above)
+    // overrides that draw; a plain fire takes it.
     let model = demand_model(0.7);
     let compiled = compile(&model);
     let mut engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
 
-    let err = engine.fire_named("d.req.resolve").unwrap_err();
-    assert!(
-        matches!(err, EngineError::NondeterministicInst { .. }),
-        "{err:?}"
-    );
+    let event = engine.fire_named("d.req.resolve").unwrap();
+    assert!(matches!(event.to.as_str(), "ok" | "ko"), "{}", event.to);
+    assert_eq!(engine.state("d.req"), Some(event.to.as_str()));
 }
 
 #[test]

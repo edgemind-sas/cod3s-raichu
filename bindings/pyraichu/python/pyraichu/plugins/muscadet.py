@@ -124,8 +124,8 @@ def _negate(expr: dict) -> dict:
 
 def _law(spec: dict) -> dict:
     """Occurrence-law specification → core transition fields
-    (cod3s `{"cls": …}` and plugin `{"distrib": …}` spellings accepted)."""
-    kind = spec.get("law") or spec.get("cls")
+    (cod3s `{"cls": …}` and plugin `{"law"/"distrib": …}` spellings accepted)."""
+    kind = spec.get("law") or spec.get("cls") or spec.get("distrib")
     if kind == "delay":
         return {"distrib": "delay", "time": float(spec["time"])}
     if kind == "exp":
@@ -350,6 +350,160 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
     return [component], [], []
 
 
+def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """cod3s `ObjFMInst` expansion — **failure on solicitation**
+    (user guide `objfm-inst.md`, ADR 2026-07-05).
+
+    The demand is ``failure_cond``; on each demand *front* the mode fails
+    with probability ``gamma`` — one Bernoulli draw, instantaneously —
+    and is repaired by an exponential ``mu``. Realised as a **3-state**
+    automaton (`rep` / `occ` / `not_occ`):
+
+    - `rep --occ [inst, guard=demand]--> {occ: gamma, not_occ: 1-gamma}` —
+      the draw (a branching instantaneous transition, RAICHU brique 2);
+    - `not_occ --not_occ [inst p=1, guard=NOT demand]--> rep` — the
+      deterministic re-arm; `not_occ` absorbs the front so no re-draw
+      happens while the demand holds (anti-Zeno);
+    - `occ --rep [exp(mu), guard=repair_cond]--> rep` — the repair.
+
+    ``failure_effects`` apply on entering `occ`; the resting value is the
+    target's initial value (reinitialization semantics, as `internal`).
+
+    Single target for now; per-target common-cause draws (``failure_param``
+    as a per-order list) are a follow-up.
+    """
+    name = spec["name"]
+    targets = spec["targets"]
+    if len(targets) != 1:
+        raise NotImplementedError(
+            f"ObjFMInst `{name}`: only a single target is supported for now "
+            f"(got {targets}); declare one ObjFMInst per target"
+        )
+    target = targets[0]
+    failure_state = spec.get("failure_state", "occ")
+    repair_state = spec.get("repair_state", "rep")
+    absorb_state = spec.get("absorb_state", "not_occ")
+    failure_effects: dict = spec.get("failure_effects", {})
+    repair_effects: dict = spec.get("repair_effects", {})
+    inner = spec.get("cond_inner_logic", "all")
+    outer = spec.get("cond_outer_logic", "any")
+
+    # gamma from the `failure` inst-law spec (or `failure_param`).
+    fspec = spec.get("failure", spec.get("failure_param"))
+    if isinstance(fspec, list):
+        raise NotImplementedError(
+            f"ObjFMInst `{name}`: per-order common-cause `failure_param` "
+            "lists are a follow-up; pass a scalar gamma"
+        )
+    gamma = float(
+        fspec.get("prob", fspec.get("gamma")) if isinstance(fspec, dict) else fspec
+    )
+    if not 0.0 <= gamma <= 1.0:
+        raise ValueError(f"ObjFMInst `{name}`: gamma must be in [0, 1] (got {gamma})")
+
+    # mu: exponential repair (`repair` law spec, or `repair_param` scalar).
+    # `mu = 0` means *no repair* — `occ` is absorbing (one failure per
+    # demand, never repaired), matching cod3s `is_occ_law_repair_active`.
+    rspec = spec.get("repair", spec.get("repair_param", 0.0))
+    repair_law = (
+        _law(rspec) if isinstance(rspec, dict) else {"distrib": "exp", "rate": float(rspec)}
+    )
+    mu = float(repair_law.get("rate", 0.0))
+
+    demand = _cond_tree(spec.get("failure_cond", True), inner, outer)
+    not_demand = _negate(demand)
+    repair_guard = _cond_tree(spec.get("repair_cond", True), inner, outer)
+
+    transitions = [
+        {  # the draw: rep -> occ (gamma) | not_occ (1 - gamma)
+            "name": failure_state,
+            "source": repair_state,
+            "targets": [failure_state, absorb_state],
+            "guard": demand,
+            "distrib": "inst",
+            "probs": [gamma],
+        },
+        {  # deterministic re-arm when the demand falls (inst p = 1)
+            "name": absorb_state,
+            "source": absorb_state,
+            "targets": [repair_state],
+            "guard": not_demand,
+            "distrib": "inst",
+            "probs": [],
+        },
+    ]
+    if mu > 0.0:
+        transitions.append(
+            {  # exponential repair
+                "name": repair_state,
+                "source": failure_state,
+                "targets": [repair_state],
+                "guard": repair_guard,
+                **repair_law,
+            }
+        )
+
+    automaton = {
+        "name": "fm",
+        "states": [repair_state, failure_state, absorb_state],
+        "init": repair_state,
+        "transitions": transitions,
+    }
+
+    def target_init(variable):
+        for component in model.get("components", []):
+            if component.get("name") != target:
+                continue
+            for entry in component.get("attributes", []):
+                if entry.get("name") == variable:
+                    return {"op": "const", "value": entry["init"]}
+        return None
+
+    # Reinitialization semantics: fail value while `occ`, initial value
+    # (or explicit repair value) otherwise.
+    gate = {
+        "op": "state_active",
+        "state": {"component": name, "automaton": "fm", "state": failure_state},
+    }
+    effects = []
+    for variable, fail_value in failure_effects.items():
+        if variable in repair_effects:
+            otherwise = _const(repair_effects[variable])
+        else:
+            otherwise = target_init(variable)
+            if otherwise is None:
+                if isinstance(fail_value, bool):
+                    otherwise = _const(not fail_value)
+                else:
+                    raise ValueError(
+                        f"ObjFMInst `{name}`: cannot resolve the initial value "
+                        f"of `{target}.{variable}` — declare repair_effects"
+                    )
+        effects.append(
+            {
+                "target": {"component": target, "attribute": variable},
+                "value": {
+                    "op": "if",
+                    "cond": gate,
+                    "then": _const(fail_value),
+                    "otherwise": otherwise,
+                },
+            }
+        )
+    functions = [{"name": "apply_effects", "effects": effects}] if effects else []
+
+    component = {
+        "name": name,
+        "attributes": [],
+        "ports": [],
+        "interfaces": [],
+        "automata": [automaton],
+        "sensitive_functions": functions,
+        "equations": [],
+    }
+    return [component], [], []
+
+
 def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
     name = spec["name"]
     aut = spec.get("event_aut_name", "ev")
@@ -406,6 +560,7 @@ class MuscadetPlugin:
     EXPANDERS = {
         "ObjFlow": staticmethod(_expand_objflow),
         "ObjFM": staticmethod(_expand_objfm),
+        "ObjFMInst": staticmethod(_expand_objfm_inst),
         "ObjEvent": staticmethod(_expand_objevent),
     }
 

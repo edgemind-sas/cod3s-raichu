@@ -128,17 +128,6 @@ pub enum EngineError {
         /// The other function involved.
         second: String,
     },
-    /// M0 restriction: instantaneous branching must be deterministic
-    /// (one branch with probability 1). Stochastic draws arrive in M2.
-    #[error(
-        "transition `{transition}` has a non-deterministic instantaneous \
-         branching (no branch with probability 1): unsupported in the M0 \
-         deterministic engine"
-    )]
-    NondeterministicInst {
-        /// The offending transition.
-        transition: String,
-    },
     /// Interactive control: no transition carries this qualified name.
     #[error("unknown transition `{transition}`")]
     UnknownTransition {
@@ -940,6 +929,10 @@ impl<'m> Engine<'m> {
                     | CLaw::Uniform(..)
                     | CLaw::Empirical(_)
             )
+            // A genuinely-branching instantaneous transition (≥ 2 positive
+            // branches) draws its destination from the RNG.
+            || matches!(&t.distrib, CLaw::Inst(probs)
+                if probs.iter().filter(|p| **p > 0.0).count() >= 2)
         });
         let continuous_rates: Vec<TransIdx> = model
             .transitions
@@ -1705,8 +1698,11 @@ impl<'m> Engine<'m> {
         best
     }
 
-    fn resolve_target(&self, trans_idx: TransIdx) -> Result<StateIdx, EngineError> {
-        let transition = &self.model.transitions[trans_idx];
+    fn resolve_target(&mut self, trans_idx: TransIdx) -> Result<StateIdx, EngineError> {
+        // Copy the `'m` model reference out so the transition borrow is
+        // independent of `&mut self` (frees `self.rng` for the draw).
+        let model = self.model;
+        let transition = &model.transitions[trans_idx];
         match &transition.distrib {
             CLaw::Delay(_)
             | CLaw::Watched { .. }
@@ -1718,16 +1714,33 @@ impl<'m> Engine<'m> {
             | CLaw::Uniform(..)
             | CLaw::Empirical(_) => Ok(transition.targets[0]),
             CLaw::Inst(probs) => {
-                // M0: the branching must be effectively deterministic.
-                let certain = probs
+                // Deterministic fast path: exactly one branch with
+                // probability 1 — resolved without touching the RNG, so a
+                // deterministic model stays RNG-free and bit-identical on
+                // replay.
+                if let Some(branch) = probs
                     .iter()
                     .position(|p| (*p - 1.0).abs() <= f64::EPSILON)
-                    .filter(|_| probs.iter().filter(|p| **p > 0.0).count() == 1);
-                certain
-                    .map(|branch| transition.targets[branch])
-                    .ok_or_else(|| EngineError::NondeterministicInst {
-                        transition: transition.name.clone(),
-                    })
+                    .filter(|_| probs.iter().filter(|p| **p > 0.0).count() == 1)
+                {
+                    return Ok(transition.targets[branch]);
+                }
+                // Stochastic instantaneous branching (`schedule_stochastic`
+                // realised on demand): draw the destination from the
+                // categorical distribution over `probs` (Σ = 1, validated at
+                // model build) by inverse-CDF on one uniform. The draw
+                // happens at fire time in the deterministic firing order, so
+                // replay stays bit-identical for a fixed (seed, stream).
+                let u: f64 = rand::Rng::random(&mut self.rng);
+                let mut cumulative = 0.0;
+                for (branch, p) in probs.iter().enumerate() {
+                    cumulative += *p;
+                    if u < cumulative {
+                        return Ok(transition.targets[branch]);
+                    }
+                }
+                // `u` within rounding of 1.0: the last branch.
+                Ok(transition.targets[probs.len() - 1])
             }
         }
     }
