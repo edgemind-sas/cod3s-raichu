@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ._pyraichu import (
+    Interactive as _RawInteractive,
     ModelError,
     SimulationError,
     __version__,
@@ -25,7 +26,9 @@ from .journal import Cascade, JournalQuery, TransitionHistory, AttributeChange
 __all__ = [
     "Cascade",
     "Event",
+    "Fireable",
     "IndicatorEstimate",
+    "Interactive",
     "JournalQuery",
     "TransitionHistory",
     "AttributeChange",
@@ -36,6 +39,7 @@ __all__ = [
     "SimulationResult",
     "__version__",
     "expand_model",
+    "interactive",
     "load_model",
     "monte_carlo",
     "simulate",
@@ -260,4 +264,152 @@ def simulate(
         journal=raw["journal"],
         provenance=raw["provenance"],
         final_time=raw["final_time"],
+    )
+
+
+@dataclass(frozen=True)
+class Fireable:
+    """An armed transition offered to interactive control."""
+
+    index: int
+    transition: str
+    kind: str  # "delay" | "stochastic" | "inst" | "watched"
+    date: float | None  # firing date; None for an unlocated watched boundary
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        when = "boundary" if self.date is None else f"t={self.date}"
+        return f"Fireable({self.transition} [{self.kind}] @ {when})"
+
+
+class Interactive:
+    """Step-by-step interactive simulation over a RAICHU model.
+
+    Drive the engine one event at a time under your own control, rather
+    than running it to the horizon in one shot:
+
+    - :meth:`fireable` — the currently-armed transitions (earliest first);
+    - :meth:`fire` — fire a *chosen* one, optionally **forcing** its
+      outcome branch with ``to=`` (bypassing the random draw — this is
+      what makes stochastic mechanics reproducibly testable);
+    - :meth:`step` — advance to the next scheduled event, as a plain run
+      would;
+    - :meth:`set_date` — reschedule an armed transition;
+    - :meth:`snapshot` / :meth:`restore` — checkpoint and undo;
+    - :meth:`reset` — back to ``t = 0``;
+    - :attr:`time`, :meth:`attribute`, :meth:`state`, :meth:`history` —
+      inspection between events.
+
+    Models carrying a ``"plugins"`` section are expanded and validated
+    (as :func:`load_model` does). ``seed``/``rng_stream`` drive the
+    stochastic laws; the same pair replays bit-identically.
+    """
+
+    def __init__(
+        self,
+        model: Model | str | dict[str, Any],
+        t_max: float = math.inf,
+        journal: bool = False,
+        confluence_check: bool = False,
+        seed: int = 0,
+        rng_stream: int = 0,
+    ) -> None:
+        if not isinstance(model, Model):
+            model = load_model(model)
+        self._model = model
+        self._raw = _RawInteractive(
+            model.json, t_max, journal, confluence_check, seed, rng_stream
+        )
+
+    @property
+    def model(self) -> Model:
+        """The validated model driving this session."""
+        return self._model
+
+    @property
+    def time(self) -> float:
+        """Current simulation time."""
+        return self._raw.time
+
+    def fireable(self) -> list[Fireable]:
+        """The currently-armed transitions, earliest date first."""
+        return [Fireable(**f) for f in json.loads(self._raw.fireable())]
+
+    def fire(self, name: str, to: str | None = None) -> Event:
+        """Fire the armed transition ``name`` (by qualified name).
+
+        ``to`` **forces** the destination branch to that state name,
+        bypassing the RNG / deterministic-branch resolution — the
+        reproducible outcome control. Raises :class:`SimulationError` if
+        the transition is not armed or ``to`` is not one of its branches.
+        """
+        return self._event(self._raw.fire(name, to))
+
+    def step(self) -> Event | None:
+        """Advance to the next scheduled event; ``None`` at the horizon."""
+        raw = self._raw.step()
+        return None if raw is None else self._event(raw)
+
+    def set_date(self, name: str, date: float) -> None:
+        """Override an armed transition's firing date (``>=`` current time)."""
+        self._raw.set_date(name, date)
+
+    def reset(self) -> None:
+        """Reset the session to its initial state (``t = 0``, fresh RNG)."""
+        self._raw.reset()
+
+    def attribute(self, qualified: str) -> bool | int | float | None:
+        """Value of ``component.attribute``; ``None`` if unknown."""
+        raw = self._raw.attribute(qualified)
+        return None if raw is None else _value_to_python(json.loads(raw))
+
+    def state(self, qualified: str) -> str | None:
+        """Current state name of ``component.automaton``; ``None`` if unknown."""
+        return self._raw.state(qualified)
+
+    def history(self) -> list[Event]:
+        """The events fired so far, chronological."""
+        return [self._event_from_dict(e) for e in json.loads(self._raw.history())]
+
+    def snapshot(self) -> Any:
+        """Capture the full state as an opaque checkpoint (for :meth:`restore`)."""
+        return self._raw.snapshot()
+
+    def restore(self, snapshot: Any) -> None:
+        """Reinstate a checkpoint captured by :meth:`snapshot` (undo)."""
+        self._raw.restore(snapshot)
+
+    @staticmethod
+    def _event_from_dict(e: dict[str, Any]) -> Event:
+        return Event(
+            time=e["time"],
+            transition=e["transition"],
+            from_state=e["from"],
+            to_state=e["to"],
+        )
+
+    def _event(self, raw_json: str) -> Event:
+        return self._event_from_dict(json.loads(raw_json))
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return f"Interactive({self._model.name!r}, t={self.time})"
+
+
+def interactive(
+    model: Model | str | dict[str, Any],
+    t_max: float = math.inf,
+    journal: bool = False,
+    confluence_check: bool = False,
+    seed: int = 0,
+    rng_stream: int = 0,
+) -> Interactive:
+    """Open an :class:`Interactive` session over ``model`` (a
+    :class:`Model`, a JSON string, or a dict — plugins are expanded and
+    validated as :func:`load_model` does)."""
+    return Interactive(
+        model,
+        t_max=t_max,
+        journal=journal,
+        confluence_check=confluence_check,
+        seed=seed,
+        rng_stream=rng_stream,
     )

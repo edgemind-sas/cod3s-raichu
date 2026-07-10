@@ -30,7 +30,7 @@ pub mod engine;
 
 pub use compile::{CompileError, CompiledModel};
 pub use engine::{
-    DropReason, Engine, EngineConfig, EngineError, Event, IndicatorSeries, JournalRecord,
-    Provenance, SimulationResult,
+    DropReason, Engine, EngineConfig, EngineError, Event, Fireable, FireableKind, IndicatorSeries,
+    JournalRecord, Provenance, SimulationResult, Snapshot,
 };
 pub use raichu_numeric::SolverParams;

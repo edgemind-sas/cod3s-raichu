@@ -13,7 +13,9 @@
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use raichu::raichu_core::{CompiledModel, Engine, EngineConfig, SolverParams};
+use raichu::raichu_core::{
+    CompiledModel, Engine, EngineConfig, Snapshot as CoreSnapshot, SolverParams,
+};
 use raichu::raichu_model::Model;
 use raichu::raichu_montecarlo::{run as mc_run, McConfig};
 
@@ -140,6 +142,167 @@ fn monte_carlo_json(
     })
 }
 
+/// Opaque checkpoint of an [`Interactive`] session's full trajectory
+/// state (see `raichu_core::Snapshot`) — produced by `Interactive.snapshot`
+/// and reinstated by `Interactive.restore`. Held as a Python object; its
+/// contents are engine-internal.
+#[pyclass]
+struct Snapshot {
+    inner: CoreSnapshot,
+}
+
+/// A stateful, step-by-step interactive simulation over a compiled
+/// model. Unlike the one-shot `simulate_json`, it advances one event at
+/// a time under the caller's control (fire a *chosen* transition, force
+/// its outcome branch, reschedule, snapshot / undo) and inspects the
+/// state between events.
+///
+/// The borrowing `raichu_core::Engine` cannot outlive a single call, so
+/// this object keeps the owned `CompiledModel` + a `Snapshot` and
+/// rebuilds a throwaway engine (`Engine::from_snapshot`) per method —
+/// exact restores make this identical to driving one persistent engine.
+#[pyclass]
+struct Interactive {
+    model: CompiledModel,
+    config: EngineConfig,
+    snap: CoreSnapshot,
+}
+
+impl Interactive {
+    /// Rebuild the engine positioned at the current snapshot.
+    fn engine(&self) -> Engine<'_> {
+        Engine::from_snapshot(&self.model, self.config.clone(), &self.snap)
+    }
+
+    fn json<T: serde::Serialize + ?Sized>(value: &T) -> PyResult<String> {
+        serde_json::to_string(value).map_err(|e| SimulationError::new_err(e.to_string()))
+    }
+}
+
+#[pymethods]
+impl Interactive {
+    #[new]
+    #[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, seed = 0, rng_stream = 0))]
+    fn new(
+        model_json: &str,
+        t_max: f64,
+        journal: bool,
+        confluence_check: bool,
+        seed: u64,
+        rng_stream: u64,
+    ) -> PyResult<Self> {
+        let model = parse_and_compile(model_json)?;
+        let config = EngineConfig {
+            t_max,
+            journal,
+            confluence_check,
+            seed,
+            rng_stream,
+            ..EngineConfig::default()
+        };
+        let snap = Engine::new(&model, config.clone())
+            .map_err(|e| SimulationError::new_err(e.to_string()))?
+            .snapshot();
+        Ok(Interactive {
+            model,
+            config,
+            snap,
+        })
+    }
+
+    /// Current simulation time.
+    #[getter]
+    fn time(&self) -> f64 {
+        self.engine().current_time()
+    }
+
+    /// JSON array of the currently-armed transitions
+    /// (`{index, transition, kind, date}`), earliest first.
+    fn fireable(&self) -> PyResult<String> {
+        Self::json(&self.engine().fireable())
+    }
+
+    /// Value of an attribute by qualified name (`component.attribute`),
+    /// tagged-JSON encoded; `None` if unknown.
+    fn attribute(&self, qualified: &str) -> PyResult<Option<String>> {
+        self.engine()
+            .attribute(qualified)
+            .map(|v| Self::json(&v))
+            .transpose()
+    }
+
+    /// Current state name of an automaton (`component.automaton`);
+    /// `None` if unknown.
+    fn state(&self, qualified: &str) -> Option<String> {
+        self.engine().state(qualified).map(str::to_owned)
+    }
+
+    /// JSON array of the events fired so far, chronological.
+    fn history(&self) -> PyResult<String> {
+        Self::json(self.engine().history())
+    }
+
+    /// Fire the armed transition `name`, optionally **forcing** its
+    /// destination branch to the state `to` (bypassing the RNG /
+    /// deterministic resolution). Returns the fired event as JSON.
+    #[pyo3(signature = (name, to = None))]
+    fn fire(&mut self, name: &str, to: Option<&str>) -> PyResult<String> {
+        let mut engine = self.engine();
+        let event = match to {
+            Some(to) => engine.fire_named_to(name, to),
+            None => engine.fire_named(name),
+        }
+        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        self.snap = engine.snapshot();
+        Self::json(&event)
+    }
+
+    /// Advance to the next scheduled event (earliest-first, as a plain
+    /// run would). Returns the fired event as JSON, or `None` at the
+    /// horizon.
+    fn step(&mut self) -> PyResult<Option<String>> {
+        let mut engine = self.engine();
+        let event = engine
+            .step()
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        self.snap = engine.snapshot();
+        event.map(|e| Self::json(&e)).transpose()
+    }
+
+    /// Override an armed transition's scheduled firing date (must be
+    /// `>=` the current time).
+    fn set_date(&mut self, name: &str, date: f64) -> PyResult<()> {
+        let mut engine = self.engine();
+        engine
+            .set_date(name, date)
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        self.snap = engine.snapshot();
+        Ok(())
+    }
+
+    /// Reset the session to its initial state (`t = 0`, fresh RNG).
+    fn reset(&mut self) -> PyResult<()> {
+        let mut engine = self.engine();
+        engine
+            .reset()
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        self.snap = engine.snapshot();
+        Ok(())
+    }
+
+    /// Capture the full trajectory state as an opaque checkpoint.
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            inner: self.snap.clone(),
+        }
+    }
+
+    /// Reinstate a previously captured checkpoint (undo).
+    fn restore(&mut self, snap: &Snapshot) {
+        self.snap = snap.inner.clone();
+    }
+}
+
 /// RAICHU engine bindings (private extension module).
 #[pymodule]
 fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -149,5 +312,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validate_model, module)?)?;
     module.add_function(wrap_pyfunction!(simulate_json, module)?)?;
     module.add_function(wrap_pyfunction!(monte_carlo_json, module)?)?;
+    module.add_class::<Interactive>()?;
+    module.add_class::<Snapshot>()?;
     Ok(())
 }
