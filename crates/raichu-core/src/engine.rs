@@ -139,6 +139,46 @@ pub enum EngineError {
         /// The offending transition.
         transition: String,
     },
+    /// Interactive control: no transition carries this qualified name.
+    #[error("unknown transition `{transition}`")]
+    UnknownTransition {
+        /// The requested (unresolved) transition name.
+        transition: String,
+    },
+    /// Interactive control: the requested transition is not currently
+    /// armed — it is neither date-scheduled (`pending`) nor a watched
+    /// transition whose guard already holds — so there is nothing to fire.
+    #[error("transition `{transition}` is not fireable at t={time} (not armed)")]
+    NotFireable {
+        /// The transition that could not be fired.
+        transition: String,
+        /// Simulation time of the attempt.
+        time: f64,
+    },
+    /// Interactive control: a forced destination (`fire_*_to`) named a
+    /// state that is not one of the transition's declared target
+    /// branches.
+    #[error("`{state}` is not a target branch of transition `{transition}`")]
+    ForcedTargetInvalid {
+        /// The transition whose branch was forced.
+        transition: String,
+        /// The invalid (unknown or non-target) state name.
+        state: String,
+    },
+    /// Interactive control: a manual firing date (`set_date`) was in the
+    /// past (before the current time) or non-finite.
+    #[error(
+        "cannot schedule transition `{transition}` at t={date} \
+         (before the current time t={time})"
+    )]
+    DateInPast {
+        /// The transition being re-dated.
+        transition: String,
+        /// The rejected date.
+        date: f64,
+        /// The current simulation time.
+        time: f64,
+    },
     /// The ODE backend failed (stiffness, non-finite derivatives, …).
     #[error("continuous evolution failed: {0}")]
     Ode(#[from] raichu_numeric::OdeError),
@@ -267,6 +307,60 @@ pub struct Event {
     pub from: String,
     /// Target state name.
     pub to: String,
+}
+
+/// Kind of an armed transition, for interactive inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FireableKind {
+    /// Deterministic delay.
+    Delay,
+    /// A sampled stochastic law (exponential, Weibull, lognormal, …).
+    Stochastic,
+    /// Instantaneous branching (fires at the current instant).
+    Inst,
+    /// Watched boundary transition (fires when its margin is crossed
+    /// during continuous evolution).
+    Watched,
+}
+
+/// One armed transition offered to interactive control
+/// ([`Engine::fireable`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Fireable {
+    /// Transition index — the stable handle for [`Engine::fire_idx`].
+    pub index: usize,
+    /// Qualified transition name (`component.automaton.transition`).
+    pub transition: String,
+    /// Kind of occurrence law.
+    pub kind: FireableKind,
+    /// Scheduled firing date; `None` for a watched transition whose
+    /// boundary has not been located yet (its guard is not yet true —
+    /// the crossing is found only during continuous evolution).
+    pub date: Option<f64>,
+}
+
+/// An opaque checkpoint of the engine's full mutable trajectory state
+/// (time, discrete + continuous attributes, schedule, RNG, recorded
+/// history), produced by [`Engine::snapshot`] and reinstated by
+/// [`Engine::restore`]. Cloning the RNG makes any continuation after a
+/// restore bit-for-bit reproducible.
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    time: f64,
+    vars: Vec<Value>,
+    states: Vec<StateIdx>,
+    pending: Vec<Option<f64>>,
+    frozen: Vec<Option<f64>>,
+    hazards: Vec<Option<Hazard>>,
+    events: Vec<Event>,
+    journal: Vec<JournalRecord>,
+    indicator_series: Vec<IndicatorSeries>,
+    sampled: Vec<IndicatorSeries>,
+    sample_cursor: usize,
+    watched_streak: (f64, usize),
+    rng: ChaCha8Rng,
+    worklist: BTreeSet<FnIdx>,
 }
 
 /// An indicator's recorded change-points `(time, value)`.
@@ -806,6 +900,35 @@ impl<'m> Engine<'m> {
         config: EngineConfig,
         solver: Box<dyn OdeSolver>,
     ) -> Result<Self, EngineError> {
+        let mut engine = Self::bare(model, config, solver);
+        engine.initialize()?;
+        Ok(engine)
+    }
+
+    /// Rebuild an engine positioned at a previously captured
+    /// [`Snapshot`], **skipping** the initialization axiom (the snapshot
+    /// already carries a valid, possibly-advanced state).
+    ///
+    /// This is the seam a stateful facade uses when it cannot hold the
+    /// borrowing [`Engine`] across calls (e.g. the Python `interactive`
+    /// object): it keeps the owned model + a `Snapshot`, and rebuilds a
+    /// throwaway engine on each call. Restores are exact, so a run
+    /// driven this way is identical to one driven on a persistent engine.
+    pub fn from_snapshot(
+        model: &'m CompiledModel,
+        config: EngineConfig,
+        snapshot: &Snapshot,
+    ) -> Self {
+        let solver = Box::new(DormandPrince45::new(config.ode.clone()));
+        let mut engine = Self::bare(model, config, solver);
+        engine.restore(snapshot);
+        engine
+    }
+
+    /// Construct the engine struct with its pristine pre-initialization
+    /// field values (no fixpoint, no schedule yet). Shared by
+    /// [`Engine::with_solver`] and [`Engine::from_snapshot`].
+    fn bare(model: &'m CompiledModel, config: EngineConfig, solver: Box<dyn OdeSolver>) -> Self {
         let stochastic = model.transitions.iter().any(|t| {
             matches!(
                 t.distrib,
@@ -834,7 +957,7 @@ impl<'m> Engine<'m> {
             .map(|(i, _)| i)
             .collect();
         let rng = raichu_rng::replica_rng(config.seed, config.rng_stream);
-        let mut engine = Engine {
+        Engine {
             time: 0.0,
             vars: model.var_init.clone(),
             states: model.automata.iter().map(|a| a.init).collect(),
@@ -868,17 +991,23 @@ impl<'m> Engine<'m> {
             solver,
             model,
             config,
-        };
-        // Initialization axiom: run every function once, declaration
-        // order, then solve explicit equations and schedule.
-        engine.worklist.extend(0..model.functions.len());
-        engine.run_fixpoint()?;
-        recompute_explicit(engine.model, &mut engine.vars, &engine.states, engine.time)?;
-        engine.refresh_schedule()?;
-        engine.record_indicators();
+        }
+    }
+
+    /// Initialization axiom (Desgeorges et al. 2021): run every
+    /// sensitive function once in declaration order to a fixpoint, solve
+    /// the explicit equations, build the initial schedule, and record
+    /// the t = 0 indicator/sample values. Shared by [`Engine::new`] and
+    /// [`Engine::reset`] so a reset state is identical to a fresh build.
+    fn initialize(&mut self) -> Result<(), EngineError> {
+        self.worklist.extend(0..self.model.functions.len());
+        self.run_fixpoint()?;
+        recompute_explicit(self.model, &mut self.vars, &self.states, self.time)?;
+        self.refresh_schedule()?;
+        self.record_indicators();
         // Sample instants at or before t = 0 use the initial state.
-        engine.flush_samples_through(0.0);
-        Ok(engine)
+        self.flush_samples_through(0.0);
+        Ok(())
     }
 
     /// Current simulation time.
@@ -906,6 +1035,340 @@ impl<'m> Engine<'m> {
         })
     }
 
+    /// **Interactive control** — every currently-armed transition.
+    ///
+    /// Lists the date-scheduled transitions (delay / inst / stochastic)
+    /// with their firing date, plus the watched transitions armed in
+    /// their source state (date = the current instant when their guard
+    /// already holds, else `None` — the boundary being located only
+    /// during continuous evolution).
+    ///
+    /// Sorted by date (unlocated watched last), then transition index,
+    /// so the first entry is exactly what [`Engine::step`] would fire
+    /// next.
+    #[must_use]
+    pub fn fireable(&self) -> Vec<Fireable> {
+        let mut out: Vec<Fireable> = Vec::new();
+        for (idx, pending) in self.pending.iter().enumerate() {
+            if let Some(date) = *pending {
+                out.push(Fireable {
+                    index: idx,
+                    transition: self.model.transitions[idx].name.clone(),
+                    kind: fireable_kind(&self.model.transitions[idx].distrib),
+                    date: Some(date),
+                });
+            }
+        }
+        for &idx in &self.model.watched {
+            let transition = &self.model.transitions[idx];
+            if self.states[transition.automaton] != transition.source {
+                continue;
+            }
+            // Guard already true ⇒ fireable at the current instant; else
+            // its boundary has not been located yet (date unknown). A
+            // guard type error is treated as "not fireable now" here; it
+            // resurfaces when the transition is actually stepped/fired.
+            let date = self
+                .is_immediate_watched(idx)
+                .unwrap_or(false)
+                .then_some(self.time);
+            out.push(Fireable {
+                index: idx,
+                transition: transition.name.clone(),
+                kind: FireableKind::Watched,
+                date,
+            });
+        }
+        out.sort_by(|a, b| match (a.date, b.date) {
+            (Some(x), Some(y)) => x
+                .partial_cmp(&y)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.index.cmp(&b.index)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.index.cmp(&b.index),
+        });
+        out
+    }
+
+    /// **Interactive control** — fire the armed transition carrying this
+    /// qualified name (see [`Engine::fire_idx`] for the semantics).
+    ///
+    /// Errors with [`EngineError::UnknownTransition`] if no transition
+    /// bears the name, or [`EngineError::NotFireable`] if it is not armed.
+    pub fn fire_named(&mut self, name: &str) -> Result<Event, EngineError> {
+        let idx = self.transition_index(name)?;
+        self.fire_idx_inner(idx, None)
+    }
+
+    /// **Interactive control** — fire the armed transition `name`,
+    /// **forcing** its destination branch to the state named `to`
+    /// (bypassing the RNG / deterministic-branch resolution). This is
+    /// what makes a non-deterministic instantaneous branching (or any
+    /// stochastic branch) reproducibly testable: the outcome is chosen,
+    /// not drawn.
+    ///
+    /// Errors with [`EngineError::ForcedTargetInvalid`] if `to` is not
+    /// one of the transition's declared target states.
+    pub fn fire_named_to(&mut self, name: &str, to: &str) -> Result<Event, EngineError> {
+        let idx = self.transition_index(name)?;
+        let forced = self.resolve_forced(idx, to)?;
+        self.fire_idx_inner(idx, Some(forced))
+    }
+
+    /// **Interactive control** — fire a *chosen* armed transition by its
+    /// index (the stable handle from [`Engine::fireable`]), resolving the
+    /// destination the normal way. See [`Engine::fire_idx_to`] to force
+    /// the branch.
+    pub fn fire_idx(&mut self, trans_idx: TransIdx) -> Result<Event, EngineError> {
+        self.fire_idx_inner(trans_idx, None)
+    }
+
+    /// **Interactive control** — fire a chosen armed transition by index,
+    /// **forcing** its destination to the state named `to`.
+    pub fn fire_idx_to(&mut self, trans_idx: TransIdx, to: &str) -> Result<Event, EngineError> {
+        let forced = self.resolve_forced(trans_idx, to)?;
+        self.fire_idx_inner(trans_idx, Some(forced))
+    }
+
+    /// **Interactive control** — override the scheduled firing date of an
+    /// armed transition (manual date-setting). The transition must be
+    /// date-scheduled (`pending`, i.e. not a watched boundary), and the
+    /// new date must not lie in the past (`>=` the current time).
+    ///
+    /// The override sticks for delay / inst / fixed-rate transitions
+    /// until they fire or leave their source state; a *state-dependent
+    /// rate* transition may have its date recomputed at the next
+    /// discrete step (`reschedule_modifiable`).
+    pub fn set_date(&mut self, name: &str, date: f64) -> Result<(), EngineError> {
+        let idx = self.transition_index(name)?;
+        self.set_date_idx(idx, date)
+    }
+
+    /// **Interactive control** — override an armed transition's firing
+    /// date by index (see [`Engine::set_date`]).
+    pub fn set_date_idx(&mut self, trans_idx: TransIdx, date: f64) -> Result<(), EngineError> {
+        let Some(transition) = self.model.transitions.get(trans_idx) else {
+            return Err(EngineError::UnknownTransition {
+                transition: format!("<index {trans_idx}>"),
+            });
+        };
+        let name = transition.name.clone();
+        if !date.is_finite() || date < self.time {
+            return Err(EngineError::DateInPast {
+                transition: name,
+                date,
+                time: self.time,
+            });
+        }
+        match self.pending.get_mut(trans_idx) {
+            Some(slot) if slot.is_some() => *slot = Some(date),
+            _ => {
+                return Err(EngineError::NotFireable {
+                    transition: name,
+                    time: self.time,
+                })
+            }
+        }
+        if self.config.journal {
+            self.journal.push(JournalRecord::TransitionRescheduled {
+                time: self.time,
+                transition: name,
+                firing_at: date,
+            });
+        }
+        Ok(())
+    }
+
+    /// **Interactive control** — capture the full mutable trajectory
+    /// state as an opaque [`Snapshot`] (checkpoint / undo point). Costs
+    /// one clone of the state vectors; the immutable model is untouched.
+    #[must_use]
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            time: self.time,
+            vars: self.vars.clone(),
+            states: self.states.clone(),
+            pending: self.pending.clone(),
+            frozen: self.frozen.clone(),
+            hazards: self.hazards.clone(),
+            events: self.events.clone(),
+            journal: self.journal.clone(),
+            indicator_series: self.indicator_series.clone(),
+            sampled: self.sampled.clone(),
+            sample_cursor: self.sample_cursor,
+            watched_streak: self.watched_streak,
+            rng: self.rng.clone(),
+            worklist: self.worklist.clone(),
+        }
+    }
+
+    /// **Interactive control** — reinstate a previously captured
+    /// [`Snapshot`] (undo). The RNG is restored too, so any continuation
+    /// is bit-for-bit identical to continuing from the original point.
+    pub fn restore(&mut self, snap: &Snapshot) {
+        self.time = snap.time;
+        self.vars = snap.vars.clone();
+        self.states = snap.states.clone();
+        self.pending = snap.pending.clone();
+        self.frozen = snap.frozen.clone();
+        self.hazards = snap.hazards.clone();
+        self.events = snap.events.clone();
+        self.journal = snap.journal.clone();
+        self.indicator_series = snap.indicator_series.clone();
+        self.sampled = snap.sampled.clone();
+        self.sample_cursor = snap.sample_cursor;
+        self.watched_streak = snap.watched_streak;
+        self.rng = snap.rng.clone();
+        self.worklist = snap.worklist.clone();
+    }
+
+    /// **Interactive control** — the events fired so far, in
+    /// chronological order (the same data a finished [`SimulationResult`]
+    /// reports in its `events`).
+    #[must_use]
+    pub fn history(&self) -> &[Event] {
+        &self.events
+    }
+
+    /// **Interactive control** — reset the engine to its initial state
+    /// (`t = 0`), as freshly built: clears the trajectory and recorded
+    /// history, re-seeds the RNG to `(seed, stream)`, and re-runs the
+    /// initialization axiom. A run restarted from here is identical to a
+    /// fresh [`Engine::new`].
+    pub fn reset(&mut self) -> Result<(), EngineError> {
+        let n = self.model.transitions.len();
+        self.time = 0.0;
+        self.vars = self.model.var_init.clone();
+        self.states = self.model.automata.iter().map(|a| a.init).collect();
+        self.pending = vec![None; n];
+        self.frozen = vec![None; n];
+        self.hazards = vec![None; n];
+        self.events.clear();
+        self.journal.clear();
+        for series in &mut self.indicator_series {
+            series.points.clear();
+        }
+        for series in &mut self.sampled {
+            series.points.clear();
+        }
+        self.sample_cursor = 0;
+        self.watched_streak = (0.0, 0);
+        self.rng = raichu_rng::replica_rng(self.config.seed, self.config.rng_stream);
+        self.worklist.clear();
+        self.initialize()
+    }
+
+    /// Fire a *chosen* armed transition (rather than the earliest one, as
+    /// [`Engine::step`] does), advancing time to its scheduled date and
+    /// running the discrete fixpoint. `forced` overrides the destination
+    /// branch when set.
+    ///
+    /// - A date-scheduled transition (delay / inst / stochastic) fires at
+    ///   its `pending` date; with continuous evolution the state is
+    ///   integrated up to that date first, and a **watched boundary**
+    ///   crossed en route fires *instead* (a forced jump cannot be
+    ///   skipped — the returned event is that boundary transition, whose
+    ///   branch is never forced).
+    /// - A watched transition may be fired only while its guard already
+    ///   holds (at the current instant).
+    ///
+    /// Choosing a non-earliest transition deliberately overrides the
+    /// schedule — the interactive counterpart of a manually driven run.
+    fn fire_idx_inner(
+        &mut self,
+        trans_idx: TransIdx,
+        forced: Option<StateIdx>,
+    ) -> Result<Event, EngineError> {
+        let Some(transition) = self.model.transitions.get(trans_idx) else {
+            return Err(EngineError::UnknownTransition {
+                transition: format!("<index {trans_idx}>"),
+            });
+        };
+        let name = transition.name.clone();
+        if let Some(date) = self.pending.get(trans_idx).copied().flatten() {
+            if !date.is_finite() {
+                return Err(EngineError::NotFireable {
+                    transition: name,
+                    time: self.time,
+                });
+            }
+            // Advance to the scheduled date, but never move the clock
+            // backwards: an *overdue* transition (date already passed
+            // because an earlier `fire_idx` skipped ahead) fires at the
+            // current instant.
+            let t_new = date.max(self.time);
+            if self.needs_integration() && t_new > self.time {
+                if let Some(watched_idx) = self.integrate_to(t_new)? {
+                    self.note_watched_firing()?;
+                    return self.fire(watched_idx, None);
+                }
+            }
+            if t_new > self.time {
+                self.flush_samples_before(t_new);
+            }
+            self.time = t_new;
+            self.watched_streak = (t_new, 0);
+            self.fire(trans_idx, forced)
+        } else if self.is_immediate_watched(trans_idx)? {
+            self.note_watched_firing()?;
+            self.fire(trans_idx, forced)
+        } else {
+            Err(EngineError::NotFireable {
+                transition: name,
+                time: self.time,
+            })
+        }
+    }
+
+    /// Resolve a qualified transition name to its index, or
+    /// [`EngineError::UnknownTransition`].
+    fn transition_index(&self, name: &str) -> Result<TransIdx, EngineError> {
+        self.model
+            .transitions
+            .iter()
+            .position(|t| t.name == name)
+            .ok_or_else(|| EngineError::UnknownTransition {
+                transition: name.to_owned(),
+            })
+    }
+
+    /// Resolve a forced destination *state name* to a valid branch of
+    /// `trans_idx`, or [`EngineError::ForcedTargetInvalid`] if the name
+    /// is unknown or not one of the transition's declared target states.
+    fn resolve_forced(&self, trans_idx: TransIdx, to: &str) -> Result<StateIdx, EngineError> {
+        let Some(transition) = self.model.transitions.get(trans_idx) else {
+            return Err(EngineError::UnknownTransition {
+                transition: format!("<index {trans_idx}>"),
+            });
+        };
+        let automaton = &self.model.automata[transition.automaton];
+        match automaton.states.iter().position(|s| s == to) {
+            Some(state) if transition.targets.contains(&state) => Ok(state),
+            _ => Err(EngineError::ForcedTargetInvalid {
+                transition: transition.name.clone(),
+                state: to.to_owned(),
+            }),
+        }
+    }
+
+    /// Whether `trans_idx` is a watched transition sitting in its source
+    /// state with its guard already true — i.e. fireable at the current
+    /// instant.
+    fn is_immediate_watched(&self, trans_idx: TransIdx) -> Result<bool, EngineError> {
+        let transition = &self.model.transitions[trans_idx];
+        if !matches!(transition.distrib, CLaw::Watched { .. }) {
+            return Ok(false);
+        }
+        if self.states[transition.automaton] != transition.source {
+            return Ok(false);
+        }
+        let Some(guard) = &transition.guard else {
+            return Ok(false);
+        };
+        eval_bool(self.model, &self.vars, &self.states, self.time, guard)
+    }
+
     /// Fire the next transition — discrete (`fire_transition`) or watched at a
     /// located boundary crossing (`schedule_boundary`) — if one occurs within the
     /// horizon.
@@ -919,7 +1382,7 @@ impl<'m> Engine<'m> {
         // conditions or post-jump state): fires immediately.
         if let Some(trans_idx) = self.immediate_watched()? {
             self.note_watched_firing()?;
-            return self.fire(trans_idx).map(Some);
+            return self.fire(trans_idx, None).map(Some);
         }
 
         let next_discrete = self.next_pending();
@@ -929,16 +1392,21 @@ impl<'m> Engine<'m> {
         if self.needs_integration() && t_target > self.time && t_target.is_finite() {
             if let Some(trans_idx) = self.integrate_to(t_target)? {
                 self.note_watched_firing()?;
-                return self.fire(trans_idx).map(Some);
+                return self.fire(trans_idx, None).map(Some);
             }
         }
 
         match next_discrete {
             Some((trans_idx, date)) if date <= self.config.t_max => {
-                self.flush_samples_before(date);
-                self.time = date;
-                self.watched_streak = (date, 0);
-                self.fire(trans_idx).map(Some)
+                // The clock never runs backwards: in a step-driven run
+                // every scheduled date is ≥ the current time, so `max`
+                // is a no-op; it only guards an *overdue* transition left
+                // behind after an interactive `fire_idx` skipped ahead.
+                let t_new = date.max(self.time);
+                self.flush_samples_before(t_new);
+                self.time = t_new;
+                self.watched_streak = (t_new, 0);
+                self.fire(trans_idx, None).map(Some)
             }
             _ => Ok(None),
         }
@@ -980,13 +1448,24 @@ impl<'m> Engine<'m> {
 
     /// Fire `trans_idx` at the current time: state change, journal,
     /// discrete evolution to fixpoint, schedule update, indicators.
-    fn fire(&mut self, trans_idx: TransIdx) -> Result<Event, EngineError> {
+    ///
+    /// `forced` overrides the destination branch (interactive control,
+    /// bypassing the RNG / deterministic-branch resolution); `None`
+    /// resolves the destination the normal way ([`Engine::resolve_target`]).
+    fn fire(
+        &mut self,
+        trans_idx: TransIdx,
+        forced: Option<StateIdx>,
+    ) -> Result<Event, EngineError> {
         self.pending[trans_idx] = None;
         self.frozen[trans_idx] = None;
         self.hazards[trans_idx] = None;
+        let target = match forced {
+            Some(state) => state,
+            None => self.resolve_target(trans_idx)?,
+        };
         let transition = &self.model.transitions[trans_idx];
         let automaton = &self.model.automata[transition.automaton];
-        let target = self.resolve_target(trans_idx)?;
         let event = Event {
             time: self.time,
             transition: transition.name.clone(),
@@ -1660,6 +2139,23 @@ impl<'m> Engine<'m> {
             }
             self.sample_cursor += 1;
         }
+    }
+}
+
+/// Classify a compiled occurrence law for interactive inspection
+/// ([`Engine::fireable`]).
+fn fireable_kind(distrib: &CLaw) -> FireableKind {
+    match distrib {
+        CLaw::Delay(_) => FireableKind::Delay,
+        CLaw::Inst(_) => FireableKind::Inst,
+        CLaw::Watched { .. } => FireableKind::Watched,
+        CLaw::Exp(_)
+        | CLaw::ExpVar { .. }
+        | CLaw::Weibull(..)
+        | CLaw::Lognormal(..)
+        | CLaw::Gamma(..)
+        | CLaw::Uniform(..)
+        | CLaw::Empirical(_) => FireableKind::Stochastic,
     }
 }
 
