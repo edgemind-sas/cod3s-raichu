@@ -5,7 +5,21 @@ artefacts**: a *model export* (the topology — component instances of KB
 templates, connections, per-instance overrides) and a *study* (the
 dynamics — failure modes, feared events, indicators, Monte-Carlo
 parameters). `pyraichu.importers.cod3s_platform` fuses both into one
-runnable RAICHU model:
+runnable RAICHU model.
+
+## Where the artefacts come from
+
+- **Model export** — the platform's model *export* action (or a database
+  dump of the model document): a JSON carrying `model.elements`
+  (components + connections) and the embedded knowledge base
+  (`kb_embedded`, or `kb` in raw dumps). Both versioned exports and raw
+  dumps are accepted.
+- **Study** — the study description used by the platform's run
+  machinery (a `study.yaml`, parsed to a dict): `failure_modes`,
+  `events`, `targets`, `indicators`, `simulation`.
+
+The pair recorded alongside an existing platform run is ideal: you can
+then compare RAICHU's results against that run's recorded outputs.
 
 <!-- skip -->
 ```python
@@ -63,6 +77,68 @@ indicator (`nb-occurrences`, `sojourn-time`).
   requested measures;
 - `simulation` — `nb_runs`, `schedule` (flattened to `samples`), `seed`,
   `time_unit`, passed through in `Translation.simulation`.
+
+## Matching the study's measures
+
+Platform studies that declare `targets` are **first-occurrence
+campaigns**: each trajectory stops at the feared event, and the recorded
+indicators latch from the hit to the horizon. To reproduce those
+numbers, run the Monte-Carlo with `stop_at_targets=True` (as in the
+snippet above) — see
+[Sequence analysis](sequence-analysis.md#first-occurrence-indicators)
+for the two semantics. `Translation.measures` tells you which measure
+each indicator carries:
+
+- `nb-occurrences` → `IndicatorEstimate.nb_occurrences_mean` / `_std`
+  (with targets: the probability the event occurred by each instant);
+- `sojourn-time` → `IndicatorEstimate.sojourn_mean` / `_std`
+  (with targets: mean time elapsed since the first occurrence).
+
+## Converting the outputs
+
+RAICHU's results map line-for-line onto the platform's artefacts. The
+indicator table (one row per measure × statistic × instant):
+
+<!-- skip -->
+```python
+rows = []
+for name, measures in t.measures.items():
+    ind = est.indicators[name]
+    series = {"nb-occurrences": (ind.nb_occurrences_mean, ind.nb_occurrences_std),
+              "sojourn-time": (ind.sojourn_mean, ind.sojourn_std)}
+    for measure in measures:
+        means, stds = series[measure]
+        for instant, mean, std in zip(ind.instants, means, stds):
+            rows.append({"name": f"{name}_{measure}", "measure": measure,
+                         "stat": "mean", "instant": instant, "values": mean})
+            rows.append({"name": f"{name}_{measure}", "measure": measure,
+                         "stat": "stddev", "instant": instant, "values": std})
+```
+
+And the minimal sequences, in the platform's sequence-artefact shape
+(`weight` is the trajectory count; divide by `nb_runs` for the
+probability):
+
+<!-- skip -->
+```python
+artefact = {
+    "schema_version": "1.0.0",
+    "target_group_id": "system_down",
+    "sequences": [
+        {"weight": s["weight"], "probability": s["weight"] / nb_runs,
+         "end_time": s["end_time"], "target_name": s["end_cause"],
+         "events": [{"obj": e["obj"], "attr": e["attr"], "time": e["time"]}
+                    for e in s["events"]]}
+        for s in cuts
+    ],
+}
+```
+
+!!! note "Naming drifts when diffing against recorded runs"
+    Older platform runs may write common-cause suffixes without index
+    separators (`occ__cc_12` for RAICHU's `occ__cc_1_2`) and prefix the
+    failure-mode component with the factorized target name — normalise
+    both before comparing sequence sets.
 
 ## Fail fast, never silently wrong
 

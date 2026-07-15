@@ -47,9 +47,20 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
 
 ## Install
 
-RAICHU is a Rust workspace with a Python binding built by
-[maturin](https://www.maturin.rs). Prerequisites: Rust stable, Python
-≥ 3.10.
+**From a release wheel** (no Rust toolchain needed) — each
+[GitHub release](https://github.com/edgemind-sas/cod3s-raichu/releases)
+ships prebuilt `pyraichu` wheels for Linux (x86_64, aarch64), macOS
+(Intel, Apple Silicon) and Windows; one abi3 wheel covers every
+CPython ≥ 3.9 on its platform. Download the wheel matching your
+platform and:
+
+```bash
+pip install pyraichu-0.7.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+```
+
+**From source** — RAICHU is a Rust workspace with a Python binding
+built by [maturin](https://www.maturin.rs). Prerequisites: Rust stable,
+Python ≥ 3.10.
 
 ```bash
 git clone https://github.com/edgemind-sas/cod3s-raichu raichu && cd raichu
@@ -57,7 +68,7 @@ python -m venv .venv
 VIRTUAL_ENV=$PWD/.venv maturin develop --release -m bindings/pyraichu/Cargo.toml
 ```
 
-Or build a wheel and `pip install` it:
+Or build the wheel yourself:
 
 ```bash
 maturin build --release -m bindings/pyraichu/Cargo.toml
