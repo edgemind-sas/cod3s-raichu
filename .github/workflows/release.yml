@@ -34,7 +34,9 @@ jobs:
           # aarch64 cross-compiles on the hosted runner; the smoke test is
           # skipped (the wheel cannot execute there).
           - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, native: false }
-          - { name: macos-x86_64, runner: macos-13, target: x86_64, native: true }
+          # Intel macOS runners are retired on hosted CI; cross-compile
+          # x86_64 from the arm64 runner (no native smoke there).
+          - { name: macos-x86_64, runner: macos-latest, target: x86_64, native: false }
           - { name: macos-arm64, runner: macos-latest, target: aarch64, native: true }
           - { name: windows-x86_64, runner: windows-latest, target: x64, native: true }
     steps:
