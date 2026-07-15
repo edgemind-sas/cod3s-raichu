@@ -1,0 +1,97 @@
+# Release wheels — the multi-platform build matrix (M5).
+#
+# Triggered by a version tag (`v*`) or manually. Builds one abi3 wheel per
+# platform (a single wheel covers every CPython >= 3.9 on that platform)
+# plus the source distribution, smoke-tests the natively-runnable ones,
+# and attaches everything to the GitHub Release for the tag.
+#
+# Distribution channel note: artefacts stop at the GitHub Release on
+# purpose — publishing to PyPI (or an internal index) is a separate,
+# deliberate step, not wired here.
+
+name: Release wheels
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wheels:
+    name: Wheel ${{ matrix.platform.name }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, native: true }
+          # aarch64 cross-compiles on the hosted runner; the smoke test is
+          # skipped (the wheel cannot execute there).
+          - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, native: false }
+          - { name: macos-x86_64, runner: macos-13, target: x86_64, native: true }
+          - { name: macos-arm64, runner: macos-latest, target: aarch64, native: true }
+          - { name: windows-x86_64, runner: windows-latest, target: x64, native: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release -m bindings/pyraichu/Cargo.toml --out dist
+          manylinux: auto
+      - name: Smoke-test import
+        if: matrix.platform.native
+        shell: bash
+        run: |
+          pip install --no-index --find-links dist pyraichu
+          python -c "import pyraichu; print(pyraichu.__version__)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform.name }}
+          path: dist/*.whl
+
+  sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: -m bindings/pyraichu/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  release:
+    name: Attach to the GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload artefacts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/* || \
+          gh release upload "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --clobber dist/*
