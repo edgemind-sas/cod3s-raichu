@@ -13,11 +13,12 @@
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use raichu::raichu_core::analyse as analyse_sequences;
 use raichu::raichu_core::{
     CompiledModel, Engine, EngineConfig, Snapshot as CoreSnapshot, SolverParams,
 };
 use raichu::raichu_model::Model;
-use raichu::raichu_montecarlo::{run as mc_run, McConfig};
+use raichu::raichu_montecarlo::{run as mc_run, run_sequences as mc_run_sequences, McConfig};
 
 create_exception!(
     _pyraichu,
@@ -92,7 +93,7 @@ fn simulate_json(
 /// override the corresponding ODE-backend parameters (engine defaults
 /// when omitted) — the knobs of the tolerance-parity experiments.
 #[pyfunction]
-#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None))]
+#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn monte_carlo_json(
     py: Python<'_>,
@@ -108,6 +109,7 @@ fn monte_carlo_json(
     max_step: Option<f64>,
     tol_event: Option<f64>,
     sub_samples: Option<usize>,
+    stop_at_targets: bool,
 ) -> PyResult<String> {
     let compiled = parse_and_compile(model_json)?;
     py.detach(|| {
@@ -135,10 +137,45 @@ fn monte_carlo_json(
             threads,
             quantiles: quantiles.unwrap_or_default(),
             ode,
+            stop_at_targets,
         };
         let estimates =
             mc_run(&compiled, &config).map_err(|e| SimulationError::new_err(e.to_string()))?;
         serde_json::to_string(&estimates).map_err(|e| SimulationError::new_err(e.to_string()))
+    })
+}
+
+/// Native minimal-sequence analysis: run `nb_runs` sequence-recording
+/// replicas (target early-stop) and return the JSON of the minimal sequences
+/// (group → filter-cycles → minimal), the RAMS output cod3s produces via its
+/// `SequenceAnalyser`. Each minimal sequence is `{events, end_cause,
+/// end_time, weight}` (weight = the trajectory count that collapsed into it).
+#[pyfunction]
+#[pyo3(signature = (model_json, nb_runs, t_max, seed = 0, threads = None))]
+fn analyse_sequences_json(
+    py: Python<'_>,
+    model_json: &str,
+    nb_runs: u64,
+    t_max: f64,
+    seed: u64,
+    threads: Option<usize>,
+) -> PyResult<String> {
+    let compiled = parse_and_compile(model_json)?;
+    py.detach(|| {
+        let config = McConfig {
+            nb_runs,
+            seed,
+            t_max,
+            samples: Vec::new(),
+            threads,
+            quantiles: Vec::new(),
+            ode: SolverParams::default(),
+            stop_at_targets: false,
+        };
+        let raw = mc_run_sequences(&compiled, &config)
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let minimal = analyse_sequences(raw);
+        serde_json::to_string(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))
     })
 }
 
@@ -312,6 +349,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validate_model, module)?)?;
     module.add_function(wrap_pyfunction!(simulate_json, module)?)?;
     module.add_function(wrap_pyfunction!(monte_carlo_json, module)?)?;
+    module.add_function(wrap_pyfunction!(analyse_sequences_json, module)?)?;
     module.add_class::<Interactive>()?;
     module.add_class::<Snapshot>()?;
     Ok(())

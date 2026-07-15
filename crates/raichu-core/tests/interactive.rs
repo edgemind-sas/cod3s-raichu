@@ -44,6 +44,8 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
                     guard: None,
                     targets: vec!["nok".into()],
                     on_interruption: Default::default(),
+                    monitored: false,
+                    cycle_group: None,
                     distrib: Distrib::Delay { time: ttf },
                 },
                 Transition {
@@ -52,6 +54,8 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
                     guard: None,
                     targets: vec!["ok".into()],
                     on_interruption: Default::default(),
+                    monitored: false,
+                    cycle_group: None,
                     distrib: Distrib::Delay { time: ttr },
                 },
             ],
@@ -89,6 +93,7 @@ fn two_component_model() -> Model {
         ],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     }
 }
 
@@ -272,6 +277,8 @@ fn demand_model(ok_prob: f64) -> Model {
                     guard: None,
                     targets: vec!["ok".into(), "ko".into()],
                     on_interruption: Default::default(),
+                    monitored: false,
+                    cycle_group: None,
                     distrib: Distrib::Inst {
                         probs: vec![ok_prob],
                     },
@@ -282,6 +289,7 @@ fn demand_model(ok_prob: f64) -> Model {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     }
 }
 

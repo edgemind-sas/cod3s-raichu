@@ -27,10 +27,12 @@
 
 pub mod compile;
 pub mod engine;
+pub mod sequence;
 
 pub use compile::{CompileError, CompiledModel};
 pub use engine::{
     DropReason, Engine, EngineConfig, EngineError, Event, Fireable, FireableKind, IndicatorSeries,
-    JournalRecord, Provenance, SimulationResult, Snapshot,
+    JournalRecord, Provenance, SeqEvent, Sequence, SimulationResult, Snapshot,
 };
 pub use raichu_numeric::SolverParams;
+pub use sequence::{analyse, filter_cycles, group_sequences, minimal_sequences};

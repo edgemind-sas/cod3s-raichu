@@ -268,6 +268,18 @@ pub struct Transition {
     /// (paper rule `drop_disabled`; see [`InterruptionPolicy`]).
     #[serde(default)]
     pub on_interruption: InterruptionPolicy,
+    /// **Sequence analysis** — when true, firing this transition records a
+    /// `SeqEvent` (component, target state, time) into the per-trajectory
+    /// sequence trace (zero cost unless sequence recording is enabled). The
+    /// muscadet plugin sets it on ObjFM occ/rep and ObjEvent occ transitions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub monitored: bool,
+    /// **Sequence analysis** — cycle-pair group id: occ/rep (occ/not_occ)
+    /// partner transitions of one failure mode share it, so the
+    /// cycle-filtering step can drop transient failure→repair pairs that net
+    /// out before the feared event. `None` = not part of a cycle pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle_group: Option<String>,
     /// Occurrence distribution.
     #[serde(flatten)]
     pub distrib: Distrib,
@@ -361,6 +373,22 @@ pub struct Component {
     pub equations: Vec<Equation>,
 }
 
+/// A **sequence-analysis target** (feared event / événement redouté): a
+/// named automaton state whose activation ends and labels a trajectory's
+/// recorded sequence (mirrors cod3s `endCause`). Empty `targets` = no early
+/// stop and no `end_cause` (the trajectory runs to `t_max`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Target {
+    /// Target name (the `end_cause` label, e.g. `doors_unsecured`).
+    pub name: String,
+    /// Component owning the automaton.
+    pub component: String,
+    /// The automaton.
+    pub automaton: String,
+    /// The state whose activation reaches the target.
+    pub state: String,
+}
+
 /// A complete model: a graph ⟨Cpt, cnx⟩ of components plus observed
 /// indicators.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -375,6 +403,9 @@ pub struct Model {
     /// Recorded indicators.
     #[serde(default)]
     pub indicators: Vec<Indicator>,
+    /// Sequence-analysis targets (feared events) — see [`Target`].
+    #[serde(default)]
+    pub targets: Vec<Target>,
 }
 
 /// Typed model-validation errors. Every invalid model is reported with a

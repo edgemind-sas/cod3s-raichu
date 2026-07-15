@@ -46,6 +46,8 @@ fn delay_model() -> Model {
                             guard: None,
                             targets: vec!["nok".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Delay { time: 5.0 },
                         },
                         Transition {
@@ -54,6 +56,8 @@ fn delay_model() -> Model {
                             guard: None,
                             targets: vec!["ok".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Delay { time: 10.0 },
                         },
                     ],
@@ -120,6 +124,7 @@ fn delay_model() -> Model {
             },
         }],
         indicators: vec![],
+        targets: vec![],
     }
 }
 
@@ -154,6 +159,8 @@ fn tank_model() -> Model {
                         }),
                         targets: vec!["on".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Watched,
                     },
                     Transition {
@@ -168,6 +175,8 @@ fn tank_model() -> Model {
                         }),
                         targets: vec!["off".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Watched,
                     },
                 ],
@@ -200,6 +209,7 @@ fn tank_model() -> Model {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     }
 }
 

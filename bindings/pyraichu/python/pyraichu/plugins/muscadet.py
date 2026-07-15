@@ -118,6 +118,23 @@ def _cond_tree(
     return {"op": "cmp", "cmp": _OPE[cond_operator], "lhs": base, "rhs": _const(cond_value)}
 
 
+def _cond_groups(cond: Any, inner_logic: str = "all") -> list[dict]:
+    """Normalize a cond spec to the list of per-group boolean expressions
+    (each an inner-logic aggregation of its leaves) — the OR-of-AND groups
+    that `_cond_tree` ORs together and that the logic gate aggregates by
+    `kind`. Mirrors `sanitize_cond_format`."""
+    if isinstance(cond, bool):
+        return [_const(cond)]
+    if isinstance(cond, dict):
+        cond = [[cond]]
+    elif cond and all(isinstance(c, dict) for c in cond):
+        cond = [cond]
+    return [
+        {"op": "bool", "bool_op": _LOGIC[inner_logic], "args": [_leaf(c) for c in group]}
+        for group in cond
+    ]
+
+
 def _negate(expr: dict) -> dict:
     return {"op": "bool", "bool_op": "not", "args": [expr]}
 
@@ -131,6 +148,113 @@ def _law(spec: dict) -> dict:
     if kind == "exp":
         return {"distrib": "exp", "rate": float(spec.get("rate", spec.get("lambda", 0.0)))}
     raise ValueError(f"unsupported law specification: {spec}")
+
+
+def _ccf_suffix(comb: tuple, order_max: int) -> str:
+    """cod3s common-cause combination suffix (`__cc_i_j`, 1-based,
+    underscore-separated since cod3s 1.9.0); empty for the single-target
+    order-1 case. Shared by the ObjFM and ObjFMInst CCF expansions."""
+    return "__cc_" + "_".join(str(i + 1) for i in comb) if order_max > 1 else ""
+
+
+def _state_active(component: str, automaton: str, state: str) -> dict:
+    """`state_active` core expression."""
+    return {
+        "op": "state_active",
+        "state": {"component": component, "automaton": automaton, "state": state},
+    }
+
+
+def _bool_expr(op: str, args: list) -> dict:
+    """`and`/`or` over args, collapsing the singleton."""
+    return args[0] if len(args) == 1 else {"op": "bool", "bool_op": op, "args": args}
+
+
+def _attr_is(component: str, attribute: str, value: bool) -> dict:
+    """`component.attribute == value` core comparison."""
+    return {
+        "op": "cmp",
+        "cmp": "eq",
+        "lhs": {"op": "attr", "attr": {"component": component, "attribute": attribute}},
+        "rhs": _const(value),
+    }
+
+
+def _target_init(model: dict, target: str, variable: str) -> dict | None:
+    """Declared initial value of a target attribute (the reinitialization rest
+    state), or None when the attribute is not found on the component."""
+    for component in model.get("components", []):
+        if component.get("name") != target:
+            continue
+        for entry in component.get("attributes", []):
+            if entry.get("name") == variable:
+                return {"op": "const", "value": entry["init"]}
+    return None
+
+
+def _reinit_effect(
+    name: str,
+    target: str,
+    gate: dict,
+    failure_effects: dict,
+    repair_effects: dict,
+    model: dict,
+) -> list[dict]:
+    """Reinitialization effects for ONE target under a given `gate`: each
+    attribute holds its failure value while `gate` is true, its rest-state
+    value otherwise (an explicit ``repair_effects`` entry, else the declared
+    initial value, else the boolean complement). `gate` is the OR of impacting
+    combinations (internal / ObjFMInst) or the target's own mirror failure
+    state (external)."""
+    effects = []
+    for variable, fail_value in failure_effects.items():
+        if variable in repair_effects:
+            otherwise = _const(repair_effects[variable])
+        else:
+            otherwise = _target_init(model, target, variable)
+            if otherwise is None:
+                if isinstance(fail_value, bool):
+                    otherwise = _const(not fail_value)
+                else:
+                    raise ValueError(
+                        f"ObjFM `{name}`: cannot resolve the initial value of "
+                        f"`{target}.{variable}` (reinitialization semantics) — "
+                        "declare repair_effects"
+                    )
+        effects.append(
+            {
+                "target": {"component": target, "attribute": variable},
+                "value": {
+                    "op": "if",
+                    "cond": gate,
+                    "then": _const(fail_value),
+                    "otherwise": otherwise,
+                },
+            }
+        )
+    return effects
+
+
+def _reinit_effects(
+    name: str,
+    targets: list,
+    impacting: dict,
+    failure_effects: dict,
+    repair_effects: dict,
+    model: dict,
+) -> list[dict]:
+    """Internal-mode reinitialization effects (shared by the internal ObjFM
+    and ObjFMInst CCF expansions): per target, the gate is the OR over the
+    impacting combinations' failure (`occ`) states."""
+    effects = []
+    for target in targets:
+        gates = [_state_active(name, aut, st) for aut, st in impacting[target]]
+        if not gates:
+            continue
+        effects += _reinit_effect(
+            name, target, _bool_expr("or", gates), failure_effects, repair_effects, model
+        )
+    return effects
 
 
 # --- object expansions ------------------------------------------------------
@@ -174,7 +298,10 @@ def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], li
                 var_prod_cond=flow.get("var_prod_cond"),
             )
     for mode in spec.get("failure_modes", []):
-        if mode.get("law", "delay") == "delay":
+        # Occurrence-law kind: accept the cod3s `cls`, the plugin `law`,
+        # and the post-migration `distrib` spelling (as `_law` does).
+        kind = mode.get("law") or mode.get("cls") or mode.get("distrib") or "delay"
+        if kind == "delay":
             obj.add_delay_failure_mode(
                 name=mode["name"],
                 failure_time=mode["failure"],
@@ -194,22 +321,32 @@ def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], li
 
 
 def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
-    """cod3s ObjFM expansion, including **common-cause orders**: with
-    N targets, cod3s creates one automaton per target combination of
-    every *active* order (`fm__cc_i_j`, states `occ__cc_i_j` /
-    `rep__cc_i_j`, transitions named after the target states —
-    underscore-separated indices since cod3s 1.9.0). Per-order laws
-    come as lists in ``"failure"`` / ``"repair"`` (``null`` = inactive
-    order, mirroring `drop_inactive_automata`).
+    """cod3s ObjFM expansion — three behaviours over N targets and every
+    *active* common-cause order (`fm__cc_i_j`, states `occ__cc_i_j` /
+    `rep__cc_i_j`, transitions named after the target states;
+    underscore-separated indices since cod3s 1.9.0; per-order laws as
+    ``null``-padded lists in ``"failure"`` / ``"repair"``):
 
-    Effects follow a *reinitialization* semantics: the
-    target variable holds its failure value while ANY impacting
-    combination sits in its failure state, and its INITIAL value
-    otherwise (the engine reinitializes such variables at every step
-    before re-applying the occurrence enforcers — a design property of
-    the internal mode: repair_effects are unnecessary by
-    construction)."""
+    - ``internal`` (default): the ObjFM writes each target attribute directly,
+      held at its failure value while ANY impacting combination is failed, its
+      initial value otherwise (reinitialization — repair_effects unnecessary by
+      construction);
+    - ``external`` (mutual lock): a boolean control attribute
+      ``ctrl_{name}_{target}`` = OR(impacting occ) drives a mirror automaton
+      grafted into each target; a combination can only (re)fail once its
+      targets are repaired and (re)repair once they are failed;
+    - ``external_rep_indep`` (trigger): the ObjFM resets instantly and each
+      target latches the failure until it repairs on its own order-1 law."""
     import itertools
+
+    behaviour = spec.get("behaviour", "internal")
+    if behaviour not in ("internal", "external", "external_rep_indep"):
+        raise ValueError(
+            f"ObjFM `{spec['name']}`: unknown behaviour `{behaviour}` "
+            "(expected 'internal', 'external' or 'external_rep_indep')"
+        )
+    rep_indep = behaviour == "external_rep_indep"
+    external = behaviour == "external" or rep_indep
 
     name = spec["name"]
     targets = spec["targets"]
@@ -233,153 +370,276 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
 
     automata = []
     impacting: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
+    # Sequence monitoring: internal ObjFMs carry the sequence events on
+    # their own occ/rep transitions; external modes carry them on the
+    # TARGET's grafted mirror instead (cod3s drops the external ObjFM's own
+    # events — in rep_indep its instant occ+rep pair would always cancel).
+    monitored = not external
     for order in range(1, order_max + 1):
         f_law = failure_laws[order - 1]
         r_law = repair_laws[order - 1]
-        if f_law is None or r_law is None:
-            continue  # inactive order
+        if f_law is None:
+            continue  # inactive order (cod3s `drop_inactive_automata`)
         for comb in itertools.combinations(range(order_max), order):
-            suffix = (
-                "__cc_" + "_".join(str(i + 1) for i in comb) if order_max > 1 else ""
-            )
+            suffix = _ccf_suffix(comb, order_max)
             aut_name = f"fm{suffix}"
             occ = f"{failure_state}{suffix}"
             rep = f"{repair_state}{suffix}"
+            fail_guard = _cond_tree(spec.get("failure_cond", True), inner, outer)
+            repair_guard = _cond_tree(spec.get("repair_cond", True), inner, outer)
+            if external:
+                # Mutual lock: fail only once all combo targets are repaired.
+                fail_guard = _bool_expr(
+                    "and",
+                    [fail_guard]
+                    + [_state_active(targets[i], name, repair_state) for i in comb],
+                )
+            # Repair transition: rep_indep resets instantly (structural,
+            # law-independent); otherwise only an ACTIVE repair law builds
+            # one — a non-repairable mode keeps its failure with an
+            # absorbing occ state (cod3s `is_occ_law_repair_active`).
+            if rep_indep:
+                repair_guard = _const(True)
+                repair_fields: dict | None = {"distrib": "delay", "time": 0.0}
+            elif r_law is None:
+                repair_fields = None
+            else:
+                repair_fields = _law(r_law)
+                if external:
+                    # Repair only once all combo targets are failed.
+                    repair_guard = _bool_expr(
+                        "and",
+                        [repair_guard]
+                        + [_state_active(targets[i], name, failure_state) for i in comb],
+                    )
+            transitions = [
+                {
+                    "name": "failure" if order_max == 1 else occ,
+                    "source": rep,
+                    "targets": [occ],
+                    "guard": fail_guard,
+                    "monitored": monitored,
+                    "cycle_group": aut_name,
+                    **_law(f_law),
+                }
+            ]
+            if repair_fields is not None:
+                transitions.append(
+                    {
+                        "name": "repair" if order_max == 1 else rep,
+                        "source": occ,
+                        "targets": [rep],
+                        "guard": repair_guard,
+                        "monitored": monitored,
+                        "cycle_group": aut_name,
+                        **repair_fields,
+                    }
+                )
             automata.append(
                 {
                     "name": aut_name,
                     "states": [rep, occ],
                     "init": rep,
-                    "transitions": [
-                        {
-                            "name": "failure" if order_max == 1 else occ,
-                            "source": rep,
-                            "targets": [occ],
-                            "guard": _cond_tree(
-                                spec.get("failure_cond", True), inner, outer
-                            ),
-                            **_law(f_law),
-                        },
-                        {
-                            "name": "repair" if order_max == 1 else rep,
-                            "source": occ,
-                            "targets": [rep],
-                            "guard": _cond_tree(
-                                spec.get("repair_cond", True), inner, outer
-                            ),
-                            **_law(r_law),
-                        },
-                    ],
+                    "transitions": transitions,
                 }
             )
             for idx in comb:
                 impacting[targets[idx]].append((aut_name, occ))
 
-    # Internal-mode reinitialization semantics: the target variables
-    # are *reinitialized to their initial value at every step*, then the
-    # occ-state enforcers of the failed combinations re-apply their
-    # failure values. Net semantics:
-    # `var = failure value while ANY impacting combination is failed,
-    # its initial value otherwise` — an OR over the occ states, with
-    # the initial value (not a repair effect) as the rest state. This
-    # is why cod3s models omit repair_effects in internal mode (and
-    # why adding them hangs the simulator on multi-order ObjFMs).
-    def target_init(target, variable):
+    if not external:
+        # INTERNAL (default): reinitialization semantics — the ObjFM writes each
+        # target attribute directly, held at its failure value while ANY
+        # impacting combination is failed (the OR gate), its initial value
+        # otherwise. cod3s models omit repair_effects here (adding them hangs
+        # the simulator on multi-order ObjFMs).
+        effects = _reinit_effects(
+            name, targets, impacting, failure_effects, repair_effects, model
+        )
+        functions = [{"name": "apply_effects", "effects": effects}] if effects else []
+        component = {
+            "name": name,
+            "attributes": [],
+            "ports": [],
+            "interfaces": [],
+            "automata": automata,
+            "sensitive_functions": functions,
+            "equations": [],
+        }
+        return [component], [], []
+
+    def target_component(cname):
         for component in model.get("components", []):
-            if component.get("name") != target:
-                continue
-            for entry in component.get("attributes", []):
-                if entry.get("name") == variable:
-                    return {"op": "const", "value": entry["init"]}
+            if component.get("name") == cname:
+                return component
         return None
 
-    effects = []
+    # EXTERNAL / EXTERNAL_REP_INDEP (cod3s FEAT_OBJFM_SPECS Rev 1.1): a boolean
+    # control attribute `ctrl_{name}_{target}` on the ObjFM drives a mirror
+    # automaton grafted into each target; the failure/repair effects apply
+    # through the target's mirror state. In `external` the control follows
+    # `OR(impacting ObjFM automata in occ)`; in `external_rep_indep` the
+    # trigger is transient, so the control also latches on the target's own
+    # occ state (held until the target repairs on its own).
+    ctrl_attributes = []
+    ctrl_functions = []
     for target in targets:
-        gates = [
+        ctrl = f"ctrl_{name}_{target}"
+        ctrl_attributes.append(
+            {"name": ctrl, "kind": "bool", "init": {"kind": "bool", "value": False}}
+        )
+        occ_gates = [_state_active(name, aut, st) for aut, st in impacting[target]]
+        if rep_indep:
+            occ_gates = occ_gates + [_state_active(target, name, failure_state)]
+        ctrl_functions.append(
             {
-                "op": "state_active",
-                "state": {"component": name, "automaton": aut, "state": st},
+                "name": f"update_{ctrl}",
+                "effects": [
+                    {
+                        "target": {"component": name, "attribute": ctrl},
+                        "value": _bool_expr("or", occ_gates),
+                    }
+                ],
             }
-            for aut, st in impacting[target]
-        ]
-        if not gates:
-            continue
-        gate = gates[0] if len(gates) == 1 else {
-            "op": "bool",
-            "bool_op": "or",
-            "args": gates,
-        }
-        for variable, fail_value in failure_effects.items():
-            if variable in repair_effects:
-                # Explicit repair value (RAICHU extension: safe here,
-                # hangs cod3s multi-order internal ObjFMs).
-                otherwise = _const(repair_effects[variable])
-            else:
-                otherwise = target_init(target, variable)
-                if otherwise is None:
-                    if isinstance(fail_value, bool):
-                        otherwise = _const(not fail_value)
-                    else:
-                        raise ValueError(
-                            f"ObjFM `{name}`: cannot resolve the initial "
-                            f"value of `{target}.{variable}` (reinit "
-                            "semantics) — declare repair_effects"
-                        )
-            effects.append(
-                {
-                    "target": {"component": target, "attribute": variable},
-                    "value": {
-                        "op": "if",
-                        "cond": gate,
-                        "then": _const(fail_value),
-                        "otherwise": otherwise,
-                    },
-                }
-            )
-    functions = [{"name": "apply_effects", "effects": effects}] if effects else []
+        )
 
-    component = {
+    objfm_component = {
         "name": name,
-        "attributes": [],
+        "attributes": ctrl_attributes,
         "ports": [],
         "interfaces": [],
         "automata": automata,
-        "sensitive_functions": functions,
+        "sensitive_functions": ctrl_functions,
         "equations": [],
     }
-    return [component], [], []
+
+    for target in targets:
+        comp = target_component(target)
+        if comp is None:
+            raise ValueError(
+                f"ObjFM `{name}` ({behaviour}): target component `{target}` is "
+                "not (yet) present — external modes graft a mirror automaton "
+                "into the target in place, so each target must be declared "
+                "before this ObjFM (unlike `internal`, which resolves targets "
+                "by name at load time)"
+            )
+        # The mirror automaton is named after the ObjFM and its effect function
+        # `apply_{name}`; guard against grafting over a member the target
+        # already owns (a duplicate-name model whose validation error would not
+        # point back here).
+        apply_fn = f"apply_{name}"
+        if any(a.get("name") == name for a in comp.get("automata", [])):
+            raise ValueError(
+                f"ObjFM `{name}` ({behaviour}): target `{target}` already has an "
+                f"automaton named `{name}` — rename the ObjFM or the automaton"
+            )
+        if any(f.get("name") == apply_fn for f in comp.get("sensitive_functions", [])):
+            raise ValueError(
+                f"ObjFM `{name}` ({behaviour}): target `{target}` already has a "
+                f"sensitive function named `{apply_fn}` — rename the ObjFM"
+            )
+        ctrl = f"ctrl_{name}_{target}"
+        if rep_indep:
+            # The target owns its repair: order-1 law of the ObjFM, gated by the
+            # user repair_cond evaluated on the target.
+            if repair_laws[0] is None:
+                raise ValueError(
+                    f"ObjFM `{name}` (external_rep_indep): the order-1 repair "
+                    "law is inactive but drives each target's repair"
+                )
+            repair_transition = {
+                "name": repair_state,
+                "source": failure_state,
+                "targets": [repair_state],
+                "guard": _cond_tree(spec.get("repair_cond", True), inner, outer),
+                "monitored": True,
+                "cycle_group": name,
+                **_law(repair_laws[0]),
+            }
+        else:
+            # external: the target mirror follows the control attribute.
+            repair_transition = {
+                "name": repair_state,
+                "source": failure_state,
+                "targets": [repair_state],
+                "guard": _attr_is(name, ctrl, False),
+                "monitored": True,
+                "cycle_group": name,
+                "distrib": "delay",
+                "time": 0.0,
+            }
+        # The target mirror carries the external mode's sequence events
+        # (cod3s drops the external ObjFM's own occ/rep and pairs the
+        # target's `{fm}` occ/rep instead); the filter's (component,
+        # group) key makes the pair unique per (target, ObjFM).
+        comp.setdefault("automata", []).append(
+            {
+                "name": name,
+                "states": [repair_state, failure_state],
+                "init": repair_state,
+                "transitions": [
+                    {
+                        "name": failure_state,
+                        "source": repair_state,
+                        "targets": [failure_state],
+                        "guard": _attr_is(name, ctrl, True),
+                        "monitored": True,
+                        "cycle_group": name,
+                        "distrib": "delay",
+                        "time": 0.0,
+                    },
+                    repair_transition,
+                ],
+            }
+        )
+        effects = _reinit_effect(
+            name,
+            target,
+            _state_active(target, name, failure_state),
+            failure_effects,
+            repair_effects,
+            model,
+        )
+        if effects:
+            comp.setdefault("sensitive_functions", []).append(
+                {"name": f"apply_{name}", "effects": effects}
+            )
+
+    return [objfm_component], [], []
 
 
 def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
     """cod3s `ObjFMInst` expansion — **failure on solicitation**
-    (user guide `objfm-inst.md`, ADR 2026-07-05).
+    (user guide `objfm-inst.md`, ADR 2026-07-05), including **common
+    cause** (test_objfm_inst_002_ccf).
 
     The demand is ``failure_cond``; on each demand *front* the mode fails
     with probability ``gamma`` — one Bernoulli draw, instantaneously —
-    and is repaired by an exponential ``mu``. Realised as a **3-state**
-    automaton (`rep` / `occ` / `not_occ`):
+    and is repaired by an exponential ``mu``. Each cc-combination is a
+    **3-state** automaton (`rep` / `occ` / `not_occ`):
 
-    - `rep --occ [inst, guard=demand]--> {occ: gamma, not_occ: 1-gamma}` —
+    - `rep --[inst, guard=demand]--> {occ: gamma_k, not_occ: 1-gamma_k}` —
       the draw (a branching instantaneous transition, RAICHU brique 2);
-    - `not_occ --not_occ [inst p=1, guard=NOT demand]--> rep` — the
-      deterministic re-arm; `not_occ` absorbs the front so no re-draw
-      happens while the demand holds (anti-Zeno);
-    - `occ --rep [exp(mu), guard=repair_cond]--> rep` — the repair.
+    - `not_occ --[inst p=1, guard=NOT demand]--> rep` — the deterministic
+      re-arm; `not_occ` absorbs the front so no re-draw happens while the
+      demand holds (anti-Zeno);
+    - `occ --[exp(mu_k), guard=repair_cond]--> rep` — the repair
+      (omitted when ``mu_k = 0`` — occ absorbing).
 
-    ``failure_effects`` apply on entering `occ`; the resting value is the
-    target's initial value (reinitialization semantics, as `internal`).
-
-    Single target for now; per-target common-cause draws (``failure_param``
-    as a per-order list) are a follow-up.
+    With N targets, `failure_param = [gamma_1, …, gamma_n]` (per order)
+    generates the 2^N−1 combination automata (`__cc_` suffix), one per
+    non-empty subset of an *active* order; each draws **independently** on
+    a shared front. ``failure_effects`` apply while ANY impacting
+    combination sits in its `occ` (reinitialization semantics, as the
+    internal CCF). A single scalar `gamma` with one target is the order-1
+    special case (no suffix, automaton `fm`).
     """
+    import itertools
+
     name = spec["name"]
     targets = spec["targets"]
-    if len(targets) != 1:
-        raise NotImplementedError(
-            f"ObjFMInst `{name}`: only a single target is supported for now "
-            f"(got {targets}); declare one ObjFMInst per target"
-        )
-    target = targets[0]
+    order_max = len(targets)
+    if order_max == 0:
+        raise ValueError(f"ObjFMInst `{name}`: `targets` must be non-empty")
     failure_state = spec.get("failure_state", "occ")
     repair_state = spec.get("repair_state", "rep")
     absorb_state = spec.get("absorb_state", "not_occ")
@@ -388,108 +648,111 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
     inner = spec.get("cond_inner_logic", "all")
     outer = spec.get("cond_outer_logic", "any")
 
-    # gamma from the `failure` inst-law spec (or `failure_param`).
+    # Per-order gammas (`failure`/`failure_param`) and mus (`repair`/
+    # `repair_param`): a scalar means one value; a list is per order,
+    # padded with `None` (inactive order) to the target count. A scalar
+    # repair is *broadcast* to every order (not just order 1).
     fspec = spec.get("failure", spec.get("failure_param"))
-    if isinstance(fspec, list):
-        raise NotImplementedError(
-            f"ObjFMInst `{name}`: per-order common-cause `failure_param` "
-            "lists are a follow-up; pass a scalar gamma"
+    if fspec is None:
+        raise ValueError(
+            f"ObjFMInst `{name}`: missing `failure` (or `failure_param`) — "
+            "the per-order Bernoulli gamma(s)"
         )
-    gamma = float(
-        fspec.get("prob", fspec.get("gamma")) if isinstance(fspec, dict) else fspec
-    )
-    if not 0.0 <= gamma <= 1.0:
-        raise ValueError(f"ObjFMInst `{name}`: gamma must be in [0, 1] (got {gamma})")
-
-    # mu: exponential repair (`repair` law spec, or `repair_param` scalar).
-    # `mu = 0` means *no repair* — `occ` is absorbing (one failure per
-    # demand, never repaired), matching cod3s `is_occ_law_repair_active`.
+    failure_specs = list(fspec) if isinstance(fspec, list) else [fspec]
+    failure_specs += [None] * (order_max - len(failure_specs))
     rspec = spec.get("repair", spec.get("repair_param", 0.0))
-    repair_law = (
-        _law(rspec) if isinstance(rspec, dict) else {"distrib": "exp", "rate": float(rspec)}
-    )
-    mu = float(repair_law.get("rate", 0.0))
+    if isinstance(rspec, list):
+        repair_specs = list(rspec) + [None] * (order_max - len(rspec))
+    else:
+        repair_specs = [rspec] * order_max
+
+    def gamma_of(fs):
+        if fs is None:
+            return None
+        raw = fs.get("prob", fs.get("gamma")) if isinstance(fs, dict) else fs
+        if raw is None:
+            raise ValueError(
+                f"ObjFMInst `{name}`: a failure spec is missing its `prob`/`gamma`"
+            )
+        g = float(raw)
+        if not 0.0 <= g <= 1.0:
+            raise ValueError(f"ObjFMInst `{name}`: gamma must be in [0, 1] (got {g})")
+        return g
+
+    def repair_of(rs):
+        """(build_repair, law): whether an occ->rep transition is
+        generated and its law. `None` or an exponential rate 0 means no
+        repair (occ absorbing, cod3s `is_occ_law_repair_active` false); a
+        delay law or a positive exp rate builds a real repair."""
+        if rs is None:
+            return False, None
+        law = _law(rs) if isinstance(rs, dict) else {"distrib": "exp", "rate": float(rs)}
+        if law["distrib"] == "exp" and float(law.get("rate", 0.0)) == 0.0:
+            return False, law
+        return True, law
 
     demand = _cond_tree(spec.get("failure_cond", True), inner, outer)
     not_demand = _negate(demand)
     repair_guard = _cond_tree(spec.get("repair_cond", True), inner, outer)
 
-    transitions = [
-        {  # the draw: rep -> occ (gamma) | not_occ (1 - gamma)
-            "name": failure_state,
-            "source": repair_state,
-            "targets": [failure_state, absorb_state],
-            "guard": demand,
-            "distrib": "inst",
-            "probs": [gamma],
-        },
-        {  # deterministic re-arm when the demand falls (inst p = 1)
-            "name": absorb_state,
-            "source": absorb_state,
-            "targets": [repair_state],
-            "guard": not_demand,
-            "distrib": "inst",
-            "probs": [],
-        },
-    ]
-    if mu > 0.0:
-        transitions.append(
-            {  # exponential repair
-                "name": repair_state,
-                "source": failure_state,
-                "targets": [repair_state],
-                "guard": repair_guard,
-                **repair_law,
-            }
-        )
-
-    automaton = {
-        "name": "fm",
-        "states": [repair_state, failure_state, absorb_state],
-        "init": repair_state,
-        "transitions": transitions,
-    }
-
-    def target_init(variable):
-        for component in model.get("components", []):
-            if component.get("name") != target:
-                continue
-            for entry in component.get("attributes", []):
-                if entry.get("name") == variable:
-                    return {"op": "const", "value": entry["init"]}
-        return None
-
-    # Reinitialization semantics: fail value while `occ`, initial value
-    # (or explicit repair value) otherwise.
-    gate = {
-        "op": "state_active",
-        "state": {"component": name, "automaton": "fm", "state": failure_state},
-    }
-    effects = []
-    for variable, fail_value in failure_effects.items():
-        if variable in repair_effects:
-            otherwise = _const(repair_effects[variable])
-        else:
-            otherwise = target_init(variable)
-            if otherwise is None:
-                if isinstance(fail_value, bool):
-                    otherwise = _const(not fail_value)
-                else:
-                    raise ValueError(
-                        f"ObjFMInst `{name}`: cannot resolve the initial value "
-                        f"of `{target}.{variable}` — declare repair_effects"
-                    )
-        effects.append(
-            {
-                "target": {"component": target, "attribute": variable},
-                "value": {
-                    "op": "if",
-                    "cond": gate,
-                    "then": _const(fail_value),
-                    "otherwise": otherwise,
+    automata = []
+    impacting: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
+    for order in range(1, order_max + 1):
+        gamma = gamma_of(failure_specs[order - 1])
+        if gamma is None:
+            continue  # inactive order (dropped, like the internal CCF)
+        build_repair, repair_law = repair_of(repair_specs[order - 1])
+        for comb in itertools.combinations(range(order_max), order):
+            suffix = _ccf_suffix(comb, order_max)
+            occ = f"{failure_state}{suffix}"
+            rep = f"{repair_state}{suffix}"
+            absorb = f"{absorb_state}{suffix}"
+            transitions = [
+                {  # the draw: rep -> occ (gamma_k) | not_occ (1 - gamma_k)
+                    "name": occ,
+                    "source": rep,
+                    "targets": [occ, absorb],
+                    "guard": demand,
+                    "distrib": "inst",
+                    "probs": [gamma],
                 },
-            }
-        )
+                {  # deterministic re-arm when the demand falls (inst p = 1)
+                    "name": absorb,
+                    "source": absorb,
+                    "targets": [rep],
+                    "guard": not_demand,
+                    "distrib": "inst",
+                    "probs": [],
+                },
+            ]
+            if build_repair:
+                transitions.append(
+                    {
+                        "name": rep,
+                        "source": occ,
+                        "targets": [rep],
+                        "guard": repair_guard,
+                        **repair_law,
+                    }
+                )
+            automata.append(
+                {
+                    "name": f"fm{suffix}",
+                    "states": [rep, occ, absorb],
+                    "init": rep,
+                    "transitions": transitions,
+                }
+            )
+            for idx in comb:
+                impacting[targets[idx]].append((f"fm{suffix}", occ))
+
+    # Reinitialization semantics: each target's variable holds its fail
+    # value while ANY impacting combination sits in its `occ` (an OR over
+    # those occ states), the initial (or explicit repair) value otherwise —
+    # identical to the internal CCF, hence the shared helper.
+    effects = _reinit_effects(
+        name, targets, impacting, failure_effects, repair_effects, model
+    )
     functions = [{"name": "apply_effects", "effects": effects}] if effects else []
 
     component = {
@@ -497,7 +760,7 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
         "attributes": [],
         "ports": [],
         "interfaces": [],
-        "automata": [automaton],
+        "automata": automata,
         "sensitive_functions": functions,
         "equations": [],
     }
@@ -534,6 +797,8 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
                         "source": not_occ,
                         "targets": [occ],
                         "guard": cond,
+                        "monitored": True,
+                        "cycle_group": name,
                         "distrib": "delay",
                         "time": float(spec.get("tempo_occ", 0)),
                     },
@@ -542,6 +807,8 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
                         "source": occ,
                         "targets": [not_occ],
                         "guard": _negate(cond),
+                        "monitored": True,
+                        "cycle_group": name,
                         "distrib": "delay",
                         "time": float(spec.get("tempo_not_occ", 0)),
                     },
@@ -549,6 +816,90 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
             }
         ],
         "sensitive_functions": [],
+        "equations": [],
+    }
+    # A feared event marked `"target": true` becomes a sequence-analysis
+    # target: reaching its `occ` state ends and labels a trajectory.
+    if spec.get("target"):
+        model.setdefault("targets", []).append(
+            {"name": name, "component": name, "automaton": aut, "state": occ}
+        )
+    return [component], [], []
+
+
+def _expand_objlogicgate(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """muscadet `ObjLogicGate` (`muscadet/obj_logic.py`): a combinational
+    boolean gate, **automaton-free**. A `result` attribute is recomputed —
+    edge-triggered by a sensitive function whenever a referenced input
+    changes — as `kind` over the condition leaves. By convention `cond` is
+    one unit clause per source (`[[s1], [s2], …]`), so `kind` alone chooses
+    the aggregation:
+
+    - ``or``  → any source true;
+    - ``and`` → all sources true;
+    - ``k``   → at least ``k`` sources true (count ≥ k).
+
+    Each ``out_elements`` entry exports ``result`` through one out port; a
+    gate feeding several targets (broadcast) is simply several out ports /
+    connections. Mirrors muscadet's ``result`` variable + sensitive method
+    (`obj_logic.py:95-138`)."""
+    name = spec["name"]
+    kind = spec.get("kind", "or")
+    inner = spec.get("inner_logic", "all")
+    groups = _cond_groups(spec.get("cond", []), inner)
+    if not groups:
+        # An empty condition would silently evaluate as a CONSTANT gate
+        # (empty OR = false, empty AND = true) — fail at build time instead.
+        raise ValueError(
+            f"ObjLogicGate `{name}`: empty or missing `cond` — declare at "
+            "least one source leaf"
+        )
+
+    if kind == "or":
+        value = {"op": "bool", "bool_op": "or", "args": groups}
+    elif kind == "and":
+        value = {"op": "bool", "bool_op": "and", "args": groups}
+    elif kind == "k":
+        k = spec.get("k")
+        if not isinstance(k, int) or isinstance(k, bool) or k < 1:
+            raise ValueError(
+                f"ObjLogicGate `{name}`: kind 'k' needs an integer threshold "
+                f"k >= 1 (got {k!r})"
+            )
+        # count of true source flags ≥ k
+        count = {
+            "op": "add",
+            "args": [
+                {"op": "if", "cond": g, "then": _const(1), "otherwise": _const(0)}
+                for g in groups
+            ],
+        }
+        value = {"op": "cmp", "cmp": "ge", "lhs": count, "rhs": _const(k)}
+    else:
+        raise ValueError(
+            f"ObjLogicGate `{name}`: unknown kind `{kind}` (expected 'or', 'and' or 'k')"
+        )
+
+    ports = [
+        {"name": f"{elem}_out", "dir": "out", "attr": "result"}
+        for elem in spec.get("out_elements", [])
+    ]
+    component = {
+        "name": name,
+        "attributes": [
+            {"name": "result", "kind": "bool", "init": {"kind": "bool", "value": False}}
+        ],
+        "ports": ports,
+        "interfaces": [],
+        "automata": [],
+        "sensitive_functions": [
+            {
+                "name": f"recompute_{name}",
+                "effects": [
+                    {"target": {"component": name, "attribute": "result"}, "value": value}
+                ],
+            }
+        ],
         "equations": [],
     }
     return [component], [], []
@@ -562,6 +913,7 @@ class MuscadetPlugin:
         "ObjFM": staticmethod(_expand_objfm),
         "ObjFMInst": staticmethod(_expand_objfm_inst),
         "ObjEvent": staticmethod(_expand_objevent),
+        "ObjLogicGate": staticmethod(_expand_objlogicgate),
     }
 
     def expand_object(
