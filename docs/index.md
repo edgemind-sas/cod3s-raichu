@@ -37,6 +37,13 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
 - **Answers "why".** An optional causal journal records why a transition
   did or did not fire, who changed an attribute, and the full consequence
   chain of an event. See [Causal journal](guides/causal-journal.md).
+- **The safety output, natively.** Declare a feared event, and a
+  Monte-Carlo campaign yields the **minimal cut sequences** — the ordered,
+  irreducible failure chains leading to it — plus first-occurrence
+  indicators. See [Sequence analysis](guides/sequence-analysis.md).
+- **Imports platform studies.** Models and studies exported from a COD3S
+  platform instance translate directly into runnable RAICHU models. See
+  [Platform import](guides/platform-import.md).
 
 ## Install
 
@@ -98,8 +105,8 @@ print("unavailability:", round(estimates.indicators["P_failed"].mean[-1], 3))
 - **[Model schema reference](reference/model-schema.md)** — every field,
   distribution and expression operator.
 - **[Advanced guides](guides/reproducibility.md)** — reproducibility,
-  numerical tuning, the causal journal, the muscadet authoring layer,
-  parallelism.
+  numerical tuning, the causal journal, sequence analysis, the muscadet
+  authoring layer, platform import, parallelism.
 - **[Benchmarks](benchmarks/cross-validation.md)** — RAICHU measured,
   honestly, against an established C++ engine.
 
