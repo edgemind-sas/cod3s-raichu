@@ -17,6 +17,7 @@ from ._pyraichu import (
     ModelError,
     SimulationError,
     __version__,
+    analyse_sequences_json,
     monte_carlo_json,
     simulate_json,
     validate_model,
@@ -38,6 +39,7 @@ __all__ = [
     "SimulationError",
     "SimulationResult",
     "__version__",
+    "analyse_sequences",
     "expand_model",
     "interactive",
     "load_model",
@@ -141,6 +143,8 @@ class IndicatorEstimate:
     std: list[float]
     sojourn_mean: list[float]
     sojourn_std: list[float]
+    nb_occurrences_mean: list[float]
+    nb_occurrences_std: list[float]
     quantiles: dict[float, list[float]]
     sojourn_quantiles: dict[float, list[float]]
 
@@ -174,6 +178,7 @@ def monte_carlo(
     max_step: float | None = None,
     tol_event: float | None = None,
     sub_samples: int | None = None,
+    stop_at_targets: bool = False,
 ) -> McEstimates:
     """Estimate indicator statistics over ``nb_runs`` replicas.
 
@@ -186,6 +191,11 @@ def monte_carlo(
     ``rtol``/``atol``/``max_step``/``tol_event``/``sub_samples``
     override the ODE-backend parameters (engine defaults when omitted):
     the integration-effort knobs of the tolerance-parity experiments.
+
+    ``stop_at_targets=True`` early-stops each trajectory at the first
+    sequence target (feared event) and holds the frozen state through the
+    remaining sample instants — the latch semantics of target-stopped
+    studies (first-occurrence measures instead of free-cycling ones).
     """
     raw = json.loads(
         monte_carlo_json(
@@ -201,6 +211,7 @@ def monte_carlo(
             max_step,
             tol_event,
             sub_samples,
+            stop_at_targets,
         )
     )
     indicators = {
@@ -211,6 +222,8 @@ def monte_carlo(
             std=e["std"],
             sojourn_mean=e["sojourn_mean"],
             sojourn_std=e["sojourn_std"],
+            nb_occurrences_mean=e["nb_occurrences_mean"],
+            nb_occurrences_std=e["nb_occurrences_std"],
             quantiles={s["q"]: s["values"] for s in e["quantiles"]},
             sojourn_quantiles={s["q"]: s["values"] for s in e["sojourn_quantiles"]},
         )
@@ -221,6 +234,28 @@ def monte_carlo(
         nb_runs=raw["nb_runs"],
         seed=raw["seed"],
         engine_version=raw["engine_version"],
+    )
+
+
+def analyse_sequences(
+    model: Model,
+    nb_runs: int,
+    t_max: float,
+    seed: int = 0,
+    threads: int | None = None,
+) -> list[dict[str, Any]]:
+    """Native minimal-sequence analysis — the RAMS output.
+
+    Run ``nb_runs`` sequence-recording replicas (each early-stopping at the
+    first feared-event target), then group → filter transient failure/repair
+    cycles → greedily absorb super-sequences, returning the **minimal
+    sequences** cod3s produces through its ``SequenceAnalyser``. Each entry is
+    ``{events: [{obj, attr, time}], end_cause, end_time, weight}`` (``weight``
+    = the number of trajectories that collapsed into it). The model must
+    declare at least one target (an ``ObjEvent`` with ``"target": true``).
+    """
+    return json.loads(
+        analyse_sequences_json(model.json, nb_runs, t_max, seed, threads)
     )
 
 

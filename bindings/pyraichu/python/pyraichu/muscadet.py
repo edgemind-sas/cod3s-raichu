@@ -24,9 +24,9 @@ Semantics generated per flow (mirroring `muscadet/flow.py`):
   ``k >= n``) of the connected producers' ``f_fed_out``;
 - flow out ``f``: bool ``f_fed_out`` := production condition (AND of
   the declared ``var_prod_cond`` in-flows, or the ``var_prod_default``
-  constant) AND ``f_available_out`` (driven by failure modes);
+  constant) AND ``f_fed_available_out`` (driven by failure modes);
 - failure modes: two-state automaton (``ok``/``nok``) with delay or
-  exponential laws; ``nok`` forces ``f_available_out`` to ``False``.
+  exponential laws; ``nok`` forces ``f_fed_available_out`` to ``False``.
 """
 
 from __future__ import annotations
@@ -62,7 +62,9 @@ class _FlowIn:
 class _FlowOut:
     name: str
     var_prod_default: bool = False
-    var_prod_cond: list[str] = field(default_factory=list)
+    # Flat list = one AND group; list-of-lists = DNF (outer-OR of
+    # inner-AND groups, the platform-export `prod_cond` form).
+    var_prod_cond: list[str] | list[list[str]] = field(default_factory=list)
     # muscadet `FlowOutTempo`: {"enable_time", "disable_time",
     # "init_enable"} — a disabled↔enabled automaton whose delayed
     # transitions are gated on the production condition (reset on
@@ -287,7 +289,9 @@ class ObjFlow:
 
         for flow in self.flows_out:
             fed_out = f"{flow.name}_fed_out"
-            available = f"{flow.name}_available_out"
+            # muscadet-aligned name (`FlowOut.var_fed_available_out`): real
+            # studies' failure_effects target `{flow}_fed_available_out`.
+            available = f"{flow.name}_fed_available_out"
             variables.append(
                 {"name": fed_out, "kind": "bool", "init": {"kind": "bool", "value": False}}
             )
@@ -320,20 +324,51 @@ class ObjFlow:
                     }
                 )
 
-            # Production condition.
+            # Production condition. `var_prod_cond` is either a flat list
+            # (one AND group — the historical form) or a DNF list-of-lists
+            # (outer-OR of inner-AND groups — the platform-export
+            # `prod_cond` form). A referenced flow resolves to this
+            # component's `_fed_in` (in-flow) or `_fed_out` (out-flow —
+            # the diagnostic-mirror pattern; the fixpoint handles the
+            # intra-component dependency without a topological sort).
+            in_names = {f.name for f in self.flows_in}
+            out_names = {f.name for f in self.flows_out}
+
+            def prod_ref(cond: str) -> dict:
+                if cond in in_names:
+                    return _var(me, f"{cond}_fed_in")
+                if cond in out_names:
+                    return _var(me, f"{cond}_fed_out")
+                raise ValueError(
+                    f"ObjFlow `{me}`: production condition of "
+                    f"`{flow.name}` references unknown flow `{cond}` "
+                    "(neither an in-flow nor an out-flow of this component)"
+                )
+
             if flow.var_prod_cond:
-                prod_terms: list[dict] = [
-                    _var(me, f"{cond}_fed_in") for cond in flow.var_prod_cond
-                ]
-            elif flow.var_prod_default:
-                prod_terms = [{"op": "const", "value": {"kind": "bool", "value": True}}]
+                groups = (
+                    flow.var_prod_cond
+                    if all(isinstance(g, list) for g in flow.var_prod_cond)
+                    else [flow.var_prod_cond]
+                )
+                or_terms = []
+                for group in groups:
+                    and_terms = [prod_ref(cond) for cond in group]
+                    or_terms.append(
+                        and_terms[0]
+                        if len(and_terms) == 1
+                        else {"op": "bool", "bool_op": "and", "args": and_terms}
+                    )
+                prod_expr: dict[str, Any] = (
+                    or_terms[0]
+                    if len(or_terms) == 1
+                    else {"op": "bool", "bool_op": "or", "args": or_terms}
+                )
             else:
-                prod_terms = [{"op": "const", "value": {"kind": "bool", "value": False}}]
-            prod_expr: dict[str, Any] = (
-                prod_terms[0]
-                if len(prod_terms) == 1
-                else {"op": "bool", "bool_op": "and", "args": prod_terms}
-            )
+                prod_expr = {
+                    "op": "const",
+                    "value": {"kind": "bool", "value": bool(flow.var_prod_default)},
+                }
 
             if flow.tempo is not None:
                 # FlowOutTempo: fed while `enabled`; the production

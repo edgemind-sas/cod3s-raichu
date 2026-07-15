@@ -33,6 +33,8 @@ fn single_law_model(distrib: Distrib) -> Model {
                     guard: None,
                     targets: vec!["nok".into()],
                     on_interruption: Default::default(),
+                    monitored: false,
+                    cycle_group: None,
                     distrib,
                 }],
             }],
@@ -48,6 +50,7 @@ fn single_law_model(distrib: Distrib) -> Model {
                 state: "nok".into(),
             },
         }],
+        targets: vec![],
     }
 }
 
@@ -68,6 +71,7 @@ fn assert_model_matches_cdf(model: &Model, instants: &[f64], cdf: impl Fn(f64) -
         threads: None,
         quantiles: vec![],
         ode: Default::default(),
+        stop_at_targets: false,
     };
     let estimates = run(&compiled, &config).unwrap();
     let est = &estimates.indicators[0];
@@ -166,6 +170,7 @@ fn quantiles_of_bernoulli_state_follow_the_probability() {
         threads: None,
         quantiles: vec![0.25, 0.75],
         ode: Default::default(),
+        stop_at_targets: false,
     };
     let estimates = run(&compiled, &config).unwrap();
     let est = &estimates.indicators[0];
@@ -200,6 +205,8 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
                         guard: None,
                         targets: vec!["hot".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Delay { time: 5.0 },
                     }],
                 },
@@ -213,6 +220,8 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
                         guard: None,
                         targets: vec!["nok".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Exp {
                             rate: None,
                             rate_expr: Some(Expr::If {
@@ -246,6 +255,7 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
                 state: "nok".into(),
             },
         }],
+        targets: vec![],
     }
 }
 
@@ -287,6 +297,8 @@ fn expvar_continuous_rate_matches_closed_form() {
                     guard: None,
                     targets: vec!["nok".into()],
                     on_interruption: Default::default(),
+                    monitored: false,
+                    cycle_group: None,
                     distrib: Distrib::Exp {
                         rate: None,
                         rate_expr: Some(Expr::Mul {
@@ -323,6 +335,7 @@ fn expvar_continuous_rate_matches_closed_form() {
                 state: "nok".into(),
             },
         }],
+        targets: vec![],
     };
     assert_model_matches_cdf(&model, &[4.0, 8.0, 10.0], |t| 1.0 - (-0.01 * t * t).exp());
 }

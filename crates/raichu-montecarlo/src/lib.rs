@@ -22,7 +22,7 @@
 //! the sojourn-time measure).
 
 use raichu_core::{
-    CompiledModel, Engine, EngineConfig, EngineError, IndicatorSeries, SolverParams,
+    CompiledModel, Engine, EngineConfig, EngineError, IndicatorSeries, Sequence, SolverParams,
 };
 use raichu_expr::Value;
 use serde::Serialize;
@@ -49,6 +49,12 @@ pub struct McConfig {
     /// (engine defaults unless overridden — the knob of the
     /// tolerance-parity experiments; recorded as provenance upstream).
     pub ode: SolverParams,
+    /// Early-stop each trajectory at the first sequence target (feared
+    /// event) and hold the frozen state through the remaining sample
+    /// instants — the latch semantics of target-stopped studies (the
+    /// reference regime of recorded sequence campaigns). Ignored when the
+    /// model declares no target.
+    pub stop_at_targets: bool,
 }
 
 /// A quantile series over the schedule instants.
@@ -76,6 +82,11 @@ pub struct IndicatorEstimate {
     pub sojourn_mean: Vec<f64>,
     /// Sample standard deviation of the cumulated sojourn.
     pub sojourn_std: Vec<f64>,
+    /// Mean number of occurrences (state entries / rising edges) up to each
+    /// instant — the RAMS `nb-occurrences` measure.
+    pub nb_occurrences_mean: Vec<f64>,
+    /// Sample standard deviation of the occurrence count.
+    pub nb_occurrences_std: Vec<f64>,
     /// Requested quantiles of the sampled value.
     pub quantiles: Vec<QuantileSeries>,
     /// Requested quantiles of the cumulated sojourn.
@@ -118,8 +129,31 @@ fn sojourn_at(points: &[(f64, Value)], instant: f64) -> f64 {
     acc
 }
 
-/// One replica's samples: `[indicator][instant] → (value, sojourn)`.
-type ReplicaSamples = Vec<Vec<(f64, f64)>>;
+/// Number of **occurrences** (state entries) up to `instant`: the count of
+/// rising edges in the change-point series — a value going from ≤ 0 to > 0,
+/// including an active initial value. This is the RAMS `nb-occurrences`
+/// measure (how many times the feared event happened by `instant`).
+fn nb_occurrences_at(points: &[(f64, Value)], instant: f64) -> f64 {
+    let mut count = 0.0;
+    let mut prev = 0.0;
+    for (t_start, value) in points {
+        // Inclusive bound: an entry AT the sample instant counts, matching
+        // the sampled value at that instant (which reflects the post-event
+        // state) — the two measures stay mutually consistent.
+        if *t_start > instant {
+            break;
+        }
+        let cur = value_as_f64(*value);
+        if prev <= 0.0 && cur > 0.0 {
+            count += 1.0;
+        }
+        prev = cur;
+    }
+    count
+}
+
+/// One replica's samples: `[indicator][instant] → (value, sojourn, nb_occ)`.
+type ReplicaSamples = Vec<Vec<(f64, f64, f64)>>;
 
 fn run_replica(
     model: &CompiledModel,
@@ -132,6 +166,7 @@ fn run_replica(
         seed: config.seed,
         rng_stream: replica,
         ode: config.ode.clone(),
+        sequences: config.stop_at_targets,
         ..EngineConfig::default()
     };
     let result = Engine::new(model, engine_config)?.run()?;
@@ -149,6 +184,7 @@ fn run_replica(
                         (
                             value_as_f64(*value),
                             sojourn_at(&change_points.points, *instant),
+                            nb_occurrences_at(&change_points.points, *instant),
                         )
                     })
                     .collect()
@@ -193,18 +229,24 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
         let mut std = vec![0.0; n_instants];
         let mut sojourn_mean = vec![0.0; n_instants];
         let mut sojourn_std = vec![0.0; n_instants];
+        let mut nb_occurrences_mean = vec![0.0; n_instants];
+        let mut nb_occurrences_std = vec![0.0; n_instants];
         for k in 0..n_instants {
             // Serial, replica-ordered accumulation (determinism).
             let (mut sum, mut sum_sq, mut sj_sum, mut sj_sum_sq) = (0.0, 0.0, 0.0, 0.0);
+            let (mut oc_sum, mut oc_sum_sq) = (0.0, 0.0);
             for replica in &replicas {
-                let (value, sojourn) = replica[idx][k];
+                let (value, sojourn, nb_occ) = replica[idx][k];
                 sum += value;
                 sum_sq += value * value;
                 sj_sum += sojourn;
                 sj_sum_sq += sojourn * sojourn;
+                oc_sum += nb_occ;
+                oc_sum_sq += nb_occ * nb_occ;
             }
             mean[k] = sum / n;
             sojourn_mean[k] = sj_sum / n;
+            nb_occurrences_mean[k] = oc_sum / n;
             if config.nb_runs > 1 {
                 std[k] = ((sum_sq - n * mean[k] * mean[k]) / (n - 1.0))
                     .max(0.0)
@@ -212,6 +254,10 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
                 sojourn_std[k] = ((sj_sum_sq - n * sojourn_mean[k] * sojourn_mean[k]) / (n - 1.0))
                     .max(0.0)
                     .sqrt();
+                nb_occurrences_std[k] =
+                    ((oc_sum_sq - n * nb_occurrences_mean[k] * nb_occurrences_mean[k]) / (n - 1.0))
+                        .max(0.0)
+                        .sqrt();
             }
         }
         // Nearest-rank quantiles (deterministic: total_cmp sort over the
@@ -250,6 +296,8 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
             std,
             sojourn_mean,
             sojourn_std,
+            nb_occurrences_mean,
+            nb_occurrences_std,
             quantiles,
             sojourn_quantiles,
         });
@@ -261,4 +309,45 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
         seed: config.seed,
         engine_version: env!("CARGO_PKG_VERSION").to_owned(),
     })
+}
+
+/// Run `nb_runs` **sequence-recording** replicas and collect their raw
+/// per-trajectory sequences, in replica order (deterministic). Each replica
+/// runs with sequence recording on and target early-stop; a trajectory that
+/// reaches no target still contributes its (target-less) sequence. Feed the
+/// result to [`raichu_core::analyse`] for the minimal-sequence corpus.
+pub fn run_sequences(
+    model: &CompiledModel,
+    config: &McConfig,
+) -> Result<Vec<Sequence>, EngineError> {
+    use rayon::prelude::*;
+
+    let compute = || -> Result<Vec<Option<Sequence>>, EngineError> {
+        (0..config.nb_runs)
+            .into_par_iter()
+            .map(|replica| {
+                let engine_config = EngineConfig {
+                    t_max: config.t_max,
+                    sequences: true,
+                    seed: config.seed,
+                    rng_stream: replica,
+                    ode: config.ode.clone(),
+                    ..EngineConfig::default()
+                };
+                Ok(Engine::new(model, engine_config)?.run()?.sequence)
+            })
+            .collect()
+    };
+    let per = match config.threads {
+        None => compute()?,
+        Some(threads) => rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .map_err(|e| EngineError::TypeError {
+                time: 0.0,
+                detail: format!("thread-pool construction failed: {e}"),
+            })?
+            .install(compute)?,
+    };
+    Ok(per.into_iter().flatten().collect())
 }

@@ -31,6 +31,8 @@ fn demand_model(ok_prob: f64) -> Model {
                     guard: None,
                     targets: vec!["ok".into(), "ko".into()],
                     on_interruption: Default::default(),
+                    monitored: false,
+                    cycle_group: None,
                     distrib: Distrib::Inst {
                         probs: vec![ok_prob],
                     },
@@ -39,6 +41,7 @@ fn demand_model(ok_prob: f64) -> Model {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     }
 }
 
@@ -120,6 +123,8 @@ fn three_way_branching_covers_every_target() {
                     guard: None,
                     targets: vec!["a".into(), "b".into(), "c".into()],
                     on_interruption: Default::default(),
+                    monitored: false,
+                    cycle_group: None,
                     distrib: Distrib::Inst {
                         probs: vec![0.2, 0.3],
                     },
@@ -128,6 +133,7 @@ fn three_way_branching_covers_every_target() {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let mut seen = std::collections::BTreeSet::new();

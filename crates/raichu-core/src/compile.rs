@@ -191,6 +191,8 @@ pub enum CLaw {
 pub struct CTransition {
     /// Qualified name `component.automaton.transition` (journal only).
     pub name: String,
+    /// Owning component name (the `obj` of a recorded `SeqEvent`).
+    pub component: String,
     /// Owning automaton.
     pub automaton: AutIdx,
     /// Source state.
@@ -202,8 +204,23 @@ pub struct CTransition {
     /// What happens to a pending countdown when the guard turns false
     /// (paper rule `drop_disabled`).
     pub on_interruption: InterruptionPolicy,
+    /// Firing this transition records a `SeqEvent` (sequence analysis).
+    pub monitored: bool,
+    /// Cycle-pair group id (occ/rep partners share it; sequence analysis).
+    pub cycle_group: Option<String>,
     /// Occurrence distribution.
     pub distrib: CLaw,
+}
+
+/// A compiled sequence-analysis target (feared event).
+#[derive(Debug, Clone)]
+pub struct CTarget {
+    /// Target name (the `end_cause` label).
+    pub name: String,
+    /// The automaton whose state activation reaches the target.
+    pub automaton: AutIdx,
+    /// The state whose activation reaches the target.
+    pub state: StateIdx,
 }
 
 /// A compiled automaton.
@@ -268,6 +285,8 @@ pub struct CompiledModel {
     pub state_triggers: Vec<Vec<FnIdx>>,
     /// Indicators.
     pub indicators: Vec<CIndicator>,
+    /// Sequence-analysis targets (feared events), resolved to indices.
+    pub targets: Vec<CTarget>,
     /// ODE attributes and right-hand sides, declaration order (CEvol).
     pub ode: Vec<(VarIdx, CExpr)>,
     /// Explicit equations, declaration order (solved before ODE
@@ -701,11 +720,14 @@ impl CompiledModel {
                     automata[aut_idx].transitions.push(trans_idx);
                     transitions.push(CTransition {
                         name: format!("{}.{}.{}", component.name, automaton.name, transition.name),
+                        component: component.name.clone(),
                         automaton: aut_idx,
                         source,
                         guard,
                         targets,
                         on_interruption: transition.on_interruption,
+                        monitored: transition.monitored,
+                        cycle_group: transition.cycle_group.clone(),
                         distrib: distribution,
                     });
                 }
@@ -816,6 +838,20 @@ impl CompiledModel {
             })
             .collect::<Result<Vec<_>, CompileError>>()?;
 
+        let targets = model
+            .targets
+            .iter()
+            .map(|target| {
+                let (aut, st) =
+                    resolver.state(&target.component, &target.automaton, &target.state)?;
+                Ok(CTarget {
+                    name: target.name.clone(),
+                    automaton: aut,
+                    state: st,
+                })
+            })
+            .collect::<Result<Vec<_>, CompileError>>()?;
+
         let var_index = var_names
             .iter()
             .enumerate()
@@ -837,6 +873,7 @@ impl CompiledModel {
             var_triggers,
             state_triggers,
             indicators,
+            targets,
             ode,
             explicit,
             watched,

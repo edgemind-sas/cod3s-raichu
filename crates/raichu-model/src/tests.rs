@@ -40,6 +40,8 @@ fn sample_model() -> Model {
                             guard: None,
                             targets: vec!["nok".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Delay { time: 5.0 },
                         },
                         Transition {
@@ -48,6 +50,8 @@ fn sample_model() -> Model {
                             guard: None,
                             targets: vec!["ok".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Delay { time: 10.0 },
                         },
                         Transition {
@@ -56,6 +60,8 @@ fn sample_model() -> Model {
                             guard: None,
                             targets: vec!["ok".into(), "nok".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Inst { probs: vec![1.0] },
                         },
                     ],
@@ -142,6 +148,7 @@ fn sample_model() -> Model {
                 },
             },
         ],
+        targets: vec![],
     }
 }
 

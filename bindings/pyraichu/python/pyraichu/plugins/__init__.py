@@ -54,6 +54,7 @@ def expand_model(model: dict[str, Any]) -> dict[str, Any]:
     model.setdefault("components", [])
     model.setdefault("connections", [])
     model.setdefault("indicators", [])
+    model.setdefault("targets", [])
     for plugin_name, payload in plugins_section.items():
         plugin = PLUGINS.get(plugin_name)
         if plugin is None:

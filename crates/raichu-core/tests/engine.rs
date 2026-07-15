@@ -45,6 +45,8 @@ fn delay_model() -> Model {
                             guard: None,
                             targets: vec!["nok".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Delay { time: 5.0 },
                         },
                         Transition {
@@ -53,6 +55,8 @@ fn delay_model() -> Model {
                             guard: None,
                             targets: vec!["ok".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Delay { time: 10.0 },
                         },
                     ],
@@ -137,6 +141,7 @@ fn delay_model() -> Model {
                 },
             },
         ],
+        targets: vec![],
     }
 }
 
@@ -335,6 +340,7 @@ fn instantaneous_loop_is_detected() {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let result = Engine::new(&compiled, EngineConfig::default());
@@ -397,6 +403,7 @@ fn non_confluence_is_diagnosed() {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let config = EngineConfig {
@@ -464,6 +471,7 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
@@ -493,6 +501,8 @@ fn inst_transition_fires_immediately_on_certain_branch() {
                         guard: None,
                         targets: vec!["go".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Delay { time: 3.0 },
                     },
                     Transition {
@@ -502,6 +512,8 @@ fn inst_transition_fires_immediately_on_certain_branch() {
                         // probs = [] → single target with complement 1.
                         targets: vec!["end".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Inst { probs: vec![] },
                     },
                 ],
@@ -511,6 +523,7 @@ fn inst_transition_fires_immediately_on_certain_branch() {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     };
     let result = run(&model, 10.0, false);
     let times: Vec<(f64, &str)> = result
@@ -568,6 +581,8 @@ fn tank_model() -> Model {
                         }),
                         targets: vec!["on".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Watched,
                     },
                     Transition {
@@ -582,6 +597,8 @@ fn tank_model() -> Model {
                         }),
                         targets: vec!["off".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Watched,
                     },
                 ],
@@ -632,6 +649,7 @@ fn tank_model() -> Model {
                 },
             },
         ],
+        targets: vec![],
     }
 }
 
@@ -758,6 +776,8 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                             guard: None,
                             targets: vec!["down".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Delay { time: 4.0 },
                         },
                         Transition {
@@ -766,6 +786,8 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                             guard: None,
                             targets: vec!["up2".into()],
                             on_interruption: Default::default(),
+                            monitored: false,
+                            cycle_group: None,
                             distrib: Distrib::Delay { time: 3.0 },
                         },
                     ],
@@ -815,6 +837,8 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                         guard: Some(Expr::attr("gate", "open")),
                         targets: vec!["done".into()],
                         on_interruption,
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Delay { time: 6.0 },
                     }],
                 }],
@@ -824,6 +848,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
         ],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     }
 }
 
@@ -894,6 +919,8 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
                         guard: None,
                         targets: vec!["hot".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Delay { time: 5.0 },
                     }],
                 },
@@ -907,6 +934,8 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
                         guard: None,
                         targets: vec!["nok".into()],
                         on_interruption: Default::default(),
+                        monitored: false,
+                        cycle_group: None,
                         distrib: Distrib::Exp {
                             rate: None,
                             rate_expr: Some(Expr::If {
@@ -933,6 +962,7 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
         }],
         connections: vec![],
         indicators: vec![],
+        targets: vec![],
     };
     let result = run(&model, 30.0, true);
 
@@ -1059,6 +1089,7 @@ fn port_mean_and_median_aggregations() {
             })
             .collect(),
         indicators: vec![],
+        targets: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();

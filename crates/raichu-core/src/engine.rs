@@ -56,6 +56,12 @@ pub struct EngineConfig {
     pub t_max: f64,
     /// Record the structured causal journal (zero cost when `false`).
     pub journal: bool,
+    /// Record the per-trajectory sequence trace — the ordered `SeqEvent`s of
+    /// fired *monitored* transitions plus the end cause when a target
+    /// (feared event) is reached (zero cost when `false`). When on and a
+    /// target is reached, the trajectory **early-stops** at that instant
+    /// (mirroring cod3s sequence runs).
+    pub sequences: bool,
     /// Re-run every fixpoint in reverse order and fail on divergence
     /// (non-confluence diagnostic; ~2× fixpoint cost when enabled).
     pub confluence_check: bool,
@@ -82,6 +88,7 @@ impl Default for EngineConfig {
         EngineConfig {
             t_max: f64::INFINITY,
             journal: false,
+            sequences: false,
             confluence_check: false,
             max_fixpoint_iterations: 10_000,
             ode: SolverParams::default(),
@@ -298,6 +305,38 @@ pub struct Event {
     pub to: String,
 }
 
+/// One recorded event of a trajectory's **sequence** (mirrors cod3s
+/// `SeqEvent`): the entry into a monitored state. `name()` is `obj.attr`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SeqEvent {
+    /// Owning component (cod3s `elt.parent().name()`).
+    pub obj: String,
+    /// The monitored state entered (cod3s `elt.basename()`, e.g. `occ__cc_12`).
+    pub attr: String,
+    /// Firing date.
+    pub time: f64,
+    /// Cycle-pair group id of the firing transition (internal to the
+    /// cycle-filtering step; not part of the compared/serialized sequence).
+    #[serde(skip)]
+    pub cycle_group: Option<String>,
+}
+
+/// One trajectory's recorded sequence: the ordered monitored-transition
+/// firings plus the end cause/time (the reached target, or `None` if the
+/// trajectory ran to `t_max` without reaching one). Weight 1 per raw
+/// trajectory; the Monte-Carlo pipeline groups and re-weights them.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Sequence {
+    /// Ordered monitored-state entries.
+    pub events: Vec<SeqEvent>,
+    /// Reached target's name (`end_cause`), or `None` if none was reached.
+    pub end_cause: Option<String>,
+    /// Time the target was reached, or the horizon when none was.
+    pub end_time: f64,
+    /// Statistical weight (1 for a raw trajectory).
+    pub weight: f64,
+}
+
 /// Kind of an armed transition, for interactive inspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -344,6 +383,8 @@ pub struct Snapshot {
     hazards: Vec<Option<Hazard>>,
     events: Vec<Event>,
     journal: Vec<JournalRecord>,
+    seq_events: Vec<SeqEvent>,
+    seq_end: Option<(String, f64)>,
     indicator_series: Vec<IndicatorSeries>,
     sampled: Vec<IndicatorSeries>,
     sample_cursor: usize,
@@ -393,6 +434,8 @@ pub struct SimulationResult {
     pub samples: Vec<IndicatorSeries>,
     /// Causal journal (empty when disabled).
     pub journal: Vec<JournalRecord>,
+    /// Recorded sequence (`None` when sequence recording is disabled).
+    pub sequence: Option<Sequence>,
     /// Provenance metadata.
     pub provenance: Provenance,
     /// Final simulation time.
@@ -860,6 +903,12 @@ pub struct Engine<'m> {
     continuous_rates: Vec<TransIdx>,
     events: Vec<Event>,
     journal: Vec<JournalRecord>,
+    /// Ordered monitored-state entries recorded this trajectory (sequence
+    /// analysis; empty unless `config.sequences`).
+    seq_events: Vec<SeqEvent>,
+    /// The reached target `(end_cause, end_time)` once one activates — set
+    /// once, triggers the trajectory early-stop.
+    seq_end: Option<(String, f64)>,
     indicator_series: Vec<IndicatorSeries>,
     sampled: Vec<IndicatorSeries>,
     sample_cursor: usize,
@@ -960,6 +1009,8 @@ impl<'m> Engine<'m> {
             continuous_rates,
             events: Vec::new(),
             journal: Vec::new(),
+            seq_events: Vec::new(),
+            seq_end: None,
             indicator_series: model
                 .indicators
                 .iter()
@@ -1000,7 +1051,24 @@ impl<'m> Engine<'m> {
         self.record_indicators();
         // Sample instants at or before t = 0 use the initial state.
         self.flush_samples_through(0.0);
+        // Sequence analysis: a target already active at initialization
+        // (declared init state) ends the trajectory at t = 0.
+        self.check_targets();
         Ok(())
+    }
+
+    /// Sequence analysis: label the trajectory with the first target
+    /// (feared event) whose state is active — sets `seq_end` once.
+    fn check_targets(&mut self) {
+        if !self.config.sequences || self.seq_end.is_some() {
+            return;
+        }
+        for target in &self.model.targets {
+            if self.states[target.automaton] == target.state {
+                self.seq_end = Some((target.name.clone(), self.time));
+                break;
+            }
+        }
     }
 
     /// Current simulation time.
@@ -1187,6 +1255,8 @@ impl<'m> Engine<'m> {
             hazards: self.hazards.clone(),
             events: self.events.clone(),
             journal: self.journal.clone(),
+            seq_events: self.seq_events.clone(),
+            seq_end: self.seq_end.clone(),
             indicator_series: self.indicator_series.clone(),
             sampled: self.sampled.clone(),
             sample_cursor: self.sample_cursor,
@@ -1208,6 +1278,8 @@ impl<'m> Engine<'m> {
         self.hazards = snap.hazards.clone();
         self.events = snap.events.clone();
         self.journal = snap.journal.clone();
+        self.seq_events = snap.seq_events.clone();
+        self.seq_end = snap.seq_end.clone();
         self.indicator_series = snap.indicator_series.clone();
         self.sampled = snap.sampled.clone();
         self.sample_cursor = snap.sample_cursor;
@@ -1406,11 +1478,30 @@ impl<'m> Engine<'m> {
     }
 
     /// Run until the schedule drains or the horizon is reached, then
-    /// return the full result with provenance.
+    /// return the full result with provenance. When sequence recording is
+    /// on, a run **early-stops** at the first target (feared event) reached.
     pub fn run(mut self) -> Result<SimulationResult, EngineError> {
-        while self.step()?.is_some() {}
-        // Advance the clock (and the continuous state) to the horizon.
-        let final_time = if self.config.t_max.is_finite() {
+        loop {
+            if let Some((_, t_hit)) = &self.seq_end {
+                // The target is reached: FINISH the hit instant first —
+                // fire every transition still due at it, so the latched
+                // state is the completed instant, not a half-propagated
+                // one (PyCATSHOO completes the step before stopping).
+                let t_hit = *t_hit;
+                let still_due = self.pending.iter().flatten().any(|d| *d <= t_hit);
+                if !still_due {
+                    break;
+                }
+            }
+            if self.step()?.is_none() {
+                break;
+            }
+        }
+        // Advance the clock (and the continuous state) to the horizon —
+        // unless a target early-stopped the trajectory.
+        let final_time = if let Some((_, t)) = &self.seq_end {
+            *t
+        } else if self.config.t_max.is_finite() {
             if self.needs_integration() && self.config.t_max > self.time {
                 self.integrate_to(self.config.t_max)?;
             }
@@ -1419,12 +1510,45 @@ impl<'m> Engine<'m> {
             self.time
         };
         self.time = final_time;
-        self.flush_samples_through(final_time);
+        // A target-stopped trajectory holds its frozen state through the
+        // remaining sample instants (the latch semantics of a
+        // target-stopped study: the feared-event state stays active from
+        // the hit to the horizon in every sampled measure). With an
+        // infinite horizon the latch extends through the last *requested*
+        // sample instant, so every replica's series covers the schedule.
+        let flush_to = if self.seq_end.is_some() {
+            if self.config.t_max.is_finite() {
+                self.config.t_max
+            } else {
+                self.config
+                    .samples
+                    .last()
+                    .copied()
+                    .unwrap_or(final_time)
+                    .max(final_time)
+            }
+        } else {
+            final_time
+        };
+        self.flush_samples_through(flush_to);
+        let sequence = self.config.sequences.then(|| {
+            let (end_cause, end_time) = match self.seq_end.take() {
+                Some((cause, t)) => (Some(cause), t),
+                None => (None, final_time),
+            };
+            Sequence {
+                events: std::mem::take(&mut self.seq_events),
+                end_cause,
+                end_time,
+                weight: 1.0,
+            }
+        });
         Ok(SimulationResult {
             events: self.events,
             indicators: self.indicator_series,
             samples: self.sampled,
             journal: self.journal,
+            sequence,
             provenance: Provenance {
                 engine_version: env!("CARGO_PKG_VERSION").to_owned(),
                 model: self.model.name.clone(),
@@ -1475,6 +1599,15 @@ impl<'m> Engine<'m> {
             });
         }
         self.events.push(event.clone());
+        // Sequence analysis: record the entry into a monitored state.
+        if self.config.sequences && transition.monitored {
+            self.seq_events.push(SeqEvent {
+                obj: transition.component.clone(),
+                attr: event.to.clone(),
+                time: self.time,
+                cycle_group: transition.cycle_group.clone(),
+            });
+        }
 
         // Discrete evolution: functions sensitive to this automaton.
         self.worklist.extend(
@@ -1486,6 +1619,11 @@ impl<'m> Engine<'m> {
         recompute_explicit(self.model, &mut self.vars, &self.states, self.time)?;
         self.refresh_schedule()?;
         self.record_indicators();
+        // Sequence analysis: the first target (feared event) whose state is
+        // now active labels the trajectory's end cause (and ends it — see
+        // `run`). States change only through transitions (or the declared
+        // init, checked in `initialize`), so this catches every activation.
+        self.check_targets();
         Ok(event)
     }
 
