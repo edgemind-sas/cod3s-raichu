@@ -58,7 +58,9 @@ nav:
       - Reproducibility: guides/reproducibility.md
       - Numerical tuning: guides/numerical-tuning.md
       - Causal journal: guides/causal-journal.md
+      - Sequence analysis: guides/sequence-analysis.md
       - muscadet & plugins: guides/muscadet-and-plugins.md
+      - Platform import: guides/platform-import.md
       - Parallelism: guides/parallelism.md
   - Benchmarks:
       - Cross-validation: benchmarks/cross-validation.md

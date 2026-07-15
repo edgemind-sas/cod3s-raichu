@@ -45,6 +45,7 @@ A complete, minimal model that uses most sections:
 | `components` | array of [Component](#component) | yes | the system's parts |
 | `connections` | array of [Connection](#connection) | no (default `[]`) | out-port → in-port wiring |
 | `indicators` | array of [Indicator](#indicator) | no (default `[]`) | what the engine measures |
+| `targets` | array of [Target](#target) | no (default `[]`) | feared-event states for [sequence analysis](../guides/sequence-analysis.md) |
 
 ### Connection
 
@@ -102,7 +103,17 @@ automaton**. `init` must be one of `states`.
 | `targets` | array of string | destination state(s) |
 | `guard` | [Expr](#expressions) | optional; must hold for the transition to be eligible |
 | `on_interruption` | `"reset"` \| `"resume"` \| `"continue"` | optional (default `reset`); see [below](#interruption-policy) |
+| `monitored` | bool | optional (default `false`); firing is recorded in the trajectory's [sequence](../guides/sequence-analysis.md) |
+| `cycle_group` | string | optional; failure/repair partners share it so transient cycles cancel in the sequence pipeline (paired per component) |
 | `distrib` + params | — | the occurrence distribution, flattened onto the transition (see [Distributions](#distributions)) |
+
+### Target
+
+`{ "name": string, "component": string, "automaton": string, "state":
+string }` — a **feared event**: when the named state activates, a
+sequence-recording trajectory records `name` as its end cause and stops
+(after completing the current instant). Ignored unless sequence
+recording / `stop_at_targets` is enabled.
 
 ## Distributions
 

@@ -92,9 +92,51 @@ config-driven or language-agnostic authoring:
 
 `expand_model(spec)` returns the plugin-free core model, so the
 translation is always auditable — nothing the plugin does is hidden from
-you. Beyond `ObjFlow`, the plugin system provides **`ObjFM`** (failure
-modes with common-cause orders) and **`ObjEvent`** (monitored events with
-delays), each expanding deterministically to core components.
+you.
+
+## The object catalogue
+
+Beyond `ObjFlow`, the plugin system provides four object families, each
+expanding deterministically to core components:
+
+**`ObjFM`** — a failure mode over one or several target components, with
+**common-cause orders**: per-order law lists generate one automaton per
+target combination of each active order (`fm__cc_1_2`, …), every
+combination drawing independently. An active failure with an inactive
+(`null`) repair is a **non-repairable** mode — the failure state is
+absorbing. Three behaviours:
+
+- `internal` (default) — the mode writes the targets' attributes
+  directly (held at the failure value while any impacting combination is
+  failed, the initial value otherwise);
+- `external` — a mutual lock: a control attribute drives a mirror
+  automaton grafted into each target; a combination can only (re)fail
+  once its targets are repaired, and vice-versa;
+- `external_rep_indep` — a trigger model: the mode resets instantly and
+  each target latches the failure until it repairs on its own law.
+
+**`ObjFMInst`** — failure *on solicitation*: one Bernoulli draw per
+demand front (probability `gamma` per common-cause order), exponential
+repair; the anti-Zeno re-arm guarantees one draw per front.
+
+**`ObjEvent`** — a monitored event over a condition tree, with
+occurrence/clearance tempos (a repair during the tempo cancels the
+pending occurrence). Flagged `"target": true`, it becomes a feared event
+for [sequence analysis](sequence-analysis.md).
+
+**`ObjLogicGate`** — an automaton-free combinational gate over condition
+leaves: `or`, `and`, or k-of-n voting, recomputed edge-triggered on any
+input change; several `out_elements` broadcast the same result.
+
+```json
+{"type": "ObjLogicGate", "name": "vote", "kind": "k", "k": 2,
+ "cond": [[{"obj": "A", "attr": "ok"}], [{"obj": "B", "attr": "ok"}],
+          [{"obj": "C", "attr": "ok"}]],
+ "out_elements": ["ok"]}
+```
+
+Models exported from a COD3S platform instance translate directly into
+these objects — see [Importing platform studies](platform-import.md).
 
 ## Which to use
 
