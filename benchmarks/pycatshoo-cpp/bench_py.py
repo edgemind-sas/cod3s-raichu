@@ -1,10 +1,10 @@
-"""Python-callback twin of bench.cpp — same models, same PyCATSHOO
+"""Python-callback twin of bench.cpp: same models, same PyCATSHOO
 1.4.1.0 engine, same simulation configuration; only the modelling
 language differs (conditions, sensitive methods and ODE right-hand
 sides are Python callbacks, the normal PyCATSHOO modelling style).
 
 With the same seed, the C++ and Python variants must produce the same
-estimates — that is the consistency check; the wall-clock difference
+estimates: that is the consistency check; the wall-clock difference
 is then exactly the Python-boundary cost.
 
 Run with a Python matching the Pycatshoo module (3.11 for 1.4.1.0):
@@ -17,7 +17,7 @@ import time
 
 import Pycatshoo as Pyc
 
-# Tutorial constants — single numeric source is
+# Tutorial constants: single numeric source is
 # python/tests/validation/fixtures/gen_tutorial_fixtures.py.
 LAMBDA, MU, NOMINAL = 0.01, 0.1, 5.0
 T_MIN, T_MAX_THR = 15.0, 20.0

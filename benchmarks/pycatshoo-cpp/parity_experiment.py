@@ -1,17 +1,17 @@
 """Tolerance-parity experiment on `heated_room_s3` (the
-"Accuracy–cost parity" benchmark page of the documentation site).
+"Accuracy-cost parity" benchmark page of the documentation site).
 
 The engine-vs-engine ×2.7 in PyCATSHOO's favour was measured at very
 different numerical effort. This script measures, for a grid of effort
 settings on both engines:
 
-- **achieved accuracy** — on the deterministic declination (lambda = 0
+- **achieved accuracy**: on the deterministic declination (lambda = 0
   the model is a pure thermostat cycle whose piecewise-linear ODE has a
   closed form: heating T(t) = 63 − (63−T0)e^(−t/10), cooling
   T(t) = 13 + (T0−13)e^(−t/10), switch dates by log formulas), the max
   absolute temperature error over the 11 schedule instants of a single
   trajectory vs the exact solution;
-- **cost** — wall-clock of the stochastic Monte-Carlo run (2000
+- **cost**: wall-clock of the stochastic Monte-Carlo run (2000
   replicas, seed 56000/42, best of 3), same protocol as run_bench.py.
 
 Comparing wall-clocks *at comparable achieved accuracy* is the fair
@@ -121,7 +121,7 @@ def raichu_model(lam: float):
     if lam == 0.0:
         # Deterministic declination: drop the failure transitions
         # entirely (RAICHU's build-time validation rejects a zero
-        # exponential rate — typed error, by design).
+        # exponential rate: typed error, by design).
         for component in spec["components"]:
             for automaton in component.get("automata", []):
                 automaton["transitions"] = [
@@ -163,7 +163,7 @@ PYC_GRID = [
     # (dt, dtCond): dt <= 0 keeps PyCATSHOO's default RK4 step (0.01).
     # A dt = 1e-4 point was measured once: identical error (the float32
     # indicator storage floors the probe at ~8e-7) for ×100 the cost
-    # (201.8 s) — fixed-step refinement buys nothing on this smooth ODE.
+    # (201.8 s): fixed-step refinement buys nothing on this smooth ODE.
     (-1.0, 1e-3),   # PyCATSHOO's own documented defaults
     (-1.0, 1e-6),   # the bench/oracle baseline
     (-1.0, 1e-10),  # event location at RAICHU's tightness

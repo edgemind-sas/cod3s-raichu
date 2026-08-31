@@ -1,10 +1,10 @@
-//! # raichu-rng — reproducible randomness
+//! # raichu-rng: reproducible randomness
 //!
 //! Seeding and substream policy (reproducibility by construction):
 //!
 //! - one explicit **master seed** per study;
 //! - one independent **substream per Monte-Carlo replica**
-//!   (`ChaCha8Rng::set_stream` — 2⁶⁴ independent streams by
+//!   (`ChaCha8Rng::set_stream`: 2⁶⁴ independent streams by
 //!   construction, bit-reproducible across platforms);
 //! - no global RNG anywhere: the engine receives its generator
 //!   explicitly and draws only at scheduling points, in deterministic

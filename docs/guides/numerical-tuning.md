@@ -1,7 +1,7 @@
 # Numerical tuning
 
 When a model has continuous dynamics, the ODE integrator's effort is
-**explicit and adjustable** — not a hidden constant. This lets you trade
+**explicit and adjustable**: not a hidden constant. This lets you trade
 accuracy for speed deliberately, and record exactly what you ran (the
 tolerances are part of the [provenance](reproducibility.md)).
 
@@ -103,15 +103,15 @@ print(f"fast vs default: max temperature gap = {gap:.1e}")
 
 The `fast` profile tracks the conservative default to ~10⁻⁵ °C while
 doing far less integration work. On this model the
-[accuracy–cost parity benchmark](../benchmarks/accuracy-cost-parity.md)
+[accuracy-cost parity benchmark](../benchmarks/accuracy-cost-parity.md)
 measures that ~10⁻⁵ setting running an order of magnitude faster than
-the default — and the default, in turn, delivers 3–4 orders of magnitude
+the default, and the default, in turn, delivers 3-4 orders of magnitude
 more accuracy than a typical study can use.
 
 ## Choosing a setting
 
 - **Keep the defaults** for correctness-critical work, small models, or
-  when you are unsure — they are safe.
+  when you are unsure: they are safe.
 - **Relax `rtol`/`tol_event` and raise `max_step`** for large hybrid
   Monte-Carlo campaigns where the ODE is smooth and a `1e-5`-level
   accuracy is ample.

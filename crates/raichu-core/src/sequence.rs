@@ -15,7 +15,7 @@
 
 use crate::engine::{SeqEvent, Sequence};
 
-/// Ordered `(obj, attr)` signature of a sequence — the identity used for
+/// Ordered `(obj, attr)` signature of a sequence: the identity used for
 /// grouping and subsequence inclusion (times and cycle groups excluded).
 fn signature(seq: &Sequence) -> Vec<(&str, &str)> {
     seq.events
@@ -114,7 +114,7 @@ fn is_included(short: &[(&str, &str)], long: &[(&str, &str)]) -> bool {
     short.iter().all(|s| it.any(|l| l == s))
 }
 
-/// Minimal sequences (greedy, order-dependent — cod3s' `compute_minimal_sequences`):
+/// Minimal sequences (greedy, order-dependent: cod3s' `compute_minimal_sequences`):
 /// per end cause, sort by ascending length (ties by descending weight); keep
 /// each sequence unless a shorter already-kept one is included in it, in
 /// which case absorb it (add its weight to that minimal). Then sort by
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn filter_never_pairs_events_across_components() {
         // Review finding: two DIFFERENT failure modes share the bare
-        // automaton name (every ObjFM's `fm__cc_1`) — their persistent
+        // automaton name (every ObjFM's `fm__cc_1`): their persistent
         // failures must NOT cancel each other by group-name parity.
         let s = seq(
             "F",
@@ -288,7 +288,7 @@ mod tests {
         // (transient) before the ER occ, one where fm1 stays failed. After
         // cycle filtering both collapse to the single-cause minimal [ER.occ]
         // (transient) vs [fm1.occ, ER.occ] (persistent); the minimal set is
-        // {[ER.occ], [fm1.occ, ER.occ]}? No — [ER.occ] ⊆ [fm1.occ, ER.occ],
+        // {[ER.occ], [fm1.occ, ER.occ]}? No: [ER.occ] ⊆ [fm1.occ, ER.occ],
         // so the latter absorbs into [ER.occ].
         let raw = vec![
             // transient: fm1 occ then rep, then ER occ

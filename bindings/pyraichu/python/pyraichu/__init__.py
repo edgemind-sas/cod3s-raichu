@@ -100,7 +100,7 @@ class Model:
 
 def expand_model(source: str | dict[str, Any]) -> dict[str, Any]:
     """Expand the ``"plugins"`` section of a model (if any) into core
-    material and return the resulting core-schema dict — the audit
+    material and return the resulting core-schema dict: the audit
     window on plugin translations (see :mod:`pyraichu.plugins`)."""
     from .plugins import expand_model as _expand
 
@@ -111,8 +111,8 @@ def expand_model(source: str | dict[str, Any]) -> dict[str, Any]:
 def load_model(source: str | dict[str, Any]) -> Model:
     """Load and validate a model from a JSON string or a dict.
 
-    Models carrying a ``"plugins"`` section (specialized object schemas
-    — ObjFlow, ObjFM, ObjEvent, …) are expanded into the core schema
+    Models carrying a ``"plugins"`` section (specialized object schemas:
+    ObjFlow, ObjFM, ObjEvent, …) are expanded into the core schema
     first; use :func:`expand_model` to inspect the translation.
     Raises :class:`ModelError` with a precise, typed message when the
     model is invalid (never a crash).
@@ -194,7 +194,7 @@ def monte_carlo(
 
     ``stop_at_targets=True`` early-stops each trajectory at the first
     sequence target (feared event) and holds the frozen state through the
-    remaining sample instants — the latch semantics of target-stopped
+    remaining sample instants: the latch semantics of target-stopped
     studies (first-occurrence measures instead of free-cycling ones).
     """
     raw = json.loads(
@@ -244,7 +244,7 @@ def analyse_sequences(
     seed: int = 0,
     threads: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Native minimal-sequence analysis — the RAMS output.
+    """Native minimal-sequence analysis: the RAMS output.
 
     Run ``nb_runs`` sequence-recording replicas (each early-stopping at the
     first feared-event target), then group → filter transient failure/repair
@@ -322,16 +322,16 @@ class Interactive:
     Drive the engine one event at a time under your own control, rather
     than running it to the horizon in one shot:
 
-    - :meth:`fireable` — the currently-armed transitions (earliest first);
-    - :meth:`fire` — fire a *chosen* one, optionally **forcing** its
-      outcome branch with ``to=`` (bypassing the random draw — this is
+    - :meth:`fireable`: the currently-armed transitions (earliest first);
+    - :meth:`fire`: fire a *chosen* one, optionally **forcing** its
+      outcome branch with ``to=`` (bypassing the random draw, which is
       what makes stochastic mechanics reproducibly testable);
-    - :meth:`step` — advance to the next scheduled event, as a plain run
+    - :meth:`step`: advance to the next scheduled event, as a plain run
       would;
-    - :meth:`set_date` — reschedule an armed transition;
-    - :meth:`snapshot` / :meth:`restore` — checkpoint and undo;
-    - :meth:`reset` — back to ``t = 0``;
-    - :attr:`time`, :meth:`attribute`, :meth:`state`, :meth:`history` —
+    - :meth:`set_date`: reschedule an armed transition;
+    - :meth:`snapshot` / :meth:`restore`: checkpoint and undo;
+    - :meth:`reset`: back to ``t = 0``;
+    - :attr:`time`, :meth:`attribute`, :meth:`state`, :meth:`history`:
       inspection between events.
 
     Models carrying a ``"plugins"`` section are expanded and validated
@@ -373,7 +373,7 @@ class Interactive:
         """Fire the armed transition ``name`` (by qualified name).
 
         ``to`` **forces** the destination branch to that state name,
-        bypassing the RNG / deterministic-branch resolution — the
+        bypassing the RNG / deterministic-branch resolution: the
         reproducible outcome control. Raises :class:`SimulationError` if
         the transition is not armed or ``to`` is not one of its branches.
         """
@@ -438,7 +438,7 @@ def interactive(
     rng_stream: int = 0,
 ) -> Interactive:
     """Open an :class:`Interactive` session over ``model`` (a
-    :class:`Model`, a JSON string, or a dict — plugins are expanded and
+    :class:`Model`, a JSON string, or a dict; plugins are expanded and
     validated as :func:`load_model` does)."""
     return Interactive(
         model,

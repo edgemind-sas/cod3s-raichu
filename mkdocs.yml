@@ -1,6 +1,6 @@
 site_name: RAICHU
 site_description: >-
-  RAICHU — a native, open-source Rust engine for the hybrid simulation
+  RAICHU: a native, open-source Rust engine for the hybrid simulation
   of complex systems: discrete stochastic behaviour (failures, repairs,
   reconfigurations) coupled with continuous (ODE) dynamics, with a
   Python binding (pyraichu).
@@ -65,14 +65,14 @@ nav:
   - Benchmarks:
       - Cross-validation: benchmarks/cross-validation.md
       - Performance: benchmarks/performance.md
-      - Accuracy–cost parity: benchmarks/accuracy-cost-parity.md
+      - Accuracy-cost parity: benchmarks/accuracy-cost-parity.md
   - For PyCATSHOO users:
       - Concept mapping: pycatshoo/concept-mapping.md
       - Migration guide: pycatshoo/migration-guide.md
 
 # Internal working docs (roadmap, dated write-ups, the pycatshoo-legacy
 # corpus incl. the EDF PDFs, and the pre-restructure root pages) are
-# excluded from the published site — never rendered.
+# excluded from the published site: never rendered.
 exclude_docs: |
   brainstorms/
   plans/

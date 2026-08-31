@@ -3,7 +3,7 @@
 Real systems are made of parts that influence each other. In RAICHU a
 component exposes **ports** and you wire an **out-port** to an
 **in-port** with a **connection**. A component reads its inputs through
-**port aggregations** and reacts through **sensitive functions** —
+**port aggregations** and reacts through **sensitive functions**:
 declarative rules that recompute an attribute whenever something it
 depends on changes.
 
@@ -14,7 +14,7 @@ delivers.
 ## Ports and attributes
 
 An **out-port** publishes one attribute of its component. An **in-port**
-receives whatever out-ports are connected to it — possibly several. A
+receives whatever out-ports are connected to it: possibly several. A
 attribute carries a typed value with an initial value (`bool`, `int` or
 `float`):
 
@@ -34,12 +34,12 @@ source = {
 
 Each block has an internal `health` automaton (as in chapter 1) and a
 boolean `delivering`. A block delivers when it is **fed** *and*
-**working**. "Fed" means *any* connected source is true — a **port
+**working**. "Fed" means *any* connected source is true: a **port
 aggregation** with the `any` operator over the in-port. The rule that
 keeps `delivering` up to date is a **sensitive function**: you declare
 the effect (an assignment whose value is an expression), and the engine
 figures out *when* to run it from the attributes and states that
-expression reads — no manual wiring, and no callback runs during the
+expression reads: no manual wiring, and no callback runs during the
 numerical hot loop.
 
 ```python
@@ -77,7 +77,7 @@ def block(name):
 
 The `port_agg` operator turns an in-port's connected values into one
 value. The aggregators are `any`, `all`, `count`, `sum`, `mean` and
-`median` — enough to express OR-redundancy, k-out-of-n voting, load
+`median`: enough to express OR-redundancy, k-out-of-n voting, load
 sums and averages.
 
 ## The target and the connections
@@ -134,7 +134,7 @@ print("T supplied:", [round(v, 3) for v in availability])
 The target stays supplied ~97 % of the time. Each block is unavailable
 about λ/(λ+μ) = 0.02/0.12 ≈ 0.167 of the time; with two independent
 blocks in parallel the target is down only when **both** fail at once,
-≈ 0.167² ≈ 0.028 — so ≈ 0.972 availability, which is what the estimate
+≈ 0.167² ≈ 0.028, so ≈ 0.972 availability, which is what the estimate
 shows. Redundancy turned a 17 % outage into a 3 % one.
 
 !!! tip "You do not have to write this by hand"

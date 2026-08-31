@@ -4,7 +4,7 @@ A model file may carry a ``"plugins"`` section whose objects follow a
 plugin-specific specification schema; :func:`expand_model` translates
 them **deterministically** into ordinary core-model material
 (components, connections, indicators) before validation. The expansion
-is pure data-to-data — auditable, reproducible, serializable.
+is pure data-to-data: auditable, reproducible, serializable.
 
 Registering a plugin::
 

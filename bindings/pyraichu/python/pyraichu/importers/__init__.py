@@ -1,7 +1,7 @@
 """Importers: translate external model descriptions into RAICHU models.
 
 `cod3s_platform` consumes the COD3S-platform artefacts (the model export
-JSON + the study YAML dict) and emits a RAICHU plugin-spec model — the thin
+JSON + the study YAML dict) and emits a RAICHU plugin-spec model: the thin
 `platform-export → core JSON → pyraichu` path (no muscadet/PyCATSHOO
 dependency).
 """

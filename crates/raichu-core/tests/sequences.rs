@@ -137,7 +137,7 @@ fn early_stop_finishes_the_hit_instant() {
     // activation must still fire before the stop, so the latched state is
     // the completed instant (PyCATSHOO finishes the step before stopping).
     // `T.ev` (the target) and `B.aux` are both due at t=5; T fires first
-    // (declaration order) — B must fire too.
+    // (declaration order): B must fire too.
     let m = Model {
         name: "same_instant".into(),
         components: vec![
@@ -212,7 +212,7 @@ fn initially_active_target_ends_the_trajectory_at_zero() {
 fn runs_to_horizon_when_no_target_is_reached() {
     let m = compiled();
     // Horizon 7: A fires occ@5 but its rep@8 and ER.ev's occ@10 are past
-    // the horizon, so no target is reached — the sequence records only the
+    // the horizon, so no target is reached: the sequence records only the
     // one event and ends with no cause at t_max.
     let config = EngineConfig {
         t_max: 7.0,

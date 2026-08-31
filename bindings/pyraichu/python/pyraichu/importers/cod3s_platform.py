@@ -2,11 +2,11 @@
 
 The platform persists a study in two **disjoint** artefacts:
 
-- the **model export** (JSON): topology only — a `MUSCADET`-type KB of
+- the **model export** (JSON): topology only, a `MUSCADET`-type KB of
   component templates (interfaces with `input_logic` / `prod_cond` DNF) and
   UUID-keyed component instances + connections, with per-instance attribute
   overrides;
-- the **study** (YAML → dict): the dynamics — `failure_modes` (ObjFM),
+- the **study** (YAML → dict): the dynamics, `failure_modes` (ObjFM),
   `events` (ObjEvent feared events), `targets`, `indicators` and the
   Monte-Carlo `simulation` parameters.
 
@@ -14,9 +14,9 @@ The platform persists a study in two **disjoint** artefacts:
 ObjFM / ObjEvent objects expanded by :mod:`pyraichu.plugins.muscadet`) plus
 the run configuration. The topology semantics mirror muscadet's
 `importers/cod3s_platform.py` (the reference importer) but the translator is
-self-contained — no muscadet or PyCATSHOO dependency.
+self-contained: no muscadet or PyCATSHOO dependency.
 
-Scope: what real platform safety studies use — `classic` flows, `input_logic`
+Scope: what real platform safety studies use, `classic` flows, `input_logic`
 or/and/k, `prod_cond` DNF (outer-OR / inner-AND), instance overrides
 `logic`/`logic_in` and `init`/`prod_init`, ObjFMExp/ObjFMDelay, ObjEvent.
 Anything outside raises a typed :class:`TranslationError` (fail fast, never
@@ -37,7 +37,7 @@ class TranslationError(ValueError):
 
 # Instance-attribute roles: current platform vocabulary and its legacy
 # (pre-2026-05) spelling, normalised to the current one. Observable roles
-# are runtime variables, not configuration — ignored.
+# are runtime variables, not configuration: ignored.
 _LEGACY_ROLES = {
     "logic": "logic_in",
     "init": "prod_init",
@@ -58,7 +58,7 @@ class Translation:
     #: Plugin-spec model dict, ready for ``pyraichu.load_model``.
     model: dict[str, Any]
     #: Monte-Carlo run configuration from the study's ``simulation`` section
-    #: (``nb_runs``, ``samples``, ``seed``, ``time_unit``…) — empty without a study.
+    #: (``nb_runs``, ``samples``, ``seed``, ``time_unit``…), empty without a study.
     simulation: dict[str, Any] = field(default_factory=dict)
     #: Indicator measures requested by the study, per indicator name
     #: (e.g. ``{"doors_unsecured_occ": ["nb-occurrences", "sojourn-time"]}``).
@@ -70,7 +70,7 @@ class Translation:
 
 def _check_version(payload: dict) -> None:
     """Reject exports of an unsupported major. An absent version is
-    tolerated (platform DB dumps carry none) — the per-construct fail-fast
+    tolerated (platform DB dumps carry none): the per-construct fail-fast
     checks still guard the actual content."""
     version = payload.get("export_version")
     if version is None:
@@ -85,7 +85,7 @@ def _check_version(payload: dict) -> None:
 
 def _resolve_kb(payload: dict) -> dict:
     """The embedded KB lives under `kb_embedded` (versioned exports), a
-    top-level `kb` (platform DB dumps) or `model.kb` — first with
+    top-level `kb` (platform DB dumps) or `model.kb`: first with
     component_templates wins."""
     for kb in (
         payload.get("kb_embedded"),
@@ -105,7 +105,7 @@ def _parse_interface(template_name: str, interface: dict) -> dict:
         raise TranslationError(f"KB `{template_name}`: interface missing 'name'")
     if "logic" in interface:
         raise TranslationError(
-            f"KB `{template_name}`, interface `{name}`: legacy 'logic' field — "
+            f"KB `{template_name}`, interface `{name}`: legacy 'logic' field, "
             "re-export from a post-3.0.0 platform (input_logic / prod_cond)"
         )
     direction = (interface.get("port_type") or {}).get("general")
@@ -151,7 +151,7 @@ def _parse_interface(template_name: str, interface: dict) -> dict:
 
 def _require(mapping: dict, key: str, *, where: str) -> Any:
     """Fetch a required key with a typed, contextual error (never a raw
-    KeyError — the fail-fast contract of this module)."""
+    KeyError: the fail-fast contract of this module)."""
     try:
         return mapping[key]
     except KeyError:
@@ -292,7 +292,7 @@ def _translate_failure_mode(fm: dict) -> dict:
 
     def order_law(p):
         # cod3s marks an INACTIVE common-cause order with a zero rate
-        # (`is_occ_law_*_active` = param > 0, `drop_inactive_automata`) —
+        # (`is_occ_law_*_active` = param > 0, `drop_inactive_automata`):
         # normalise to None so the plugin drops the order. Exp only: a
         # zero *delay* is a legitimate immediate transition.
         if p is None or (law == "exp" and float(p) <= 0.0):

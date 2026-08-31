@@ -3,18 +3,18 @@
 RAICHU simulates systems that mix two kinds of dynamics: **discrete,
 stochastic** changes (a pump fails, a valve is repaired, a controller
 switches mode) and **continuous** evolution (a temperature drifts, a
-tank fills). This first chapter builds the smallest useful model — a
-single repairable component — and runs it. No prior tool experience is
+tank fills). This first chapter builds the smallest useful model, a
+single repairable component, and runs it. No prior tool experience is
 assumed.
 
 A model is plain **data**: a Python `dict` (or JSON). You hand it to
 `pyraichu.load_model`, which validates it and returns a `Model` you can
 simulate. Because a model is data, it is inspectable, serializable and
-diffable — there is no hidden state.
+diffable: there is no hidden state.
 
 ## A repairable component
 
-Our component `P` has one **automaton** — a little state machine —
+Our component `P` has one **automaton** (a little state machine)
 named `health`, with two states, `working` and `failed`. Two
 **transitions** move between them, each governed by an **exponential
 distribution**: `fail` fires at rate `0.01` (mean time to failure = 100 time
@@ -75,7 +75,7 @@ for event in result.events[:4]:
 ```
 
 Each `Event` records a fired transition and the states it moved
-between — the exact discrete history of the run.
+between: the exact discrete history of the run.
 
 ## Many trajectories: Monte-Carlo
 
@@ -99,13 +99,13 @@ print("P(failed):", [round(u, 3) for u in unavailability])
 ```
 
 The mean of a 0/1 state indicator at instant *t* is the **fraction of
-replicas in that state** — here the pump's unavailability over time. It
+replicas in that state**: here the pump's unavailability over time. It
 climbs from 0 and settles near the steady-state value
 λ/(λ+μ) = 0.01/0.11 ≈ 0.091.
 
 !!! note "Why this matters"
     A constant-rate failure/repair pair is a two-state Markov chain
-    with a known steady state — a case where you can check the
+    with a known steady state: a case where you can check the
     simulator against pen-and-paper. RAICHU's test suite pins exactly
     these analytical solutions; the [numerical guides](../guides/reproducibility.md)
     explain the confidence intervals behind a Monte-Carlo estimate.

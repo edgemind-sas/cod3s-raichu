@@ -1,4 +1,4 @@
-//! Integration tests of the deterministic engine — Phase 2 exit
+//! Integration tests of the deterministic engine: Phase 2 exit
 //! criteria of the M0 plan.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -307,7 +307,7 @@ fn step_api_exposes_state_and_variables() {
 }
 
 /// An instantaneous loop: a function that rewrites its own input never
-/// converges — the engine reports a typed error instead of hanging
+/// converges: the engine reports a typed error instead of hanging
 /// (Design Goal #6).
 #[test]
 fn instantaneous_loop_is_detected() {
@@ -417,7 +417,7 @@ fn non_confluence_is_diagnosed() {
     ));
 }
 
-/// The same non-confluent model passes silently without the probe —
+/// The same non-confluent model passes silently without the probe:
 /// with the documented deterministic order (declaration order), the
 /// last writer wins. This documents *why* the probe exists.
 #[test]
@@ -748,7 +748,7 @@ fn tank_runs_on_the_euler_backend_too() {
 /// duration gated by the open condition. The three policies diverge
 /// precisely here (naming set by Roland):
 /// `continue` → fires at 6 (countdown never stops);
-/// `reset` → 13 (duration cancelled, fresh draw at 7 —
+/// `reset` → 13 (duration cancelled, fresh draw at 7:
 /// RAICHU default);
 /// `resume` → 9 (4 h done + remaining 2 h after 7, RAICHU extension).
 fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model {
@@ -896,7 +896,7 @@ fn interruption_policy_without_guard_is_rejected() {
 }
 
 /// `reschedule_modifiable`: a state-dependent rate held at λ = 0 (firing date on
-/// hold at +∞) is rescheduled — with a causal-journal record — when a
+/// hold at +∞) is rescheduled (with a causal-journal record) when a
 /// discrete step switches its inputs, and the banked `Exp(1)` threshold
 /// then produces the firing.
 #[test]
@@ -995,7 +995,7 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
 }
 
 /// M3 aggregation extensions: `mean` and `median` over an in-port
-/// (audit M1 list — sensor averaging, redundant-sensor median).
+/// (audit M1 list: sensor averaging, redundant-sensor median).
 #[test]
 fn port_mean_and_median_aggregations() {
     let sensor = |name: &str, value: f64| Component {

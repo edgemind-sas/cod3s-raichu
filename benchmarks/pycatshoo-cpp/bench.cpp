@@ -1,4 +1,4 @@
-// PyCATSHOO C++-native benchmark models — fairness companion to
+// PyCATSHOO C++-native benchmark models: fairness companion to
 // python/tests/validation/perf_bench.py.
 //
 // The Python oracle drives PyCATSHOO through models whose conditions,
@@ -6,7 +6,7 @@
 // Python callbacks: the C++ engine crosses the interpreter boundary at
 // every evaluation. This program rebuilds the same three models fully
 // in C++ against libPycatshoo.so, so the whole Monte-Carlo hot loop
-// stays native — the strictest apples-to-apples baseline available for
+// stays native: the strictest apples-to-apples baseline available for
 // RAICHU comparisons.
 //
 // Faithfulness contract (mirrors oracles/run_oracle.py builders):
@@ -22,7 +22,7 @@
 //
 // Built against the official PyCATSHOO 1.4.1.0 Linux distribution
 // (Core/include/PyC + libPycatshoo.so), the only distribution on this
-// machine whose headers match its binaries — the 1.3.8.0 install under
+// machine whose headers match its binaries: the 1.3.8.0 install under
 // Dev/pycatshoo ships 1.3.7.x-era headers whose class layouts drifted
 // from the .so (subclassing crashes). The Python side of the
 // same-version comparison (bench_py.py) runs on the same 1.4.1.0
@@ -44,7 +44,7 @@
 // are never reached in this benchmark.
 extern "C" void* getKB() { return nullptr; }
 
-// Tutorial constants — single numeric source is
+// Tutorial constants: single numeric source is
 // python/tests/validation/fixtures/gen_tutorial_fixtures.py; keep in
 // sync with LAMBDA, MU, NOMINAL, T_MIN, T_MAX_THR, LEAKAGE, T_OUT,
 // T_INIT there.

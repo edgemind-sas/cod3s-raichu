@@ -1,4 +1,4 @@
-# Release wheels — the multi-platform build matrix (M5).
+# Release wheels: the multi-platform build matrix (M5).
 #
 # Triggered by a version tag (`v*`) or manually. Builds one abi3 wheel per
 # platform (a single wheel covers every CPython >= 3.9 on that platform)
@@ -6,7 +6,7 @@
 # and attaches everything to the GitHub Release for the tag.
 #
 # Distribution channel note: artefacts stop at the GitHub Release on
-# purpose — publishing to PyPI (or an internal index) is a separate,
+# purpose: publishing to PyPI (or an internal index) is a separate,
 # deliberate step, not wired here.
 
 name: Release wheels

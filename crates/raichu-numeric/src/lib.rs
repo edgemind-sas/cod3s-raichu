@@ -1,4 +1,4 @@
-//! # raichu-numeric — continuous evolution (milestone M1)
+//! # raichu-numeric: continuous evolution (milestone M1)
 //!
 //! ODE integration with dense output and **guaranteed event location**
 //! for watched transitions: a boundary crossing is never silently
@@ -11,7 +11,7 @@
 //!   expression trees. The convention is **event `i` fires when
 //!   `events()[i]` crosses from negative to non-negative**.
 //! - [`OdeSolver`] is the swappable backend trait. The default backend
-//!   is [`DormandPrince45`] (adaptive Dormand–Prince 4(5) with the
+//!   is [`DormandPrince45`] (adaptive Dormand-Prince 4(5) with the
 //!   Hairer dense-output interpolant); [`FixedEuler`] is a deliberately
 //!   simple second backend proving the trait boundary (used by tests
 //!   and available for coarse debugging runs). `diffsol` remains the
@@ -113,10 +113,10 @@ pub trait OdeSolver {
     ///
     /// - `samples` must be ascending and lie in `(t0, t_end]`; each is
     ///   delivered through `on_sample(t, y_at_t)` (dense output) if the
-    ///   segment reaches it — samples at or after an event are *not*
+    ///   segment reaches it: samples at or after an event are *not*
     ///   delivered (the caller resumes after handling the event).
     /// - Margins must all be negative at `t0`; a non-negative initial
-    ///   margin returns an immediate event at `t0` (defensive — the
+    ///   margin returns an immediate event at `t0` (defensive: the
     ///   engine fires such transitions before integrating).
     fn integrate(
         &mut self,
@@ -129,9 +129,9 @@ pub trait OdeSolver {
     ) -> Result<Outcome, OdeError>;
 }
 
-// --- Dormand–Prince 4(5) ---------------------------------------------------
+// --- Dormand-Prince 4(5) ---------------------------------------------------
 
-/// Adaptive Dormand–Prince 4(5) with Hairer's dense-output interpolant
+/// Adaptive Dormand-Prince 4(5) with Hairer's dense-output interpolant
 /// and bisection event location (default backend).
 #[derive(Debug, Clone)]
 pub struct DormandPrince45 {
@@ -147,7 +147,7 @@ impl DormandPrince45 {
     }
 }
 
-/// Dormand–Prince coefficients (Hairer, Nørsett, Wanner — DOPRI5).
+/// Dormand-Prince coefficients (Hairer, Nørsett, Wanner: DOPRI5).
 mod dopri {
     pub const C: [f64; 7] = [0.0, 0.2, 0.3, 0.8, 8.0 / 9.0, 1.0, 1.0];
     pub const A2: [f64; 1] = [0.2];
@@ -166,7 +166,7 @@ mod dopri {
         49.0 / 176.0,
         -5103.0 / 18656.0,
     ];
-    /// 5th-order solution weights (also row 7 of A — FSAL).
+    /// 5th-order solution weights (also row 7 of A: FSAL).
     pub const B: [f64; 6] = [
         35.0 / 384.0,
         0.0,
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn euler_backend_is_swappable() {
-        // Same trait, same call — coarser answer (proves the swap).
+        // Same trait, same call: coarser answer (proves the swap).
         let mut solver = FixedEuler {
             step: 1e-4,
             tol_event: 1e-10,

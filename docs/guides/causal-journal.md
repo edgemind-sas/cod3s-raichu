@@ -2,7 +2,7 @@
 
 Debugging a discrete-event model often comes down to one question: *why
 did that (not) happen?* RAICHU can record a structured, queryable
-**causal journal** of a run — every scheduled, fired and dropped
+**causal journal** of a run: every scheduled, fired and dropped
 transition, every attribute write with its cause, and the consequence
 chain of each event. It is **zero-cost when off** and enabled per run
 with `journal=True`:
@@ -55,7 +55,7 @@ at t = 4** when its guard turned false. No guesswork.
 
 ## "What followed this event?"
 
-`cascade_after` returns the full consequence chain of an event — the
+`cascade_after` returns the full consequence chain of an event: the
 sensitive functions it ran, the attributes it changed, and the
 transitions it (re)scheduled or dropped:
 
@@ -64,7 +64,7 @@ print(query.cascade_after("C.req.stop"))
 ```
 
 Here it reports that firing `C.req.stop` (on → off) is what dropped the
-worker's `finish` countdown — linking cause to effect directly.
+worker's `finish` countdown: linking cause to effect directly.
 
 ## "Who changed this attribute?"
 
@@ -97,11 +97,11 @@ for change in pyraichu.JournalQuery(lamp_run.journal).who_changed("Lamp.light"):
 ```
 
 The light turned on at *t = 3*, written by `Lamp.update_light`, triggered
-by the switch flipping — a complete audit trail.
+by the switch flipping: a complete audit trail.
 
 ## When to use it
 
-Turn the journal on while building or debugging a model — it explains
+Turn the journal on while building or debugging a model: it explains
 dropped transitions, unexpected attribute values and effect cascades far
 faster than re-reading the model. Turn it off for production
 Monte-Carlo runs, where it adds nothing to the estimates and you want

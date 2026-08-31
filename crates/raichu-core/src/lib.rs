@@ -1,9 +1,9 @@
-//! # raichu-core — scheduler and simulation cycle
+//! # raichu-core: scheduler and simulation cycle
 //!
 //! Implements the operational semantics of Desgeorges et al. 2021:
 //! `init → schedule → continuous → discrete → update`, mapped to the
 //! paper's rules (`schedule_deterministic`, `schedule_stochastic`, `schedule_boundary`, `integrate_continuous`, `fire_transition`, `propagate_effects`,
-//! `reschedule_modifiable`, `drop_disabled`) so the correspondence stays auditable — see
+//! `reschedule_modifiable`, `drop_disabled`) so the correspondence stays auditable: see
 //! the [`engine`] module documentation for the per-rule mapping of the
 //! M0 deterministic subset.
 //!

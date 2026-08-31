@@ -7,15 +7,15 @@ function), schedulings, reschedulings (`reschedule_modifiable`) and drops
 (`drop_disabled` / source left). This module answers the three
 explainability questions, *from the journal alone*:
 
-- :meth:`JournalQuery.why_not_fired` — why didn't transition X fire?
-- :meth:`JournalQuery.who_changed` — who modified variable V?
-- :meth:`JournalQuery.cascade_after` — what cascade followed event E?
+- :meth:`JournalQuery.why_not_fired`: why didn't transition X fire?
+- :meth:`JournalQuery.who_changed`: who modified variable V?
+- :meth:`JournalQuery.cascade_after`: what cascade followed event E?
 
 >>> result = pyraichu.simulate(model, t_max=6.0, journal=True)
 >>> query = pyraichu.JournalQuery(result.journal)
 >>> print(query.why_not_fired("w_reset.job.finish"))
 `w_reset.job.finish` did not fire: scheduled at t=0 for t=6, dropped
-at t=4 (its guard turned false — reset policy, drop_disabled).
+at t=4 (its guard turned false: reset policy, drop_disabled).
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ def _value(raw: Any) -> Any:
 
 
 _DROP_PROSE = {
-    "guard_false": "its guard turned false — reset policy, drop_disabled",
-    "guard_paused": "its guard turned false — countdown paused, resume policy",
+    "guard_false": "its guard turned false, reset policy, drop_disabled",
+    "guard_paused": "its guard turned false, countdown paused, resume policy",
     "source_left": "its automaton left the source state",
 }
 
@@ -52,9 +52,9 @@ class TransitionHistory:
     transition: str
     #: Firing dates.
     fired: list[float] = field(default_factory=list)
-    #: `(time, planned firing date)` — schedulings and reschedulings.
+    #: `(time, planned firing date)`, schedulings and reschedulings.
     schedules: list[tuple[float, float]] = field(default_factory=list)
-    #: `(time, reason)` — drops, reason in guard_false / guard_paused /
+    #: `(time, reason)`, drops, reason in guard_false / guard_paused /
     #: source_left.
     drops: list[tuple[float, str]] = field(default_factory=list)
     #: Planned firing date still pending when the run ended, if any.
@@ -102,7 +102,7 @@ class AttributeChange:
     #: Sensitive function that wrote the value.
     cause: str
     #: Transition whose firing (directly or through the cascade)
-    #: triggered the write — `"initialization"` for the t = 0 fixpoint.
+    #: triggered the write, `"initialization"` for the t = 0 fixpoint.
     trigger: str
 
     def __str__(self) -> str:
@@ -124,10 +124,10 @@ class Cascade:
     to_state: str
     functions: list[str] = field(default_factory=list)
     changes: list[AttributeChange] = field(default_factory=list)
-    #: `(transition, planned firing date)` — schedulings and
+    #: `(transition, planned firing date)`, schedulings and
     #: reschedulings caused by this event.
     scheduled: list[tuple[str, float]] = field(default_factory=list)
-    #: `(transition, reason)` — drops caused by this event.
+    #: `(transition, reason)`, drops caused by this event.
     dropped: list[tuple[str, str]] = field(default_factory=list)
 
     def __str__(self) -> str:
@@ -152,14 +152,14 @@ class JournalQuery:
     """Query layer over the causal journal of one simulation run.
 
     Build from ``result.journal`` (requires ``journal=True`` at
-    simulation time — the journal is zero-cost when disabled and
+    simulation time: the journal is zero-cost when disabled and
     therefore empty here otherwise).
     """
 
     def __init__(self, journal: list[dict[str, Any]]):
         if not journal:
             raise ValueError(
-                "empty journal — run simulate(..., journal=True)"
+                "empty journal: run simulate(..., journal=True)"
             )
         self._journal = journal
 
@@ -246,7 +246,7 @@ class JournalQuery:
                     break
         if start is None:
             raise ValueError(
-                f"`{transition}` fired {seen + 1} time(s) — no "
+                f"`{transition}` fired {seen + 1} time(s): no "
                 f"occurrence #{occurrence} in the journal"
             )
         fired = self._journal[start]

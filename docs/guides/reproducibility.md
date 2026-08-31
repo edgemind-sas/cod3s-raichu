@@ -1,7 +1,7 @@
 # Reproducibility
 
 RAICHU is a scientific simulator: **the same seed, code and
-configuration reproduce the same results — bit-for-bit where feasible.**
+configuration reproduce the same results: bit-for-bit where feasible.**
 This page states the guarantees and how they are implemented.
 
 ## No hidden randomness
@@ -11,7 +11,7 @@ This page states the guarantees and how they are implemented.
   There is no global RNG, no time-derived seeding.
 - The generator is **ChaCha8**, chosen for its *substream* capability:
   replica *k* of a Monte-Carlo campaign draws from `(master seed,
-  stream k)`. Replicas are independent **and** individually replayable —
+  stream k)`. Replicas are independent **and** individually replayable:
   re-simulating trajectory *k* alone reproduces it exactly.
 - The random-number dependencies are pinned (lockfile committed) and
   built without platform-specific math, keeping draws identical across
@@ -53,22 +53,22 @@ print("exact replay")
   results serially, in replica-index order**: estimates are
   **byte-identical whether the campaign runs on 1 or N threads** (see
   [Parallelism](parallelism.md)).
-- Simultaneous events are ordered by (date, transition index) — a
+- Simultaneous events are ordered by (date, transition index): a
   documented, stable tie-break.
 
 ## Explicit numerics
 
-- The ODE integrator (Dormand–Prince 4(5) with dense output) exposes its
-  tolerances — relative/absolute step control, maximum step and the
-  event-location tolerance — as *configuration*, not hidden constants.
+- The ODE integrator (Dormand-Prince 4(5) with dense output) exposes its
+  tolerances (relative/absolute step control, maximum step and the
+  event-location tolerance) as *configuration*, not hidden constants.
   See [Numerical tuning](numerical-tuning.md).
 - Boundary crossings are located by bracketing on the dense interpolant,
   never stepped over silently.
 
 ## Provenance
 
-Every result carries its provenance — engine version, model name,
-horizon, seed, integrator tolerances — so a recorded run can be
+Every result carries its provenance: engine version, model name,
+horizon, seed, integrator tolerances, so a recorded run can be
 re-simulated identically:
 
 ```python

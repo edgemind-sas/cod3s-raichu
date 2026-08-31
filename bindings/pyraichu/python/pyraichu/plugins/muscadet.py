@@ -98,7 +98,7 @@ def _cond_tree(
     """cod3s condition specification → core boolean expression.
 
     Accepts the cod3s shapes: a bare bool, a single leaf dict, a list of
-    leaves (one AND group) or a list of lists (OR of AND groups) —
+    leaves (one AND group) or a list of lists (OR of AND groups):
     mirroring `sanitize_cond_format`.
     """
     if isinstance(cond, bool):
@@ -115,7 +115,7 @@ def _cond_tree(
 
 def _cond_groups(cond: Any, inner_logic: str = "all") -> list[dict]:
     """Normalize a cond spec to the list of per-group boolean expressions
-    (each an inner-logic aggregation of its leaves) — the OR-of-AND groups
+    (each an inner-logic aggregation of its leaves): the OR-of-AND groups
     that `_cond_tree` ORs together and that the logic gate aggregates by
     `kind`. Mirrors `sanitize_cond_format`."""
     if isinstance(cond, bool):
@@ -213,7 +213,7 @@ def _reinit_effect(
                 else:
                     raise ValueError(
                         f"ObjFM `{name}`: cannot resolve the initial value of "
-                        f"`{target}.{variable}` (reinitialization semantics) — "
+                        f"`{target}.{variable}` (reinitialization semantics): "
                         "declare repair_effects"
                     )
         effects.append(
@@ -316,7 +316,7 @@ def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], li
 
 
 def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
-    """cod3s ObjFM expansion — three behaviours over N targets and every
+    """cod3s ObjFM expansion: three behaviours over N targets and every
     *active* common-cause order (`fm__cc_i_j`, states `occ__cc_i_j` /
     `rep__cc_i_j`, transitions named after the target states;
     underscore-separated indices since cod3s 1.9.0; per-order laws as
@@ -324,7 +324,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
 
     - ``internal`` (default): the ObjFM writes each target attribute directly,
       held at its failure value while ANY impacting combination is failed, its
-      initial value otherwise (reinitialization — repair_effects unnecessary by
+      initial value otherwise (reinitialization: repair_effects unnecessary by
       construction);
     - ``external`` (mutual lock): a boolean control attribute
       ``ctrl_{name}_{target}`` = OR(impacting occ) drives a mirror automaton
@@ -368,7 +368,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
     # Sequence monitoring: internal ObjFMs carry the sequence events on
     # their own occ/rep transitions; external modes carry them on the
     # TARGET's grafted mirror instead (cod3s drops the external ObjFM's own
-    # events — in rep_indep its instant occ+rep pair would always cancel).
+    # events: in rep_indep its instant occ+rep pair would always cancel).
     monitored = not external
     for order in range(1, order_max + 1):
         f_law = failure_laws[order - 1]
@@ -391,7 +391,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 )
             # Repair transition: rep_indep resets instantly (structural,
             # law-independent); otherwise only an ACTIVE repair law builds
-            # one — a non-repairable mode keeps its failure with an
+            # one: a non-repairable mode keeps its failure with an
             # absorbing occ state (cod3s `is_occ_law_repair_active`).
             if rep_indep:
                 repair_guard = _const(True)
@@ -442,7 +442,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 impacting[targets[idx]].append((aut_name, occ))
 
     if not external:
-        # INTERNAL (default): reinitialization semantics — the ObjFM writes each
+        # INTERNAL (default): reinitialization semantics, the ObjFM writes each
         # target attribute directly, held at its failure value while ANY
         # impacting combination is failed (the OR gate), its initial value
         # otherwise. cod3s models omit repair_effects here (adding them hangs
@@ -486,7 +486,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
             raise ValueError(
                 f"ObjFM `{name}` ({behaviour}): target `{target}` is impacted by no "
                 "active failure order, so its control attribute could never become "
-                "true — declare at least one order with a failure law"
+                "true: declare at least one order with a failure law"
             )
         occ_gates = [_state_active(name, aut, st) for aut, st in impacting[target]]
         if rep_indep:
@@ -518,7 +518,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         if comp is None:
             raise ValueError(
                 f"ObjFM `{name}` ({behaviour}): target component `{target}` is "
-                "not (yet) present — external modes graft a mirror automaton "
+                "not (yet) present: external modes graft a mirror automaton "
                 "into the target in place, so each target must be declared "
                 "before this ObjFM (unlike `internal`, which resolves targets "
                 "by name at load time)"
@@ -531,12 +531,12 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         if any(a.get("name") == name for a in comp.get("automata", [])):
             raise ValueError(
                 f"ObjFM `{name}` ({behaviour}): target `{target}` already has an "
-                f"automaton named `{name}` — rename the ObjFM or the automaton"
+                f"automaton named `{name}`: rename the ObjFM or the automaton"
             )
         if any(f.get("name") == apply_fn for f in comp.get("sensitive_functions", [])):
             raise ValueError(
                 f"ObjFM `{name}` ({behaviour}): target `{target}` already has a "
-                f"sensitive function named `{apply_fn}` — rename the ObjFM"
+                f"sensitive function named `{apply_fn}`: rename the ObjFM"
             )
         ctrl = f"ctrl_{name}_{target}"
         if rep_indep:
@@ -609,22 +609,22 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
 
 
 def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
-    """cod3s `ObjFMInst` expansion — **failure on solicitation**
+    """cod3s `ObjFMInst` expansion: **failure on solicitation**
     (user guide `objfm-inst.md`, ADR 2026-07-05), including **common
     cause** (test_objfm_inst_002_ccf).
 
     The demand is ``failure_cond``; on each demand *front* the mode fails
-    with probability ``gamma`` — one Bernoulli draw, instantaneously —
+    with probability ``gamma`` (one Bernoulli draw, instantaneously)
     and is repaired by an exponential ``mu``. Each cc-combination is a
     **3-state** automaton (`rep` / `occ` / `not_occ`):
 
-    - `rep --[inst, guard=demand]--> {occ: gamma_k, not_occ: 1-gamma_k}` —
+    - `rep --[inst, guard=demand]--> {occ: gamma_k, not_occ: 1-gamma_k}`:
       the draw (a branching instantaneous transition, RAICHU brique 2);
-    - `not_occ --[inst p=1, guard=NOT demand]--> rep` — the deterministic
+    - `not_occ --[inst p=1, guard=NOT demand]--> rep`: the deterministic
       re-arm; `not_occ` absorbs the front so no re-draw happens while the
       demand holds (anti-Zeno);
-    - `occ --[exp(mu_k), guard=repair_cond]--> rep` — the repair
-      (omitted when ``mu_k = 0`` — occ absorbing).
+    - `occ --[exp(mu_k), guard=repair_cond]--> rep`: the repair
+      (omitted when ``mu_k = 0``: occ absorbing).
 
     With N targets, `failure_param = [gamma_1, …, gamma_n]` (per order)
     generates the 2^N−1 combination automata (`__cc_` suffix), one per
@@ -656,7 +656,7 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
     fspec = spec.get("failure", spec.get("failure_param"))
     if fspec is None:
         raise ValueError(
-            f"ObjFMInst `{name}`: missing `failure` (or `failure_param`) — "
+            f"ObjFMInst `{name}`: missing `failure` (or `failure_param`), "
             "the per-order Bernoulli gamma(s)"
         )
     failure_specs = list(fspec) if isinstance(fspec, list) else [fspec]
@@ -749,7 +749,7 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
 
     # Reinitialization semantics: each target's variable holds its fail
     # value while ANY impacting combination sits in its `occ` (an OR over
-    # those occ states), the initial (or explicit repair) value otherwise —
+    # those occ states), the initial (or explicit repair) value otherwise:
     # identical to the internal CCF, hence the shared helper.
     effects = _reinit_effects(
         name, targets, impacting, failure_effects, repair_effects, model
@@ -830,9 +830,9 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
 
 def _expand_objlogicgate(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
     """muscadet `ObjLogicGate` (`muscadet/obj_logic.py`): a combinational
-    boolean gate, **automaton-free**. A `result` attribute is recomputed —
-    edge-triggered by a sensitive function whenever a referenced input
-    changes — as `kind` over the condition leaves. By convention `cond` is
+    boolean gate, **automaton-free**. A `result` attribute is recomputed
+    as `kind` over the condition leaves, edge-triggered by a sensitive
+    function whenever a referenced input changes. By convention `cond` is
     one unit clause per source (`[[s1], [s2], …]`), so `kind` alone chooses
     the aggregation:
 
@@ -850,9 +850,9 @@ def _expand_objlogicgate(spec: dict, model: dict) -> tuple[list[dict], list[dict
     groups = _cond_groups(spec.get("cond", []), inner)
     if not groups:
         # An empty condition would silently evaluate as a CONSTANT gate
-        # (empty OR = false, empty AND = true) — fail at build time instead.
+        # (empty OR = false, empty AND = true): fail at build time instead.
         raise ValueError(
-            f"ObjLogicGate `{name}`: empty or missing `cond` — declare at "
+            f"ObjLogicGate `{name}`: empty or missing `cond`, declare at "
             "least one source leaf"
         )
 

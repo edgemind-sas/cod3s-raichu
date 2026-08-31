@@ -1,4 +1,4 @@
-//! # raichu-montecarlo — parallel replica driver
+//! # raichu-montecarlo: parallel replica driver
 //!
 //! Runs `nb_runs` independent trajectories of a compiled model and
 //! estimates indicator statistics at a sampling schedule.
@@ -6,18 +6,18 @@
 //! Reproducibility contract:
 //!
 //! - replica `r` uses the RNG substream `r` of the master seed
-//!   (`raichu-rng` policy) — replicas are independent by construction
+//!   (`raichu-rng` policy): replicas are independent by construction
 //!   and each one replays bit-identically;
 //! - replica results are collected **in replica order** and reduced by
 //!   a **serial, index-ordered fold**: floating-point addition is not
 //!   associative, so this is what makes 1-thread and N-thread runs
 //!   produce *identical bytes*, not just statistically equal numbers;
 //! - `rayon` only parallelises the embarrassingly parallel trajectory
-//!   loop — the single-trajectory engine stays single-threaded.
+//!   loop: the single-trajectory engine stays single-threaded.
 //!
 //! Estimators per indicator and schedule instant: mean and sample
 //! standard deviation of the sampled value, plus the **sojourn time**
-//! (time-integral of the indicator value up to the instant — for 0/1
+//! (time-integral of the indicator value up to the instant: for 0/1
 //! state indicators this is the classic cumulated-sojourn estimator,
 //! the sojourn-time measure).
 
@@ -39,19 +39,19 @@ pub struct McConfig {
     /// Ascending sampling instants (also the estimator support).
     pub samples: Vec<f64>,
     /// Thread count (`None` = rayon default). The result is
-    /// byte-identical whatever the value — see the crate docs.
+    /// byte-identical whatever the value: see the crate docs.
     pub threads: Option<usize>,
     /// Quantile orders to estimate (e.g. `[0.25, 0.75]`), on both the
     /// sampled value and the cumulated sojourn, nearest-rank across
     /// replicas (M4; quantile stats, e.g. P25/P75).
     pub quantiles: Vec<f64>,
     /// Numerical parameters of the ODE backend for every replica
-    /// (engine defaults unless overridden — the knob of the
+    /// (engine defaults unless overridden: the knob of the
     /// tolerance-parity experiments; recorded as provenance upstream).
     pub ode: SolverParams,
     /// Early-stop each trajectory at the first sequence target (feared
     /// event) and hold the frozen state through the remaining sample
-    /// instants — the latch semantics of target-stopped studies (the
+    /// instants: the latch semantics of target-stopped studies (the
     /// reference regime of recorded sequence campaigns). Ignored when the
     /// model declares no target.
     pub stop_at_targets: bool,
@@ -83,7 +83,7 @@ pub struct IndicatorEstimate {
     /// Sample standard deviation of the cumulated sojourn.
     pub sojourn_std: Vec<f64>,
     /// Mean number of occurrences (state entries / rising edges) up to each
-    /// instant — the RAMS `nb-occurrences` measure.
+    /// instant: the RAMS `nb-occurrences` measure.
     pub nb_occurrences_mean: Vec<f64>,
     /// Sample standard deviation of the occurrence count.
     pub nb_occurrences_std: Vec<f64>,
@@ -130,7 +130,7 @@ fn sojourn_at(points: &[(f64, Value)], instant: f64) -> f64 {
 }
 
 /// Number of **occurrences** (state entries) up to `instant`: the count of
-/// rising edges in the change-point series — a value going from ≤ 0 to > 0,
+/// rising edges in the change-point series: a value going from ≤ 0 to > 0,
 /// including an active initial value. This is the RAMS `nb-occurrences`
 /// measure (how many times the feared event happened by `instant`).
 fn nb_occurrences_at(points: &[(f64, Value)], instant: f64) -> f64 {
@@ -139,7 +139,7 @@ fn nb_occurrences_at(points: &[(f64, Value)], instant: f64) -> f64 {
     for (t_start, value) in points {
         // Inclusive bound: an entry AT the sample instant counts, matching
         // the sampled value at that instant (which reflects the post-event
-        // state) — the two measures stay mutually consistent.
+        // state): the two measures stay mutually consistent.
         if *t_start > instant {
             break;
         }

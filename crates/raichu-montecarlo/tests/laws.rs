@@ -1,9 +1,9 @@
-//! M4 distribution library — statistical unit tests against closed-form CDFs.
+//! M4 distribution library: statistical unit tests against closed-form CDFs.
 //!
 //! Identity under test: a single `ok → nok` automaton whose transition
 //! carries distribution `L` gives `E[1{nok at t}] = P(T ≤ t) = CDF_L(t)`. Each
 //! distribution is checked at three instants with a 4·SE tolerance (20 000
-//! replicas, fixed seed — the verdict is reproducible).
+//! replicas, fixed seed: the verdict is reproducible).
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
@@ -87,7 +87,7 @@ fn assert_model_matches_cdf(model: &Model, instants: &[f64], cdf: impl Fn(f64) -
     }
 }
 
-/// Abramowitz–Stegun 7.1.26 erf approximation (|ε| < 1.5e-7 — far below
+/// Abramowitz-Stegun 7.1.26 erf approximation (|ε| < 1.5e-7: far below
 /// the Monte-Carlo standard error).
 fn erf(x: f64) -> f64 {
     let sign = x.signum();
@@ -176,8 +176,8 @@ fn quantiles_of_bernoulli_state_follow_the_probability() {
     let est = &estimates.indicators[0];
     let q25 = &est.quantiles[0].values;
     let q75 = &est.quantiles[1].values;
-    // At p ≈ 0.5: a quarter of replicas are surely below (still ok) —
-    // q25 = 0 — and q75 = 1.
+    // At p ≈ 0.5, a quarter of replicas are surely below (still ok),
+    // so q25 = 0 and q75 = 1.
     assert_eq!((q25[0], q75[0]), (0.0, 1.0));
     // At p ≈ 0.9 > 0.75: even the 25 % rank has fired.
     assert_eq!((q25[1], q75[1]), (1.0, 1.0));
