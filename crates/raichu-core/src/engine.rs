@@ -58,10 +58,16 @@ pub struct EngineConfig {
     pub journal: bool,
     /// Record the per-trajectory sequence trace — the ordered `SeqEvent`s of
     /// fired *monitored* transitions plus the end cause when a target
-    /// (feared event) is reached (zero cost when `false`). When on and a
-    /// target is reached, the trajectory **early-stops** at that instant
-    /// (mirroring cod3s sequence runs).
+    /// (feared event) is reached (zero cost when `false`). Recording only:
+    /// the early stop is [`EngineConfig::stop_at_targets`], so a driver
+    /// that wants the latch without the trace does not pay for the trace.
     pub sequences: bool,
+    /// End the trajectory at the first target (feared event) reached,
+    /// holding the latched state through the remaining sample instants
+    /// (mirroring cod3s sequence runs). Independent of `sequences`:
+    /// sequence *analysis* needs both, a Monte-Carlo run that only wants
+    /// the early stop needs this one alone (zero cost when `false`).
+    pub stop_at_targets: bool,
     /// Re-run every fixpoint in reverse order and fail on divergence
     /// (non-confluence diagnostic; ~2× fixpoint cost when enabled).
     pub confluence_check: bool,
@@ -89,6 +95,7 @@ impl Default for EngineConfig {
             t_max: f64::INFINITY,
             journal: false,
             sequences: false,
+            stop_at_targets: false,
             confluence_check: false,
             max_fixpoint_iterations: 10_000,
             ode: SolverParams::default(),
@@ -391,6 +398,55 @@ pub struct Snapshot {
     watched_streak: (f64, usize),
     rng: ChaCha8Rng,
     worklist: BTreeSet<FnIdx>,
+}
+
+/// Value of an attribute by qualified name (`component.attribute`) —
+/// shared by [`Engine`] and [`Snapshot`] so the two never drift.
+fn attribute_of(model: &CompiledModel, vars: &[Value], qualified: &str) -> Option<Value> {
+    model.var_index.get(qualified).map(|&idx| vars[idx])
+}
+
+/// Current state name of an automaton by qualified name
+/// (`component.automaton`) — shared by [`Engine`] and [`Snapshot`].
+fn state_of<'m>(model: &'m CompiledModel, states: &[StateIdx], qualified: &str) -> Option<&'m str> {
+    model.automaton_index.get(qualified).map(|&idx| {
+        let automaton = &model.automata[idx];
+        automaton.states[states[idx]].as_str()
+    })
+}
+
+impl Snapshot {
+    /// Simulation time captured in this snapshot.
+    ///
+    /// Read directly, without rebuilding an [`Engine`]: a facade that
+    /// polls the state between steps (the Python `interactive` object)
+    /// would otherwise pay a full state clone per read.
+    #[must_use]
+    pub fn time(&self) -> f64 {
+        self.time
+    }
+
+    /// Events fired up to this snapshot, chronological. See
+    /// [`Snapshot::time`] on why this bypasses the engine rebuild.
+    #[must_use]
+    pub fn history(&self) -> &[Event] {
+        &self.events
+    }
+
+    /// Value of an attribute by qualified name (`component.attribute`),
+    /// resolved against the model this snapshot was taken from.
+    #[must_use]
+    pub fn attribute(&self, model: &CompiledModel, qualified: &str) -> Option<Value> {
+        attribute_of(model, &self.vars, qualified)
+    }
+
+    /// Current state name of an automaton by qualified name
+    /// (`component.automaton`), resolved against the model this snapshot
+    /// was taken from.
+    #[must_use]
+    pub fn state<'m>(&self, model: &'m CompiledModel, qualified: &str) -> Option<&'m str> {
+        state_of(model, &self.states, qualified)
+    }
 }
 
 /// An indicator's recorded change-points `(time, value)`.
@@ -1060,7 +1116,7 @@ impl<'m> Engine<'m> {
     /// Sequence analysis: label the trajectory with the first target
     /// (feared event) whose state is active — sets `seq_end` once.
     fn check_targets(&mut self) {
-        if !self.config.sequences || self.seq_end.is_some() {
+        if !self.config.stop_at_targets || self.seq_end.is_some() {
             return;
         }
         for target in &self.model.targets {
@@ -1080,20 +1136,14 @@ impl<'m> Engine<'m> {
     /// Value of an attribute by qualified name (`component.attribute`).
     #[must_use]
     pub fn attribute(&self, qualified: &str) -> Option<Value> {
-        self.model
-            .var_index
-            .get(qualified)
-            .map(|&idx| self.vars[idx])
+        attribute_of(self.model, &self.vars, qualified)
     }
 
     /// Current state name of an automaton by qualified name
     /// (`component.automaton`).
     #[must_use]
     pub fn state(&self, qualified: &str) -> Option<&str> {
-        self.model.automaton_index.get(qualified).map(|&idx| {
-            let automaton = &self.model.automata[idx];
-            automaton.states[self.states[idx]].as_str()
-        })
+        state_of(self.model, &self.states, qualified)
     }
 
     /// **Interactive control** — every currently-armed transition.
@@ -1311,6 +1361,8 @@ impl<'m> Engine<'m> {
         self.hazards = vec![None; n];
         self.events.clear();
         self.journal.clear();
+        self.seq_events.clear();
+        self.seq_end = None;
         for series in &mut self.indicator_series {
             series.points.clear();
         }
@@ -1478,8 +1530,9 @@ impl<'m> Engine<'m> {
     }
 
     /// Run until the schedule drains or the horizon is reached, then
-    /// return the full result with provenance. When sequence recording is
-    /// on, a run **early-stops** at the first target (feared event) reached.
+    /// return the full result with provenance. With
+    /// [`EngineConfig::stop_at_targets`] on, a run **early-stops** at the
+    /// first target (feared event) reached.
     pub fn run(mut self) -> Result<SimulationResult, EngineError> {
         loop {
             if let Some((_, t_hit)) = &self.seq_end {

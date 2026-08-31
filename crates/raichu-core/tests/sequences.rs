@@ -89,6 +89,7 @@ fn records_monitored_events_and_stops_at_the_target() {
     let config = EngineConfig {
         t_max: 100.0,
         sequences: true,
+        stop_at_targets: true,
         ..EngineConfig::default()
     };
     let result = Engine::new(&m, config).unwrap().run().unwrap();
@@ -168,6 +169,7 @@ fn early_stop_finishes_the_hit_instant() {
     let config = EngineConfig {
         t_max: 100.0,
         sequences: true,
+        stop_at_targets: true,
         ..EngineConfig::default()
     };
     let result = Engine::new(&compiled, config).unwrap().run().unwrap();
@@ -196,6 +198,7 @@ fn initially_active_target_ends_the_trajectory_at_zero() {
     let config = EngineConfig {
         t_max: 100.0,
         sequences: true,
+        stop_at_targets: true,
         ..EngineConfig::default()
     };
     let result = Engine::new(&compiled, config).unwrap().run().unwrap();
@@ -214,6 +217,7 @@ fn runs_to_horizon_when_no_target_is_reached() {
     let config = EngineConfig {
         t_max: 7.0,
         sequences: true,
+        stop_at_targets: true,
         ..EngineConfig::default()
     };
     let result = Engine::new(&m, config).unwrap().run().unwrap();
@@ -226,4 +230,57 @@ fn runs_to_horizon_when_no_target_is_reached() {
     assert_eq!(events, vec![("A", "occ")]); // occ@5 only
     assert_eq!(seq.end_cause, None);
     assert_eq!(seq.end_time, 7.0);
+}
+
+#[test]
+fn early_stop_without_recording_costs_no_trace() {
+    // Review finding: the early stop and the trace are separate concerns.
+    // The Monte-Carlo driver wants the target latch (and its held state)
+    // without paying for a per-trajectory `SeqEvent` trace it discards.
+    let m = compiled();
+    let config = EngineConfig {
+        t_max: 100.0,
+        stop_at_targets: true,
+        ..EngineConfig::default()
+    };
+    let result = Engine::new(&m, config).unwrap().run().unwrap();
+    assert!(result.sequence.is_none(), "no trace recorded");
+    assert_eq!(result.final_time, 10.0, "but the target still early-stops");
+}
+
+#[test]
+fn reset_clears_the_recorded_trace_and_end_cause() {
+    // Review finding: `reset` promises a state identical to a fresh
+    // `Engine::new`. Leaving `seq_end` latched would make `check_targets`
+    // return early forever (the restarted trajectory never target-checked)
+    // and concatenate the previous trajectory's events into the next one.
+    let m = compiled();
+    let config = EngineConfig {
+        t_max: 100.0,
+        sequences: true,
+        stop_at_targets: true,
+        ..EngineConfig::default()
+    };
+    let mut engine = Engine::new(&m, config).unwrap();
+    // Drive interactively to the target: occ@5, rep@8, then ER.occ@10.
+    for _ in 0..3 {
+        engine.step().unwrap();
+    }
+    engine.reset().unwrap();
+
+    // The restarted trajectory must be indistinguishable from a fresh one.
+    let result = engine.run().unwrap();
+    let seq = result.sequence.expect("sequence recorded when enabled");
+    let events: Vec<_> = seq
+        .events
+        .iter()
+        .map(|e| (e.obj.as_str(), e.attr.as_str(), e.time))
+        .collect();
+    assert_eq!(
+        events,
+        vec![("A", "occ", 5.0), ("A", "rep", 8.0), ("ER", "occ", 10.0)]
+    );
+    assert_eq!(seq.end_cause.as_deref(), Some("feared"));
+    assert_eq!(seq.end_time, 10.0);
+    assert_eq!(result.final_time, 10.0);
 }

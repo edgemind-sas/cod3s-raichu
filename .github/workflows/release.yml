@@ -16,8 +16,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Least privilege: only the release job writes to the repository. The build
+# jobs run third-party actions and get a read-only token.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,9 +36,7 @@ jobs:
           # aarch64 cross-compiles on the hosted runner; the smoke test is
           # skipped (the wheel cannot execute there).
           - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, native: false }
-          # Intel macOS runners are retired on hosted CI; cross-compile
-          # x86_64 from the arm64 runner (no native smoke there).
-          - { name: macos-x86_64, runner: macos-latest, target: x86_64, native: false }
+          - { name: macos-x86_64, runner: macos-13, target: x86_64, native: true }
           - { name: macos-arm64, runner: macos-latest, target: aarch64, native: true }
           - { name: windows-x86_64, runner: windows-latest, target: x64, native: true }
     steps:
@@ -81,6 +81,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [wheels, sdist]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -90,10 +92,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            dist/* || \
-          gh release upload "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" --clobber dist/*
+          set -euo pipefail
+          # Probe explicitly rather than falling back on any `create`
+          # failure: an auth error, a malformed tag or an empty dist/ would
+          # otherwise be read as "the release already exists" and resurface
+          # as a second, less informative error from `upload`.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" --clobber dist/*
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              dist/*
+          fi
