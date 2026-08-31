@@ -2,7 +2,7 @@
 
 A Monte-Carlo campaign is *embarrassingly parallel*: the replicas are
 independent. RAICHU runs them across a thread pool and gives you the
-speed-up for free — while guaranteeing the result does not depend on how
+speed-up for free, while guaranteeing the result does not depend on how
 many threads ran it.
 
 ## The model
@@ -16,7 +16,7 @@ many threads ran it.
 - The per-replica results are collected and **reduced serially, in
   replica-index order**. Floating-point addition is not associative, so
   this ordered reduction is what makes the estimate **byte-identical**
-  for any thread count — not merely statistically equal.
+  for any thread count: not merely statistically equal.
 
 ```python
 import pyraichu
@@ -47,14 +47,14 @@ print("1 thread and N threads agree to the byte")
 ## Controlling it
 
 - `threads=None` (default) uses the whole machine.
-- `threads=1` forces a serial run — useful for profiling the engine
+- `threads=1` forces a serial run: useful for profiling the engine
   itself, or in a context that already parallelises at a higher level.
 - `threads=k` caps the pool at *k*.
 
 Because the answer is identical whatever you choose, `threads` is purely
 a performance dial: develop and debug at `threads=1` for simple stack
 traces, then let it default for production throughput. There is nothing
-to reconcile afterwards — the numbers are the same.
+to reconcile afterwards: the numbers are the same.
 
 ## Scope
 

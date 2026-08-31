@@ -1,20 +1,20 @@
 # 4. Going hybrid: continuous dynamics
 
 So far the state changed only in discrete jumps. Many systems also
-**evolve continuously** between jumps — a temperature, a level, a
-current — and the jumps and the continuous flow feed back on each other.
+**evolve continuously** between jumps (a temperature, a level, a
+current) and the jumps and the continuous flow feed back on each other.
 This is what RAICHU is built for. We model a **heated room**: a
 thermostat switches a heater on and off at temperature thresholds, the
 room temperature follows an ODE, and the heater can fail.
 
 Two new ingredients:
 
-- **equations** — a continuous attribute governed by `dV/dt = …`
+- **equations**: a continuous attribute governed by `dV/dt = …`
   (`ode`) or `V = …` (`explicit`);
-- **watched transitions** — a *guarded* transition whose guard involves a
+- **watched transitions**: a *guarded* transition whose guard involves a
   continuous attribute. Because that attribute drifts between events, the
   engine must **watch the trajectory** and fire the transition exactly
-  when the guard flips — the crossing is located by root-finding, not by
+  when the guard flips: the crossing is located by root-finding, not by
   stepping. You declare this intent explicitly (`"distrib": "watched"`): the
   engine cannot guess, from a comparison alone, whether you mean "fire at
   the crossing" or merely "be eligible while true".
@@ -55,13 +55,13 @@ room = {
 
 The heater's thermostat is two **watched transitions**: turn `ON` when
 the room falls below 15, `OFF` when it climbs above 20. A watched guard
-is a comparison on a continuous quantity — the engine treats it as a
+is a comparison on a continuous quantity: the engine treats it as a
 boundary and root-finds the crossing, so the switch happens at exactly
 the right temperature, not at the nearest time step.
 
 The heater also has a `health` automaton that can fail (exponentially)
 and be repaired. Its delivered `power` is `5` only when it is both `ON`
-and `OK` — a sensitive function with an `if` expression couples the
+and `OK`: a sensitive function with an `if` expression couples the
 discrete state to the continuous input of the room.
 
 ```python
@@ -156,11 +156,11 @@ print("mean temperature:", [round(v, 1) for v in est.indicators["temp"].mean])
 
 !!! note "What the engine did"
     Between jumps it integrated the temperature ODE with an adaptive
-    Dormand–Prince method and **located each thermostat crossing** by
+    Dormand-Prince method and **located each thermostat crossing** by
     root-finding on the guard, not by stepping. When the heater failed,
     the discrete jump changed the ODE's right-hand side, and integration
     resumed from the exact failure instant. The numerical tolerances are
-    explicit and tunable — see
+    explicit and tunable: see
     [Numerical tuning](../guides/numerical-tuning.md).
 
 ## Where to go next

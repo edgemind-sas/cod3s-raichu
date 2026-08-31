@@ -8,10 +8,10 @@ CXX ?= g++
 CXXFLAGS ?= -O2 -std=c++17 -Wall -Wno-unused-variable
 
 # Fail early (and clearly) if PYCATSHOO_DIR does not point at a 1.4.x
-# tree with the PyC headers — avoids the header/binary drift segfault.
+# tree with the PyC headers: avoids the header/binary drift segfault.
 pyc_bench: bench.cpp
-	@test -n "$(PYCATSHOO_DIR)" || { echo "PYCATSHOO_DIR is not set — see README.md"; exit 1; }
-	@test -d "$(PYCATSHOO_DIR)/Core/include/PyC" || { echo "No PyC headers under $(PYCATSHOO_DIR)/Core/include/PyC — need a PyCATSHOO 1.4.x install (see README.md)"; exit 1; }
+	@test -n "$(PYCATSHOO_DIR)" || { echo "PYCATSHOO_DIR is not set: see README.md"; exit 1; }
+	@test -d "$(PYCATSHOO_DIR)/Core/include/PyC" || { echo "No PyC headers under $(PYCATSHOO_DIR)/Core/include/PyC: need a PyCATSHOO 1.4.x install (see README.md)"; exit 1; }
 	$(CXX) $(CXXFLAGS) $< \
 	  -I$(PYCATSHOO_DIR)/Core/include/PyC \
 	  $(PYCATSHOO_DIR)/Core/lib/libPycatshoo.a \

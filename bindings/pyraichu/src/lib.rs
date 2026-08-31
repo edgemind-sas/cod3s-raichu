@@ -91,7 +91,7 @@ fn simulate_json(
 ///
 /// The `rtol`/`atol`/`max_step`/`tol_event`/`sub_samples` keywords
 /// override the corresponding ODE-backend parameters (engine defaults
-/// when omitted) — the knobs of the tolerance-parity experiments.
+/// when omitted): the knobs of the tolerance-parity experiments.
 #[pyfunction]
 #[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
@@ -180,7 +180,7 @@ fn analyse_sequences_json(
 }
 
 /// Opaque checkpoint of an [`Interactive`] session's full trajectory
-/// state (see `raichu_core::Snapshot`) — produced by `Interactive.snapshot`
+/// state (see `raichu_core::Snapshot`): produced by `Interactive.snapshot`
 /// and reinstated by `Interactive.restore`. Held as a Python object; its
 /// contents are engine-internal.
 #[pyclass]
@@ -196,7 +196,7 @@ struct Snapshot {
 ///
 /// The borrowing `raichu_core::Engine` cannot outlive a single call, so
 /// this object keeps the owned `CompiledModel` + a `Snapshot` and
-/// rebuilds a throwaway engine (`Engine::from_snapshot`) per method —
+/// rebuilds a throwaway engine (`Engine::from_snapshot`) per method:
 /// exact restores make this identical to driving one persistent engine.
 #[pyclass]
 struct Interactive {

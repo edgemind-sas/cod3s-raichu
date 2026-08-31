@@ -2,7 +2,7 @@
 //! the engine consumes.
 //!
 //! Performance contract: all names are resolved here, once, at
-//! build time — the simulation hot path only touches vector indices,
+//! build time: the simulation hot path only touches vector indices,
 //! never string lookups, and never allocates.
 
 use raichu_expr::{AggOp, BoolOp, CmpOp, Expr, Value};
@@ -14,7 +14,7 @@ use thiserror::Error;
 
 /// Margin tightening applied to *strict* watched comparisons (`<`,
 /// `>`): the engine fires at margin ≥ 0, so a strict boundary is
-/// shifted inward by this amount — a trajectory resting exactly on it
+/// shifted inward by this amount: a trajectory resting exactly on it
 /// does not fire, and a genuine crossing date shifts by ε/slope. Must
 /// sit *below* the event-location tolerance (`tol_event` = 1e-10):
 /// when two watched guards share one crossing, the located state
@@ -39,7 +39,7 @@ pub enum CompileError {
     /// The model failed its structural validation.
     #[error(transparent)]
     Invalid(#[from] ModelError),
-    /// Internal resolution failure — indicates a validator/compiler
+    /// Internal resolution failure: indicates a validator/compiler
     /// mismatch, reported as a typed error rather than a panic.
     #[error("internal resolution failure: {what} `{name}` not found")]
     Unresolved {
@@ -68,7 +68,7 @@ pub enum CExpr {
     /// Aggregate the out-attributes connected to an in-port.
     PortAgg {
         /// Indices of the connected out-port attributes (connection
-        /// declaration order — deterministic).
+        /// declaration order: deterministic).
         sources: Vec<VarIdx>,
         /// Aggregation operator.
         agg: AggOp,
@@ -151,7 +151,7 @@ pub enum CLaw {
     /// Watched transition (M1): fires when `margin` crosses from
     /// negative to non-negative during continuous evolution (`schedule_boundary`).
     /// The margin is the signed boundary distance derived from the
-    /// guard comparison — guard true ⇔ margin ≥ 0.
+    /// guard comparison: guard true ⇔ margin ≥ 0.
     Watched {
         /// Signed boundary margin.
         margin: CExpr,
@@ -161,12 +161,12 @@ pub enum CLaw {
     Exp(f64),
     /// Exponential distribution with a state-dependent rate λ(x) (`reschedule_modifiable`):
     /// realised by a cumulative hazard against an `Exp(1)` threshold
-    /// (`P(T > t) = exp(−∫λ)` — the PDMP survival function, exactly).
+    /// (`P(T > t) = exp(−∫λ)`: the PDMP survival function, exactly).
     ExpVar {
         /// Rate expression λ(x) ≥ 0.
         rate: CExpr,
-        /// Whether λ varies during continuous evolution (depends —
-        /// transitively through explicit equations — on an
+        /// Whether λ varies during continuous evolution (depends,
+        /// transitively through explicit equations, on an
         /// ODE-integrated attribute or on time). If so the hazard is
         /// integrated alongside the continuous state and the firing
         /// time located like a boundary crossing; otherwise λ is
@@ -276,7 +276,7 @@ pub struct CompiledModel {
     pub automata: Vec<CAutomaton>,
     /// All transitions (global order = declaration order).
     pub transitions: Vec<CTransition>,
-    /// All sensitive functions (global order = declaration order — this
+    /// All sensitive functions (global order = declaration order: this
     /// *is* the documented deterministic fixpoint order).
     pub functions: Vec<CFunction>,
     /// var index → functions to re-evaluate when it changes.
@@ -336,7 +336,7 @@ impl Resolver {
     }
 
     fn port(&self, component: &str, port: &str) -> Vec<VarIdx> {
-        // An in-port with no connection aggregates over the empty set —
+        // An in-port with no connection aggregates over the empty set:
         // legal (muscadet relies on no-connection defaults).
         self.port_sources
             .get(&(component.to_owned(), port.to_owned()))
@@ -450,8 +450,8 @@ impl Resolver {
                     _ => raw,
                 })
             }
-            // AND: every boundary must hold — the binding one is the
-            // *minimum* margin. OR: any suffices — the maximum.
+            // AND: every boundary must hold, the binding one is the
+            // *minimum* margin. OR: any suffices, the maximum.
             Expr::Bool {
                 bool_op: bool_op @ (BoolOp::And | BoolOp::Or),
                 args,
@@ -466,7 +466,7 @@ impl Resolver {
                 })
             }
             // NOT: the guard flips exactly where the margin changes
-            // sign — negate it.
+            // sign: negate it.
             Expr::Bool {
                 bool_op: BoolOp::Not,
                 args,

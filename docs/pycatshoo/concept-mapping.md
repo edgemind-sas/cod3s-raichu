@@ -6,7 +6,7 @@
     maps its concepts to RAICHU's, and the [migration
     guide](migration-guide.md) walks two models across step by step.
 
-RAICHU and PyCATSHOO implement the same underlying formalism — a
+RAICHU and PyCATSHOO implement the same underlying formalism: a
 piecewise-deterministic Markov process realised as communicating hybrid
 automata (Desgeorges et al. 2021). RAICHU is **iso-functional, not
 iso-API**: the same modelling power, expressed as data, with some
@@ -22,7 +22,7 @@ deliberate departures.
 | `mb.addExport` / `addImport` + `connect` | `ports: [{name, dir, var}]` + `connections: [{from, to}]` | an out-port exports one attribute; an in-port aggregates its sources |
 | `sumValue` / `orValue` / `andValue` on a reference | a `port_agg` expression: `sum`, `any`, `all`, `count`, `mean`, `median` | aggregation is part of the expression tree |
 | `addAutomaton` / `addState` / `setInitState` | `automata: [{name, states, init, transitions}]` | state names are scoped **per automaton** |
-| sensitive methods (`addSensitiveMethod`) | **sensitive functions**: declarative `effects` | triggers are *derived* from what each expression reads — no manual wiring, no Python callback in the hot loop |
+| sensitive methods (`addSensitiveMethod`) | **sensitive functions**: declarative `effects` | triggers are *derived* from what each expression reads, no manual wiring, no Python callback in the hot loop |
 | PDMP manager (`addEquationMethod`, `addODEVariable`) | `equations: [{target, kind: ode\|explicit, expr}]` | no manager object; a model has continuous semantics wherever it declares equations |
 
 ## Transitions and distributions
@@ -32,12 +32,12 @@ deliberate departures.
 | `setDistLaw(defer, t)` | `"distrib": "delay", "time": t` |
 | `setDistLaw(inst, p)` | `"distrib": "inst", "probs": [...]` |
 | `setDistLaw(expo, rate)` | `"distrib": "exp", "rate": λ` |
-| `expo` + modifiable rate (discrete / continuous) | `"distrib": "exp", "rate_expr": …` — re-evaluated on change; on continuous attributes the cumulative hazard is integrated exactly |
+| `expo` + modifiable rate (discrete / continuous) | `"distrib": "exp", "rate_expr": …`: re-evaluated on change; on continuous attributes the cumulative hazard is integrated exactly |
 | `setCondition(fun)` + watched transition | `"distrib": "watched"` + a `guard` with ordering comparisons (the boundary is root-found) |
 | `setCondition(fun)` on a timed transition | a `"guard"` on the transition |
 | `setInterruptible(True)` | `"on_interruption": "reset"` (**default**) |
 | default (not interruptible) | `"on_interruption": "continue"` |
-| *(no equivalent)* | `"on_interruption": "resume"` — a RAICHU extension |
+| *(no equivalent)* | `"on_interruption": "resume"`: a RAICHU extension |
 | *(exponential / delay / instant)* | plus `weibull`, `lognormal`, `gamma`, `uniform`, `empirical`, each validated against its closed form |
 
 ## Simulation and results
@@ -60,8 +60,8 @@ intentional differences:
 
 - **Models are data**, validated at build time with precise typed errors
   instead of runtime crashes.
-- **No process singleton** — build and run as many models as you like.
-- **Reproducibility by construction** — explicit seeds, substreams,
+- **No process singleton**: build and run as many models as you like.
+- **Reproducibility by construction**: explicit seeds, substreams,
   byte-identical parallel reduction (see
   [Reproducibility](../guides/reproducibility.md)).
 - **Diagnostics** for non-confluence and instantaneous loops that

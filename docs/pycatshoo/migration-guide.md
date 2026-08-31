@@ -1,19 +1,19 @@
 # Migration guide (from PyCATSHOO)
 
 This guide migrates two models from the PyCATSHOO Python API to RAICHU,
-construct by construct. A RAICHU model is **data** — the Python `dict`
-you build *is* the native JSON the engine consumes, with no hidden layer
-— so "the Python authoring" and "the generated JSON" are the same thing.
+construct by construct. A RAICHU model is **data**: the Python `dict`
+you build *is* the native JSON the engine consumes, with no hidden layer,
+so "the Python authoring" and "the generated JSON" are the same thing.
 We use the [concept mapping](concept-mapping.md) as the dictionary.
 
 Two threads, increasing in coupling:
 
-- **Thread A** — a discrete master/slave system (message boxes,
+- **Thread A**: a discrete master/slave system (message boxes,
   references, sensitive methods, conditions).
-- **Thread B** — a hybrid heated room (adds the PDMP manager and watched
+- **Thread B**: a hybrid heated room (adds the PDMP manager and watched
   transitions).
 
-## Thread A — discrete master/slave
+## Thread A: discrete master/slave
 
 A slave unit delivers only while the master is failed. In PyCATSHOO you
 subclass `CComponent`, add attributes, an automaton, a message box, a
@@ -129,7 +129,7 @@ est = pyraichu.monte_carlo(model, nb_runs=2000, t_max=100.0,
 print("slave running:", [round(v, 3) for v in est.indicators["slave_on"].mean])
 ```
 
-The slave runs ~33 % of the time — exactly the master's unavailability
+The slave runs ~33 % of the time: exactly the master's unavailability
 (0.05/0.15), since it is on precisely when the master is down.
 
 **Construct map used here:**
@@ -143,7 +143,7 @@ The slave runs ~33 % of the time — exactly the master's unavailability
 | sensitive method | sensitive function (`effects`) |
 | `system.connect(...)` | a `connections` entry |
 
-## Thread B — the hybrid heated room
+## Thread B: the hybrid heated room
 
 The hybrid case adds two PyCATSHOO constructs: the **PDMP manager**
 (ODE) and the **boundary checker / watched transition**.
@@ -228,13 +228,13 @@ run = pyraichu.simulate(hybrid, t_max=100.0, seed=1,
 print("temperature:", [round(v, 1) for _, v in run.samples["temp"]])
 ```
 
-The thermostat holds the room in its 15–20 band.
+The thermostat holds the room in its 15-20 band.
 
 **Construct map used here:**
 
 | PyCATSHOO | RAICHU |
 |---|---|
-| `addPDMPManager` | *(none — declare equations directly)* |
+| `addPDMPManager` | *(none: declare equations directly)* |
 | `addODEVariable` + `setDvdtODE` | `equations: [{kind: "ode", …}]` |
 | `sumValue` on a power reference | `port_agg … "agg": "sum"` |
 | boundary checker / `addWatchedTransition` | `"distrib": "watched"` + a `guard` comparison |
@@ -244,7 +244,7 @@ The thermostat holds the room in its 15–20 band.
 
 - **No callbacks in the loop.** PyCATSHOO's condition and equation
   *methods* are Python, called by the engine during the run. RAICHU's
-  guards and equations are **expression trees** evaluated natively — the
+  guards and equations are **expression trees** evaluated natively: the
   reason the [hybrid benchmark](../benchmarks/performance.md) is so much
   faster.
 - **Build-time validation.** An unknown state or a malformed distribution is a

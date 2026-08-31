@@ -4,22 +4,22 @@ A performance number means nothing if the two engines are not computing
 the same thing. So the benchmark starts here: **the same model, authored
 three ways, produces the same results.** Only once that is established do
 the [performance](performance.md) and
-[accuracy–cost](accuracy-cost-parity.md) pages report timings.
+[accuracy-cost](accuracy-cost-parity.md) pages report timings.
 
 The comparison is against **PyCATSHOO** (EDF R&D), a mature C++ hybrid
 simulation engine, on three models of increasing coupling:
 
 | model | what it exercises |
 |---|---|
-| `pure_exp` | two-state exponential component — pure discrete-stochastic, zero callbacks |
-| `heaters_s1` | a thermostatic heater — conditional switching + failures |
-| `heated_room_s3` | a room-temperature ODE + watched thermostats + failures — fully hybrid |
+| `pure_exp` | two-state exponential component: pure discrete-stochastic, zero callbacks |
+| `heaters_s1` | a thermostatic heater: conditional switching + failures |
+| `heated_room_s3` | a room-temperature ODE + watched thermostats + failures: fully hybrid |
 
 ## The same model, three ways
 
 Each model is written (1) in C++ against PyCATSHOO's C++ API, (2) in the
 normal PyCATSHOO Python style, and (3) as a native RAICHU model. Here is
-the simplest one, `pure_exp`, in all three — the code is included
+the simplest one, `pure_exp`, in all three: the code is included
 verbatim from the benchmark sources, so it cannot drift from what is
 actually run:
 
@@ -77,7 +77,7 @@ gates:
   | `heaters_s1` | 2.65 |
   | `heated_room_s3` | 1.49 |
 
-  all below the multiple-comparison critical value — the estimators are
+  all below the multiple-comparison critical value: the estimators are
   indistinguishable.
 
 ## Reproduce it
@@ -94,5 +94,5 @@ The full three-way comparison needs a PyCATSHOO install; see the
 `benchmarks/pycatshoo-cpp/README.md` for the (freeware) download and the
 exact steps.
 
-With correctness established, we can compare speed —
+With correctness established, we can compare speed:
 [Performance](performance.md).

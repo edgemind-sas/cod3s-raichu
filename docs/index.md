@@ -1,19 +1,19 @@
 # RAICHU
 
-**RAICHU** — *Rust Automata Integrating Continuous & Hazard, Unified* —
+**RAICHU** (*Rust Automata Integrating Continuous & Hazard, Unified*)
 is a native, open-source **Rust** engine for the **hybrid simulation of
-complex systems**: discrete stochastic behaviour — random failures,
-repairs, reconfigurations — tightly coupled with continuous,
+complex systems**: discrete stochastic behaviour (random failures,
+repairs, reconfigurations) tightly coupled with continuous,
 multiphysics evolution described by ODEs (temperature, level, current,
 pressure, …). It ships a typed Python binding, **`pyraichu`**.
 
 (The name reads, less formally, as *Rust Automata InCredibly Hybrid
-Unleashed* — the **H** standing for the hazard rate that drives the
+Unleashed*: the **H** standing for the hazard rate that drives the
 stochastic jumps.)
 
 It targets reliability engineers, safety analysts and system modellers
 who need to quantify how a system behaves when random events and
-continuous dynamics interact — and who want an engine they can read,
+continuous dynamics interact, and who want an engine they can read,
 extend and trust. RAICHU implements the **piecewise-deterministic
 Markov process** (PDMP) formalism (Desgeorges et al. 2021) with an
 emphasis on **reproducibility, numerical rigour and inspectability**.
@@ -32,14 +32,14 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
   serializable, diffable, validated at build time with precise typed
   errors instead of crashes.
 - **A rich distribution library.** Exponential (with state-dependent rates),
-  Weibull, lognormal, gamma, uniform, empirical, deterministic delay —
+  Weibull, lognormal, gamma, uniform, empirical, deterministic delay:
   each validated against its closed form.
 - **Answers "why".** An optional causal journal records why a transition
   did or did not fire, who changed an attribute, and the full consequence
   chain of an event. See [Causal journal](guides/causal-journal.md).
 - **The safety output, natively.** Declare a feared event, and a
-  Monte-Carlo campaign yields the **minimal cut sequences** — the ordered,
-  irreducible failure chains leading to it — plus first-occurrence
+  Monte-Carlo campaign yields the **minimal cut sequences** (the ordered,
+  irreducible failure chains leading to it) plus first-occurrence
   indicators. See [Sequence analysis](guides/sequence-analysis.md).
 - **Imports platform studies.** Models and studies exported from a COD3S
   platform instance translate directly into runnable RAICHU models. See
@@ -47,7 +47,7 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
 
 ## Install
 
-**From a release wheel** (no Rust toolchain needed) — each
+**From a release wheel** (no Rust toolchain needed): each
 [GitHub release](https://github.com/edgemind-sas/cod3s-raichu/releases)
 ships prebuilt `pyraichu` wheels for Linux (x86_64, aarch64), macOS
 (Intel, Apple Silicon) and Windows; one abi3 wheel covers every
@@ -58,7 +58,7 @@ platform and:
 pip install pyraichu-0.7.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
-**From source** — RAICHU is a Rust workspace with a Python binding
+**From source**: RAICHU is a Rust workspace with a Python binding
 built by [maturin](https://www.maturin.rs). Prerequisites: Rust stable,
 Python ≥ 3.10.
 
@@ -111,14 +111,14 @@ print("unavailability:", round(estimates.indicators["P_failed"].mean[-1], 3))
 
 ## Where to go next
 
-- **[Tutorial](tutorial/01-first-model.md)** — from your first model to a
+- **[Tutorial](tutorial/01-first-model.md)**: from your first model to a
   full hybrid system, step by step.
-- **[Model schema reference](reference/model-schema.md)** — every field,
+- **[Model schema reference](reference/model-schema.md)**: every field,
   distribution and expression operator.
-- **[Advanced guides](guides/reproducibility.md)** — reproducibility,
+- **[Advanced guides](guides/reproducibility.md)**: reproducibility,
   numerical tuning, the causal journal, sequence analysis, the muscadet
   authoring layer, platform import, parallelism.
-- **[Benchmarks](benchmarks/cross-validation.md)** — RAICHU measured,
+- **[Benchmarks](benchmarks/cross-validation.md)**: RAICHU measured,
   honestly, against an established C++ engine.
 
 RAICHU is part of the **COD3S** modelling ecosystem and is released

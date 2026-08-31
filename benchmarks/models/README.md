@@ -5,7 +5,7 @@ so `benchmarks/` reproduces without any external tree:
 
 | File | What it exercises |
 |---|---|
-| `pure_exp.json` | two-state exponential component, zero callbacks — the pure discrete-stochastic reference |
+| `pure_exp.json` | two-state exponential component, zero callbacks: the pure discrete-stochastic reference |
 | `heaters_s1.json` | one thermostatic heater: conditional ON/OFF + exponential failure/repair |
 | `heated_room_s3.json` | hybrid: room-temperature ODE + watched thermostats + stochastic failures |
 

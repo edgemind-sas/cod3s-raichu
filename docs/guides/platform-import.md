@@ -1,20 +1,20 @@
 # Importing COD3S-platform studies
 
 Models authored on a COD3S platform instance are persisted as **two
-artefacts**: a *model export* (the topology — component instances of KB
+artefacts**: a *model export* (the topology, component instances of KB
 templates, connections, per-instance overrides) and a *study* (the
-dynamics — failure modes, feared events, indicators, Monte-Carlo
+dynamics: failure modes, feared events, indicators, Monte-Carlo
 parameters). `pyraichu.importers.cod3s_platform` fuses both into one
 runnable RAICHU model.
 
 ## Where the artefacts come from
 
-- **Model export** — the platform's model *export* action (or a database
+- **Model export**: the platform's model *export* action (or a database
   dump of the model document): a JSON carrying `model.elements`
   (components + connections) and the embedded knowledge base
   (`kb_embedded`, or `kb` in raw dumps). Both versioned exports and raw
   dumps are accepted.
-- **Study** — the study description used by the platform's run
+- **Study**: the study description used by the platform's run
   machinery (a `study.yaml`, parsed to a dict): `failure_modes`,
   `events`, `targets`, `indicators`, `simulation`.
 
@@ -66,16 +66,16 @@ indicator (`nb-occurrences`, `sojourn-time`).
 
 **Study**:
 
-- `failure_modes` — `ObjFMExp` / `ObjFMDelay`, including per-order
+- `failure_modes`: `ObjFMExp` / `ObjFMDelay`, including per-order
   common-cause parameter lists; a **zero exponential rate marks an
   inactive order** (dropped, as the platform does), and an active
   failure with an inactive repair yields a non-repairable mode
   (absorbing failure state);
-- `events` — `ObjEvent` feared events; the study's `targets` list flags
+- `events`: `ObjEvent` feared events; the study's `targets` list flags
   them as sequence-analysis targets;
-- `indicators` — state indicators on the declared events, with their
+- `indicators`: state indicators on the declared events, with their
   requested measures;
-- `simulation` — `nb_runs`, `schedule` (flattened to `samples`), `seed`,
+- `simulation`: `nb_runs`, `schedule` (flattened to `samples`), `seed`,
   `time_unit`, passed through in `Translation.simulation`.
 
 ## Matching the study's measures
@@ -84,7 +84,7 @@ Platform studies that declare `targets` are **first-occurrence
 campaigns**: each trajectory stops at the feared event, and the recorded
 indicators latch from the hit to the horizon. To reproduce those
 numbers, run the Monte-Carlo with `stop_at_targets=True` (as in the
-snippet above) — see
+snippet above): see
 [Sequence analysis](sequence-analysis.md#first-occurrence-indicators)
 for the two semantics. `Translation.measures` tells you which measure
 each indicator carries:
@@ -137,13 +137,13 @@ artefact = {
 !!! note "Naming drifts when diffing against recorded runs"
     Older platform runs may write common-cause suffixes without index
     separators (`occ__cc_12` for RAICHU's `occ__cc_1_2`) and prefix the
-    failure-mode component with the factorized target name — normalise
+    failure-mode component with the factorized target name: normalise
     both before comparing sequence sets.
 
 ## Fail fast, never silently wrong
 
 Anything outside this scope raises a typed `TranslationError` with the
-offending artefact in the message — a tempo/on-trigger flow type, a
+offending artefact in the message: a tempo/on-trigger flow type, a
 `negate` flag, an unknown attribute role, a malformed logic override, a
 missing required key. The translator refuses to guess: a model that
 translates is a model whose semantics are covered.

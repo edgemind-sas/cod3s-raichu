@@ -1,14 +1,14 @@
 # PyCATSHOO C++-native benchmark
 
 Strict, reproducible comparison of the **same three models** authored
-three ways — (1) in C++ against PyCATSHOO's C++ API, (2) in the normal
-PyCATSHOO Python style, (3) as native RAICHU models — with identical
+three ways: (1) in C++ against PyCATSHOO's C++ API, (2) in the normal
+PyCATSHOO Python style, (3) as native RAICHU models, with identical
 parameters and RNG configuration and a shared seed on the PyCATSHOO
 sides. Findings and analysis: the **Benchmarks** section of the
-documentation site (cross-validation → performance → accuracy–cost
+documentation site (cross-validation → performance → accuracy-cost
 parity).
 
-The models are in `../models/` (self-contained JSON — no dependency on
+The models are in `../models/` (self-contained JSON: no dependency on
 any test tree). This directory holds the PyCATSHOO-side code and the
 measurement drivers.
 
@@ -51,18 +51,18 @@ self-consistent set; its Python module needs Python 3.11.
 
 ## Files
 
-- `../models/*.json` — the three benchmark models (vendored, the source
+- `../models/*.json`: the three benchmark models (vendored, the source
   of truth for reproduction).
-- `bench.cpp` — C++ PyCATSHOO models (`pure_exp`, `heaters_s1`,
+- `bench.cpp`: C++ PyCATSHOO models (`pure_exp`, `heaters_s1`,
   `heated_room_s3`) + Monte-Carlo driver, statically linked; accepts
   optional `dt`/`dtCond`/`lambda` for the parity experiment.
-- `bench_py.py` — Python-callback twins on the same PyCATSHOO engine;
+- `bench_py.py`: Python-callback twins on the same PyCATSHOO engine;
   byte-compatible estimates at the same seed (the faithfulness check of
   the C++ port).
-- `run_bench.py` — orchestrates the engines/paths, checks the
+- `run_bench.py`: orchestrates the engines/paths, checks the
   consistency gates, writes `results.json` (or `results-raichu-only.json`
   with `--raichu-only`).
-- `parity_experiment.py` — tolerance-parity experiment on
+- `parity_experiment.py`: tolerance-parity experiment on
   `heated_room_s3`: achieved accuracy (deterministic thermostat cycle
   vs its closed form) and cost per integration-effort setting on both
   engines; writes `parity_results.json`.

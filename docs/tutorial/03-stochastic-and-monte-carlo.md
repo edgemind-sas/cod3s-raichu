@@ -3,16 +3,16 @@
 Chapter 1 used exponential distributions. Real components age, get repaired in
 roughly-constant times, or follow measured distributions. This chapter
 covers the **distribution library**, **state-dependent rates**, and what a
-**Monte-Carlo** run actually estimates — means, quantiles and sojourn
-times — plus how seeds make every result reproducible.
+**Monte-Carlo** run actually estimates: means, quantiles and sojourn
+times, plus how seeds make every result reproducible.
 
 ## Timed vs instantaneous transitions
 
 A transition comes in two flavours, depending on where its randomness
 lives:
 
-- a **timed** transition draws its *firing date* — deterministically
-  (`delay`) or from a distribution (`exp`, `weibull`, …) — and moves to a
+- a **timed** transition draws its *firing date*, deterministically
+  (`delay`) or from a distribution (`exp`, `weibull`, …), and moves to a
   single destination;
 - an **instantaneous** transition fires *the moment its guard holds*, and
   its randomness is instead a **probabilistic choice of destination**
@@ -20,7 +20,7 @@ lives:
   a guard on a *continuous* attribute makes an instantaneous transition
   into a *watched* one.
 
-This chapter is about the timed, stochastic kind — the failure and repair
+This chapter is about the timed, stochastic kind: the failure and repair
 distributions.
 
 ## The distribution library
@@ -71,14 +71,14 @@ for name, distribution in LAWS.items():
 ```
 
 Every distribution is validated against its closed-form CDF in the test suite,
-so these are not approximations of a distribution — they *are* the
+so these are not approximations of a distribution: they *are* the
 distribution.
 
 ## State-dependent rates
 
 An exponential rate can be an **expression** instead of a constant, via
 `rate_expr`. The rate is then re-evaluated as the state it reads
-changes — a load that rises, a temperature that climbs. Here the hazard
+changes: a load that rises, a temperature that climbs. Here the hazard
 is proportional to a `stress` attribute:
 
 ```python
@@ -103,19 +103,19 @@ model = pyraichu.load_model({
 ```
 
 When the rate depends on a *continuous* attribute (chapter 4), RAICHU
-integrates the cumulative hazard exactly rather than freezing the rate —
+integrates the cumulative hazard exactly rather than freezing the rate:
 see [Numerical tuning](../guides/numerical-tuning.md).
 
 ## What a Monte-Carlo run estimates
 
 `monte_carlo` returns, per indicator and per schedule instant:
 
-- **`mean`** and **`std`** — the estimate and its dispersion across
+- **`mean`** and **`std`**: the estimate and its dispersion across
   replicas;
-- **`quantiles`** — request them with `quantiles=[…]`;
-- **`sojourn_mean` / `sojourn_std` / `sojourn_quantiles`** — the
+- **`quantiles`**: request them with `quantiles=[…]`;
+- **`sojourn_mean` / `sojourn_std` / `sojourn_quantiles`**: the
   time-integral of the indicator up to each instant. For a 0/1 state
-  indicator, that is the **cumulated time spent in the state** — e.g.
+  indicator, that is the **cumulated time spent in the state**: e.g.
   total downtime.
 
 ```python

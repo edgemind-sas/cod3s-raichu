@@ -1,4 +1,4 @@
-//! Monte-Carlo driver tests — M2 exit criteria: closed-form agreement,
+//! Monte-Carlo driver tests: M2 exit criteria: closed-form agreement,
 //! thread-count-independent bytes, seed reproducibility.
 
 #![allow(clippy::unwrap_used, clippy::panic)]
@@ -102,7 +102,7 @@ fn estimates_match_closed_forms_within_confidence() {
 
 /// A repairable delay model: `ok → nok` at t=3, `nok → ok` at t=2, so nok is
 /// (re)entered at t = 3, 8, 13, …. The occurrence count is deterministic and
-/// exact — a direct check of the rising-edge counting with repairs.
+/// exact: a direct check of the rising-edge counting with repairs.
 #[test]
 fn nb_occurrences_counts_repeated_entries_exactly() {
     let mut model = exp_ok_nok(0.0);
@@ -178,7 +178,7 @@ fn stop_at_targets_latches_the_measures() {
     let free = &run(&compiled, &base).unwrap().indicators[0];
     assert_eq!(free.nb_occurrences_mean, vec![0.0, 1.0, 2.0, 3.0]);
     assert_eq!(free.sojourn_mean[3], 5.0);
-    // Early-stopped: frozen in nok at the t=3 hit — one occurrence, the
+    // Early-stopped: frozen in nok at the t=3 hit, one occurrence, the
     // state holds through every later instant, sojourn at 14 = 14 − 3 = 11.
     let latched = &run(
         &compiled,
@@ -197,7 +197,7 @@ fn stop_at_targets_latches_the_measures() {
 }
 
 /// Review finding: an early-stopped replica under an INFINITE horizon must
-/// still cover every requested sample instant (latch through the last one) —
+/// still cover every requested sample instant (latch through the last one):
 /// previously the truncated series made the reduction index out of bounds
 /// (a panic on the library path).
 #[test]
@@ -230,7 +230,7 @@ fn stop_at_targets_with_infinite_horizon_covers_the_schedule() {
 }
 
 /// Review finding: an entry happening EXACTLY at a sample instant counts in
-/// the sampled value but was excluded from nb-occurrences — the two measures
+/// the sampled value but was excluded from nb-occurrences: the two measures
 /// must agree at the boundary.
 #[test]
 fn nb_occurrences_includes_an_entry_at_the_sample_instant() {
@@ -248,7 +248,7 @@ fn nb_occurrences_includes_an_entry_at_the_sample_instant() {
         stop_at_targets: false,
     };
     let est = &run(&compiled, &config).unwrap().indicators[0];
-    // The sampled value at t=3 reflects the post-event state (1.0) — the
+    // The sampled value at t=3 reflects the post-event state (1.0): the
     // occurrence count at the same instant must agree.
     assert_eq!(est.mean, vec![1.0, 1.0]);
     assert_eq!(est.nb_occurrences_mean, vec![1.0, 1.0]);

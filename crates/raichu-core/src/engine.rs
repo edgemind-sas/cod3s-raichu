@@ -4,16 +4,16 @@
 //! Implements the cycle `init → schedule → continuous → discrete →
 //! update` of Desgeorges et al. 2021. Rule mapping:
 //!
-//! - scheduling of deterministic transitions — `schedule_deterministic`
+//! - scheduling of deterministic transitions: `schedule_deterministic`
 //!   ([`Engine::refresh_schedule`]);
-//! - continuous evolution up to the next scheduled date — `integrate_continuous`
+//! - continuous evolution up to the next scheduled date: `integrate_continuous`
 //!   ([`Engine::integrate_to`]);
-//! - watched transitions fired at located boundary crossings — `schedule_boundary`
+//! - watched transitions fired at located boundary crossings: `schedule_boundary`
 //!   (margin monitoring inside [`Engine::integrate_to`]);
-//! - firing of the earliest transition — `fire_transition` ([`Engine::step`]);
-//! - sensitive-function propagation to fixpoint — `propagate_effects`
+//! - firing of the earliest transition: `fire_transition` ([`Engine::step`]);
+//! - sensitive-function propagation to fixpoint: `propagate_effects`
 //!   ([`Engine::run_fixpoint`]);
-//! - dropping interruptible transitions whose guard turned false —
+//! - dropping interruptible transitions whose guard turned false:
 //!   `drop_disabled` ([`Engine::refresh_schedule`]).
 //!
 //! `schedule_stochastic` is implemented (M2, exponential distribution). `reschedule_modifiable` is
@@ -56,7 +56,7 @@ pub struct EngineConfig {
     pub t_max: f64,
     /// Record the structured causal journal (zero cost when `false`).
     pub journal: bool,
-    /// Record the per-trajectory sequence trace — the ordered `SeqEvent`s of
+    /// Record the per-trajectory sequence trace: the ordered `SeqEvent`s of
     /// fired *monitored* transitions plus the end cause when a target
     /// (feared event) is reached (zero cost when `false`). Recording only:
     /// the early stop is [`EngineConfig::stop_at_targets`], so a driver
@@ -75,7 +75,7 @@ pub struct EngineConfig {
     /// declared to have an instantaneous loop (typed error, not a hang).
     pub max_fixpoint_iterations: usize,
     /// Numerical parameters of the default ODE backend (explicit,
-    /// recorded as provenance — validation-contract level 3).
+    /// recorded as provenance: validation-contract level 3).
     pub ode: SolverParams,
     /// Ascending instants at which every indicator is sampled (dense
     /// output for continuous attributes, piecewise-constant hold for
@@ -84,7 +84,7 @@ pub struct EngineConfig {
     /// Master seed of the RNG policy (M2). Only consumed by stochastic
     /// distributions; deterministic models ignore it.
     pub seed: u64,
-    /// Substream index (`ChaCha8Rng::set_stream`) — the Monte-Carlo
+    /// Substream index (`ChaCha8Rng::set_stream`): the Monte-Carlo
     /// driver assigns one stream per replica.
     pub rng_stream: u64,
 }
@@ -149,8 +149,8 @@ pub enum EngineError {
         transition: String,
     },
     /// Interactive control: the requested transition is not currently
-    /// armed — it is neither date-scheduled (`pending`) nor a watched
-    /// transition whose guard already holds — so there is nothing to fire.
+    /// armed. It is neither date-scheduled (`pending`) nor a watched
+    /// transition whose guard already holds, so there is nothing to fire.
     #[error("transition `{transition}` is not fireable at t={time} (not armed)")]
     NotFireable {
         /// The transition that could not be fired.
@@ -270,7 +270,7 @@ pub enum JournalRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DropReason {
-    /// Its guard turned false (`drop_disabled`) under the `reset` policy —
+    /// Its guard turned false (`drop_disabled`) under the `reset` policy:
     /// a fresh duration is redrawn when the guard returns
     /// (interruptible transition).
     GuardFalse,
@@ -292,7 +292,7 @@ struct Hazard {
     threshold: f64,
     /// Hazard accumulated so far, `H = ∫ λ dt ≤ E`.
     accumulated: f64,
-    /// Rate λ at `since` — supports the lazy piecewise-constant
+    /// Rate λ at `since`: supports the lazy piecewise-constant
     /// accumulation of non-continuous rates between discrete steps.
     rate: f64,
     /// Time of the last accumulation point.
@@ -363,14 +363,14 @@ pub enum FireableKind {
 /// ([`Engine::fireable`]).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Fireable {
-    /// Transition index — the stable handle for [`Engine::fire_idx`].
+    /// Transition index: the stable handle for [`Engine::fire_idx`].
     pub index: usize,
     /// Qualified transition name (`component.automaton.transition`).
     pub transition: String,
     /// Kind of occurrence law.
     pub kind: FireableKind,
     /// Scheduled firing date; `None` for a watched transition whose
-    /// boundary has not been located yet (its guard is not yet true —
+    /// boundary has not been located yet (its guard is not yet true:
     /// the crossing is found only during continuous evolution).
     pub date: Option<f64>,
 }
@@ -400,14 +400,14 @@ pub struct Snapshot {
     worklist: BTreeSet<FnIdx>,
 }
 
-/// Value of an attribute by qualified name (`component.attribute`) —
+/// Value of an attribute by qualified name (`component.attribute`):
 /// shared by [`Engine`] and [`Snapshot`] so the two never drift.
 fn attribute_of(model: &CompiledModel, vars: &[Value], qualified: &str) -> Option<Value> {
     model.var_index.get(qualified).map(|&idx| vars[idx])
 }
 
 /// Current state name of an automaton by qualified name
-/// (`component.automaton`) — shared by [`Engine`] and [`Snapshot`].
+/// (`component.automaton`): shared by [`Engine`] and [`Snapshot`].
 fn state_of<'m>(model: &'m CompiledModel, states: &[StateIdx], qualified: &str) -> Option<&'m str> {
     model.automaton_index.get(qualified).map(|&idx| {
         let automaton = &model.automata[idx];
@@ -962,7 +962,7 @@ pub struct Engine<'m> {
     /// Ordered monitored-state entries recorded this trajectory (sequence
     /// analysis; empty unless `config.sequences`).
     seq_events: Vec<SeqEvent>,
-    /// The reached target `(end_cause, end_time)` once one activates — set
+    /// The reached target `(end_cause, end_time)` once one activates: set
     /// once, triggers the trajectory early-stop.
     seq_end: Option<(String, f64)>,
     indicator_series: Vec<IndicatorSeries>,
@@ -974,21 +974,21 @@ pub struct Engine<'m> {
     rng: ChaCha8Rng,
     /// Whether the model carries any stochastic distribution (provenance).
     stochastic: bool,
-    /// Scratch worklist for the fixpoint (reused across steps — no
+    /// Scratch worklist for the fixpoint (reused across steps: no
     /// allocation in the hot loop once warmed up).
     worklist: BTreeSet<FnIdx>,
 }
 
 impl<'m> Engine<'m> {
     /// Build and initialise an engine with the default ODE backend
-    /// (Dormand–Prince 4(5), parameters from the config).
+    /// (Dormand-Prince 4(5), parameters from the config).
     pub fn new(model: &'m CompiledModel, config: EngineConfig) -> Result<Self, EngineError> {
         let solver = Box::new(DormandPrince45::new(config.ode.clone()));
         Self::with_solver(model, config, solver)
     }
 
     /// Build an engine with an explicit ODE backend (the trait is the
-    /// swap point — see `raichu-numeric`).
+    /// swap point: see `raichu-numeric`).
     pub fn with_solver(
         model: &'m CompiledModel,
         config: EngineConfig,
@@ -1114,7 +1114,7 @@ impl<'m> Engine<'m> {
     }
 
     /// Sequence analysis: label the trajectory with the first target
-    /// (feared event) whose state is active — sets `seq_end` once.
+    /// (feared event) whose state is active: sets `seq_end` once.
     fn check_targets(&mut self) {
         if !self.config.stop_at_targets || self.seq_end.is_some() {
             return;
@@ -1146,12 +1146,12 @@ impl<'m> Engine<'m> {
         state_of(self.model, &self.states, qualified)
     }
 
-    /// **Interactive control** — every currently-armed transition.
+    /// **Interactive control**: every currently-armed transition.
     ///
     /// Lists the date-scheduled transitions (delay / inst / stochastic)
     /// with their firing date, plus the watched transitions armed in
     /// their source state (date = the current instant when their guard
-    /// already holds, else `None` — the boundary being located only
+    /// already holds, else `None`: the boundary being located only
     /// during continuous evolution).
     ///
     /// Sorted by date (unlocated watched last), then transition index,
@@ -1202,7 +1202,7 @@ impl<'m> Engine<'m> {
         out
     }
 
-    /// **Interactive control** — fire the armed transition carrying this
+    /// **Interactive control**: fire the armed transition carrying this
     /// qualified name (see [`Engine::fire_idx`] for the semantics).
     ///
     /// Errors with [`EngineError::UnknownTransition`] if no transition
@@ -1212,7 +1212,7 @@ impl<'m> Engine<'m> {
         self.fire_idx_inner(idx, None)
     }
 
-    /// **Interactive control** — fire the armed transition `name`,
+    /// **Interactive control**: fire the armed transition `name`,
     /// **forcing** its destination branch to the state named `to`
     /// (bypassing the RNG / deterministic-branch resolution). This is
     /// what makes a non-deterministic instantaneous branching (or any
@@ -1227,7 +1227,7 @@ impl<'m> Engine<'m> {
         self.fire_idx_inner(idx, Some(forced))
     }
 
-    /// **Interactive control** — fire a *chosen* armed transition by its
+    /// **Interactive control**: fire a *chosen* armed transition by its
     /// index (the stable handle from [`Engine::fireable`]), resolving the
     /// destination the normal way. See [`Engine::fire_idx_to`] to force
     /// the branch.
@@ -1235,14 +1235,14 @@ impl<'m> Engine<'m> {
         self.fire_idx_inner(trans_idx, None)
     }
 
-    /// **Interactive control** — fire a chosen armed transition by index,
+    /// **Interactive control**: fire a chosen armed transition by index,
     /// **forcing** its destination to the state named `to`.
     pub fn fire_idx_to(&mut self, trans_idx: TransIdx, to: &str) -> Result<Event, EngineError> {
         let forced = self.resolve_forced(trans_idx, to)?;
         self.fire_idx_inner(trans_idx, Some(forced))
     }
 
-    /// **Interactive control** — override the scheduled firing date of an
+    /// **Interactive control**: override the scheduled firing date of an
     /// armed transition (manual date-setting). The transition must be
     /// date-scheduled (`pending`, i.e. not a watched boundary), and the
     /// new date must not lie in the past (`>=` the current time).
@@ -1256,7 +1256,7 @@ impl<'m> Engine<'m> {
         self.set_date_idx(idx, date)
     }
 
-    /// **Interactive control** — override an armed transition's firing
+    /// **Interactive control**: override an armed transition's firing
     /// date by index (see [`Engine::set_date`]).
     pub fn set_date_idx(&mut self, trans_idx: TransIdx, date: f64) -> Result<(), EngineError> {
         let Some(transition) = self.model.transitions.get(trans_idx) else {
@@ -1291,7 +1291,7 @@ impl<'m> Engine<'m> {
         Ok(())
     }
 
-    /// **Interactive control** — capture the full mutable trajectory
+    /// **Interactive control**: capture the full mutable trajectory
     /// state as an opaque [`Snapshot`] (checkpoint / undo point). Costs
     /// one clone of the state vectors; the immutable model is untouched.
     #[must_use]
@@ -1316,7 +1316,7 @@ impl<'m> Engine<'m> {
         }
     }
 
-    /// **Interactive control** — reinstate a previously captured
+    /// **Interactive control**: reinstate a previously captured
     /// [`Snapshot`] (undo). The RNG is restored too, so any continuation
     /// is bit-for-bit identical to continuing from the original point.
     pub fn restore(&mut self, snap: &Snapshot) {
@@ -1338,7 +1338,7 @@ impl<'m> Engine<'m> {
         self.worklist = snap.worklist.clone();
     }
 
-    /// **Interactive control** — the events fired so far, in
+    /// **Interactive control**: the events fired so far, in
     /// chronological order (the same data a finished [`SimulationResult`]
     /// reports in its `events`).
     #[must_use]
@@ -1346,7 +1346,7 @@ impl<'m> Engine<'m> {
         &self.events
     }
 
-    /// **Interactive control** — reset the engine to its initial state
+    /// **Interactive control**: reset the engine to its initial state
     /// (`t = 0`), as freshly built: clears the trajectory and recorded
     /// history, re-seeds the RNG to `(seed, stream)`, and re-runs the
     /// initialization axiom. A run restarted from here is identical to a
@@ -1385,13 +1385,13 @@ impl<'m> Engine<'m> {
     ///   its `pending` date; with continuous evolution the state is
     ///   integrated up to that date first, and a **watched boundary**
     ///   crossed en route fires *instead* (a forced jump cannot be
-    ///   skipped — the returned event is that boundary transition, whose
+    ///   skipped: the returned event is that boundary transition, whose
     ///   branch is never forced).
     /// - A watched transition may be fired only while its guard already
     ///   holds (at the current instant).
     ///
     /// Choosing a non-earliest transition deliberately overrides the
-    /// schedule — the interactive counterpart of a manually driven run.
+    /// schedule: the interactive counterpart of a manually driven run.
     fn fire_idx_inner(
         &mut self,
         trans_idx: TransIdx,
@@ -1470,7 +1470,7 @@ impl<'m> Engine<'m> {
     }
 
     /// Whether `trans_idx` is a watched transition sitting in its source
-    /// state with its guard already true — i.e. fireable at the current
+    /// state with its guard already true: i.e. fireable at the current
     /// instant.
     fn is_immediate_watched(&self, trans_idx: TransIdx) -> Result<bool, EngineError> {
         let transition = &self.model.transitions[trans_idx];
@@ -1486,8 +1486,8 @@ impl<'m> Engine<'m> {
         eval_bool(self.model, &self.vars, &self.states, self.time, guard)
     }
 
-    /// Fire the next transition — discrete (`fire_transition`) or watched at a
-    /// located boundary crossing (`schedule_boundary`) — if one occurs within the
+    /// Fire the next transition: discrete (`fire_transition`) or watched at a
+    /// located boundary crossing (`schedule_boundary`): if one occurs within the
     /// horizon.
     ///
     /// Returns the fired event, or `None` when nothing remains before
@@ -1536,7 +1536,7 @@ impl<'m> Engine<'m> {
     pub fn run(mut self) -> Result<SimulationResult, EngineError> {
         loop {
             if let Some((_, t_hit)) = &self.seq_end {
-                // The target is reached: FINISH the hit instant first —
+                // The target is reached: FINISH the hit instant first,
                 // fire every transition still due at it, so the latched
                 // state is the completed instant, not a half-propagated
                 // one (PyCATSHOO completes the step before stopping).
@@ -1550,7 +1550,7 @@ impl<'m> Engine<'m> {
                 break;
             }
         }
-        // Advance the clock (and the continuous state) to the horizon —
+        // Advance the clock (and the continuous state) to the horizon:
         // unless a target early-stopped the trajectory.
         let final_time = if let Some((_, t)) = &self.seq_end {
             *t
@@ -1673,7 +1673,7 @@ impl<'m> Engine<'m> {
         self.refresh_schedule()?;
         self.record_indicators();
         // Sequence analysis: the first target (feared event) whose state is
-        // now active labels the trajectory's end cause (and ends it — see
+        // now active labels the trajectory's end cause (and ends it: see
         // `run`). States change only through transitions (or the declared
         // init, checked in `initialize`), so this catches every activation.
         self.check_targets();
@@ -1682,7 +1682,7 @@ impl<'m> Engine<'m> {
 
     /// Whether continuous evolution must run: the model has ODE
     /// attributes, or an armed hazard varies continuously (`reschedule_modifiable`
-    /// under `integrate_continuous` — possibly with no ODE at all, e.g. a
+    /// under `integrate_continuous`: possibly with no ODE at all, e.g. a
     /// time-dependent rate).
     fn needs_integration(&self) -> bool {
         !self.model.ode.is_empty()
@@ -1711,7 +1711,7 @@ impl<'m> Engine<'m> {
     ///
     /// The guard is evaluated exactly (boolean), not through the
     /// margin: after a located crossing, a sibling transition sharing
-    /// the boundary may sit within round-off of it — its strict guard
+    /// the boundary may sit within round-off of it: its strict guard
     /// is already true while its ε-tightened margin is still negative.
     /// Conversely a trajectory *resting* exactly on a strict boundary
     /// keeps a false guard and does not fire (no Zeno).
@@ -1858,7 +1858,7 @@ impl<'m> Engine<'m> {
             }
             recompute_explicit(self.model, &mut self.vars, &self.states, self.time)?;
 
-            // Commit dense samples (strictly before the reached time —
+            // Commit dense samples (strictly before the reached time:
             // a sample at exactly an event date is recorded post-event
             // by the flush in the next advance).
             for (t, values) in recorded {
@@ -1906,7 +1906,7 @@ impl<'m> Engine<'m> {
             | CLaw::Empirical(_) => Ok(transition.targets[0]),
             CLaw::Inst(probs) => {
                 // Deterministic fast path: exactly one branch with
-                // probability 1 — resolved without touching the RNG, so a
+                // probability 1: resolved without touching the RNG, so a
                 // deterministic model stays RNG-free and bit-identical on
                 // replay.
                 if let Some(branch) = probs
@@ -1975,7 +1975,7 @@ impl<'m> Engine<'m> {
 
     /// Non-confluence diagnostic: converge a *copy* of the state with
     /// the worklist processed in reverse order and compare. Divergence
-    /// means the model's result depends on evaluation order — reported
+    /// means the model's result depends on evaluation order: reported
     /// as a typed error (rather than silently picking an arbitrary order).
     fn confluence_probe(&mut self) -> Result<(), EngineError> {
         let saved_vars = self.vars.clone();
@@ -2185,7 +2185,7 @@ impl<'m> Engine<'m> {
                     // `schedule_stochastic` for a state-dependent rate: draw the
                     // `Exp(1)` threshold (fresh arming) or keep the
                     // banked hazard (resume re-arm), then schedule
-                    // against the current λ — `+∞` while λ = 0 or while
+                    // against the current λ: `+∞` while λ = 0 or while
                     // the hazard is integrated continuously (`integrate_continuous`
                     // locates the firing like a boundary crossing).
                     if let CLaw::ExpVar { rate, continuous } =
@@ -2234,7 +2234,7 @@ impl<'m> Engine<'m> {
                     }
                     // `schedule_stochastic`: stochastic firing dates are sampled at
                     // source-state entry. Draws happen here, in
-                    // transition-index order — replay is bit-identical
+                    // transition-index order: replay is bit-identical
                     // for a fixed (seed, stream).
                     let time_now = self.time;
                     let bad_law = move |detail: String| EngineError::TypeError {
@@ -2313,7 +2313,7 @@ impl<'m> Engine<'m> {
     }
 
     /// Record pending sample instants strictly before `t` with the
-    /// *current* (pre-jump) state — piecewise-constant hold for the
+    /// *current* (pre-jump) state: piecewise-constant hold for the
     /// discrete-only case.
     fn flush_samples_before(&mut self, t: f64) {
         self.flush_samples(t, false);

@@ -1,5 +1,5 @@
 """Side-by-side Monte-Carlo benchmark: PyCATSHOO C++-native vs
-PyCATSHOO Python-callback vs RAICHU — the strict apples-to-apples
+PyCATSHOO Python-callback vs RAICHU: the strict apples-to-apples
 comparison of models written and compiled in C++ against PyCATSHOO's
 own API versus the same models in RAICHU.
 
@@ -7,7 +7,7 @@ Engines and modelling paths measured on the same models:
   - pyc-cpp   : PyCATSHOO 1.4.1.0, model fully in C++ (bench.cpp),
                 zero interpreter crossing in the hot loop;
   - pyc-py    : PyCATSHOO 1.4.1.0, same model with Python callbacks
-                (bench_py.py) — the normal PyCATSHOO modelling style;
+                (bench_py.py): the normal PyCATSHOO modelling style;
   - raichu 1t : RAICHU single-thread (engine vs engine);
   - raichu Nt : RAICHU with its default thread pool.
 
@@ -19,7 +19,7 @@ Wall-clock covers the Monte-Carlo run only (model construction and
 result extraction excluded) on every side; best of REPEATS runs.
 
 Run:
-  python3 run_bench.py                 # all engines (needs PyCATSHOO — see README)
+  python3 run_bench.py                 # all engines (needs PyCATSHOO: see README)
   python3 run_bench.py --raichu-only   # RAICHU side only (no PyCATSHOO required)
 
 Environment (see README.md):
@@ -74,7 +74,7 @@ def bench_python() -> str:
         )
     return found
 
-# (model, t_max, nb_runs) — scales of perf_bench.py CASES.
+# (model, t_max, nb_runs): scales of perf_bench.py CASES.
 CASES = [
     ("pure_exp", 100.0, 10_000),
     ("pure_exp", 100.0, 100_000),

@@ -1,4 +1,4 @@
-//! # raichu-expr — serializable expression trees
+//! # raichu-expr: serializable expression trees
 //!
 //! Guards, sensitive-function effects and (from milestone M1) ODE
 //! right-hand sides are **pure data**: expression trees serialized inside
@@ -7,7 +7,7 @@
 //! hot path (Performance contract) while keeping models fully
 //! serializable.
 //!
-//! M0 subset (frozen — see the M0 plan): constant/attribute leaves,
+//! M0 subset (frozen: see the M0 plan): constant/attribute leaves,
 //! comparison and boolean operators, port aggregation (sum/count/all/any),
 //! direct assignment. Arithmetic and math functions arrive in M1; the
 //! [`Expr`] enum is `#[non_exhaustive]`-in-spirit (tagged serde repr) so
@@ -34,7 +34,7 @@ pub enum Value {
     Float(f64),
 }
 
-/// Reference to an attribute by hierarchical name — the *authoring /
+/// Reference to an attribute by hierarchical name: the *authoring /
 /// serialized* form. Build-time validation resolves it to dense indices
 /// (typed errors on dangling references; no stringly-typed lookups at
 /// simulation time).
@@ -110,7 +110,7 @@ pub enum AggOp {
     /// True iff at least one connected boolean value is true.
     Any,
     /// Arithmetic mean of connected numeric values (M3: sensor
-    /// averaging — cod3s `compute_reference_mean`). 0.0 with no
+    /// averaging: cod3s `compute_reference_mean`). 0.0 with no
     /// connection.
     Mean,
     /// Median of connected numeric values (M3: redundant-sensor
@@ -190,7 +190,7 @@ pub enum Expr {
         /// Divisor.
         rhs: Box<Expr>,
     },
-    /// N-ary minimum (clamping — `min(max(lo, v), hi)` patterns).
+    /// N-ary minimum (clamping: `min(max(lo, v), hi)` patterns).
     Min {
         /// Operands (≥ 1, validated at model build).
         args: Vec<Expr>,
@@ -200,7 +200,7 @@ pub enum Expr {
         /// Operands (≥ 1, validated at model build).
         args: Vec<Expr>,
     },
-    /// Conditional expression — with [`Expr::StateActive`] as condition
+    /// Conditional expression: with [`Expr::StateActive`] as condition
     /// it covers the piecewise-by-automaton-state right-hand sides of
     /// the corpus (empty/full tank freezing `dv/dt`).
     If {
@@ -216,7 +216,7 @@ pub enum Expr {
         /// Operand (radians).
         arg: Box<Expr>,
     },
-    /// Natural exponential `e^arg` (state-dependent failure rates —
+    /// Natural exponential `e^arg` (state-dependent failure rates:
     /// the heated-tank λ(T) of the Aldemir benchmark).
     Exp {
         /// Operand.
@@ -250,7 +250,7 @@ impl Expr {
     }
 
     /// Visit the direct children of this node (traversal backbone of
-    /// the reference visitors below — new variants only need a case
+    /// the reference visitors below: new variants only need a case
     /// here).
     pub fn for_each_child(&self, f: &mut impl FnMut(&Expr)) {
         match self {
@@ -287,7 +287,7 @@ impl Expr {
 
     /// Visit every attribute reference in the tree (used by model
     /// validation to check that all references resolve, and by the engine
-    /// to derive sensitivity sets — which attribute changes must re-trigger
+    /// to derive sensitivity sets: which attribute changes must re-trigger
     /// which functions).
     pub fn for_each_attr_ref(&self, f: &mut impl FnMut(&AttrRef)) {
         if let Expr::Attr { attr } = self {
@@ -314,7 +314,7 @@ impl Expr {
     }
 }
 
-/// A direct assignment `target := value` — the M0 form of a
+/// A direct assignment `target := value`: the M0 form of a
 /// sensitive-function *effect* (the mutation is declarative data).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Assignment {

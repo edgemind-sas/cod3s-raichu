@@ -1,4 +1,4 @@
-//! # raichu-model — the native RAICHU formalism
+//! # raichu-model: the native RAICHU formalism
 //!
 //! Data model of the Distributed Stochastic Hybrid Automata (DSHA)
 //! formalism realising Piecewise-Deterministic Markov Processes (PDMP),
@@ -9,11 +9,11 @@
 //! - **In/out ports** are the fundamental connection notion; *interfaces*
 //!   group ports for batch connection.
 //! - The model layer is pure data (serde), side-effect-free, validated at
-//!   build time with **typed errors — never a crash on bad input**.
+//!   build time with **typed errors: never a crash on bad input**.
 //! - Behaviour (guards, sensitive-function effects) is expressed as
 //!   serializable expression trees from `raichu-expr`. Sensitivity sets
 //!   (which attribute change re-triggers which function) are *derived*
-//!   from the expressions, not declared by hand — one modeller error
+//!   from the expressions, not declared by hand: one modeller error
 //!   class removed.
 //!
 //! Validation ([`Model::validate`]) is the single gate: a model that
@@ -73,7 +73,7 @@ pub enum PortDir {
     Out,
 }
 
-/// A connection endpoint on a component boundary — the fundamental
+/// A connection endpoint on a component boundary: the fundamental
 /// interconnection notion of RAICHU (the model representation).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Port {
@@ -82,14 +82,14 @@ pub struct Port {
     /// Direction.
     pub dir: PortDir,
     /// For an **out** port: the local attribute it exposes (required).
-    /// For an **in** port: must be absent — in-port values are read
+    /// For an **in** port: must be absent, in-port values are read
     /// through aggregation expressions (`Expr::PortAgg`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attr: Option<String>,
 }
 
 /// A named group of ports, used to connect components in batch
-/// (grouping only — the ports stay the fundamental notion).
+/// (grouping only: the ports stay the fundamental notion).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Interface {
     /// Interface name, unique inside its component.
@@ -128,7 +128,7 @@ pub enum Distrib {
     },
     /// Watched transition (paper rule `schedule_boundary`, M1): fires exactly when
     /// the continuous trajectory makes its guard become true. The guard
-    /// is the boundary predicate — it must be a single ordering
+    /// is the boundary predicate: it must be a single ordering
     /// comparison (`<`, `≤`, `>`, `≥`) between float expressions, so
     /// the engine can locate the crossing by root-finding on the signed
     /// margin. Exactly one target state.
@@ -138,10 +138,10 @@ pub enum Distrib {
     /// `P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,
     /// and exactly one of the two rate forms:
     ///
-    /// - `rate` — fixed positive λ; the firing date is sampled as
-    ///   `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless — a
+    /// - `rate`: fixed positive λ; the firing date is sampled as
+    ///   `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a
     ///   guard turning true re-arms with a fresh draw.
-    /// - `rate_expr` — **state-dependent** λ(x) as an expression. The
+    /// - `rate_expr`: **state-dependent** λ(x) as an expression. The
     ///   engine realises the survival integral with a cumulative
     ///   hazard: a threshold `E ~ Exp(1)` is drawn at source-state
     ///   entry and the transition fires when `∫ λ dt` reaches `E`.
@@ -190,7 +190,7 @@ pub enum Distrib {
         high: f64,
     },
     /// Empirical / user-defined distribution (M4): inverse-CDF sampling from a
-    /// table of `(time, cumulative probability)` points — any
+    /// table of `(time, cumulative probability)` points: any
     /// distribution supplied as a sampled CDF. `u < points[0].1` maps
     /// to `points[0].0` (probability mass at the first time); between
     /// points the CDF is linearly interpolated; the last cumulative
@@ -237,7 +237,7 @@ pub enum InterruptionPolicy {
     #[default]
     Reset,
     /// The countdown is paused and resumes where it stopped when the
-    /// guard holds again — a RAICHU extension, e.g. suspended repair
+    /// guard holds again: a RAICHU extension, e.g. suspended repair
     /// work.
     Resume,
     /// The countdown never stops: the transition fires at the drawn
@@ -268,13 +268,13 @@ pub struct Transition {
     /// (paper rule `drop_disabled`; see [`InterruptionPolicy`]).
     #[serde(default)]
     pub on_interruption: InterruptionPolicy,
-    /// **Sequence analysis** — when true, firing this transition records a
+    /// **Sequence analysis**: when true, firing this transition records a
     /// `SeqEvent` (component, target state, time) into the per-trajectory
     /// sequence trace (zero cost unless sequence recording is enabled). The
     /// muscadet plugin sets it on ObjFM occ/rep and ObjEvent occ transitions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub monitored: bool,
-    /// **Sequence analysis** — cycle-pair group id: occ/rep (occ/not_occ)
+    /// **Sequence analysis**: cycle-pair group id: occ/rep (occ/not_occ)
     /// partner transitions of one failure mode share it, so the
     /// cycle-filtering step can drop transient failure→repair pairs that net
     /// out before the feared event. `None` = not part of a cycle pair.
@@ -287,7 +287,7 @@ pub struct Transition {
 
 /// A finite automaton owned by a component. The global state space is
 /// the Cartesian product of component automata but is **never
-/// materialised** (the key to avoiding combinatorial explosion — keep it
+/// materialised** (the key to avoiding combinatorial explosion: keep it
 /// that way).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Automaton {
@@ -303,7 +303,7 @@ pub struct Automaton {
 
 /// A sensitive function: declarative effects re-evaluated whenever one of
 /// the attributes read by its expressions changes (the sensitivity set is
-/// *derived* from the expressions — no manual `addSensitiveMethod`
+/// *derived* from the expressions: no manual `addSensitiveMethod`
 /// bookkeeping). Effects run to a fixpoint during the discrete-evolution
 /// phase (paper rule `propagate_effects`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -314,7 +314,7 @@ pub struct SensitiveFunction {
     pub effects: Vec<Assignment>,
 }
 
-/// What an indicator observes — a **typed, validated reference**
+/// What an indicator observes: a **typed, validated reference**
 /// (rather than a stringly-typed `"comp.attr"` path).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "target", rename_all = "snake_case")]
@@ -403,13 +403,13 @@ pub struct Model {
     /// Recorded indicators.
     #[serde(default)]
     pub indicators: Vec<Indicator>,
-    /// Sequence-analysis targets (feared events) — see [`Target`].
+    /// Sequence-analysis targets (feared events): see [`Target`].
     #[serde(default)]
     pub targets: Vec<Target>,
 }
 
 /// Typed model-validation errors. Every invalid model is reported with a
-/// precise, contextual error — never a panic, never a crash.
+/// precise, contextual error: never a panic, never a crash.
 #[derive(Debug, Error, PartialEq)]
 pub enum ModelError {
     /// Two components share a name.
@@ -1242,8 +1242,8 @@ impl Model {
     /// (the located boundary), optionally conjoined/disjoined with
     /// discrete gate expressions (which only change at discrete events):
     /// `cmp`, `and(gates…, cmp)` or `or(gates…, cmp)`.
-    /// A watched guard must contain at least one ordering comparison —
-    /// the continuous boundary — anywhere under `and`/`or`/`not`
+    /// A watched guard must contain at least one ordering comparison
+    /// (the continuous boundary) anywhere under `and`/`or`/`not`
     /// connectives (the other operands act as discrete gates). The
     /// margin compiler maps `and` to the `min` of the operand margins,
     /// `or` to the `max`, `not` to the negation, and any other boolean

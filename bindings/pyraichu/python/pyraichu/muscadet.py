@@ -1,7 +1,7 @@
-"""muscadet-style authoring layer over RAICHU (M3 — `raichu-muscadet`).
+"""muscadet-style authoring layer over RAICHU (M3: `raichu-muscadet`).
 
-Recovers muscadet's productivity idioms — smart flow components,
-declarative failure modes, one-line connections — as a thin builder
+Recovers muscadet's productivity idioms: smart flow components,
+declarative failure modes, one-line connections, as a thin builder
 that *generates a native RAICHU model* (ports/interfaces, sensitive
 functions, expression trees).
 
@@ -66,11 +66,11 @@ class _FlowOut:
     # inner-AND groups, the platform-export `prod_cond` form).
     var_prod_cond: list[str] | list[list[str]] = field(default_factory=list)
     # muscadet `FlowOutTempo`: {"enable_time", "disable_time",
-    # "init_enable"} — a disabled↔enabled automaton whose delayed
+    # "init_enable"}: a disabled↔enabled automaton whose delayed
     # transitions are gated on the production condition (reset on
     # interruption); the flow is fed while `enabled`.
     tempo: dict[str, Any] | None = None
-    # muscadet `FlowOutOnTrigger`: {"time_up", "time_down", "logic"} —
+    # muscadet `FlowOutOnTrigger`: {"time_up", "time_down", "logic"},
     # a down↔up automaton on a dedicated trigger in-port with
     # *inhibition* logic (up while the trigger inputs are absent); the
     # flow is fed while `up` AND the production condition holds.
@@ -185,7 +185,7 @@ class ObjFlow:
         var_prod_cond: list[str] | None = None,
     ) -> None:
         """muscadet `FlowOutOnTrigger`: the flow feeds while a down↔up
-        automaton sits in `up`, with *inhibition* logic — `up` is armed
+        automaton sits in `up`, with *inhibition* logic: `up` is armed
         while the trigger aggregate (`"and"`, `"or"` or k-out-of-n over
         the `{name}_trigger_in` port) is false, `down` while it is
         true; both transitions are delays, reset on interruption."""
@@ -325,10 +325,10 @@ class ObjFlow:
                 )
 
             # Production condition. `var_prod_cond` is either a flat list
-            # (one AND group — the historical form) or a DNF list-of-lists
-            # (outer-OR of inner-AND groups — the platform-export
+            # (one AND group: the historical form) or a DNF list-of-lists
+            # (outer-OR of inner-AND groups: the platform-export
             # `prod_cond` form). A referenced flow resolves to this
-            # component's `_fed_in` (in-flow) or `_fed_out` (out-flow —
+            # component's `_fed_in` (in-flow) or `_fed_out` (out-flow:
             # the diagnostic-mirror pattern; the fixpoint handles the
             # intra-component dependency without a topological sort).
             in_names = {f.name for f in self.flows_in}
@@ -373,7 +373,7 @@ class ObjFlow:
             if flow.tempo is not None:
                 # FlowOutTempo: fed while `enabled`; the production
                 # condition only gates the (delayed, reset) enable and
-                # disable transitions — a lost condition keeps feeding
+                # disable transitions: a lost condition keeps feeding
                 # until the disable delay elapses.
                 aut = f"{flow.name}_tempo"
                 automata.append(
@@ -407,7 +407,7 @@ class ObjFlow:
                 )
                 gate_terms = [_state_active(me, aut, "enabled")]
             elif flow.trigger is not None:
-                # FlowOutOnTrigger: inhibition logic — `up` arms while
+                # FlowOutOnTrigger: inhibition logic, `up` arms while
                 # the trigger aggregate is false; fed while `up` AND
                 # the production condition holds.
                 aut = f"{flow.name}_trigger"
@@ -530,7 +530,7 @@ class System:
         )
 
     def auto_connect(self, source: str, target: str) -> None:
-        """Connect every same-named (out, in) flow pair — the muscadet
+        """Connect every same-named (out, in) flow pair: the muscadet
         convenience."""
         for flow_out in self.comp[source].flows_out:
             for flow_in in self.comp[target].flows_in:
@@ -539,7 +539,7 @@ class System:
 
     def build_dict(self) -> dict[str, Any]:
         """Generate the native RAICHU model as a plain dict, with one
-        indicator per flow variable (muscadet naming: `comp_var`) —
+        indicator per flow variable (muscadet naming: `comp_var`),
         also the fixture-generation entry point."""
         components = [c._build() for c in self.comp.values()]
         indicators = []

@@ -1,11 +1,11 @@
 //! Interactive-simulation control surface (isimu):
 //!
-//! - Phase A — `fireable()` + firing a *chosen* armed transition
+//! - Phase A: `fireable()` + firing a *chosen* armed transition
 //!   (`fire_named` / `fire_idx`) rather than only the earliest, then
 //!   inspecting the resulting state through `attribute` / `state`.
-//! - Phase B — forcing a chosen transition's destination branch
+//! - Phase B: forcing a chosen transition's destination branch
 //!   (`fire_named_to` / `fire_idx_to`), bypassing the RNG /
-//!   deterministic-branch resolution — the reproducible outcome control
+//!   deterministic-branch resolution: the reproducible outcome control
 //!   that makes stochastic mechanics testable.
 //!
 //! The single-trajectory engine stays deterministic; these methods add
@@ -126,7 +126,7 @@ fn fire_named_fires_a_non_earliest_transition() {
     let mut engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
 
     // Deliberately fire B (the *later* transition, date 8) before A
-    // (date 5) — the interactive override the plain `step()` cannot do.
+    // (date 5): the interactive override the plain `step()` cannot do.
     let event = engine.fire_named("B.fail.occ").unwrap();
     assert_eq!(event.time, 8.0);
     assert_eq!(event.transition, "B.fail.occ");
@@ -226,7 +226,7 @@ fn interactive_firing_reaches_the_same_state_as_stepping() {
     assert_eq!(a.state("A.fail"), b.state("A.fail"));
 }
 
-// ---- Phase B — forced branch (`fire_*_to`) ----------------------------
+// ---- Phase B: forced branch (`fire_*_to`) ----------------------------
 
 /// A one-shot demand: an instantaneous branching `resolve` from
 /// `pending` to either `ok` or `ko`, with boolean attributes `success`
@@ -394,7 +394,7 @@ fn fire_idx_to_forces_by_index() {
     assert_eq!(engine.state("d.req"), Some("ko"));
 }
 
-// ---- Phase C — manual date-setting (`set_date`) -----------------------
+// ---- Phase C: manual date-setting (`set_date`) -----------------------
 
 #[test]
 fn set_date_reschedules_a_pending_transition() {
@@ -413,7 +413,7 @@ fn set_date_reschedules_a_pending_transition() {
         .unwrap();
     assert_eq!(a.date, Some(10.0));
 
-    // A plain step now fires B first — the rescheduling took effect.
+    // A plain step now fires B first: the rescheduling took effect.
     let event = engine.step().unwrap().unwrap();
     assert_eq!(event.transition, "B.fail.occ");
     assert_eq!(event.time, 8.0);
@@ -469,7 +469,7 @@ fn set_date_on_unarmed_or_unknown_transition_is_rejected() {
     );
 }
 
-// ---- Phase D — snapshot / restore + history + reset -------------------
+// ---- Phase D: snapshot / restore + history + reset -------------------
 
 fn bounded(compiled: &CompiledModel, t_max: f64) -> Engine<'_> {
     Engine::new(

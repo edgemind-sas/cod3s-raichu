@@ -85,7 +85,7 @@ with the [`port_agg`](#expressions) operator).
 
 ### Interface
 
-`{ "name": string, "ports": [string, …] }` — a named bundle of the
+`{ "name": string, "ports": [string, …] }`: a named bundle of the
 component's ports, for connecting several at once.
 
 ### Automaton
@@ -105,12 +105,12 @@ automaton**. `init` must be one of `states`.
 | `on_interruption` | `"reset"` \| `"resume"` \| `"continue"` | optional (default `reset`); see [below](#interruption-policy) |
 | `monitored` | bool | optional (default `false`); firing is recorded in the trajectory's [sequence](../guides/sequence-analysis.md) |
 | `cycle_group` | string | optional; failure/repair partners share it so transient cycles cancel in the sequence pipeline (paired per component) |
-| `distrib` + params | — | the occurrence distribution, flattened onto the transition (see [Distributions](#distributions)) |
+| `distrib` + params | - | the occurrence distribution, flattened onto the transition (see [Distributions](#distributions)) |
 
 ### Target
 
 `{ "name": string, "component": string, "automaton": string, "state":
-string }` — a **feared event**: when the named state activates, a
+string }`: a **feared event**: when the named state activates, a
 sequence-recording trajectory records `name` as its end cause and stops
 (after completing the current instant). Ignored unless sequence
 recording / `stop_at_targets` is enabled.
@@ -120,11 +120,11 @@ recording / `stop_at_targets` is enabled.
 A transition has one of **two natures**, distinguished by where its
 randomness lives:
 
-- **Timed** — the firing *date* is drawn (or fixed) and the transition
+- **Timed**: the firing *date* is drawn (or fixed) and the transition
   has a single effective destination. It is either **deterministic**
   (`delay`) or **stochastic** (`exp`, `weibull`, `gamma`, `lognormal`,
   `uniform`, `empirical`).
-- **Instantaneous** — the transition fires at the instant its guard
+- **Instantaneous**: the transition fires at the instant its guard
   holds; the randomness is in the **choice of destination** among its
   targets (`inst`, with `probs`).
 
@@ -149,7 +149,7 @@ on the same transition object.
 |---|---|---|
 | `inst` | `probs`: array of number | fires when the guard holds; `probs` are the destination probabilities, `len(probs) = len(targets) − 1` (the complement is reconstructed) |
 
-### `watched` — a guard on continuous attributes
+### `watched`: a guard on continuous attributes
 
 `"distrib": "watched"` is **not a third nature**. It marks a *guarded*
 transition whose guard involves continuously-evolving (ODE-driven)
@@ -158,7 +158,7 @@ fire the transition exactly when the boundary is crossed (located by
 root-finding), rather than re-checking the guard only at discrete events.
 
 It is declared explicitly because that intent **cannot be inferred from
-the guard alone** — the same comparison could instead gate a timed
+the guard alone**: the same comparison could instead gate a timed
 transition's eligibility. A watched transition takes no distribution parameters
 and requires a `guard` containing an ordering comparison
 (`lt`/`le`/`gt`/`ge`).
@@ -179,7 +179,7 @@ and requires a `guard` containing an ordering comparison
 `{ "target": VarRef, "value": Expr }`, where **VarRef** is
 `{ "component": string, "attribute": string }`. The engine derives *when*
 to run a sensitive function from the attributes and states its
-expressions read — there is no manual trigger list, and no callback runs
+expressions read: there is no manual trigger list, and no callback runs
 during numerical integration.
 
 ## Equation
@@ -232,13 +232,13 @@ Enumerations:
 Two entry points consume a model (see the tutorial for usage):
 
 `simulate(model, t_max, seed=0, rng_stream=0, samples=None,
-journal=False, confluence_check=False)` — one trajectory; returns
+journal=False, confluence_check=False)`: one trajectory; returns
 events, indicator series, dense `samples`, optional `journal`, and
 `provenance`.
 
 `monte_carlo(model, nb_runs, t_max, samples, seed=0, threads=None,
 quantiles=None, rtol=None, atol=None, max_step=None, tol_event=None,
-sub_samples=None)` — parallel replicas; returns per-indicator estimates.
+sub_samples=None)`: parallel replicas; returns per-indicator estimates.
 Replica *r* uses RNG substream *r*; the reduction is index-ordered, so
 results are byte-identical for any `threads`. The `rtol` / `atol` /
 `max_step` / `tol_event` / `sub_samples` keywords set the ODE

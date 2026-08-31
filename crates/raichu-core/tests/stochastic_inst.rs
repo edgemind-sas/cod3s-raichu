@@ -1,7 +1,7 @@
-//! Stochastic instantaneous branching (brique 2 — Bernoulli-on-demand
+//! Stochastic instantaneous branching (brique 2: Bernoulli-on-demand
 //! foundation): a `CLaw::Inst` whose branching is non-deterministic
 //! draws its destination from the categorical distribution over its
-//! probabilities, using the engine RNG — seed-reproducible, and matching
+//! probabilities, using the engine RNG: seed-reproducible, and matching
 //! the target frequencies over many independent draws.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -60,7 +60,7 @@ fn draw(compiled: &CompiledModel, seed: u64, stream: u64) -> String {
 
 #[test]
 fn deterministic_inst_is_rng_free() {
-    // A probability-1 branch resolves to that branch whatever the seed —
+    // A probability-1 branch resolves to that branch whatever the seed:
     // no RNG dependence, hence bit-identical replay.
     let compiled = CompiledModel::compile(&demand_model(1.0)).unwrap();
     for stream in 0..64 {

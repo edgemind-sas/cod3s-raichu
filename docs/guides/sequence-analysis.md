@@ -1,11 +1,11 @@
 # Sequence analysis: feared events & minimal cut sequences
 
-Safety studies do not only ask *how often* an undesired event occurs —
+Safety studies do not only ask *how often* an undesired event occurs:
 they ask **which chains of failures lead to it**. RAICHU answers both
 natively: declare a **feared event** as a *target*, run a Monte-Carlo
 campaign where every trajectory records its causal event sequence and
 stops at the first occurrence, then reduce the corpus to **minimal cut
-sequences** — the irreducible, ordered failure combinations that reach
+sequences**: the irreducible, ordered failure combinations that reach
 the event, weighted by how many trajectories they explain.
 
 ## Declaring a feared event
@@ -24,7 +24,7 @@ every recorded sequence.
 }
 ```
 
-At the native level this is a model-wide `targets` entry — any automaton
+At the native level this is a model-wide `targets` entry: any automaton
 state can be one (see the [model schema](../reference/model-schema.md)):
 
 ```json
@@ -34,7 +34,7 @@ state can be one (see the [model schema](../reference/model-schema.md)):
 
 When a target state activates, the engine finishes the current instant
 (everything due at the same date still fires), records the **end cause**,
-and stops the trajectory — the *first-occurrence* semantics of safety
+and stops the trajectory: the *first-occurrence* semantics of safety
 campaigns.
 
 ## From trajectories to minimal cut sequences
@@ -84,32 +84,32 @@ for cut in cuts:
 
 Three minimal cut sequences: the **common-cause** direct path dominates,
 and the two **order-dependent** sequential paths (A-then-B vs B-then-A)
-are reported separately — sequences are ordered, unlike classic cut
+are reported separately: sequences are ordered, unlike classic cut
 *sets*. Weights are trajectory counts: divide by `nb_runs` for
 probabilities. The result is seed-reproducible bit-for-bit.
 
 The pipeline behind the call:
 
-1. **Record** — each trajectory logs its *monitored* transitions (the
+1. **Record**: each trajectory logs its *monitored* transitions (the
    plugin marks failure/repair and event transitions automatically) and
    stops at the first target.
-2. **Group** — trajectories with the same ordered event signature merge;
+2. **Group**: trajectories with the same ordered event signature merge;
    weights add up.
-3. **Cancel transient cycles** — a failure that was repaired *before*
+3. **Cancel transient cycles**: a failure that was repaired *before*
    the feared event did not cause it: paired failure/repair events of
    the same mode are removed (per component, so distinct modes never
    cancel each other).
-4. **Minimal absorption** — a sequence that contains a shorter reaching
+4. **Minimal absorption**: a sequence that contains a shorter reaching
    sequence is absorbed into it; only irreducible cuts remain.
 
 ## First-occurrence indicators
 
 The Monte-Carlo estimator has the matching measures. By default
-`monte_carlo` lets trajectories run and cycle freely — an
+`monte_carlo` lets trajectories run and cycle freely: an
 *availability* view. With `stop_at_targets=True` it applies the same
 early-stop as the sequence analysis and **latches** the state: once the
 feared event occurs, it stays occurred through every later sampling
-instant — a *reliability / first-occurrence* view.
+instant: a *reliability / first-occurrence* view.
 
 ```python
 est = pyraichu.monte_carlo(model, nb_runs=2000, t_max=100.0,
