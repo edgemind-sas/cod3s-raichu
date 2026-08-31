@@ -132,10 +132,20 @@ def _parse_interface(template_name: str, interface: dict) -> dict:
             f"KB `{template_name}`, interface `{name}`: logic_inner_mode "
             f"{inner!r} not supported (outer-OR/inner-AND only)"
         )
+    prod_cond = interface.get("prod_cond") or []
+    for group in prod_cond:
+        # DNF only: a flat `["power_in"]` would otherwise be exploded into
+        # one group per character and fail far downstream, on a flow name
+        # that does not exist.
+        if not isinstance(group, list):
+            raise TranslationError(
+                f"KB `{template_name}`, interface `{name}`: prod_cond must be a "
+                f"list of AND groups (OR of lists), got {group!r} at top level"
+            )
     return {
         "direction": "output",
         "name": name,
-        "prod_cond": [list(group) for group in interface.get("prod_cond") or []],
+        "prod_cond": [list(group) for group in prod_cond],
     }
 
 
@@ -346,10 +356,15 @@ def _strip_anchors(pattern: str, *, where: str) -> str:
 def translate_study(study: dict) -> tuple[list[dict], list[dict], dict, dict[str, list[str]]]:
     """Study dict → ``(plugin objects, indicators, simulation, measures)``."""
     target_names = {
-        t["name"] for t in study.get("targets") or [] if t.get("enabled", True)
+        _require(t, "name", where="study targets")
+        for t in study.get("targets") or []
+        if t.get("enabled", True)
     }
     events = [e for e in study.get("events") or [] if e.get("enabled", True)]
-    event_auts = {e["name"]: e.get("event_aut_name", "ev") for e in events}
+    event_auts = {
+        _require(e, "name", where="study events"): e.get("event_aut_name", "ev")
+        for e in events
+    }
 
     objects = [
         _translate_failure_mode(fm)

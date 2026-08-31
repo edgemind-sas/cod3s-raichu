@@ -32,33 +32,33 @@ fn signature(seq: &Sequence) -> Vec<(&str, &str)> {
 pub fn group_sequences(raw: Vec<Sequence>) -> Vec<Sequence> {
     // (end_cause, signature) → index into `merged`, preserving first-seen
     // order (a plain Vec scan keeps the reduction byte-deterministic).
+    // The accumulated weight *is* `merged[i].weight`, so no parallel count
+    // vector is kept: one number, one owner, nothing to keep in sync.
     let mut merged: Vec<Sequence> = Vec::new();
-    let mut counts: Vec<f64> = Vec::new();
     for seq in raw {
-        let key = (seq.end_cause.clone(), signature(&seq).to_owned());
+        // Signatures are compared in place: materialising them would
+        // allocate on both sides of every candidate of this O(n²) scan.
         let pos = merged.iter().position(|m| {
-            m.end_cause == key.0
-                && signature(m)
+            m.end_cause == seq.end_cause
+                && m.events.len() == seq.events.len()
+                && m.events
                     .iter()
-                    .map(|(o, a)| (o.to_string(), a.to_string()))
-                    .eq(key.1.iter().map(|(o, a)| (o.to_string(), a.to_string())))
+                    .zip(&seq.events)
+                    .all(|(a, b)| a.obj == b.obj && a.attr == b.attr)
         });
         match pos {
             Some(i) => {
-                let n = counts[i] + seq.weight;
+                let acc_weight = merged[i].weight;
+                let n = acc_weight + seq.weight;
                 // Weight-averaged event and end times.
                 for (acc, ev) in merged[i].events.iter_mut().zip(&seq.events) {
-                    acc.time = (acc.time * counts[i] + ev.time * seq.weight) / n;
+                    acc.time = (acc.time * acc_weight + ev.time * seq.weight) / n;
                 }
                 merged[i].end_time =
-                    (merged[i].end_time * counts[i] + seq.end_time * seq.weight) / n;
-                merged[i].weight += seq.weight;
-                counts[i] = n;
+                    (merged[i].end_time * acc_weight + seq.end_time * seq.weight) / n;
+                merged[i].weight = n;
             }
-            None => {
-                counts.push(seq.weight);
-                merged.push(seq);
-            }
+            None => merged.push(seq),
         }
     }
     // Stable sort by descending weight (ties keep first-seen order).

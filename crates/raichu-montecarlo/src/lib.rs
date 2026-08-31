@@ -166,7 +166,9 @@ fn run_replica(
         seed: config.seed,
         rng_stream: replica,
         ode: config.ode.clone(),
-        sequences: config.stop_at_targets,
+        // Early stop only: this driver reads `samples` / `indicators` and
+        // never the per-trajectory trace, so it must not pay for recording it.
+        stop_at_targets: config.stop_at_targets,
         ..EngineConfig::default()
     };
     let result = Engine::new(model, engine_config)?.run()?;
@@ -329,6 +331,7 @@ pub fn run_sequences(
                 let engine_config = EngineConfig {
                     t_max: config.t_max,
                     sequences: true,
+                    stop_at_targets: true,
                     seed: config.seed,
                     rng_stream: replica,
                     ode: config.ode.clone(),

@@ -104,14 +104,9 @@ def _cond_tree(
     if isinstance(cond, bool):
         base = _const(cond)
     else:
-        if isinstance(cond, dict):
-            cond = [[cond]]
-        elif cond and all(isinstance(c, dict) for c in cond):
-            cond = [cond]
-        groups = [
-            {"op": "bool", "bool_op": _LOGIC[inner_logic], "args": [_leaf(c) for c in group]}
-            for group in cond
-        ]
+        # One normalisation, shared with the logic-gate path: the two must
+        # not be able to drift on the same cod3s input.
+        groups = _cond_groups(cond, inner_logic)
         base = {"op": "bool", "bool_op": _LOGIC[outer_logic], "args": groups}
     if cond_operator == "==" and cond_value is True:
         return base
@@ -487,6 +482,12 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         ctrl_attributes.append(
             {"name": ctrl, "kind": "bool", "init": {"kind": "bool", "value": False}}
         )
+        if not impacting[target]:
+            raise ValueError(
+                f"ObjFM `{name}` ({behaviour}): target `{target}` is impacted by no "
+                "active failure order, so its control attribute could never become "
+                "true — declare at least one order with a failure law"
+            )
         occ_gates = [_state_active(name, aut, st) for aut, st in impacting[target]]
         if rep_indep:
             occ_gates = occ_gates + [_state_active(target, name, failure_state)]

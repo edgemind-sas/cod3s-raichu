@@ -207,6 +207,11 @@ struct Interactive {
 
 impl Interactive {
     /// Rebuild the engine positioned at the current snapshot.
+    ///
+    /// This clones the whole trajectory state, so it is reserved for the
+    /// **mutating** methods; the read-only accessors answer straight from
+    /// `self.snap` (polling the state between steps must not cost a state
+    /// clone per read).
     fn engine(&self) -> Engine<'_> {
         Engine::from_snapshot(&self.model, self.config.clone(), &self.snap)
     }
@@ -250,11 +255,14 @@ impl Interactive {
     /// Current simulation time.
     #[getter]
     fn time(&self) -> f64 {
-        self.engine().current_time()
+        self.snap.time()
     }
 
     /// JSON array of the currently-armed transitions
     /// (`{index, transition, kind, date}`), earliest first.
+    ///
+    /// The only reader that needs a rebuilt engine: locating an armed
+    /// watched transition evaluates its guard against the live state.
     fn fireable(&self) -> PyResult<String> {
         Self::json(&self.engine().fireable())
     }
@@ -262,8 +270,8 @@ impl Interactive {
     /// Value of an attribute by qualified name (`component.attribute`),
     /// tagged-JSON encoded; `None` if unknown.
     fn attribute(&self, qualified: &str) -> PyResult<Option<String>> {
-        self.engine()
-            .attribute(qualified)
+        self.snap
+            .attribute(&self.model, qualified)
             .map(|v| Self::json(&v))
             .transpose()
     }
@@ -271,12 +279,12 @@ impl Interactive {
     /// Current state name of an automaton (`component.automaton`);
     /// `None` if unknown.
     fn state(&self, qualified: &str) -> Option<String> {
-        self.engine().state(qualified).map(str::to_owned)
+        self.snap.state(&self.model, qualified).map(str::to_owned)
     }
 
     /// JSON array of the events fired so far, chronological.
     fn history(&self) -> PyResult<String> {
-        Self::json(self.engine().history())
+        Self::json(self.snap.history())
     }
 
     /// Fire the armed transition `name`, optionally **forcing** its
