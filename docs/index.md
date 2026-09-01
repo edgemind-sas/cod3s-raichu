@@ -55,7 +55,7 @@ CPython ≥ 3.9 on its platform. Download the wheel matching your
 platform and:
 
 ```bash
-pip install pyraichu-0.7.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+pip install pyraichu-<version>-cp39-abi3-<platform>.whl
 ```
 
 **From source**: RAICHU is a Rust workspace with a Python binding

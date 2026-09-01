@@ -59,11 +59,27 @@ the project documentation.
 
 - `crates/`: the pure-Rust engine (model, expressions, core cycle, I/O,
   numerics, RNG) under an umbrella crate `raichu`.
-- `bindings/pyraichu/`: PyO3/maturin Python binding, published on PyPI
-  as **`pyraichu`**.
+- `bindings/pyraichu/`: PyO3/maturin Python binding (**`pyraichu`**),
+  distributed as prebuilt wheels attached to each GitHub release.
 - `python/tests/validation/`: cross-validation harness (differential
   testing against the reference oracle).
 - `docs/`: the documentation site (`mkdocs`).
+
+## Install
+
+**From a release wheel** (no Rust toolchain needed): each
+[GitHub release](https://github.com/edgemind-sas/cod3s-raichu/releases)
+ships prebuilt `pyraichu` wheels for Linux (x86_64, aarch64), macOS
+(Intel, Apple Silicon) and Windows; one abi3 wheel covers every
+CPython ≥ 3.9 on its platform. Download the wheel matching your
+platform and:
+
+```bash
+pip install pyraichu-<version>-cp39-abi3-<platform>.whl
+```
+
+RAICHU is deliberately not published on PyPI: the GitHub releases are
+the distribution channel.
 
 ## Build
 
