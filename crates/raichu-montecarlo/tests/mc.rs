@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
-use raichu_core::CompiledModel;
+use raichu_core::{CompiledModel, FlowConfig};
 use raichu_model::{Automaton, Component, Distrib, Indicator, IndicatorTarget, Model, Transition};
 use raichu_montecarlo::{run, McConfig};
 
@@ -36,6 +36,7 @@ fn exp_ok_nok(rate: f64) -> Model {
                     },
                 }],
             }],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![],
         }],
@@ -49,6 +50,7 @@ fn exp_ok_nok(rate: f64) -> Model {
             },
         }],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 
@@ -70,6 +72,7 @@ fn estimates_match_closed_forms_within_confidence() {
         quantiles: vec![],
         ode: Default::default(),
         stop_at_targets: false,
+        flow: FlowConfig::default(),
     };
     let estimates = run(&compiled, &config).unwrap();
     let est = &estimates.indicators[0];
@@ -129,6 +132,7 @@ fn nb_occurrences_counts_repeated_entries_exactly() {
         quantiles: vec![],
         ode: Default::default(),
         stop_at_targets: false,
+        flow: FlowConfig::default(),
     };
     let est = &run(&compiled, &config).unwrap().indicators[0];
     // Entries into nok before each instant: t<2 → 0; t=4 → 1 (@3); t=9 → 2
@@ -172,6 +176,7 @@ fn stop_at_targets_latches_the_measures() {
         quantiles: vec![],
         ode: Default::default(),
         stop_at_targets: false,
+        flow: FlowConfig::default(),
     };
     // Free-cycling: nok over [3,5)∪[8,10)∪[13,15) → three entries, the
     // cumulated sojourn at 14 is 2 + 2 + 1 = 5.
@@ -184,6 +189,7 @@ fn stop_at_targets_latches_the_measures() {
         &compiled,
         &McConfig {
             stop_at_targets: true,
+            flow: FlowConfig::default(),
             quantiles: vec![],
             ode: Default::default(),
             ..base
@@ -220,6 +226,7 @@ fn stop_at_targets_with_infinite_horizon_covers_the_schedule() {
         quantiles: vec![],
         ode: Default::default(),
         stop_at_targets: true,
+        flow: FlowConfig::default(),
     };
     let est = &run(&compiled, &config).unwrap().indicators[0];
     // No panic, both instants estimated; the latch makes the feared state
@@ -246,6 +253,7 @@ fn nb_occurrences_includes_an_entry_at_the_sample_instant() {
         quantiles: vec![],
         ode: Default::default(),
         stop_at_targets: false,
+        flow: FlowConfig::default(),
     };
     let est = &run(&compiled, &config).unwrap().indicators[0];
     // The sampled value at t=3 reflects the post-event state (1.0): the
@@ -269,6 +277,7 @@ fn one_thread_and_many_threads_give_identical_bytes() {
         quantiles: vec![],
         ode: Default::default(),
         stop_at_targets: false,
+        flow: FlowConfig::default(),
     };
     let single = run(&compiled, &base).unwrap();
     let multi = run(
@@ -287,6 +296,120 @@ fn one_thread_and_many_threads_give_identical_bytes() {
     );
 }
 
+/// A model whose **continuous flow resolution engages under-relaxation**
+/// in every replica: the consumer's demand collapses as it is served
+/// (`d = base − 1.5·a`), so the undamped iteration alternates and the
+/// resolution latches its relaxation to settle. `base` depends on the
+/// stochastic state, so the resolved flow differs from replica to
+/// replica and the reduction has genuinely different numbers to fold.
+const DAMPED_FLOW: &str = r#"
+{"raichu_model": {"format": 1, "requires": ["evaluation_order", "allocation"]},
+ "model": {
+  "name": "damped_flow",
+  "components": [
+    {"name": "supply",
+     "attributes": [
+       {"name": "capacity", "kind": "float", "init": {"kind": "float", "value": 100.0}}],
+     "ports": [
+       {"name": "out", "dir": "out", "attr": "capacity",
+        "channels": [{"name": "demand"}, {"name": "alloc"}]}],
+     "equations": [
+       {"target": "out__demand__ea", "kind": "explicit",
+        "expr": {"op": "sub",
+          "lhs": {"op": "if",
+            "cond": {"op": "state_active",
+              "state": {"component": "c", "automaton": "aut", "state": "nok"}},
+            "then": {"op": "const", "value": {"kind": "float", "value": 6.0}},
+            "otherwise": {"op": "const", "value": {"kind": "float", "value": 10.0}}},
+          "rhs": {"op": "mul", "args": [
+            {"op": "const", "value": {"kind": "float", "value": 1.5}},
+            {"op": "attr",
+             "attr": {"component": "supply", "attribute": "out__alloc__ea"}}]}}}],
+     "allocations": [
+       {"name": "split", "port": "out", "demand": "demand", "allocated": "alloc",
+        "available": {"op": "attr",
+          "attr": {"component": "supply", "attribute": "capacity"}},
+        "policy": "proportional"}]},
+    {"name": "a",
+     "attributes": [
+       {"name": "got", "kind": "float", "init": {"kind": "float", "value": 0.0}}],
+     "ports": [{"name": "input", "dir": "in"}],
+     "equations": [
+       {"target": "got", "kind": "explicit",
+        "expr": {"op": "port_agg", "agg": "sum", "channel": "alloc",
+                 "port": {"component": "a", "port": "input"}}}]},
+    {"name": "c",
+     "attributes": [], "ports": [],
+     "automata": [
+       {"name": "aut", "states": ["ok", "nok"], "init": "ok",
+        "transitions": [
+          {"name": "fail", "source": "ok", "targets": ["nok"],
+           "distrib": "exp", "rate": 0.2}]}]}
+  ],
+  "connections": [
+    {"name": "ea", "from": {"component": "supply", "port": "out"},
+     "to": {"component": "a", "port": "input"}}],
+  "indicators": [
+    {"name": "a_got", "target": "attribute",
+     "attr": {"component": "a", "attribute": "got"}},
+    {"name": "c_nok", "target": "state",
+     "component": "c", "automaton": "aut", "state": "nok"}]
+}}
+"#;
+
+/// Thread-count invariance **through the flow resolution**. The existing
+/// invariance test drives a model with no continuous flow at all, so it
+/// cannot see a relaxation accumulator that survived a resolution: this
+/// one can. A relaxation carried from one resolution into the next would
+/// make a replica's answer depend on the resolutions that ran before it
+/// on the same worker, and workers are assigned by rayon.
+#[test]
+fn one_thread_and_many_threads_agree_through_the_flow_resolution() {
+    let model = raichu_model::Model::from_json(DAMPED_FLOW).unwrap();
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let base = McConfig {
+        nb_runs: 512,
+        seed: 11,
+        t_max: 10.0,
+        samples: schedule(),
+        threads: Some(1),
+        quantiles: vec![],
+        ode: Default::default(),
+        stop_at_targets: false,
+        flow: FlowConfig::default(),
+    };
+    let single = run(&compiled, &base).unwrap();
+    let multi = run(
+        &compiled,
+        &McConfig {
+            threads: Some(8),
+            quantiles: vec![],
+            ode: Default::default(),
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&single).unwrap(),
+        serde_json::to_vec(&multi).unwrap()
+    );
+    // The estimate must actually depend on the resolved flow, or the
+    // comparison above proves nothing about it: the damped fixpoints are
+    // 10/2.5 = 4 before the failure and 6/2.5 = 2.4 after, so the mean
+    // sits strictly between them at a mid-horizon instant.
+    let got = single
+        .indicators
+        .iter()
+        .find(|i| i.name == "a_got")
+        .unwrap();
+    let mid = got.mean[4];
+    assert!(
+        mid > 2.4 && mid < 4.0,
+        "the mean resolved flow at t=5 is {mid}, outside the two damped \
+         fixpoints: the resolution is not what this test compares"
+    );
+}
+
 #[test]
 fn same_seed_reproduces_and_other_seed_differs() {
     let model = exp_ok_nok(0.2);
@@ -300,6 +423,7 @@ fn same_seed_reproduces_and_other_seed_differs() {
         quantiles: vec![],
         ode: Default::default(),
         stop_at_targets: false,
+        flow: FlowConfig::default(),
     };
     let a = run(&compiled, &config).unwrap();
     let b = run(&compiled, &config).unwrap();

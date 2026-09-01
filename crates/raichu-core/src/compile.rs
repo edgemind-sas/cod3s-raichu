@@ -5,9 +5,11 @@
 //! build time: the simulation hot path only touches vector indices,
 //! never string lookups, and never allocates.
 
-use raichu_expr::{AggOp, BoolOp, CmpOp, Expr, Value};
+use crate::flow::CPolicy;
+use raichu_expr::{AggOp, AttrRef, BoolOp, CmpOp, Expr, PortRef, Value};
 use raichu_model::{
-    Distrib, EquationKind, IndicatorTarget, InterruptionPolicy, Model, ModelError, PortDir,
+    Allocation, AllocationPolicy, Distrib, EquationKind, IndicatorTarget, InterruptionPolicy,
+    Model, ModelError, PortDir,
 };
 use std::collections::{BTreeSet, HashMap};
 use thiserror::Error;
@@ -32,6 +34,9 @@ pub type StateIdx = usize;
 pub type TransIdx = usize;
 /// Dense index of a sensitive function (global).
 pub type FnIdx = usize;
+/// Position of a watched transition *within* [`CompiledModel::watched`],
+/// which is the order the engine scans the watched population in.
+pub type WatchedIdx = usize;
 
 /// Errors raised while compiling a model.
 #[derive(Debug, Error)]
@@ -236,6 +241,143 @@ pub struct CAutomaton {
     pub transitions: Vec<TransIdx>,
 }
 
+/// A compiled **conservative distribution operator**: the available
+/// quantity, the per-connection demands it reads, the per-connection
+/// quantities it writes, and the policy that splits one among the other.
+///
+/// The three vectors share one order, the connection declaration order of
+/// the operator's out port, which is the order [`CPolicy::Priority`]
+/// breaks its ties by.
+#[derive(Debug, Clone)]
+pub struct CAllocation {
+    /// Qualified name `component.allocation` (journal, diagnostics).
+    pub name: String,
+    /// The quantity available for distribution.
+    pub available: CExpr,
+    /// Attributes carrying each consumer's demand (read).
+    pub demands: Vec<VarIdx>,
+    /// Attributes receiving each consumer's share (written).
+    pub allocated: Vec<VarIdx>,
+    /// The split policy, resolved to the same order.
+    pub policy: CPolicy,
+}
+
+/// The **active-set margins** of one conservative distribution operator:
+/// the compiled watched guards that tell the engine when the frozen
+/// saturation pattern of that operator is about to change.
+///
+/// One margin per outgoing connection, evaluated inside the solver
+/// callbacks exactly like the margin of a watched transition. What each
+/// margin *measures* depends on the class the edge currently sits in, so
+/// the expression is not fixed at compile time; what is fixed here is the
+/// operator it belongs to and the attributes it reads.
+///
+/// The per-edge margins of one operator share **one** dependency set:
+/// the quantity offered to a consumer under a weighted split is a
+/// function of the available quantity and of *every* demand, so narrowing
+/// the registration per edge would claim an independence that does not
+/// exist. The registration is therefore per operator, which is the
+/// granularity a variable-to-margin index can honestly index.
+///
+/// Minima are deliberately **not** given a margin. A limiting reagent
+/// written as a minimum keeps a kink rather than a jump, so the
+/// integrator handles it without help, and one watched guard per input
+/// pair would add a quadratic population for accuracy the kink already
+/// provides. The branch a minimum takes still enters the *termination
+/// test* of the resolution, where it is free.
+#[derive(Debug, Clone)]
+pub struct CFlowMargins {
+    /// Index of the operator's step in [`CompiledModel::explicit`].
+    pub step: usize,
+    /// Qualified operator name `component.allocation`.
+    pub name: String,
+    /// Qualified name of the attribute each edge is allocated, in
+    /// connection declaration order (diagnostics and causal journal).
+    pub consumers: Vec<String>,
+    /// Attributes every margin of this operator reads: the available
+    /// quantity's own reads plus the demand of each edge. Sorted and
+    /// deduplicated, so an index inverting it iterates a stable sequence.
+    pub deps: Vec<VarIdx>,
+}
+
+/// The **inverted dependency index of the margins**: which of them a
+/// change to a given attribute, automaton state or to the clock can move.
+///
+/// It is the same inversion [`CompiledModel::var_triggers`] performs for
+/// the sensitive functions, applied to the watched population instead:
+/// the compiler already knows what every guard reads, so the engine can
+/// be told which guards a change reaches rather than re-deriving it by
+/// scanning all of them. Every list is **ascending and deduplicated**, so
+/// an engine walking one visits the watched transitions in the order it
+/// would have scanned them, and a run replays identically. That
+/// ordering is a requirement, not a convenience: a hash-set iteration
+/// would reorder simultaneous firings from one process to the next,
+/// because the default hasher is seeded per process.
+///
+/// **What it narrows and what it does not.** It narrows the two sites
+/// that scan the *whole* watched population: the immediate-guard check
+/// after every discrete fixpoint, and the active-margin set the engine
+/// hands the solver at every integration segment. It does **not** narrow
+/// the event evaluation inside the solver callbacks: that one is already
+/// bounded by the margins of the segment, evaluated at every scan point
+/// and every bisection step because their values are what the root
+/// finder brackets.
+#[derive(Debug, Clone, Default)]
+pub struct MarginIndex {
+    /// attribute index → positions in [`CompiledModel::watched`] whose
+    /// guard (hence whose margin, compiled from that same guard) reads
+    /// it.
+    pub watched_by_var: Vec<Vec<WatchedIdx>>,
+    /// automaton index → positions in [`CompiledModel::watched`] whose
+    /// guard reads that automaton's current state.
+    pub watched_by_state: Vec<Vec<WatchedIdx>>,
+    /// Positions in [`CompiledModel::watched`] whose guard reads the
+    /// clock, and which therefore move whenever time does. Usually
+    /// empty: a boundary is normally a predicate on the continuous
+    /// state.
+    pub watched_by_time: Vec<WatchedIdx>,
+    /// automaton index → positions in [`CompiledModel::watched`] that
+    /// automaton **owns**. This is the dependency of the *arming*
+    /// filter (a watched transition is monitored only while its
+    /// automaton sits in its source state), which is what lets the
+    /// per-segment margin set be maintained instead of rebuilt.
+    pub watched_by_owner: Vec<Vec<WatchedIdx>>,
+    /// attribute index → indices into [`CompiledModel::flow_margins`]
+    /// whose margins read it, inverting [`CFlowMargins::deps`].
+    ///
+    /// Registered so the index is a *complete* answer to "which margins
+    /// read this attribute" for every margin family the engine carries.
+    /// The active-set margins of the distribution operators have no
+    /// arming filter to narrow (every operator of the sweep contributes
+    /// its edges to every segment) and their evaluation happens inside
+    /// the solver, which this index deliberately leaves alone: they are
+    /// therefore indexed and not consumed by a scan site.
+    pub flow_by_var: Vec<Vec<usize>>,
+}
+
+/// One step of the **explicit sweep**, run at every evaluation point in
+/// table order.
+///
+/// An equation writes one attribute; a distribution operator writes one
+/// per outgoing connection, which is why it is a step of its own rather
+/// than a sensitive-function effect. Both live in one table because both
+/// must run inside the solver callbacks: a quantity written outside that
+/// table stays frozen through an integration segment, and a watched
+/// margin reading it would be polled rather than located.
+#[derive(Debug, Clone)]
+pub enum CStep {
+    /// Explicit assignment `target = expr`.
+    Equation {
+        /// The attribute receiving the value.
+        target: VarIdx,
+        /// The right-hand side.
+        expr: CExpr,
+    },
+    /// Conservative distribution of one quantity over the connections of
+    /// an out port.
+    Allocate(CAllocation),
+}
+
 /// A compiled sensitive function.
 #[derive(Debug, Clone)]
 pub struct CFunction {
@@ -289,12 +431,23 @@ pub struct CompiledModel {
     pub targets: Vec<CTarget>,
     /// ODE attributes and right-hand sides, declaration order (CEvol).
     pub ode: Vec<(VarIdx, CExpr)>,
-    /// Explicit equations, declaration order (solved before ODE
-    /// right-hand sides at every evaluation point).
-    pub explicit: Vec<(VarIdx, CExpr)>,
+    /// The explicit sweep: equations and distribution operators in
+    /// evaluation order (run before ODE right-hand sides at every
+    /// evaluation point). Positional unless the model declares an
+    /// `evaluation_order`.
+    pub explicit: Vec<CStep>,
     /// Indices of watched transitions (monitored during continuous
     /// evolution, never date-scheduled).
     pub watched: Vec<TransIdx>,
+    /// Active-set margins, one entry per conservative distribution
+    /// operator of the explicit sweep, in sweep order. Empty for a model
+    /// carrying no operator, which is what lets such a model skip the
+    /// flow resolution entirely and keep the counted-work profile it had
+    /// before the resolution existed.
+    pub flow_margins: Vec<CFlowMargins>,
+    /// Inverted dependency index of the margins: which of them a change
+    /// reaches. See [`MarginIndex`].
+    pub margin_index: MarginIndex,
     /// Lookup: qualified attribute name → index (API convenience).
     pub var_index: HashMap<String, VarIdx>,
     /// Lookup: qualified automaton name → index (API convenience).
@@ -307,6 +460,10 @@ struct Resolver {
     automata: HashMap<(String, String), AutIdx>,
     /// (component, in-port) → connected source attribute indices.
     port_sources: HashMap<(String, String), Vec<VarIdx>>,
+    /// (component, in-port, channel) → the *per-connection* attributes
+    /// materialised for that channel, one per incoming connection, in the
+    /// same connection declaration order as `port_sources`.
+    port_channel_sources: HashMap<(String, String, String), Vec<VarIdx>>,
 }
 
 impl Resolver {
@@ -344,6 +501,16 @@ impl Resolver {
             .unwrap_or_default()
     }
 
+    /// Sources of an in-port aggregation that names a channel: the
+    /// per-connection attributes materialised for it. Same no-connection
+    /// default as [`Resolver::port`], same declaration order.
+    fn port_channel(&self, component: &str, port: &str, channel: &str) -> Vec<VarIdx> {
+        self.port_channel_sources
+            .get(&(component.to_owned(), port.to_owned(), channel.to_owned()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn compile_expr(&self, expr: &Expr) -> Result<CExpr, CompileError> {
         Ok(match expr {
             Expr::Const { value } => CExpr::Const(*value),
@@ -353,8 +520,13 @@ impl Resolver {
                     self.state(&state.component, &state.automaton, &state.state)?;
                 CExpr::StateActive { automaton, state }
             }
-            Expr::PortAgg { port, agg } => CExpr::PortAgg {
-                sources: self.port(&port.component, &port.port),
+            Expr::PortAgg { port, agg, channel } => CExpr::PortAgg {
+                sources: match channel {
+                    // No channel named: the producer's single exported
+                    // attribute, exactly as before this affordance.
+                    None => self.port(&port.component, &port.port),
+                    Some(channel) => self.port_channel(&port.component, &port.port, channel),
+                },
                 agg: *agg,
             },
             Expr::Cmp { cmp, lhs, rhs } => CExpr::Cmp {
@@ -567,10 +739,153 @@ fn expr_is_continuous(expr: &CExpr, continuous_vars: &BTreeSet<VarIdx>) -> bool 
     vars.iter().any(|var| continuous_vars.contains(var))
 }
 
+/// Resolve one conservative distribution operator against the
+/// connections its out port carries.
+///
+/// The demand and allocated vectors are built from the **same** iteration
+/// over `model.connections` as the per-connection channel attributes
+/// themselves, so the three orders (demands, allocations, policy
+/// parameters) are one order: the connection declaration order.
+fn compile_allocation(
+    resolver: &Resolver,
+    model: &Model,
+    component: &raichu_model::Component,
+    allocation: &Allocation,
+) -> Result<CAllocation, CompileError> {
+    let edges: Vec<&raichu_model::Connection> = model
+        .connections
+        .iter()
+        .filter(|connection| {
+            connection.from.component == component.name && connection.from.port == allocation.port
+        })
+        .collect();
+    let channel_var = |channel: &str, connection: &raichu_model::Connection| {
+        let attribute = raichu_model::channel_attribute_name(connection, channel);
+        resolver.var(&component.name, &attribute)
+    };
+    let demands = edges
+        .iter()
+        .map(|connection| channel_var(&allocation.demand, connection))
+        .collect::<Result<Vec<_>, _>>()?;
+    let allocated = edges
+        .iter()
+        .map(|connection| channel_var(&allocation.allocated, connection))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // A consumer-keyed parameter resolved to the connection order.
+    // `Model::validate` has established the bijection between the two, so
+    // a missing entry here is a validator/compiler disagreement and is
+    // reported as a typed error rather than defaulted.
+    let value_for = |params: &[raichu_model::ConsumerParam], to: &PortRef| {
+        params
+            .iter()
+            .find(|param| param.to.component == to.component && param.to.port == to.port)
+            .map(|param| param.value)
+            .ok_or_else(|| CompileError::Unresolved {
+                what: "allocation policy value for connection",
+                name: format!("{}.{}", to.component, to.port),
+            })
+    };
+    let policy = match &allocation.policy {
+        AllocationPolicy::Proportional => CPolicy::Proportional,
+        AllocationPolicy::Shares { shares } => CPolicy::Shares(
+            edges
+                .iter()
+                .map(|connection| value_for(shares, &connection.to))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        AllocationPolicy::Priority { priorities } => {
+            let ranks = edges
+                .iter()
+                .map(|connection| value_for(priorities, &connection.to))
+                .collect::<Result<Vec<f64>, _>>()?;
+            // The serving order is settled **here**, once, by (rank,
+            // declaration index): equal ranks therefore break by
+            // declaration index, and the engine never sorts at run time.
+            let mut order: Vec<usize> = (0..ranks.len()).collect();
+            order.sort_by(|a, b| ranks[*a].total_cmp(&ranks[*b]).then(a.cmp(b)));
+            CPolicy::Priority(order)
+        }
+    };
+
+    Ok(CAllocation {
+        name: format!("{}.{}", component.name, allocation.name),
+        available: resolver.compile_expr(&allocation.available)?,
+        demands,
+        allocated,
+        policy,
+    })
+}
+
+/// Permute the explicit sweep into the model's declared evaluation order.
+///
+/// `Model::validate` has already established that the order and the sweep
+/// steps are in bijection, so every lookup below resolves and nothing is
+/// left over; the two failure paths are kept as typed errors rather than
+/// assertions, because a validator/compiler disagreement must surface as
+/// a diagnostic and never as a panic.
+fn order_steps(
+    resolver: &Resolver,
+    order: &[AttrRef],
+    steps: Vec<CStep>,
+) -> Result<Vec<CStep>, CompileError> {
+    // An entry names a step: an explicit equation by its target
+    // attribute, or a distribution operator by its qualified name. The
+    // two namespaces cannot collide inside one component
+    // (`ModelError::EvaluationStepAmbiguous`).
+    let mut equations: HashMap<VarIdx, CStep> = HashMap::new();
+    let mut operators: HashMap<String, CStep> = HashMap::new();
+    for step in steps {
+        match &step {
+            CStep::Equation { target, .. } => {
+                equations.insert(*target, step);
+            }
+            CStep::Allocate(allocation) => {
+                operators.insert(allocation.name.clone(), step);
+            }
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(order.len());
+    for entry in order {
+        let qualified = format!("{}.{}", entry.component, entry.attribute);
+        let named = resolver
+            .vars
+            .get(&(entry.component.clone(), entry.attribute.clone()))
+            .and_then(|target| equations.remove(target));
+        let Some(step) = named.or_else(|| operators.remove(&qualified)) else {
+            return Err(CompileError::Unresolved {
+                what: "sweep step named by the evaluation order",
+                name: qualified,
+            });
+        };
+        ordered.push(step);
+    }
+    if let Some(step) = equations
+        .values()
+        .next()
+        .or_else(|| operators.values().next())
+    {
+        return Err(CompileError::Unresolved {
+            what: "sweep step missing from the evaluation order",
+            name: match step {
+                CStep::Equation { target, .. } => format!("attribute #{target}"),
+                CStep::Allocate(allocation) => allocation.name.clone(),
+            },
+        });
+    }
+    Ok(ordered)
+}
+
 impl CompiledModel {
     /// Validate `model` then resolve every name to dense indices.
     pub fn compile(model: &Model) -> Result<Self, CompileError> {
         model.validate()?;
+
+        // Per-connection channel attributes: derived once, from the model
+        // itself, so validation and this pass agree on what exists
+        // (`Model::channel_attributes` is the single derivation).
+        let channel_attributes = model.channel_attributes();
 
         // Pass 1: index attributes, automata, states.
         let mut resolver = Resolver {
@@ -578,10 +893,13 @@ impl CompiledModel {
             states: HashMap::new(),
             automata: HashMap::new(),
             port_sources: HashMap::new(),
+            port_channel_sources: HashMap::new(),
         };
         let mut var_names = Vec::new();
         let mut var_init = Vec::new();
         let mut automata = Vec::new();
+        // (connection index, channel) → materialised attribute index.
+        let mut channel_vars: HashMap<(usize, &str), VarIdx> = HashMap::new();
         for component in &model.components {
             for attribute in &component.attributes {
                 resolver.vars.insert(
@@ -590,6 +908,22 @@ impl CompiledModel {
                 );
                 var_names.push(format!("{}.{}", component.name, attribute.name));
                 var_init.push(attribute.init);
+            }
+            // Materialised channel attributes sit right after the
+            // component's declared ones: ordinary float attributes, so
+            // sensitivity triggers, the journal, the snapshot, indicators
+            // and the estimators need no special case for them.
+            for entry in channel_attributes
+                .iter()
+                .filter(|entry| entry.component == component.name)
+            {
+                let idx = var_names.len();
+                resolver
+                    .vars
+                    .insert((component.name.clone(), entry.attribute.clone()), idx);
+                var_names.push(format!("{}.{}", component.name, entry.attribute));
+                var_init.push(Value::Float(entry.init));
+                channel_vars.insert((entry.connection, entry.channel.as_str()), idx);
             }
             for automaton in &component.automata {
                 let aut_idx = automata.len();
@@ -620,14 +954,25 @@ impl CompiledModel {
         }
 
         // Pass 2: connections → in-port source lists (declaration order).
-        for connection in &model.connections {
-            let source_var = model
+        //
+        // The declaration order of these lists is load-bearing: an
+        // aggregation is an ordered floating-point fold, so a reordering
+        // shifts existing results in their last bits and breaks the
+        // strict comparison level of the validation contract.
+        for (index, connection) in model.connections.iter().enumerate() {
+            let source_port = model
                 .components
                 .iter()
                 .find(|c| c.name == connection.from.component)
                 .and_then(|c| c.ports.iter().find(|p| p.name == connection.from.port))
                 .filter(|p| p.dir == PortDir::Out)
-                .and_then(|p| p.attr.as_ref())
+                .ok_or_else(|| CompileError::Unresolved {
+                    what: "out-port",
+                    name: format!("{}.{}", connection.from.component, connection.from.port),
+                })?;
+            let source_var = source_port
+                .attr
+                .as_ref()
                 .ok_or_else(|| CompileError::Unresolved {
                     what: "out-port",
                     name: format!("{}.{}", connection.from.component, connection.from.port),
@@ -638,11 +983,33 @@ impl CompiledModel {
                 .entry((connection.to.component.clone(), connection.to.port.clone()))
                 .or_default()
                 .push(var_idx);
+            for channel in &source_port.channels {
+                let materialised = channel_vars
+                    .get(&(index, channel.name.as_str()))
+                    .copied()
+                    .ok_or_else(|| CompileError::Unresolved {
+                        what: "materialised channel attribute",
+                        name: format!(
+                            "{}.{}",
+                            connection.from.component,
+                            raichu_model::channel_attribute_name(connection, &channel.name)
+                        ),
+                    })?;
+                resolver
+                    .port_channel_sources
+                    .entry((
+                        connection.to.component.clone(),
+                        connection.to.port.clone(),
+                        channel.name.clone(),
+                    ))
+                    .or_default()
+                    .push(materialised);
+            }
         }
 
         // Pass 3: transitions, functions, indicators.
         let mut transitions = Vec::new();
-        let mut explicit: Vec<(VarIdx, CExpr)> = Vec::new();
+        let mut explicit: Vec<CStep> = Vec::new();
         let mut ode: Vec<(VarIdx, CExpr)> = Vec::new();
         let mut functions = Vec::new();
         for component in &model.components {
@@ -752,9 +1119,16 @@ impl CompiledModel {
                 let target = resolver.var(&component.name, &equation.target)?;
                 let expr = resolver.compile_expr(&equation.expr)?;
                 match equation.kind {
-                    EquationKind::Explicit => explicit.push((target, expr)),
+                    EquationKind::Explicit => explicit.push(CStep::Equation { target, expr }),
                     EquationKind::Ode => ode.push((target, expr)),
                 }
+            }
+            // Distribution operators come after the component's explicit
+            // equations, which is the positional order documented for the
+            // sweep; a model that needs another one declares it.
+            for allocation in &component.allocations {
+                let compiled = compile_allocation(&resolver, model, component, allocation)?;
+                explicit.push(CStep::Allocate(compiled));
             }
         }
         let watched: Vec<TransIdx> = transitions
@@ -770,10 +1144,32 @@ impl CompiledModel {
         let mut continuous_vars: BTreeSet<VarIdx> = ode.iter().map(|(var, _)| *var).collect();
         loop {
             let mut changed = false;
-            for (target, expr) in &explicit {
-                if !continuous_vars.contains(target) && expr_is_continuous(expr, &continuous_vars) {
-                    continuous_vars.insert(*target);
-                    changed = true;
+            for step in &explicit {
+                match step {
+                    CStep::Equation { target, expr } => {
+                        if !continuous_vars.contains(target)
+                            && expr_is_continuous(expr, &continuous_vars)
+                        {
+                            continuous_vars.insert(*target);
+                            changed = true;
+                        }
+                    }
+                    // An allocated quantity moves whenever the available
+                    // quantity or any demand moves: the operator is a
+                    // function of them, evaluated at every solver stage
+                    // like any other step of the sweep.
+                    CStep::Allocate(allocation) => {
+                        let moving = expr_is_continuous(&allocation.available, &continuous_vars)
+                            || allocation
+                                .demands
+                                .iter()
+                                .any(|var| continuous_vars.contains(var));
+                        if moving {
+                            for var in &allocation.allocated {
+                                changed |= continuous_vars.insert(*var);
+                            }
+                        }
+                    }
                 }
             }
             if !changed {
@@ -789,6 +1185,106 @@ impl CompiledModel {
                 (is_continuous, &mut transition.distrib)
             {
                 *continuous = flag;
+            }
+        }
+
+        // Pass 3-ter: the **declared evaluation order**, applied once,
+        // here, as a permutation of the explicit table.
+        //
+        // The order is a compile-time property of the table, not a
+        // runtime indirection: `recompute_explicit` still walks
+        // `model.explicit` from 0, so the ~23 sweeps an accepted solver
+        // step performs are the same code over the same layout. A model
+        // that declares no order does not enter this branch at all, so
+        // its table keeps the positional order it had before the field
+        // existed, entry for entry.
+        //
+        // Placed after 3-bis, whose fixpoint over the explicit table is
+        // order-independent by construction: it iterates to closure.
+        if let Some(order) = &model.evaluation_order {
+            explicit = order_steps(&resolver, order, explicit)?;
+        }
+
+        // Pass 3-quater: the **active-set margins**, one entry per
+        // distribution operator, indexed against the *final* sweep table
+        // (hence after 3-ter, which permutes it).
+        //
+        // Compiling them here rather than deriving them at each segment
+        // start is what registers their variable dependencies once: a
+        // later index inverting `deps` sees every margin the operators
+        // contribute, exactly as it sees the margins of the watched
+        // transitions.
+        let flow_margins: Vec<CFlowMargins> = explicit
+            .iter()
+            .enumerate()
+            .filter_map(|(step, item)| match item {
+                CStep::Allocate(allocation) => Some((step, allocation)),
+                CStep::Equation { .. } => None,
+            })
+            .map(|(step, allocation)| {
+                let mut deps = Vec::new();
+                let mut auts = Vec::new();
+                allocation
+                    .available
+                    .collect_sensitivity(&mut deps, &mut auts);
+                deps.extend_from_slice(&allocation.demands);
+                deps.sort_unstable();
+                deps.dedup();
+                CFlowMargins {
+                    step,
+                    name: allocation.name.clone(),
+                    consumers: allocation
+                        .allocated
+                        .iter()
+                        .map(|&var| var_names[var].clone())
+                        .collect(),
+                    deps,
+                }
+            })
+            .collect();
+
+        // Pass 3-quinquies: **invert** the margin dependencies, exactly
+        // as pass 4 below inverts the sensitive functions'. Both scan
+        // sites of the watched population then cost what moved instead of
+        // what exists.
+        //
+        // The guard is the only expression consulted: the margin is
+        // compiled *from* the guard (`compile_watched_margin`), so the
+        // two read the same attributes and one dependency set answers for
+        // both the immediate-guard check and the located crossing.
+        let mut margin_index = MarginIndex {
+            watched_by_var: vec![Vec::new(); var_names.len()],
+            watched_by_state: vec![Vec::new(); automata.len()],
+            watched_by_time: Vec::new(),
+            watched_by_owner: vec![Vec::new(); automata.len()],
+            flow_by_var: vec![Vec::new(); var_names.len()],
+        };
+        for (position, &trans_idx) in watched.iter().enumerate() {
+            let transition = &transitions[trans_idx];
+            margin_index.watched_by_owner[transition.automaton].push(position);
+            let Some(guard) = &transition.guard else {
+                continue;
+            };
+            let mut vars = Vec::new();
+            let mut auts = Vec::new();
+            guard.collect_sensitivity(&mut vars, &mut auts);
+            vars.sort_unstable();
+            vars.dedup();
+            auts.sort_unstable();
+            auts.dedup();
+            for var in vars {
+                margin_index.watched_by_var[var].push(position);
+            }
+            for aut in auts {
+                margin_index.watched_by_state[aut].push(position);
+            }
+            if guard.reads_time() {
+                margin_index.watched_by_time.push(position);
+            }
+        }
+        for (operator, margins) in flow_margins.iter().enumerate() {
+            for &var in &margins.deps {
+                margin_index.flow_by_var[var].push(operator);
             }
         }
 
@@ -877,6 +1373,8 @@ impl CompiledModel {
             ode,
             explicit,
             watched,
+            flow_margins,
+            margin_index,
             var_index,
             automaton_index,
         })

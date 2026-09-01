@@ -7,7 +7,7 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
-use raichu_core::CompiledModel;
+use raichu_core::{CompiledModel, FlowConfig};
 use raichu_expr::{AttrRef, Expr, StateRef, Value};
 use raichu_model::{
     AttrKind, Attribute, Automaton, Component, Distrib, Equation, EquationKind, Indicator,
@@ -38,6 +38,7 @@ fn single_law_model(distrib: Distrib) -> Model {
                     distrib,
                 }],
             }],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![],
         }],
@@ -51,6 +52,7 @@ fn single_law_model(distrib: Distrib) -> Model {
             },
         }],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 
@@ -72,6 +74,7 @@ fn assert_model_matches_cdf(model: &Model, instants: &[f64], cdf: impl Fn(f64) -
         quantiles: vec![],
         ode: Default::default(),
         stop_at_targets: false,
+        flow: FlowConfig::default(),
     };
     let estimates = run(&compiled, &config).unwrap();
     let est = &estimates.indicators[0];
@@ -171,6 +174,7 @@ fn quantiles_of_bernoulli_state_follow_the_probability() {
         quantiles: vec![0.25, 0.75],
         ode: Default::default(),
         stop_at_targets: false,
+        flow: FlowConfig::default(),
     };
     let estimates = run(&compiled, &config).unwrap();
     let est = &estimates.indicators[0];
@@ -243,6 +247,7 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
                     }],
                 },
             ],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![],
         }],
@@ -256,6 +261,7 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
             },
         }],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 
@@ -317,6 +323,7 @@ fn expvar_continuous_rate_matches_closed_form() {
                     },
                 }],
             }],
+            allocations: vec![],
             equations: vec![Equation {
                 target: "x".into(),
                 kind: EquationKind::Ode,
@@ -336,6 +343,7 @@ fn expvar_continuous_rate_matches_closed_form() {
             },
         }],
         targets: vec![],
+        evaluation_order: None,
     };
     assert_model_matches_cdf(&model, &[4.0, 8.0, 10.0], |t| 1.0 - (-0.01 * t * t).exp());
 }

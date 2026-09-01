@@ -22,7 +22,8 @@
 //! the sojourn-time measure).
 
 use raichu_core::{
-    CompiledModel, Engine, EngineConfig, EngineError, IndicatorSeries, Sequence, SolverParams,
+    CompiledModel, Engine, EngineConfig, EngineError, FlowConfig, IndicatorSeries, Sequence,
+    SolverParams,
 };
 use raichu_expr::Value;
 use serde::Serialize;
@@ -55,6 +56,12 @@ pub struct McConfig {
     /// reference regime of recorded sequence campaigns). Ignored when the
     /// model declares no target.
     pub stop_at_targets: bool,
+    /// Convergence policy of the continuous flow resolution, applied to
+    /// every replica ([`FlowConfig::default`] is the documented policy).
+    /// It is per-run configuration and not per-replica state: the
+    /// resolution carries nothing across a segment, so sharing one policy
+    /// across replicas keeps the estimates invariant in the thread count.
+    pub flow: FlowConfig,
 }
 
 /// A quantile series over the schedule instants.
@@ -169,6 +176,7 @@ fn run_replica(
         // Early stop only: this driver reads `samples` / `indicators` and
         // never the per-trajectory trace, so it must not pay for recording it.
         stop_at_targets: config.stop_at_targets,
+        flow: config.flow.clone(),
         ..EngineConfig::default()
     };
     let result = Engine::new(model, engine_config)?.run()?;
@@ -335,6 +343,7 @@ pub fn run_sequences(
                     seed: config.seed,
                     rng_stream: replica,
                     ode: config.ode.clone(),
+                    flow: config.flow.clone(),
                     ..EngineConfig::default()
                 };
                 Ok(Engine::new(model, engine_config)?.run()?.sequence)

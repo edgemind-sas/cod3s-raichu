@@ -39,6 +39,7 @@ fn comp(
             init: init.into(),
             transitions,
         }],
+        allocations: vec![],
         equations: vec![],
         sensitive_functions: vec![],
     }
@@ -76,6 +77,7 @@ fn model() -> Model {
             automaton: "ev".into(),
             state: "occ".into(),
         }],
+        evaluation_order: None,
     }
 }
 
@@ -164,6 +166,7 @@ fn early_stop_finishes_the_hit_instant() {
             automaton: "ev".into(),
             state: "occ".into(),
         }],
+        evaluation_order: None,
     };
     let compiled = CompiledModel::compile(&m).unwrap();
     let config = EngineConfig {

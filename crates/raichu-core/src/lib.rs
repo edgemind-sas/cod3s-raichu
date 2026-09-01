@@ -27,12 +27,15 @@
 
 pub mod compile;
 pub mod engine;
+pub mod flow;
 pub mod sequence;
 
-pub use compile::{CompileError, CompiledModel};
+pub use compile::{CompileError, CompiledModel, MarginIndex, WatchedIdx};
 pub use engine::{
-    DropReason, Engine, EngineConfig, EngineError, Event, Fireable, FireableKind, IndicatorSeries,
-    JournalRecord, Provenance, SeqEvent, Sequence, SimulationResult, Snapshot,
+    DropReason, Engine, EngineConfig, EngineError, Event, Fireable, FireableKind, FlowConfig,
+    FlowStall, IndicatorSeries, JournalRecord, Provenance, SeqEvent, Sequence, SimulationResult,
+    Snapshot, WorkCounters,
 };
-pub use raichu_numeric::SolverParams;
+pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
+pub use raichu_numeric::{SolverParams, SolverStats};
 pub use sequence::{analyse, filter_cycles, group_sequences, minimal_sequences};

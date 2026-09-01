@@ -105,6 +105,19 @@ impl Default for SolverParams {
     }
 }
 
+/// Steps an adaptive backend accepted and rejected since it was built.
+///
+/// Machine-independent counted work: unlike wall-clock it does not move
+/// with the machine, the allocator or the load, which is what makes a
+/// performance comparison reproducible by a third party.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SolverStats {
+    /// Steps whose error estimate met the tolerance and were committed.
+    pub accepted: u64,
+    /// Trial steps the error controller rejected and retried smaller.
+    pub rejected: u64,
+}
+
 /// Swappable integration backend.
 pub trait OdeSolver {
     /// Integrate from `t0` to `t_end` (writing the final state back
@@ -127,6 +140,15 @@ pub trait OdeSolver {
         samples: &[f64],
         on_sample: &mut dyn FnMut(f64, &[f64]),
     ) -> Result<Outcome, OdeError>;
+
+    /// Steps accepted and rejected since this backend was built,
+    /// cumulative across [`OdeSolver::integrate`] calls.
+    ///
+    /// Defaults to zeros: a backend that does not count its steps
+    /// reports none rather than forcing every implementor to.
+    fn stats(&self) -> SolverStats {
+        SolverStats::default()
+    }
 }
 
 // --- Dormand-Prince 4(5) ---------------------------------------------------
@@ -137,13 +159,18 @@ pub trait OdeSolver {
 pub struct DormandPrince45 {
     /// Numerical parameters.
     pub params: SolverParams,
+    /// Counted work, cumulative over this backend's life.
+    stats: SolverStats,
 }
 
 impl DormandPrince45 {
     /// Backend with the documented default parameters.
     #[must_use]
     pub fn new(params: SolverParams) -> Self {
-        DormandPrince45 { params }
+        DormandPrince45 {
+            params,
+            stats: SolverStats::default(),
+        }
     }
 }
 
@@ -304,7 +331,8 @@ impl OdeSolver for DormandPrince45 {
             return Ok(Outcome::Reached { t: t_end });
         }
 
-        let p = &self.params;
+        // Cloned, not borrowed: the step counters below take `&mut self`.
+        let p = self.params.clone();
         let mut t = t0;
         let mut h = p.max_step.min(t_end - t0);
         let mut sample_cursor = 0usize;
@@ -381,9 +409,11 @@ impl OdeSolver for DormandPrince45 {
             }
 
             if err > 1.0 {
+                self.stats.rejected += 1;
                 h *= (0.9 * err.powf(-0.2)).clamp(0.2, 1.0);
                 continue;
             }
+            self.stats.accepted += 1;
 
             // Accepted: build the dense interpolant.
             let mut dense = Dense {
@@ -448,6 +478,10 @@ impl OdeSolver for DormandPrince45 {
             h *= (0.9 * err.max(1e-10).powf(-0.2)).clamp(0.2, 5.0);
         }
     }
+
+    fn stats(&self) -> SolverStats {
+        self.stats
+    }
 }
 
 // --- Fixed-step Euler (dummy backend proving the trait) --------------------
@@ -461,6 +495,21 @@ pub struct FixedEuler {
     pub step: f64,
     /// Event bisection tolerance.
     pub tol_event: f64,
+    /// Counted work, cumulative over this backend's life. A fixed step
+    /// is never rejected, so only the accepted count moves.
+    stats: SolverStats,
+}
+
+impl FixedEuler {
+    /// Backend with the given fixed step and event tolerance.
+    #[must_use]
+    pub fn new(step: f64, tol_event: f64) -> Self {
+        FixedEuler {
+            step,
+            tol_event,
+            stats: SolverStats::default(),
+        }
+    }
 }
 
 impl OdeSolver for FixedEuler {
@@ -537,8 +586,13 @@ impl OdeSolver for FixedEuler {
             }
             y.copy_from_slice(&y_new);
             t += h;
+            self.stats.accepted += 1;
         }
         Ok(Outcome::Reached { t: t_end })
+    }
+
+    fn stats(&self) -> SolverStats {
+        self.stats
     }
 }
 
@@ -665,10 +719,7 @@ mod tests {
     #[test]
     fn euler_backend_is_swappable() {
         // Same trait, same call: coarser answer (proves the swap).
-        let mut solver = FixedEuler {
-            step: 1e-4,
-            tol_event: 1e-10,
-        };
+        let mut solver = FixedEuler::new(1e-4, 1e-10);
         let mut y = vec![1.0];
         let outcome = solver
             .integrate(&mut Decay, 0.0, &mut y, 1.0, &[], &mut |_, _| {})

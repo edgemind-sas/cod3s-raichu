@@ -39,8 +39,10 @@
 //! (rather than silently returning an order-dependent result).
 
 use crate::compile::{
-    CExpr, CIndicatorTarget, CLaw, CompiledModel, FnIdx, StateIdx, TransIdx, VarIdx,
+    AutIdx, CAllocation, CExpr, CFlowMargins, CIndicatorTarget, CLaw, CStep, CompiledModel, FnIdx,
+    StateIdx, TransIdx, VarIdx, WatchedIdx,
 };
+use crate::flow::{allocate, classify, edge_margin, flow_band, EdgeClass, FLOW_TOLERANCE};
 use raichu_expr::{AggOp, BoolOp, CmpOp, Value};
 use raichu_numeric::{DormandPrince45, OdeSolver, OdeSystem, Outcome, SolverParams};
 use rand_chacha::ChaCha8Rng;
@@ -48,6 +50,63 @@ use rand_distr::Distribution;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use thiserror::Error;
+
+/// Convergence policy of the continuous **flow resolution**: the two
+/// budgets that bound one resolution, the damping it applies to a
+/// two-cycle, and the tolerance its quantities are settled to.
+///
+/// One object rather than four more fields on [`EngineConfig`] and four
+/// more keywords on every entry point. The four are read *together*: a
+/// tolerance loosened without a budget to match is a half-measure, and a
+/// budget raised without knowing the tolerance it is spent against says
+/// nothing. Grouping them also keeps the binding's already-wide
+/// signatures from growing another four positional arguments, which is
+/// what the surface exists to avoid.
+///
+/// [`Default`] reproduces the documented policy exactly, so a config
+/// built without touching this group behaves as it did before the group
+/// existed. Each field names the constant that documents *why* its
+/// default is what it is; those constants stay the single place the
+/// policy is argued.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlowConfig {
+    /// Sweeps the **numeric** level of one resolution may spend once its
+    /// active set has settled. Default: [`FLOW_SWEEP_BUDGET`].
+    pub sweep_budget: usize,
+    /// Sweeps the **combinatorial** level of one resolution may spend,
+    /// and segment restarts one instant may absorb.
+    ///
+    /// `None` derives it from the compiled network
+    /// ([`active_set_budget`]), which is the default and was the only
+    /// source before this knob existed. `Some(n)` overrides that
+    /// derivation for every model this configuration runs: the
+    /// derivation describes a *model*, so an override is a deliberate
+    /// departure from what the model says about itself, not a tuning.
+    pub active_set_budget: Option<usize>,
+    /// Under-relaxation weight latched on the first detected two-cycle
+    /// (`x ← (1 − w)·x + w·F(x)`). Default: [`FLOW_RELAXATION`]. A
+    /// weight of one is no damping at all.
+    pub relaxation: f64,
+    /// Per-edge convergence tolerance of the numeric level, and the dead
+    /// band of every active-set margin. One value serves both on
+    /// purpose: see [`FLOW_TOLERANCE`], the default, whose documentation
+    /// carries the ordering against the event-location tolerance that
+    /// keeps a freshly resolved network from re-crossing its own
+    /// boundary on the spot. Loosening it past that ordering trades that
+    /// guarantee away.
+    pub tolerance: f64,
+}
+
+impl Default for FlowConfig {
+    fn default() -> Self {
+        FlowConfig {
+            sweep_budget: FLOW_SWEEP_BUDGET,
+            active_set_budget: None,
+            relaxation: FLOW_RELAXATION,
+            tolerance: FLOW_TOLERANCE,
+        }
+    }
+}
 
 /// Engine configuration.
 #[derive(Debug, Clone)]
@@ -87,6 +146,11 @@ pub struct EngineConfig {
     /// Substream index (`ChaCha8Rng::set_stream`): the Monte-Carlo
     /// driver assigns one stream per replica.
     pub rng_stream: u64,
+    /// Convergence policy of the continuous flow resolution (budgets,
+    /// damping, tolerance). [`FlowConfig::default`] is the documented
+    /// policy; a model with no distribution operator runs no resolution
+    /// and is untouched by any of it.
+    pub flow: FlowConfig,
 }
 
 impl Default for EngineConfig {
@@ -102,6 +166,7 @@ impl Default for EngineConfig {
             samples: Vec::new(),
             seed: 0,
             rng_stream: 0,
+            flow: FlowConfig::default(),
         }
     }
 }
@@ -195,6 +260,82 @@ pub enum EngineError {
         /// The stuck instant.
         time: f64,
     },
+    /// The conservative flow network did not settle within its sweep
+    /// budget (see [`Engine::resolve_flows`]).
+    #[error(
+        "the continuous flow network did not settle after {sweeps} sweeps \
+         at t={time}: {cause}; still moving: {moving}"
+    )]
+    FlowNotConverged {
+        /// Simulation time of the resolution that would not settle.
+        time: f64,
+        /// Sweeps the resolution spent before its budget ran out.
+        sweeps: usize,
+        /// Which budget ran out, and what the iteration was doing.
+        cause: FlowStall,
+        /// Qualified `operator[consumer]` name of every edge that moved
+        /// in the final sweep, comma separated.
+        moving: String,
+    },
+    /// A located active-set boundary was crossed again and again without
+    /// time advancing: the continuous analogue of [`Self::WatchedLoop`],
+    /// for a crossing that fires no transition.
+    #[error(
+        "the active set of the continuous flow network keeps changing at \
+         t={time} without time advancing ({restarts} segment restarts at \
+         the same instant); edges crossing: {edges}"
+    )]
+    FlowChattering {
+        /// The stuck instant.
+        time: f64,
+        /// Segment restarts spent at that instant.
+        restarts: usize,
+        /// Qualified `operator[consumer]` name of every edge that
+        /// crossed there, comma separated.
+        edges: String,
+    },
+}
+
+/// Why a continuous-flow resolution stopped without settling.
+///
+/// The three variants share one payload (the moving edges): a slow
+/// monotone sequence and a long cycle exhaust a budget without matching
+/// the two-cycle test, and a diagnostic that named the edges only in the
+/// cycle case would leave the two commonest stalls unexplained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowStall {
+    /// The saturation pattern kept changing: the combinatorial search
+    /// spent the budget derived from the compiled edge count without the
+    /// pattern ever holding still for two consecutive sweeps.
+    ActiveSet,
+    /// The saturation pattern held still but the quantities kept moving
+    /// by more than [`FLOW_TOLERANCE`]: the numeric level spent its
+    /// constant budget.
+    Quantities,
+    /// The iteration returned to a state it held two sweeps earlier:
+    /// two allocations, each of which justifies the other. Under-relaxation
+    /// was engaged in response and did not absorb it, so this is a policy
+    /// conflict in the model, not a numerical accident.
+    TwoCycle,
+}
+
+impl std::fmt::Display for FlowStall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            FlowStall::ActiveSet => {
+                "the saturation pattern kept changing (active-set budget exhausted)"
+            }
+            FlowStall::Quantities => {
+                "the saturation pattern held but the quantities kept moving \
+                 (flow budget exhausted)"
+            }
+            FlowStall::TwoCycle => {
+                "two allocations alternate, each justifying the other \
+                 (two-cycle persisting under under-relaxation)"
+            }
+        };
+        f.write_str(text)
+    }
 }
 
 /// One record of the structured causal journal.
@@ -254,6 +395,28 @@ pub enum JournalRecord {
         /// New planned firing date (`+∞` serialises as `null`: the
         /// rate dropped to zero and the countdown is on hold).
         firing_at: f64,
+    },
+    /// The **active set** of a distribution operator changed at a located
+    /// boundary crossing: the integration segment ended there, at the
+    /// crossing instant rather than at the next scheduled date, and the
+    /// network was resolved again from that state.
+    ///
+    /// This is the record that makes the located-crossing claim
+    /// observable: a resolution that only happened at discrete dates
+    /// would leave the journal without it, or with it at the wrong
+    /// instant.
+    ActiveSetCrossed {
+        /// Located crossing instant.
+        time: f64,
+        /// Qualified operator name `component.allocation`.
+        operator: String,
+        /// Qualified name of the allocated attribute whose saturation
+        /// changed.
+        consumer: String,
+        /// Saturation class the edge held during the segment.
+        from: EdgeClass,
+        /// Class it holds after the network was resolved again.
+        to: EdgeClass,
     },
     /// A pending transition was dropped (`drop_disabled` or source left).
     TransitionDropped {
@@ -459,6 +622,63 @@ pub struct IndicatorSeries {
     pub points: Vec<(f64, Value)>,
 }
 
+/// **Counted work** of a run: the machine-independent units a
+/// performance comparison is expressed in.
+///
+/// Wall-clock moves with the machine, the allocator and the load; these
+/// counts do not, which is what lets a third party reproduce a
+/// measurement and what makes a self-regression visible even when a
+/// wall-clock gate with slack stays green.
+///
+/// Two counters report zero for a model that declares no conservative
+/// distribution operator: `flow_sweeps` and `allocation_capping_passes`.
+/// That is not an absent producer but an absent network, and it is the
+/// property that keeps such a model's profile identical to the one it had
+/// before the flow resolution existed.
+///
+/// The counters are **cumulative instrumentation over the engine's
+/// life**, not trajectory state: [`Engine::restore`] rewinds the
+/// trajectory, never the work already done.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct WorkCounters {
+    /// Calls to the explicit-equation pass. It runs on every solver
+    /// stage, every interior event-scan sample and every bisection step,
+    /// so this dominates the continuous cost of any model.
+    pub explicit_evaluations: u64,
+    /// ODE steps the error controller accepted.
+    pub solver_steps_accepted: u64,
+    /// ODE trial steps the error controller rejected and retried.
+    pub solver_steps_rejected: u64,
+    /// Integration segments started. A segment restart discards the
+    /// adapted step size, so segments per unit simulated time is the
+    /// cost driver a chattering boundary shows up in.
+    pub segments: u64,
+    /// Sweeps of the continuous-flow resolution: one per ordered pass of
+    /// the descending iteration that settles the active set and then the
+    /// flows, counted at every discrete epoch and at every located
+    /// active-set crossing. Zero for a model with no distribution
+    /// operator, which skips the resolution entirely.
+    pub flow_sweeps: u64,
+    /// Passes of the capping loop of the conservative distribution
+    /// operators. One pass per operator per explicit sweep when no
+    /// consumer is over-served, one more per consumer that is: the
+    /// counter is therefore how much the *policies* cost on top of the
+    /// sweep itself.
+    pub allocation_capping_passes: u64,
+    /// Watched-margin expressions evaluated inside solver callbacks.
+    pub margin_evaluations: u64,
+    /// Watched guards **evaluated** by the immediate-guard scan that runs
+    /// after every discrete fixpoint.
+    ///
+    /// Evaluated, not visited: the scan walks the armed positions and
+    /// answers from a cached verdict for every guard whose inputs have
+    /// not moved since it was last evaluated (see [`crate::MarginIndex`]), so
+    /// this counts the work the model's *changes* justify rather than the
+    /// size of its watched population. A model whose network never moves
+    /// pays one cold pass and nothing after it.
+    pub immediate_guard_scans: u64,
+}
+
 /// Provenance metadata attached to every result (reproducibility by
 /// construction).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -494,6 +714,8 @@ pub struct SimulationResult {
     pub sequence: Option<Sequence>,
     /// Provenance metadata.
     pub provenance: Provenance,
+    /// Counted work (machine-independent performance units).
+    pub work: WorkCounters,
     /// Final simulation time.
     pub final_time: f64,
 }
@@ -816,18 +1038,529 @@ fn eval_cmp(time: f64, op: CmpOp, lhs: Value, rhs: Value) -> Result<Value, Engin
     Ok(Value::Bool(result))
 }
 
-/// Recompute explicit equations (declaration order) into `vars`.
+/// Reusable scratch of the explicit sweep: the demand and allocation
+/// vectors of the conservative distribution operators, and their capping
+/// marks.
+///
+/// The sweep runs on every solver stage, so the buffers are owned by the
+/// caller and reused: after the first pass the operator allocates nothing.
+/// This is scratch, not trajectory state, so it stays out of the snapshot.
+#[derive(Debug, Clone, Default)]
+struct FlowScratch {
+    demands: Vec<f64>,
+    allocated: Vec<f64>,
+    capped: Vec<bool>,
+    /// When present, every distribution operator run by the sweep appends
+    /// its edge classes here, in sweep order: this is how the active set
+    /// is read off **the operator's own capping outcome** instead of being
+    /// recomputed by a second, parallel rule that could disagree with it.
+    ///
+    /// Set only by the boundary resolution. The per-stage path leaves it
+    /// `None` and pays nothing.
+    classes: Option<Vec<EdgeClass>>,
+}
+
+/// Read an attribute as a number, refusing a boolean where a quantity is
+/// expected (a distribution operator moves quantities, not flags).
+fn quantity(
+    model: &CompiledModel,
+    vars: &[Value],
+    time: f64,
+    var: VarIdx,
+) -> Result<f64, EngineError> {
+    match vars[var] {
+        Value::Float(value) => Ok(value),
+        Value::Int(value) => Ok(value as f64),
+        Value::Bool(_) => Err(EngineError::TypeError {
+            time,
+            detail: format!(
+                "`{}` carries a boolean where a distributed quantity is expected",
+                model.var_names[var]
+            ),
+        }),
+    }
+}
+
+/// Guard one input of a distribution operator: a non-finite quantity is a
+/// loud failure, a negative one is not a quantity and distributes nothing.
+///
+/// The clamp is deliberate and narrow. A level or a rate can pass through
+/// zero during an integration segment and land a few ulps below it; that
+/// is rounding, not a negative demand, and aborting a run on it would make
+/// every conservative flow fragile at exactly the operating point where
+/// it matters. A NaN or an infinity, on the other hand, means the model
+/// itself produced no number, and is reported.
+fn flow_input(value: f64, time: f64, operator: &str, role: &str) -> Result<f64, EngineError> {
+    if !value.is_finite() {
+        return Err(EngineError::TypeError {
+            time,
+            detail: format!("the {role} of distribution operator `{operator}` is {value}"),
+        });
+    }
+    Ok(value.max(0.0))
+}
+
+/// The mutable side-channels of one explicit sweep, carried together
+/// because every caller holds all three and none of them belongs to the
+/// state the sweep computes: what the pass **counts**
+/// ([`WorkCounters`]), what it **scribbles on** ([`FlowScratch`]), and
+/// what it **reports as moved** ([`ChangeLog`]).
+struct PassContext<'a> {
+    /// Counted work of the pass.
+    work: &'a mut WorkCounters,
+    /// Reused buffers of the distribution operators.
+    scratch: &'a mut FlowScratch,
+    /// Change detection of the pass's writes.
+    changed: &'a mut ChangeLog,
+}
+
+/// Run one conservative distribution operator: read the available
+/// quantity and the per-connection demands, split them under the compiled
+/// policy, and write one quantity per outgoing connection.
+fn run_allocation(
+    model: &CompiledModel,
+    vars: &mut [Value],
+    states: &[StateIdx],
+    time: f64,
+    allocation: &CAllocation,
+    ctx: &mut PassContext<'_>,
+) -> Result<(), EngineError> {
+    let PassContext {
+        work,
+        scratch,
+        changed,
+    } = ctx;
+    let raw = eval_f64(model, vars, states, time, &allocation.available)?;
+    let available = flow_input(raw, time, &allocation.name, "available quantity")?;
+    scratch.demands.clear();
+    for &var in &allocation.demands {
+        let demand = quantity(model, vars, time, var)?;
+        scratch
+            .demands
+            .push(flow_input(demand, time, &allocation.name, "demand")?);
+    }
+    scratch.allocated.clear();
+    scratch.allocated.resize(scratch.demands.len(), 0.0);
+    work.allocation_capping_passes += allocate(
+        &allocation.policy,
+        available,
+        &scratch.demands,
+        &mut scratch.allocated,
+        &mut scratch.capped,
+    );
+    if scratch.classes.is_some() {
+        // Split the borrow: `classify` reads the three buffers the
+        // operator just wrote and appends to the fourth.
+        let FlowScratch {
+            demands,
+            allocated,
+            capped,
+            classes,
+        } = scratch;
+        if let Some(sink) = classes.as_mut() {
+            classify(&allocation.policy, demands, allocated, capped, sink);
+        }
+    }
+    for (&target, &value) in allocation.allocated.iter().zip(&scratch.allocated) {
+        changed.write(vars, target, Value::Float(value));
+    }
+    Ok(())
+}
+
+/// Read one operator's inputs on the current state: the available
+/// quantity (returned) and one demand per edge (into `demands`), both
+/// through the same guards the operator itself applies, so a margin never
+/// sees a quantity the operator would have refused or clamped.
+fn read_flow_inputs(
+    model: &CompiledModel,
+    vars: &[Value],
+    states: &[StateIdx],
+    time: f64,
+    allocation: &CAllocation,
+    demands: &mut Vec<f64>,
+) -> Result<f64, EngineError> {
+    let raw = eval_f64(model, vars, states, time, &allocation.available)?;
+    let available = flow_input(raw, time, &allocation.name, "available quantity")?;
+    demands.clear();
+    for &var in &allocation.demands {
+        let demand = quantity(model, vars, time, var)?;
+        demands.push(flow_input(demand, time, &allocation.name, "demand")?);
+    }
+    Ok(available)
+}
+
+/// **Change detection of the explicit sweep**: every write goes through
+/// here, and the ones that actually move a value are reported.
+///
+/// The sweep rewrites each of its targets at every evaluation point,
+/// whether or not the new value differs from the one already there. That
+/// is fine as an *assignment*, and useless as a *signal*: an index that
+/// tells the engine which margins a change reaches is worth nothing if
+/// every attribute is announced as changed on every pass. Comparing
+/// before writing is what turns the rewrite into a signal.
+///
+/// **The comparison is unconditional**, paid by every model, including
+/// the discrete-only ones that carry no watched transition and receive
+/// nothing in exchange. Only the *recording* is optional: the passes
+/// whose result is thrown away (the solver callbacks, the dense-sample
+/// callback, the active-set probe) run against a copied attribute vector
+/// and have no state to invalidate.
+///
+/// Floats are compared at the **flow tolerance**, the same number the
+/// flow resolution settles to, so a quantity still creeping inside the
+/// band the resolution has already declared settled is not announced as a
+/// move. Everything else compares exactly.
+struct ChangeLog {
+    /// The band a float write must leave to count as a move
+    /// ([`FlowConfig::tolerance`]).
+    tolerance: f64,
+    /// Targets that moved, in write order, or `None` on a pass whose
+    /// result is discarded.
+    moved: Option<Vec<VarIdx>>,
+}
+
+impl ChangeLog {
+    /// A log that compares but records nothing: the passes run on a copy
+    /// of the attribute vector.
+    fn discarding(tolerance: f64) -> Self {
+        ChangeLog {
+            tolerance,
+            moved: None,
+        }
+    }
+
+    /// Write one target, reporting it when the value moved.
+    ///
+    /// Two tests, cheapest first. **Identity** settles the common case:
+    /// a sweep of a settled network recomputes most of its targets to the
+    /// bits they already held, and that is one comparison. Only a genuine
+    /// difference is worth the banded test, which costs a handful of
+    /// operations and is where the tolerance enters.
+    #[inline]
+    fn write(&mut self, vars: &mut [Value], target: VarIdx, value: Value) {
+        let old = vars[target];
+        vars[target] = value;
+        if old == value {
+            return;
+        }
+        if !value_settled(&old, &value, self.tolerance) {
+            if let Some(sink) = self.moved.as_mut() {
+                sink.push(target);
+            }
+        }
+    }
+}
+
+/// Run the explicit sweep (equations and distribution operators, in table
+/// order) into `vars`, counting the pass into `work` (see
+/// [`WorkCounters`]) and reporting the targets that moved into `changed`
+/// (see [`ChangeLog`]).
 fn recompute_explicit(
     model: &CompiledModel,
     vars: &mut [Value],
     states: &[StateIdx],
     time: f64,
+    ctx: &mut PassContext<'_>,
 ) -> Result<(), EngineError> {
-    for (target, expr) in &model.explicit {
-        let value = eval_f64(model, vars, states, time, expr)?;
-        vars[*target] = Value::Float(value);
+    ctx.work.explicit_evaluations += 1;
+    for step in &model.explicit {
+        match step {
+            CStep::Equation { target, expr } => {
+                let value = eval_f64(model, vars, states, time, expr)?;
+                ctx.changed.write(vars, *target, Value::Float(value));
+            }
+            CStep::Allocate(allocation) => {
+                run_allocation(model, vars, states, time, allocation, ctx)?;
+            }
+        }
     }
     Ok(())
+}
+
+/// Record which branch of every comparison the sweep resolves, into a
+/// vector whose *equality* between two sweeps is half the active-set
+/// termination test (the other half being the operators' capping
+/// outcome).
+///
+/// Minima and maxima contribute the index of the argument they select,
+/// conditionals the branch they take. Both are finite, categorical
+/// answers: settling them to exact equality turns most of a resolution
+/// from an asymptotic question into a combinatorial one, which is why
+/// they are tested before the flows are tested to a tolerance.
+///
+/// Only the **taken** branch of a conditional is walked. The other one is
+/// not part of the answer, and evaluating it could fail on a state the
+/// model never intended it to see.
+fn record_branches(
+    model: &CompiledModel,
+    vars: &[Value],
+    states: &[StateIdx],
+    time: f64,
+    expr: &CExpr,
+    into: &mut Vec<u32>,
+) -> Result<(), EngineError> {
+    match expr {
+        CExpr::Min { args } | CExpr::Max { args } => {
+            let wants_min = matches!(expr, CExpr::Min { .. });
+            let mut best: Option<(usize, f64)> = None;
+            for (index, arg) in args.iter().enumerate() {
+                let value = eval_f64(model, vars, states, time, arg)?;
+                let better = match best {
+                    None => true,
+                    Some((_, incumbent)) => {
+                        if wants_min {
+                            value < incumbent
+                        } else {
+                            value > incumbent
+                        }
+                    }
+                };
+                if better {
+                    best = Some((index, value));
+                }
+            }
+            // An empty min/max selects nothing; `u32::MAX` is that
+            // answer, and it is as stable as any other.
+            into.push(best.map_or(u32::MAX, |(index, _)| index as u32));
+            for arg in args {
+                record_branches(model, vars, states, time, arg, into)?;
+            }
+        }
+        CExpr::If {
+            cond,
+            then,
+            otherwise,
+        } => {
+            let taken = eval_bool(model, vars, states, time, cond)?;
+            into.push(u32::from(taken));
+            record_branches(model, vars, states, time, cond, into)?;
+            record_branches(
+                model,
+                vars,
+                states,
+                time,
+                if taken { then } else { otherwise },
+                into,
+            )?;
+        }
+        CExpr::Cmp { lhs, rhs, .. } | CExpr::Sub { lhs, rhs } | CExpr::Div { lhs, rhs } => {
+            record_branches(model, vars, states, time, lhs, into)?;
+            record_branches(model, vars, states, time, rhs, into)?;
+        }
+        CExpr::Bool { args, .. } | CExpr::Add { args } | CExpr::Mul { args } => {
+            for arg in args {
+                record_branches(model, vars, states, time, arg, into)?;
+            }
+        }
+        CExpr::Sin(arg) | CExpr::Exp(arg) => {
+            record_branches(model, vars, states, time, arg, into)?;
+        }
+        CExpr::Const(_)
+        | CExpr::Var(_)
+        | CExpr::StateActive { .. }
+        | CExpr::PortAgg { .. }
+        | CExpr::Time => {}
+    }
+    Ok(())
+}
+
+/// The **active set** of a resolved network: which edges are saturated
+/// (read off each operator's capping outcome) and which branch of each
+/// comparison the sweep took.
+///
+/// Two sweeps that produce equal signatures have settled the
+/// combinatorial half of the resolution; what remains is numeric and is
+/// settled against [`FLOW_TOLERANCE`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ActiveSet {
+    edges: Vec<EdgeClass>,
+    branches: Vec<u32>,
+}
+
+/// How one integration segment ended.
+///
+/// Three outcomes, not two: besides reaching the requested date and
+/// locating a watched transition, a segment can end because the **active
+/// set** it froze stopped holding. That third outcome fires no
+/// transition; it re-resolves the network at the crossing instant and
+/// integration continues from there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Segment {
+    /// The requested date was reached.
+    Reached,
+    /// A watched boundary (or a continuously-varying hazard) was
+    /// located: this transition must fire.
+    Watched(TransIdx),
+    /// An active-set boundary was located and the network was resolved
+    /// again from the crossing state. Carries the global edge index that
+    /// crossed, so a chattering boundary can be *named* rather than
+    /// merely counted.
+    Resolved(usize),
+}
+
+/// Sweeps the **numeric** level of one resolution may spend once its
+/// active set has settled: the constant half of the two-level budget of
+/// [`Engine::resolve_flows`].
+///
+/// It is a constant because nothing in the compiled network sizes it: the
+/// active set is finite and its budget counts edges, whereas the
+/// quantities converge at a rate that is a property of the model's
+/// arithmetic, not of its size.
+///
+/// **Why 64.** The undamped iteration reaches the per-edge tolerance in a
+/// handful of sweeps on every settling network measured here (three on
+/// the contested supply). The budget is not sized for those: it is sized
+/// for the damped iteration that [`FLOW_RELAXATION`] substitutes after a
+/// two-cycle, whose residual then falls by a factor `q` per sweep. From
+/// an initial residual of order one, reaching [`FLOW_TOLERANCE`] costs
+/// `ln(1e-9) / ln(q)` sweeps: 30 at `q = 1/2`, 58 at `q = 0.7`. Sixty-four
+/// therefore covers every damped contraction up to about `q = 0.72` and
+/// refuses the rest with a diagnostic rather than with silence.
+///
+/// This is the default of [`FlowConfig::sweep_budget`], which is where a
+/// caller overrides it.
+pub const FLOW_SWEEP_BUDGET: usize = 64;
+
+/// Under-relaxation factor of the flow resolution: the weight given to
+/// the sweep's raw answer when blending it with the iterate it started
+/// from (`x ← (1 − w)·x + w·F(x)`).
+///
+/// **Why one half, and not the 0.9 of general practice.** The two figures
+/// answer different failure modes. A factor near 0.9 damps a *diverging
+/// monotone* iteration, whose linearised multiplier `μ` is above 1: there
+/// the aim is to shave the overshoot while keeping most of the step, and
+/// taking `w` far below 1 would only make a convergent case crawl. Here
+/// the relaxation is engaged **only** in response to an observed
+/// two-cycle, whose multiplier sits near −1. The damped multiplier is
+/// `|1 − w(1 − μ)|`, which at `μ = −1` is `|1 − 2w|`: minimal, and zero,
+/// at `w = 1/2`. The same point under `w = 0.9` leaves `0.8` per sweep,
+/// about 95 sweeps to [`FLOW_TOLERANCE`], which no constant budget of the
+/// size above could hold.
+///
+/// The relaxation is **not** applied from the first sweep. The cold-start
+/// sequence of [`Engine::resolve_flows`] descends, and damping a
+/// descending sequence buys nothing while costing every well-behaved
+/// network a factor on its sweep count. It is latched on the first
+/// two-cycle detection and never released within a resolution; it is a
+/// local of the resolution, so nothing carries it across a segment.
+///
+/// This is the default of [`FlowConfig::relaxation`], which is where a
+/// caller overrides it.
+pub const FLOW_RELAXATION: f64 = 0.5;
+
+/// Sweeps the **combinatorial** level of one resolution may spend, and
+/// segment restarts one instant may absorb: the derived half of the
+/// two-level budget.
+///
+/// Derived, not chosen. The descending cold-start sequence saturates at
+/// least one more edge per round, so a search that is still changing the
+/// saturation pattern after one round per compiled edge is no longer
+/// searching. **Two** rounds per edge rather than one, because an edge
+/// has three classes under a priority order
+/// ([`EdgeClass::Unserved`] → [`EdgeClass::Partial`] → [`EdgeClass::Full`])
+/// and therefore two class changes to spend along that descent. Branch
+/// decisions (a limiting minimum, a conditional) enter the same pattern
+/// and are counted alongside the edges, since a resolution can equally be
+/// held up by a minimum that keeps swapping its limiting argument. Two
+/// more rounds cover the sweep that produces the first candidate and the
+/// sweep that confirms it.
+///
+/// The same figure bounds the segment restarts of
+/// [`Engine::advance_continuous`] at one instant, for the same reason: at
+/// most that many distinct class changes can be located there before the
+/// boundary is chattering rather than moving.
+///
+/// This derivation is the source of the combinatorial budget unless
+/// [`FlowConfig::active_set_budget`] overrides it.
+#[must_use]
+pub fn active_set_budget(model: &CompiledModel) -> usize {
+    let mut budget = 2usize;
+    for step in &model.explicit {
+        match step {
+            CStep::Equation { expr, .. } => budget += decision_sites(expr),
+            CStep::Allocate(allocation) => {
+                budget += 2 * allocation.allocated.len() + decision_sites(&allocation.available);
+            }
+        }
+    }
+    budget
+}
+
+/// Number of **branch decisions** an expression can contribute to the
+/// active set: one per minimum, maximum and conditional, counted over
+/// every branch (the sweep walks only the taken one, so this is an upper
+/// bound, which is what a budget wants).
+fn decision_sites(expr: &CExpr) -> usize {
+    match expr {
+        CExpr::Min { args } | CExpr::Max { args } => {
+            1 + args.iter().map(decision_sites).sum::<usize>()
+        }
+        CExpr::If {
+            cond,
+            then,
+            otherwise,
+        } => 1 + decision_sites(cond) + decision_sites(then) + decision_sites(otherwise),
+        CExpr::Cmp { lhs, rhs, .. } | CExpr::Sub { lhs, rhs } | CExpr::Div { lhs, rhs } => {
+            decision_sites(lhs) + decision_sites(rhs)
+        }
+        CExpr::Bool { args, .. } | CExpr::Add { args } | CExpr::Mul { args } => {
+            args.iter().map(decision_sites).sum()
+        }
+        CExpr::Sin(arg) | CExpr::Exp(arg) => decision_sites(arg),
+        CExpr::Const(_)
+        | CExpr::Var(_)
+        | CExpr::StateActive { .. }
+        | CExpr::PortAgg { .. }
+        | CExpr::Time => 0,
+    }
+}
+
+/// Whether one sweep moved every quantity by less than the per-edge flow
+/// tolerance: the numeric half of the resolution's stopping test, applied
+/// only once the combinatorial half has settled.
+///
+/// Mixed relative-and-absolute, so a network carrying large quantities is
+/// held to the same meaning as one carrying small ones. A non-float
+/// attribute compares exactly: nothing in the sweep writes one, so an
+/// inequality there is a change, not a residual.
+///
+/// `tolerance` is [`FlowConfig::tolerance`], passed rather than read from
+/// the constant so the stopping test and the margin dead band of the same
+/// run are always the same number.
+fn flows_settled(before: &[Value], after: &[Value], tolerance: f64) -> bool {
+    before
+        .iter()
+        .zip(after)
+        .all(|(old, new)| value_settled(old, new, tolerance))
+}
+
+/// One attribute's half of [`flows_settled`]: also the test that decides
+/// whether an edge "moved" in the sweep the diagnostic reports on, so
+/// that what stops the resolution and what the diagnostic names are the
+/// same measure.
+fn value_settled(old: &Value, new: &Value, tolerance: f64) -> bool {
+    match (old, new) {
+        (Value::Float(old), Value::Float(new)) => {
+            (old - new).abs() <= tolerance * old.abs().max(new.abs()).max(1.0)
+        }
+        _ => old == new,
+    }
+}
+
+/// One operator's active set, frozen for the duration of a segment.
+///
+/// The combinatorial search that produced `classes` ran once, at the
+/// segment boundary. Inside the segment only the *quantities* move, which
+/// is what keeps the solver's right-hand side a function of the state and
+/// keeps an accepted and a rejected trial of the same step from doing
+/// different amounts of work.
+struct FrozenFlow<'m> {
+    /// The operator, borrowed from the compiled sweep.
+    allocation: &'m CAllocation,
+    /// Where its margins are registered (naming, dependencies).
+    margins: &'m CFlowMargins,
+    /// Saturation class per edge, in connection declaration order.
+    classes: Vec<EdgeClass>,
 }
 
 /// Adapter exposing the compiled continuous section to `raichu-numeric`.
@@ -846,7 +1579,29 @@ struct ContinuousSystem<'m> {
     /// located exactly like a watched boundary crossing (`reschedule_modifiable`
     /// under continuous evolution).
     hazards: Vec<(TransIdx, f64)>,
+    /// The **frozen active set** of this segment: one entry per
+    /// distribution operator, each carrying the saturation class of every
+    /// edge as it was settled at the segment boundary. Their margins ride
+    /// alongside the watched ones, so the instant the frozen pattern
+    /// stops holding is *located*, not noticed at the next discrete date.
+    flows: Vec<FrozenFlow<'m>>,
     error: Option<EngineError>,
+    /// Work done inside the solver callbacks, merged back into the
+    /// engine's counters when the segment returns.
+    work: WorkCounters,
+    /// Scratch of the distribution operators run by the explicit sweep
+    /// inside those callbacks.
+    scratch: FlowScratch,
+    /// Scratch holding one operator's demands while its active-set
+    /// margins are evaluated (reused: the event callback runs on every
+    /// interior scan point and every bisection step).
+    flow_demands: Vec<f64>,
+    /// The run's flow tolerance ([`FlowConfig::tolerance`]): the dead
+    /// band of every active-set margin evaluated here. Copied from the
+    /// config at segment start, so the band this segment applies and the
+    /// tolerance the resolution that opened it settled to are the same
+    /// number.
+    flow_tolerance: f64,
 }
 
 impl ContinuousSystem<'_> {
@@ -855,7 +1610,17 @@ impl ContinuousSystem<'_> {
             self.vars[*var] = Value::Float(y[slot]);
         }
         if self.error.is_none() {
-            if let Err(error) = recompute_explicit(self.model, &mut self.vars, &self.states, t) {
+            // Nothing outside this callback survives the segment, so the
+            // pass compares but records nothing.
+            let mut changed = ChangeLog::discarding(self.flow_tolerance);
+            let mut ctx = PassContext {
+                work: &mut self.work,
+                scratch: &mut self.scratch,
+                changed: &mut changed,
+            };
+            if let Err(error) =
+                recompute_explicit(self.model, &mut self.vars, &self.states, t, &mut ctx)
+            {
                 self.error = Some(error);
             }
         }
@@ -908,11 +1673,14 @@ impl OdeSystem for ContinuousSystem<'_> {
     }
 
     fn n_events(&self) -> usize {
-        self.margins.len() + self.hazards.len()
+        self.margins.len()
+            + self.hazards.len()
+            + self.flows.iter().map(|f| f.classes.len()).sum::<usize>()
     }
 
     fn events(&mut self, t: f64, y: &[f64], out: &mut [f64]) {
         self.load(t, y);
+        self.work.margin_evaluations += self.margins.len() as u64;
         for (slot, trans_idx) in self.margins.iter().enumerate() {
             let CLaw::Watched { margin } = &self.model.transitions[*trans_idx].distrib else {
                 out[slot] = -1.0;
@@ -929,6 +1697,50 @@ impl OdeSystem for ContinuousSystem<'_> {
         let (n_margins, ode_len) = (self.margins.len(), self.model.ode.len());
         for (slot, (_, remaining)) in self.hazards.iter().enumerate() {
             out[n_margins + slot] = y[ode_len + slot] - remaining;
+        }
+        // Active-set margins. They are watched guards like the ones
+        // above: the segment ends where the frozen saturation pattern
+        // stops holding, and the crossing instant is bisected to the same
+        // event tolerance.
+        let mut slot = n_margins + self.hazards.len();
+        for flow in &self.flows {
+            self.work.margin_evaluations += flow.classes.len() as u64;
+            let inputs = read_flow_inputs(
+                self.model,
+                &self.vars,
+                &self.states,
+                t,
+                flow.allocation,
+                &mut self.flow_demands,
+            );
+            let available = match inputs {
+                Ok(available) => available,
+                Err(error) => {
+                    self.error.get_or_insert(error);
+                    for edge in 0..flow.classes.len() {
+                        out[slot + edge] = -1.0;
+                    }
+                    slot += flow.classes.len();
+                    continue;
+                }
+            };
+            let band = flow_band(
+                self.flow_demands
+                    .iter()
+                    .fold(available.abs(), |scale, d| scale.max(d.abs())),
+                self.flow_tolerance,
+            );
+            for edge in 0..flow.classes.len() {
+                out[slot + edge] = edge_margin(
+                    &flow.allocation.policy,
+                    available,
+                    &self.flow_demands,
+                    &flow.classes,
+                    edge,
+                    band,
+                );
+            }
+            slot += flow.classes.len();
         }
     }
 }
@@ -977,6 +1789,42 @@ pub struct Engine<'m> {
     /// Scratch worklist for the fixpoint (reused across steps: no
     /// allocation in the hot loop once warmed up).
     worklist: BTreeSet<FnIdx>,
+    /// Counted work (see [`WorkCounters`]): cumulative instrumentation
+    /// over this engine's life, deliberately outside the snapshot.
+    work: WorkCounters,
+    /// Scratch of the explicit sweep's distribution operators (see
+    /// [`FlowScratch`]): reused, never part of the trajectory.
+    flow_scratch: FlowScratch,
+    /// Combinatorial half of the flow convergence policy, resolved once
+    /// at construction: the config's override
+    /// ([`FlowConfig::active_set_budget`]) when it carries one, else the
+    /// derivation from the compiled network ([`active_set_budget`]).
+    /// Constant for the engine's life: it describes the model and the
+    /// configuration, not the trajectory, so it stays out of the
+    /// snapshot.
+    active_set_budget: usize,
+    /// Where the engine's own explicit passes report the attributes they
+    /// moved (see [`ChangeLog`]). Drained into the stale marks of the
+    /// watched population; the buffer itself is scratch, reused.
+    changed: ChangeLog,
+    /// **Indexed watched set**, arming half: whether each position of
+    /// `model.watched` sits in its source state. Maintained on state
+    /// changes through [`crate::MarginIndex::watched_by_owner`], never rebuilt
+    /// by a full scan.
+    watched_armed: Vec<bool>,
+    /// **Indexed watched set**, ascending list of the armed positions:
+    /// the per-segment margin set, and the population the immediate-guard
+    /// scan walks. Ascending by construction, which is what preserves the
+    /// documented firing order of simultaneous crossings.
+    watched_active: Vec<WatchedIdx>,
+    /// **Indexed watched set**, cache half: the last evaluated verdict of
+    /// each watched guard.
+    watched_guard: Vec<bool>,
+    /// **Indexed watched set**, invalidation half: whether the cached
+    /// verdict of each position still reflects the state. Set through
+    /// [`crate::MarginIndex`] whenever an attribute, an automaton state or the
+    /// clock a guard reads moves; cleared when the guard is re-evaluated.
+    watched_stale: Vec<bool>,
 }
 
 impl<'m> Engine<'m> {
@@ -1088,6 +1936,22 @@ impl<'m> Engine<'m> {
             rng,
             stochastic,
             worklist: BTreeSet::new(),
+            work: WorkCounters::default(),
+            flow_scratch: FlowScratch::default(),
+            active_set_budget: config
+                .flow
+                .active_set_budget
+                .unwrap_or_else(|| active_set_budget(model)),
+            changed: ChangeLog {
+                tolerance: config.flow.tolerance,
+                moved: Some(Vec::new()),
+            },
+            // Pristine: nothing armed, nothing cached, everything stale.
+            // `initialize` (or `restore`) derives the real arming.
+            watched_armed: vec![false; model.watched.len()],
+            watched_active: Vec::new(),
+            watched_guard: vec![false; model.watched.len()],
+            watched_stale: vec![true; model.watched.len()],
             solver,
             model,
             config,
@@ -1100,9 +1964,12 @@ impl<'m> Engine<'m> {
     /// the t = 0 indicator/sample values. Shared by [`Engine::new`] and
     /// [`Engine::reset`] so a reset state is identical to a fresh build.
     fn initialize(&mut self) -> Result<(), EngineError> {
+        // The state vectors have just been set wholesale (fresh build or
+        // reset): derive the arming and discard every cached verdict.
+        self.rebuild_watched_index();
         self.worklist.extend(0..self.model.functions.len());
         self.run_fixpoint()?;
-        recompute_explicit(self.model, &mut self.vars, &self.states, self.time)?;
+        self.resolve_flows()?;
         self.refresh_schedule()?;
         self.record_indicators();
         // Sample instants at or before t = 0 use the initial state.
@@ -1131,6 +1998,23 @@ impl<'m> Engine<'m> {
     #[must_use]
     pub fn current_time(&self) -> f64 {
         self.time
+    }
+
+    /// Counted work done so far (see [`WorkCounters`]): the
+    /// machine-independent performance units of this run.
+    ///
+    /// Cumulative over the engine's life. [`Engine::restore`] rewinds the
+    /// trajectory, not the work already done, so a rewound-and-replayed
+    /// engine reports *more* work than a straight run of the same
+    /// trajectory: compare counters between fresh runs.
+    #[must_use]
+    pub fn work(&self) -> WorkCounters {
+        let solver = self.solver.stats();
+        WorkCounters {
+            solver_steps_accepted: solver.accepted,
+            solver_steps_rejected: solver.rejected,
+            ..self.work
+        }
     }
 
     /// Value of an attribute by qualified name (`component.attribute`).
@@ -1336,6 +2220,10 @@ impl<'m> Engine<'m> {
         self.watched_streak = snap.watched_streak;
         self.rng = snap.rng.clone();
         self.worklist = snap.worklist.clone();
+        // The indexed watched set is *derived*, never carried: rewinding
+        // the state rewinds the arming and discards every cached verdict,
+        // which is what keeps a replay from a restored snapshot exact.
+        self.rebuild_watched_index();
     }
 
     /// **Interactive control**: the events fired so far, in
@@ -1416,7 +2304,7 @@ impl<'m> Engine<'m> {
             // current instant.
             let t_new = date.max(self.time);
             if self.needs_integration() && t_new > self.time {
-                if let Some(watched_idx) = self.integrate_to(t_new)? {
+                if let Some(watched_idx) = self.advance_continuous(t_new)? {
                     self.note_watched_firing()?;
                     return self.fire(watched_idx, None);
                 }
@@ -1425,6 +2313,7 @@ impl<'m> Engine<'m> {
                 self.flush_samples_before(t_new);
             }
             self.time = t_new;
+            self.note_time_change();
             self.watched_streak = (t_new, 0);
             self.fire(trans_idx, forced)
         } else if self.is_immediate_watched(trans_idx)? {
@@ -1507,7 +2396,7 @@ impl<'m> Engine<'m> {
             next_discrete.map_or(self.config.t_max, |(_, date)| date.min(self.config.t_max));
 
         if self.needs_integration() && t_target > self.time && t_target.is_finite() {
-            if let Some(trans_idx) = self.integrate_to(t_target)? {
+            if let Some(trans_idx) = self.advance_continuous(t_target)? {
                 self.note_watched_firing()?;
                 return self.fire(trans_idx, None).map(Some);
             }
@@ -1522,6 +2411,7 @@ impl<'m> Engine<'m> {
                 let t_new = date.max(self.time);
                 self.flush_samples_before(t_new);
                 self.time = t_new;
+                self.note_time_change();
                 self.watched_streak = (t_new, 0);
                 self.fire(trans_idx, None).map(Some)
             }
@@ -1556,13 +2446,14 @@ impl<'m> Engine<'m> {
             *t
         } else if self.config.t_max.is_finite() {
             if self.needs_integration() && self.config.t_max > self.time {
-                self.integrate_to(self.config.t_max)?;
+                self.advance_continuous(self.config.t_max)?;
             }
             self.config.t_max
         } else {
             self.time
         };
         self.time = final_time;
+        self.note_time_change();
         // A target-stopped trajectory holds its frozen state through the
         // remaining sample instants (the latch semantics of a
         // target-stopped study: the feared-event state stays active from
@@ -1596,6 +2487,7 @@ impl<'m> Engine<'m> {
                 weight: 1.0,
             }
         });
+        let work = self.work();
         Ok(SimulationResult {
             events: self.events,
             indicators: self.indicator_series,
@@ -1610,6 +2502,7 @@ impl<'m> Engine<'m> {
                 ode_rtol: self.config.ode.rtol,
                 ode_tol_event: self.config.ode.tol_event,
             },
+            work,
             final_time,
         })
     }
@@ -1642,7 +2535,12 @@ impl<'m> Engine<'m> {
             from: automaton.states[transition.source].clone(),
             to: automaton.states[target].clone(),
         };
-        self.states[transition.automaton] = target;
+        let owner = transition.automaton;
+        self.states[owner] = target;
+        // Indexed watched set: re-arm what this automaton owns and
+        // invalidate the guards that read its state.
+        self.note_state_change(owner);
+        let transition = &self.model.transitions[trans_idx];
         if self.config.journal {
             self.journal.push(JournalRecord::TransitionFired {
                 time: self.time,
@@ -1669,7 +2567,7 @@ impl<'m> Engine<'m> {
                 .copied(),
         );
         self.run_fixpoint()?;
-        recompute_explicit(self.model, &mut self.vars, &self.states, self.time)?;
+        self.resolve_flows()?;
         self.refresh_schedule()?;
         self.record_indicators();
         // Sequence analysis: the first target (feared event) whose state is
@@ -1678,6 +2576,414 @@ impl<'m> Engine<'m> {
         // init, checked in `initialize`), so this catches every activation.
         self.check_targets();
         Ok(event)
+    }
+
+    /// Settle the conservative flow network at a boundary: **the active
+    /// set first, to exact equality, then the flows, to the per-edge
+    /// tolerance**.
+    ///
+    /// Which consumers are saturated and which branch of each comparison
+    /// is taken is a finite, combinatorial question; how much each edge
+    /// carries is not. Settling the finite half first turns most of the
+    /// problem from asymptotic into combinatorial, and it is what lets
+    /// the rest of the segment run with the answer frozen.
+    ///
+    /// The sequence descends. Its first term is the ordered sweep run
+    /// from a **cold start**, in which every allocated quantity is zero
+    /// and every consumer therefore sizes itself as though it held
+    /// nothing: that pass over-estimates every delivery, which is what
+    /// makes it a post-fixpoint and the sequence that follows
+    /// non-increasing. Iterating up from zero would carry no such
+    /// argument.
+    ///
+    /// The cold start is recomputed here rather than carried from the
+    /// previous resolution. A warm start would be state living outside
+    /// the attribute vector, and it would have to enter the snapshot for
+    /// a replay to reproduce it.
+    ///
+    /// A model with no distribution operator has no active set to settle
+    /// and takes none of this: it runs the single ordered pass it ran
+    /// before the resolution existed, at the same cost, which is why its
+    /// counted-work profile is unchanged.
+    ///
+    /// # Convergence policy
+    ///
+    /// The two levels carry **two budgets, both counted in sweeps**, and
+    /// the whole policy is [`EngineConfig::flow`]: the figures below are
+    /// its defaults, not the only values it can take. A sweep that
+    /// changes the saturation pattern is charged to the combinatorial
+    /// budget ([`FlowConfig::active_set_budget`], by default derived from
+    /// the compiled edge and decision count by [`active_set_budget`]); a
+    /// sweep that leaves the pattern alone and only moves quantities is
+    /// charged to the numeric one ([`FlowConfig::sweep_budget`], by
+    /// default [`FLOW_SWEEP_BUDGET`]). Every sweep is charged to exactly
+    /// one of them, so the whole resolution is bounded by their sum, plus
+    /// the single regrant described below. Neither is the engine's
+    /// [`EngineConfig::max_fixpoint_iterations`], which counts worklist
+    /// pops of the *discrete* fixpoint and would bound a different thing.
+    ///
+    /// **Under-relaxation** ([`FlowConfig::relaxation`], by default
+    /// [`FLOW_RELAXATION`]) is latched the first time, and only the first
+    /// time, the iterate returns to where it stood two sweeps earlier, in
+    /// its saturation pattern or in its quantities. That observation says
+    /// the descending argument behind the combinatorial budget has
+    /// failed, so the combinatorial budget is granted **once more** at
+    /// that point: what follows is a damped numeric iteration, not a
+    /// descent, and charging its first class flips against a spent budget
+    /// would refuse networks that damping is about to settle.
+    ///
+    /// Exhausting either budget raises [`EngineError::FlowNotConverged`],
+    /// naming every edge that moved in the final sweep. The cause
+    /// distinguishes a two-cycle that survived damping from a pattern
+    /// that never settled and from quantities that never stopped
+    /// creeping, but all three carry the same payload: a long cycle and a
+    /// slow monotone sequence exhaust a budget without ever matching the
+    /// two-cycle test, and they are the commonest stalls.
+    ///
+    /// Whatever the resolution moves is drained into the stale marks of
+    /// the indexed watched set on every exit path, the failing ones
+    /// included: a resolution that raised still left the attribute vector
+    /// where its last sweep put it.
+    fn resolve_flows(&mut self) -> Result<(), EngineError> {
+        let outcome = self.resolve_flows_inner();
+        self.drain_changes();
+        outcome
+    }
+
+    /// The resolution proper (see [`Engine::resolve_flows`], which wraps
+    /// it to drain the change log).
+    fn resolve_flows_inner(&mut self) -> Result<(), EngineError> {
+        if self.model.flow_margins.is_empty() {
+            let mut ctx = PassContext {
+                work: &mut self.work,
+                scratch: &mut self.flow_scratch,
+                changed: &mut self.changed,
+            };
+            return recompute_explicit(
+                self.model,
+                &mut self.vars,
+                &self.states,
+                self.time,
+                &mut ctx,
+            );
+        }
+        let model = self.model;
+        for margins in &model.flow_margins {
+            if let CStep::Allocate(allocation) = &model.explicit[margins.step] {
+                for &target in &allocation.allocated {
+                    // The cold start is a *write* like any other: an edge
+                    // whose settled quantity is zero would otherwise be
+                    // reported as unchanged by the sweep that follows,
+                    // and its move from the previous value would go
+                    // unannounced.
+                    self.changed
+                        .write(&mut self.vars, target, Value::Float(0.0));
+                }
+            }
+        }
+        // History of the iteration, two sweeps deep: the two-cycle test
+        // compares the fresh iterate with the one two steps back, which
+        // is what an alternation between two allocations looks like.
+        let mut previous: Option<ActiveSet> = None;
+        let mut two_back: Option<ActiveSet> = None;
+        let mut two_back_values: Option<Vec<Value>> = None;
+        let mut before: Vec<Value> = Vec::with_capacity(self.vars.len());
+        // Budgets, and the relaxation state. All three are locals: a
+        // relaxation that survived a resolution would make the answer
+        // depend on what the engine resolved before, and Monte-Carlo
+        // results would stop being invariant in the thread count.
+        let mut set_spent = 0usize;
+        let mut flow_spent = 0usize;
+        let mut relaxation = 1.0f64;
+        let mut cycled = false;
+        let mut sweeps = 0usize;
+        // Read once: the policy is fixed for the engine's life, and
+        // taking a copy keeps the loop from re-borrowing `self.config`
+        // while it mutates `self.vars`.
+        let policy = self.config.flow.clone();
+        loop {
+            before.clear();
+            before.extend_from_slice(&self.vars);
+            let current = self.sweep_once()?;
+            if relaxation < 1.0 {
+                self.relax_allocations(&before, relaxation);
+            }
+            sweeps += 1;
+            let pattern_held = previous.as_ref() == Some(&current);
+            if pattern_held && flows_settled(&before, &self.vars, policy.tolerance) {
+                return Ok(());
+            }
+            // Two-cycle: the iterate is back where it stood two sweeps
+            // ago, in its pattern or in its quantities, while differing
+            // from the sweep just before it.
+            let cycles = (two_back.as_ref() == Some(&current) && !pattern_held)
+                || two_back_values
+                    .as_ref()
+                    .is_some_and(|old| flows_settled(old, &self.vars, policy.tolerance));
+            // Latched on the *first* cycle only, and latched on `cycled`
+            // rather than on the weight: a configuration that asks for no
+            // damping at all (a weight of one) would otherwise re-grant
+            // the combinatorial budget at every detection and never
+            // exhaust it, turning a stall into a spin.
+            if cycles && !cycled {
+                cycled = true;
+                relaxation = policy.relaxation;
+                set_spent = 0;
+            }
+            if pattern_held {
+                flow_spent += 1;
+            } else {
+                set_spent += 1;
+            }
+            if set_spent > self.active_set_budget || flow_spent > policy.sweep_budget {
+                let cause = if cycled {
+                    FlowStall::TwoCycle
+                } else if pattern_held {
+                    FlowStall::Quantities
+                } else {
+                    FlowStall::ActiveSet
+                };
+                return Err(self.flow_stalled(cause, sweeps, &before, previous.as_ref(), &current));
+            }
+            two_back_values = Some(before.clone());
+            two_back = previous;
+            previous = Some(current);
+        }
+    }
+
+    /// Blend the allocated quantities of every distribution operator
+    /// toward the answer the sweep just wrote, leaving the state at
+    /// `(1 − w)·before + w·raw` (see [`FLOW_RELAXATION`]).
+    ///
+    /// Only the **allocated** quantities are blended, because they are
+    /// the iteration's variables: every demand and every downstream
+    /// equation is a function of them and is recomputed from the blended
+    /// values by the next sweep. The state written by this sweep is
+    /// therefore momentarily inconsistent with the blend, by exactly the
+    /// amount the blend moved; the resolution only returns once that
+    /// amount is below [`FLOW_TOLERANCE`], which is the level it promises
+    /// anyway.
+    fn relax_allocations(&mut self, before: &[Value], weight: f64) {
+        let model = self.model;
+        for margins in &model.flow_margins {
+            let CStep::Allocate(allocation) = &model.explicit[margins.step] else {
+                continue;
+            };
+            for &target in &allocation.allocated {
+                let (Value::Float(old), Value::Float(raw)) = (before[target], self.vars[target])
+                else {
+                    continue;
+                };
+                // Through the change log like every other write of the
+                // resolution: the blend moves the same targets the sweep
+                // wrote, and the margins reading them must hear about it.
+                self.changed.write(
+                    &mut self.vars,
+                    target,
+                    Value::Float((1.0 - weight) * old + weight * raw),
+                );
+            }
+        }
+    }
+
+    /// Build the non-convergence diagnostic: name the component and flow
+    /// of every edge that moved in the final sweep, in the shape the
+    /// instantaneous-loop and non-confluence diagnostics use.
+    ///
+    /// An edge "moved" if its saturation class changed or its allocated
+    /// quantity moved by more than the flow tolerance: the same measure
+    /// the stopping test applies, so the diagnostic can never name an
+    /// empty set while the resolution claims something is still moving.
+    /// It names one anyway when the movement was a branch decision (a
+    /// conditional, a limiting minimum) rather than an edge, since a
+    /// silent empty list would read as a defect.
+    fn flow_stalled(
+        &self,
+        cause: FlowStall,
+        sweeps: usize,
+        before: &[Value],
+        previous: Option<&ActiveSet>,
+        current: &ActiveSet,
+    ) -> EngineError {
+        let mut moving: Vec<String> = Vec::new();
+        let mut base = 0usize;
+        for margins in &self.model.flow_margins {
+            let CStep::Allocate(allocation) = &self.model.explicit[margins.step] else {
+                continue;
+            };
+            for (edge, &target) in allocation.allocated.iter().enumerate() {
+                let quantity_moved = !value_settled(
+                    &before[target],
+                    &self.vars[target],
+                    self.config.flow.tolerance,
+                );
+                let class_moved = previous.is_some_and(|old| {
+                    old.edges.get(base + edge) != current.edges.get(base + edge)
+                });
+                if quantity_moved || class_moved {
+                    moving.push(self.edge_name(margins, edge));
+                }
+            }
+            base += allocation.allocated.len();
+        }
+        let moving = if moving.is_empty() {
+            "no edge (a conditional or a limiting minimum kept flipping)".to_owned()
+        } else {
+            moving.join(", ")
+        };
+        EngineError::FlowNotConverged {
+            time: self.time,
+            sweeps,
+            cause,
+            moving,
+        }
+    }
+
+    /// Qualified `operator[consumer]` name of one edge: the operator is
+    /// `component.allocation`, the consumer the allocated attribute, so
+    /// the pair names the component and the flow.
+    fn edge_name(&self, margins: &CFlowMargins, edge: usize) -> String {
+        let consumer = margins
+            .consumers
+            .get(edge)
+            .cloned()
+            .unwrap_or_else(|| format!("edge #{edge}"));
+        format!("{}[{}]", margins.name, consumer)
+    }
+
+    /// Name a set of **global** edge indices (the index space the frozen
+    /// active set and [`Segment::Resolved`] use), for the chattering
+    /// diagnostic.
+    fn edge_names(&self, indices: &[usize]) -> String {
+        let mut names: Vec<String> = Vec::new();
+        let mut base = 0usize;
+        for margins in &self.model.flow_margins {
+            let CStep::Allocate(allocation) = &self.model.explicit[margins.step] else {
+                continue;
+            };
+            for edge in 0..allocation.allocated.len() {
+                if indices.contains(&(base + edge)) {
+                    names.push(self.edge_name(margins, edge));
+                }
+            }
+            base += allocation.allocated.len();
+        }
+        if names.is_empty() {
+            "no edge".to_owned()
+        } else {
+            names.join(", ")
+        }
+    }
+
+    /// One sweep of the resolution: the ordered explicit pass, plus the
+    /// active set it produced.
+    fn sweep_once(&mut self) -> Result<ActiveSet, EngineError> {
+        self.flow_scratch.classes = Some(Vec::new());
+        let mut ctx = PassContext {
+            work: &mut self.work,
+            scratch: &mut self.flow_scratch,
+            changed: &mut self.changed,
+        };
+        let outcome = recompute_explicit(
+            self.model,
+            &mut self.vars,
+            &self.states,
+            self.time,
+            &mut ctx,
+        );
+        let edges = self.flow_scratch.classes.take().unwrap_or_default();
+        outcome?;
+        self.work.flow_sweeps += 1;
+        let mut branches = Vec::new();
+        for step in &self.model.explicit {
+            match step {
+                CStep::Equation { expr, .. } => record_branches(
+                    self.model,
+                    &self.vars,
+                    &self.states,
+                    self.time,
+                    expr,
+                    &mut branches,
+                )?,
+                CStep::Allocate(allocation) => record_branches(
+                    self.model,
+                    &self.vars,
+                    &self.states,
+                    self.time,
+                    &allocation.available,
+                    &mut branches,
+                )?,
+            }
+        }
+        Ok(ActiveSet { edges, branches })
+    }
+
+    /// The active set of the **current** state, read off a sweep run on a
+    /// copy of the attribute vector so the committed state does not move.
+    ///
+    /// Derived, never carried: this is what keeps the frozen active set
+    /// out of the snapshot and a replay exact.
+    fn frozen_classes(&mut self) -> Result<Vec<EdgeClass>, EngineError> {
+        if self.model.flow_margins.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut vars = self.vars.clone();
+        let mut scratch = FlowScratch {
+            classes: Some(Vec::new()),
+            ..FlowScratch::default()
+        };
+        // The copy is thrown away with the pass: nothing to invalidate.
+        let mut changed = ChangeLog::discarding(self.config.flow.tolerance);
+        let mut ctx = PassContext {
+            work: &mut self.work,
+            scratch: &mut scratch,
+            changed: &mut changed,
+        };
+        recompute_explicit(self.model, &mut vars, &self.states, self.time, &mut ctx)?;
+        Ok(scratch.classes.unwrap_or_default())
+    }
+
+    /// Advance continuous evolution to `t_target`, restarting a segment
+    /// at every located active-set crossing until either the date is
+    /// reached or a watched transition must fire.
+    ///
+    /// The loop is guarded the way [`Engine::note_watched_firing`] guards
+    /// watched transitions, and for the same reason: a crossing that
+    /// fires no transition is invisible to that guard, so a boundary the
+    /// network re-crosses on the spot would spin here forever. Restarts
+    /// are counted **per instant** rather than per advance: an instant
+    /// admits at most one class change per compiled edge
+    /// ([`active_set_budget`]) before the boundary is chattering
+    /// rather than moving, whereas a long horizon legitimately crosses
+    /// any number of boundaries. Progress is measured against the
+    /// event-location tolerance, so a crossing located a hair after the
+    /// previous one does not pass for progress.
+    fn advance_continuous(&mut self, t_target: f64) -> Result<Option<TransIdx>, EngineError> {
+        let mut stuck_at = f64::NEG_INFINITY;
+        let mut stuck: Vec<usize> = Vec::new();
+        loop {
+            match self.integrate_to(t_target)? {
+                Segment::Reached => return Ok(None),
+                Segment::Watched(trans_idx) => return Ok(Some(trans_idx)),
+                Segment::Resolved(edge) => {
+                    if self.time > stuck_at + self.config.ode.tol_event {
+                        stuck_at = self.time;
+                        stuck.clear();
+                    }
+                    stuck.push(edge);
+                    if stuck.len() > self.active_set_budget {
+                        return Err(EngineError::FlowChattering {
+                            time: self.time,
+                            restarts: stuck.len(),
+                            edges: self.edge_names(&stuck),
+                        });
+                    }
+                    if self.time >= t_target {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
     }
 
     /// Whether continuous evolution must run: the model has ODE
@@ -1706,6 +3012,104 @@ impl<'m> Engine<'m> {
         Ok(())
     }
 
+    // ---- the indexed watched set -------------------------------------
+    //
+    // Three pieces of bookkeeping keep the two scan sites proportional to
+    // what moved: which positions are *armed* (their automaton sits in
+    // the source state), what each guard last *evaluated to*, and which
+    // of those verdicts a change has *invalidated*. Every mutation of the
+    // attribute vector, of an automaton state or of the clock passes
+    // through one of the `note_*` methods below; forgetting one would
+    // leave a verdict cached against a state that no longer holds, which
+    // is why the full rebuild is the reinstatement path of every
+    // wholesale state change (build, reset, restore, confluence probe).
+
+    /// Rebuild the whole index from the current state: arming derived
+    /// from the automaton states, every cached verdict discarded.
+    ///
+    /// The reinstatement path of a wholesale state change. It is the only
+    /// place the watched population is walked in full, and it is
+    /// deliberately not on the simulation cycle.
+    fn rebuild_watched_index(&mut self) {
+        let model = self.model;
+        self.watched_active.clear();
+        for (position, &trans_idx) in model.watched.iter().enumerate() {
+            let transition = &model.transitions[trans_idx];
+            let armed = self.states[transition.automaton] == transition.source;
+            self.watched_armed[position] = armed;
+            self.watched_stale[position] = true;
+            if armed {
+                self.watched_active.push(position);
+            }
+        }
+    }
+
+    /// An attribute moved: invalidate the guards that read it.
+    #[inline]
+    fn note_var_change(&mut self, var: VarIdx) {
+        let model = self.model;
+        for &position in &model.margin_index.watched_by_var[var] {
+            self.watched_stale[position] = true;
+        }
+    }
+
+    /// The clock moved: invalidate the guards that read it. Normally a
+    /// no-op, a boundary being a predicate on the continuous state.
+    #[inline]
+    fn note_time_change(&mut self) {
+        let model = self.model;
+        for &position in &model.margin_index.watched_by_time {
+            self.watched_stale[position] = true;
+        }
+    }
+
+    /// An automaton changed state: invalidate the guards that read that
+    /// state, and re-arm the transitions the automaton owns.
+    ///
+    /// The arming update keeps `watched_active` **ascending**, inserting
+    /// and removing by binary search rather than re-deriving the list, so
+    /// the per-segment margin set and the guard scan visit the watched
+    /// transitions in the order the full scan visited them.
+    fn note_state_change(&mut self, automaton: AutIdx) {
+        let model = self.model;
+        for &position in &model.margin_index.watched_by_state[automaton] {
+            self.watched_stale[position] = true;
+        }
+        let state = self.states[automaton];
+        for &position in &model.margin_index.watched_by_owner[automaton] {
+            let armed = model.transitions[model.watched[position]].source == state;
+            if armed == self.watched_armed[position] {
+                continue;
+            }
+            self.watched_armed[position] = armed;
+            match self.watched_active.binary_search(&position) {
+                Ok(at) if !armed => {
+                    self.watched_active.remove(at);
+                }
+                Err(at) if armed => {
+                    self.watched_active.insert(at, position);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Drain what the engine's own explicit passes reported (see
+    /// [`ChangeLog`]) into the stale marks, keeping the buffer for reuse.
+    fn drain_changes(&mut self) {
+        let Some(mut moved) = self.changed.moved.take() else {
+            return;
+        };
+        let model = self.model;
+        for &var in &moved {
+            for &position in &model.margin_index.watched_by_var[var] {
+                self.watched_stale[position] = true;
+            }
+        }
+        moved.clear();
+        self.changed.moved = Some(moved);
+    }
+
     /// A watched transition whose *guard* already holds while its
     /// automaton sits in the source state fires immediately.
     ///
@@ -1715,16 +3119,32 @@ impl<'m> Engine<'m> {
     /// is already true while its ε-tightened margin is still negative.
     /// Conversely a trajectory *resting* exactly on a strict boundary
     /// keeps a false guard and does not fire (no Zeno).
-    fn immediate_watched(&self) -> Result<Option<TransIdx>, EngineError> {
-        for &trans_idx in &self.model.watched {
-            let transition = &self.model.transitions[trans_idx];
-            if self.states[transition.automaton] != transition.source {
-                continue;
-            }
-            let Some(guard) = &transition.guard else {
+    ///
+    /// **Indexed.** The scan walks the armed positions in ascending
+    /// order, exactly as the full scan did, but re-evaluates only the
+    /// guards a change has invalidated; the rest answer from their cached
+    /// verdict. The short-circuit is preserved with the order: the scan
+    /// still stops at the first armed guard that holds, so a guard past
+    /// it is neither evaluated nor cleared, and a guard that would raise
+    /// on a state the model never reaches stays unevaluated exactly as
+    /// before.
+    fn immediate_watched(&mut self) -> Result<Option<TransIdx>, EngineError> {
+        let model = self.model;
+        for index in 0..self.watched_active.len() {
+            let position = self.watched_active[index];
+            let trans_idx = model.watched[position];
+            let Some(guard) = &model.transitions[trans_idx].guard else {
                 continue;
             };
-            if eval_bool(self.model, &self.vars, &self.states, self.time, guard)? {
+            if self.watched_stale[position] {
+                // Counted work: this scan is one of the two sites the
+                // index narrows, so its cost is measured here.
+                self.work.immediate_guard_scans += 1;
+                self.watched_guard[position] =
+                    eval_bool(model, &self.vars, &self.states, self.time, guard)?;
+                self.watched_stale[position] = false;
+            }
+            if self.watched_guard[position] {
                 return Ok(Some(trans_idx));
             }
         }
@@ -1734,16 +3154,16 @@ impl<'m> Engine<'m> {
     /// `integrate_continuous`: integrate the continuous state to `t_target`, monitoring
     /// active watched boundaries. Returns the watched transition to fire
     /// if a crossing was located first (time/state already advanced).
-    fn integrate_to(&mut self, t_target: f64) -> Result<Option<TransIdx>, EngineError> {
+    fn integrate_to(&mut self, t_target: f64) -> Result<Segment, EngineError> {
+        // **Indexed.** The armed set is maintained on state changes, not
+        // re-derived here: a segment restarted at a located active-set
+        // crossing changes no automaton state, so the set it monitors is
+        // the one the previous segment monitored, and rebuilding it would
+        // cost the model's whole watched population per restart.
         let margins: Vec<TransIdx> = self
-            .model
-            .watched
+            .watched_active
             .iter()
-            .copied()
-            .filter(|&idx| {
-                let transition = &self.model.transitions[idx];
-                self.states[transition.automaton] == transition.source
-            })
+            .map(|&position| self.model.watched[position])
             .collect();
 
         // Armed continuously-varying hazards ride along as auxiliary
@@ -1776,14 +3196,47 @@ impl<'m> Engine<'m> {
 
         y.resize(self.model.ode.len() + hazard_monitors.len(), 0.0);
 
+        // Freeze the active set for this segment. It is *derived* from
+        // the resolved state, here, rather than carried from the
+        // resolution that produced it: nothing about the search survives
+        // outside the attribute vector, so a restored snapshot replays
+        // identically.
+        let classes = self.frozen_classes()?;
+        let mut taken = 0usize;
+        let mut flows: Vec<FrozenFlow<'_>> = Vec::with_capacity(self.model.flow_margins.len());
+        for margins in &self.model.flow_margins {
+            let CStep::Allocate(allocation) = &self.model.explicit[margins.step] else {
+                continue;
+            };
+            let width = allocation.allocated.len();
+            let slice = classes
+                .get(taken..taken + width)
+                .map(<[EdgeClass]>::to_vec)
+                .unwrap_or_default();
+            taken += width;
+            if slice.len() == width {
+                flows.push(FrozenFlow {
+                    allocation,
+                    margins,
+                    classes: slice,
+                });
+            }
+        }
+
         let mut system = ContinuousSystem {
             model: self.model,
             vars: self.vars.clone(),
             states: self.states.clone(),
             margins,
             hazards: hazard_monitors,
+            flows,
             error: None,
+            work: WorkCounters::default(),
+            scratch: FlowScratch::default(),
+            flow_demands: Vec::new(),
+            flow_tolerance: self.config.flow.tolerance,
         };
+        self.work.segments += 1;
 
         // Dense sampling: indicator values recorded from the interpolant.
         let segment_samples: Vec<f64> = self.config.samples[self.sample_cursor..]
@@ -1792,6 +3245,21 @@ impl<'m> Engine<'m> {
             .take_while(|s| *s <= t_target)
             .collect();
         let mut recorded: Vec<(f64, Vec<Value>)> = Vec::new();
+        // The dense-sample callback runs its own explicit pass, and the
+        // solver holds `system` mutably meanwhile: it counts into its own
+        // tally, merged with the system's when the segment returns.
+        let mut sample_work = WorkCounters::default();
+        let mut sample_scratch = FlowScratch::default();
+        // Second half of the error stash. The solver's sample callback is
+        // as infallible as its system, and it runs while the solver holds
+        // `system` mutably, so it cannot reach `system.error`: without a
+        // stash of its own an explicit pass failing at a dense-sample
+        // instant would be dropped on the floor, and a sample instant is
+        // not necessarily an instant any other callback visits.
+        let mut sample_error: Option<EngineError> = None;
+        // Recorded from a copy of the attribute vector: nothing to
+        // invalidate, so the pass compares and reports nothing.
+        let mut sample_changed = ChangeLog::discarding(self.config.flow.tolerance);
         {
             let model = self.model;
             let base_vars = self.vars.clone();
@@ -1801,8 +3269,17 @@ impl<'m> Engine<'m> {
                 for (slot, (var, _)) in model.ode.iter().enumerate() {
                     vars[*var] = Value::Float(y_at[slot]);
                 }
-                if recompute_explicit(model, &mut vars, &states, t).is_err() {
-                    return; // error surfaces through system.error below
+                let mut ctx = PassContext {
+                    work: &mut sample_work,
+                    scratch: &mut sample_scratch,
+                    changed: &mut sample_changed,
+                };
+                if let Err(error) = recompute_explicit(model, &mut vars, &states, t, &mut ctx) {
+                    // Stashed, then re-raised below: the callback has no
+                    // way to report it and this instant's values are not
+                    // recordable.
+                    sample_error.get_or_insert(error);
+                    return;
                 }
                 let values = model
                     .indicators
@@ -1826,25 +3303,55 @@ impl<'m> Engine<'m> {
                 &mut on_sample,
             )?;
 
-            if let Some(error) = system.error {
+            self.work.explicit_evaluations +=
+                system.work.explicit_evaluations + sample_work.explicit_evaluations;
+            self.work.allocation_capping_passes +=
+                system.work.allocation_capping_passes + sample_work.allocation_capping_passes;
+            self.work.margin_evaluations += system.work.margin_evaluations;
+
+            // Re-raise whatever the callbacks stashed. The time it
+            // carries is the *evaluation point* at which the failure was
+            // detected: inside a bisection that is a probe of the
+            // interval, not a located instant, and it is reported as it
+            // stands rather than being rewritten to the segment's
+            // committed time, which would name a state that never failed.
+            if let Some(error) = system.error.take().or(sample_error) {
                 return Err(error);
             }
 
-            // Commit the reached continuous state.
-            let (t_reached, fired) = match outcome {
-                Outcome::Reached { t } => (t, None),
-                Outcome::Event { index, t } => {
+            // Commit the reached continuous state. Three families of
+            // event share one index space: watched transitions, then
+            // continuously-varying hazards, then the active-set margins
+            // of the frozen flows. The flows come last on purpose, so a
+            // transition crossing in the same sub-interval wins the tie.
+            let watched_and_hazards = system.margins.len() + system.hazards.len();
+            let (t_reached, fired, crossed) = match outcome {
+                Outcome::Reached { t } => (t, None, None),
+                Outcome::Event { index, t } if index < watched_and_hazards => {
                     let fired = if index < system.margins.len() {
                         system.margins[index]
                     } else {
                         system.hazards[index - system.margins.len()].0
                     };
-                    (t, Some(fired))
+                    (t, Some(fired), None)
                 }
+                Outcome::Event { index, t } => (t, None, Some(index - watched_and_hazards)),
             };
             self.time = t_reached;
-            for (slot, (var, _)) in self.model.ode.iter().enumerate() {
-                self.vars[*var] = Value::Float(y[slot]);
+            self.note_time_change();
+            // Committing the reached continuous state. Compared
+            // **exactly** here, unlike the explicit pass: an integrated
+            // attribute is the very thing a watched boundary is a
+            // predicate on, and a tolerance band on it would let a
+            // trajectory cross a boundary while the guard reading it kept
+            // a cached verdict.
+            let model = self.model;
+            for (slot, (var, _)) in model.ode.iter().enumerate() {
+                let value = Value::Float(y[slot]);
+                if self.vars[*var] != value {
+                    self.vars[*var] = value;
+                    self.note_var_change(*var);
+                }
             }
             // Bank the hazard accrued over this segment (`reschedule_modifiable`
             // bookkeeping; the fired transition's slot, if any, is
@@ -1856,21 +3363,81 @@ impl<'m> Engine<'m> {
                     hazard.since = t_reached;
                 }
             }
-            recompute_explicit(self.model, &mut self.vars, &self.states, self.time)?;
+            self.resolve_flows()?;
 
             // Commit dense samples (strictly before the reached time:
             // a sample at exactly an event date is recorded post-event
             // by the flush in the next advance).
             for (t, values) in recorded {
-                if t < t_reached || fired.is_none() {
+                if t < t_reached || (fired.is_none() && crossed.is_none()) {
                     for (series, value) in self.sampled.iter_mut().zip(values) {
                         series.points.push((t, value));
                     }
                     self.sample_cursor += 1;
                 }
             }
-            Ok(fired)
+            match crossed {
+                None => Ok(fired.map_or(Segment::Reached, Segment::Watched)),
+                Some(index) => {
+                    // A located active-set crossing is a change point of
+                    // the network like a fired transition is one of the
+                    // discrete state: the resolved quantities take a new
+                    // shape there. `record_indicators` appends only on a
+                    // change, so a model with no operator (and therefore
+                    // no crossing) never reaches this and keeps its
+                    // series exactly as before.
+                    self.record_indicators();
+                    self.journal_active_set_crossing(&system.flows, index)?;
+                    Ok(Segment::Resolved(index))
+                }
+            }
         }
+    }
+
+    /// Record a located active-set crossing in the causal journal, naming
+    /// the operator, the edge, and the two saturation classes it moved
+    /// between. The network has already been resolved again, so the
+    /// destination class is read from the fresh resolution.
+    ///
+    /// Zero cost when the journal is off, which is the default.
+    fn journal_active_set_crossing(
+        &mut self,
+        flows: &[FrozenFlow<'_>],
+        index: usize,
+    ) -> Result<(), EngineError> {
+        if !self.config.journal {
+            return Ok(());
+        }
+        let mut offset = 0usize;
+        let mut located: Option<(&FrozenFlow<'_>, usize, usize)> = None;
+        for flow in flows {
+            if index < offset + flow.classes.len() {
+                located = Some((flow, index - offset, offset));
+                break;
+            }
+            offset += flow.classes.len();
+        }
+        let Some((flow, edge, base)) = located else {
+            return Ok(());
+        };
+        let after = self.frozen_classes()?;
+        let record = JournalRecord::ActiveSetCrossed {
+            time: self.time,
+            operator: flow.margins.name.clone(),
+            consumer: flow
+                .margins
+                .consumers
+                .get(edge)
+                .cloned()
+                .unwrap_or_else(|| format!("edge #{edge}")),
+            from: flow.classes[edge],
+            to: after
+                .get(base + edge)
+                .copied()
+                .unwrap_or(flow.classes[edge]),
+        };
+        self.journal.push(record);
+        Ok(())
     }
 
     fn next_pending(&self) -> Option<(TransIdx, f64)> {
@@ -1955,6 +3522,11 @@ impl<'m> Engine<'m> {
             let old = self.vars[*target];
             if old != new {
                 self.vars[*target] = new;
+                // Indexed watched set: invalidate the guards reading it.
+                // The comparison above is the sensitive functions' own,
+                // older than the explicit pass's: this site was already a
+                // change *detector*, it only lacked a consumer.
+                self.note_var_change(*target);
                 if self.config.journal {
                     self.journal.push(JournalRecord::AttributeChanged {
                         time: self.time,
@@ -1984,6 +3556,15 @@ impl<'m> Engine<'m> {
         // Canonical forward pass (journaled normally).
         self.converge(false)?;
         let forward_vars = std::mem::replace(&mut self.vars, saved_vars);
+        // The attribute vector has just been rewound wholesale, and it is
+        // rewound again below whichever way the probe ends: discard every
+        // cached watched verdict here, once, rather than reason about the
+        // union of two passes on every exit path (the diverging one
+        // included, which an interactive caller can catch and continue
+        // from).
+        for stale in &mut self.watched_stale {
+            *stale = true;
+        }
 
         // Silent reverse pass on the saved state.
         self.worklist = saved_worklist;
@@ -2000,12 +3581,29 @@ impl<'m> Engine<'m> {
                 .zip(&self.vars)
                 .position(|(a, b)| a != b)
                 .unwrap_or(0);
+            // The distribution operators are named alongside the
+            // sensitive functions, though they cannot themselves diverge:
+            // they run in the explicit sweep, after the fixpoint, from
+            // whatever state it converged to, so both replays recompute
+            // them identically. A diverging allocated quantity therefore
+            // means a *second* writer, which the model layer refuses
+            // (`AllocationTargetWritten`), or a defect in this engine: in
+            // either case naming the operator is what makes the report
+            // actionable, and leaving it out is the "divergence with no
+            // writer name" this probe must never produce.
+            let operators = self.model.explicit.iter().filter_map(|step| match step {
+                CStep::Allocate(allocation) if allocation.allocated.contains(&diverging) => {
+                    Some(allocation.name.clone())
+                }
+                _ => None,
+            });
             let mut writers = self
                 .model
                 .functions
                 .iter()
                 .filter(|f| f.effects.iter().any(|(target, _)| *target == diverging))
-                .map(|f| f.name.clone());
+                .map(|f| f.name.clone())
+                .chain(operators);
             let first = writers.next().unwrap_or_else(|| "<unknown>".to_owned());
             let second = writers.next().unwrap_or_else(|| first.clone());
             return Err(EngineError::NonConfluent {
@@ -2014,7 +3612,8 @@ impl<'m> Engine<'m> {
                 second,
             });
         }
-        // Both orders agree: keep the forward result as canonical.
+        // Both orders agree: keep the forward result as canonical (the
+        // cached verdicts were already discarded above).
         self.vars = forward_vars;
         Ok(())
     }
