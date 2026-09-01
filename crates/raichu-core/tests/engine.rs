@@ -29,6 +29,7 @@ fn delay_model() -> Model {
                     name: "out".into(),
                     dir: PortDir::Out,
                     attr: Some("flow_out".into()),
+                    channels: vec![],
                 }],
                 interfaces: vec![Interface {
                     name: "outputs".into(),
@@ -61,6 +62,7 @@ fn delay_model() -> Model {
                         },
                     ],
                 }],
+                allocations: vec![],
                 equations: vec![],
                 sensitive_functions: vec![SensitiveFunction {
                     name: "update_flow_out".into(),
@@ -90,9 +92,11 @@ fn delay_model() -> Model {
                     name: "input".into(),
                     dir: PortDir::In,
                     attr: None,
+                    channels: vec![],
                 }],
                 interfaces: vec![],
                 automata: vec![],
+                allocations: vec![],
                 equations: vec![],
                 sensitive_functions: vec![SensitiveFunction {
                     name: "update_fed".into(),
@@ -107,6 +111,7 @@ fn delay_model() -> Model {
                                 port: "input".into(),
                             },
                             agg: AggOp::Any,
+                            channel: None,
                         },
                     }],
                 }],
@@ -121,6 +126,7 @@ fn delay_model() -> Model {
                 component: "target".into(),
                 port: "input".into(),
             },
+            name: None,
         }],
         indicators: vec![
             Indicator {
@@ -142,6 +148,7 @@ fn delay_model() -> Model {
             },
         ],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 
@@ -231,7 +238,8 @@ fn journal_records_the_causality_chain() {
             | JournalRecord::AttributeChanged { time, .. }
             | JournalRecord::TransitionScheduled { time, .. }
             | JournalRecord::TransitionRescheduled { time, .. }
-            | JournalRecord::TransitionDropped { time, .. } => *time == 5.0,
+            | JournalRecord::TransitionDropped { time, .. }
+            | JournalRecord::ActiveSetCrossed { time, .. } => *time == 5.0,
         })
         .collect();
     let kinds: Vec<String> = at_5
@@ -247,6 +255,7 @@ fn journal_records_the_causality_chain() {
                 format!("resched:{transition}")
             }
             JournalRecord::TransitionDropped { transition, .. } => format!("drop:{transition}"),
+            JournalRecord::ActiveSetCrossed { operator, .. } => format!("active-set:{operator}"),
         })
         .collect();
     assert_eq!(
@@ -323,6 +332,7 @@ fn instantaneous_loop_is_detected() {
             ports: vec![],
             interfaces: vec![],
             automata: vec![],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![SensitiveFunction {
                 name: "flip".into(),
@@ -341,6 +351,7 @@ fn instantaneous_loop_is_detected() {
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let result = Engine::new(&compiled, EngineConfig::default());
@@ -374,6 +385,7 @@ fn non_confluence_is_diagnosed() {
             ports: vec![],
             interfaces: vec![],
             automata: vec![],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![
                 SensitiveFunction {
@@ -404,6 +416,7 @@ fn non_confluence_is_diagnosed() {
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let config = EngineConfig {
@@ -442,6 +455,7 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
             ports: vec![],
             interfaces: vec![],
             automata: vec![],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![
                 SensitiveFunction {
@@ -472,6 +486,7 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
@@ -518,12 +533,14 @@ fn inst_transition_fires_immediately_on_certain_branch() {
                     },
                 ],
             }],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![],
         }],
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     };
     let result = run(&model, 10.0, false);
     let times: Vec<(f64, &str)> = result
@@ -603,6 +620,7 @@ fn tank_model() -> Model {
                     },
                 ],
             }],
+            allocations: vec![],
             equations: vec![raichu_model::Equation {
                 target: "content".into(),
                 kind: raichu_model::EquationKind::Ode,
@@ -650,6 +668,7 @@ fn tank_model() -> Model {
             },
         ],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 
@@ -729,10 +748,7 @@ fn tank_runs_on_the_euler_backend_too() {
         t_max: 10.0,
         ..EngineConfig::default()
     };
-    let solver = Box::new(raichu_numeric::FixedEuler {
-        step: 1e-3,
-        tol_event: 1e-9,
-    });
+    let solver = Box::new(raichu_numeric::FixedEuler::new(1e-3, 1e-9));
     let mut engine = Engine::with_solver(&compiled, config, solver).unwrap();
     let event = engine.step().unwrap().unwrap();
     assert!(
@@ -792,6 +808,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                         },
                     ],
                 }],
+                allocations: vec![],
                 equations: vec![],
                 sensitive_functions: vec![SensitiveFunction {
                     name: "update_open".into(),
@@ -842,6 +859,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                         distrib: Distrib::Delay { time: 6.0 },
                     }],
                 }],
+                allocations: vec![],
                 equations: vec![],
                 sensitive_functions: vec![],
             },
@@ -849,6 +867,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 
@@ -957,12 +976,14 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
                     }],
                 },
             ],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![],
         }],
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     };
     let result = run(&model, 30.0, true);
 
@@ -1009,9 +1030,11 @@ fn port_mean_and_median_aggregations() {
             name: "out".into(),
             dir: PortDir::Out,
             attr: Some("v".into()),
+            channels: vec![],
         }],
         interfaces: vec![],
         automata: vec![],
+        allocations: vec![],
         equations: vec![],
         sensitive_functions: vec![],
     };
@@ -1039,9 +1062,11 @@ fn port_mean_and_median_aggregations() {
                     name: "in".into(),
                     dir: PortDir::In,
                     attr: None,
+                    channels: vec![],
                 }],
                 interfaces: vec![],
                 automata: vec![],
+                allocations: vec![],
                 equations: vec![],
                 sensitive_functions: vec![SensitiveFunction {
                     name: "aggregate".into(),
@@ -1057,6 +1082,7 @@ fn port_mean_and_median_aggregations() {
                                     port: "in".into(),
                                 },
                                 agg: AggOp::Mean,
+                                channel: None,
                             },
                         },
                         Assignment {
@@ -1070,6 +1096,7 @@ fn port_mean_and_median_aggregations() {
                                     port: "in".into(),
                                 },
                                 agg: AggOp::Median,
+                                channel: None,
                             },
                         },
                     ],
@@ -1086,10 +1113,12 @@ fn port_mean_and_median_aggregations() {
                     component: "voter".into(),
                     port: "in".into(),
                 },
+                name: None,
             })
             .collect(),
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();

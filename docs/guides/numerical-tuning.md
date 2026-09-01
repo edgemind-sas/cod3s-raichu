@@ -108,6 +108,110 @@ measures that ~10⁻⁵ setting running an order of magnitude faster than
 the default, and the default, in turn, delivers 3-4 orders of magnitude
 more accuracy than a typical study can use.
 
+## The flow-resolution policy
+
+A model carrying a **distribution operator** (a supply split across
+several consumers) resolves its network to a fixpoint before each
+segment. That resolution has its own policy, adjustable through one
+object rather than four more keywords, and accepted by `simulate`,
+`monte_carlo`, `analyse_sequences` and `Interactive` under a single
+`flow=`:
+
+| knob | meaning | default |
+|---|---|---|
+| `sweep_budget` | sweeps the numeric level may spend once the saturation pattern has settled | `64` |
+| `active_set_budget` | sweeps the combinatorial level may spend; `None` derives it from the compiled network | `None` |
+| `relaxation` | under-relaxation weight latched on a detected two-cycle (`1.0` = no damping) | `0.5` |
+| `tolerance` | per-edge convergence tolerance, and the dead band of every active-set margin | `1e-9` |
+
+Take a supply of 100 units feeding one consumer that **backs off as it
+is served**: it asks for `6 - 1.5x` where `x` is what it currently
+receives. That is an over-correcting regulator, and it is what a network
+whose demand depends on its own supply looks like at its most awkward.
+
+```python
+import pyraichu
+
+served = {"op": "attr",
+          "attr": {"component": "supply", "attribute": "out__alloc__ea"}}
+network = pyraichu.load_model({
+    "name": "backing_off",
+    "components": [
+        {"name": "supply",
+         "attributes": [{"name": "capacity", "kind": "float",
+                         "init": {"kind": "float", "value": 100.0}}],
+         "ports": [{"name": "out", "dir": "out", "attr": "capacity",
+                    "channels": [{"name": "demand"}, {"name": "alloc"}]}],
+         "equations": [{"target": "out__demand__ea", "kind": "explicit",
+             "expr": {"op": "sub",
+                 "lhs": {"op": "const", "value": {"kind": "float", "value": 6.0}},
+                 "rhs": {"op": "mul", "args": [
+                     {"op": "const", "value": {"kind": "float", "value": 1.5}},
+                     served]}}}],
+         "allocations": [{"name": "split", "port": "out", "demand": "demand",
+             "allocated": "alloc", "policy": "proportional",
+             "available": {"op": "attr",
+                 "attr": {"component": "supply", "attribute": "capacity"}}}]},
+        {"name": "a",
+         "attributes": [{"name": "got", "kind": "float",
+                         "init": {"kind": "float", "value": 0.0}}],
+         "ports": [{"name": "input", "dir": "in"}],
+         "equations": [{"target": "got", "kind": "explicit",
+             "expr": {"op": "port_agg", "agg": "sum", "channel": "alloc",
+                      "port": {"component": "a", "port": "input"}}}]},
+    ],
+    "connections": [{"name": "ea",
+                     "from": {"component": "supply", "port": "out"},
+                     "to": {"component": "a", "port": "input"}}],
+    "indicators": [{"name": "a_got", "target": "attribute",
+                    "attr": {"component": "a", "attribute": "got"}}],
+})
+
+policy = pyraichu.FlowConfig()
+print(policy)
+
+# Every knob left unset keeps the engine default, so these two runs are
+# the same run, down to the counted work.
+default = pyraichu.simulate(network, t_max=1.0)
+spelled_out = pyraichu.simulate(network, t_max=1.0, flow=pyraichu.FlowConfig())
+assert default.work == spelled_out.work
+print(f"served: {default.indicators['a_got'][-1][1]:.3f}")
+```
+
+Undamped, that regulator alternates forever between asking for 6 and
+asking for nothing: its linearised multiplier is `-1.5`. The engine
+detects the alternation and damps it at `relaxation = 0.5`, which
+contracts onto `6/2.5 = 2.4`. Turn the damping off and the same model is
+**refused**, with a diagnostic naming the flow that was oscillating:
+
+```python
+def refusal(knobs):
+    try:
+        pyraichu.simulate(network, t_max=1.0, flow=knobs)
+    except pyraichu.SimulationError as failure:
+        return str(failure)
+    return ""
+
+for knobs in (pyraichu.FlowConfig(relaxation=1.0),
+              pyraichu.FlowConfig(sweep_budget=2)):
+    message = refusal(knobs)
+    assert message, f"{knobs} settled: the knob never reached the engine"
+    print(f"{knobs}\n  refused: {message}")
+```
+
+Reach for these knobs in two situations, and rarely otherwise. A network
+the engine refuses may settle under a larger `sweep_budget`, or under a
+`tolerance` loosened to the accuracy the study actually needs. And a
+network you suspect of settling on the wrong answer can be squeezed:
+tightening the budgets turns a slow, silent creep into a diagnostic that
+names the edges still moving.
+
+Tightening `tolerance` below the event-location tolerance (`tol_event`,
+`1e-10` by default) is the one setting to avoid: the resolution then
+promises the flows more precisely than a boundary crossing can be
+located, and a freshly resolved network can re-cross its own boundary on
+the spot.
+
 ## Choosing a setting
 
 - **Keep the defaults** for correctness-critical work, small models, or

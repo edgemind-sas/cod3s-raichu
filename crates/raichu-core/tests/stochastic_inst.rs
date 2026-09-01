@@ -19,6 +19,7 @@ fn demand_model(ok_prob: f64) -> Model {
             attributes: vec![],
             ports: vec![],
             interfaces: vec![],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![],
             automata: vec![Automaton {
@@ -42,6 +43,7 @@ fn demand_model(ok_prob: f64) -> Model {
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 
@@ -111,6 +113,7 @@ fn three_way_branching_covers_every_target() {
             attributes: vec![],
             ports: vec![],
             interfaces: vec![],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![],
             automata: vec![Automaton {
@@ -134,6 +137,7 @@ fn three_way_branching_covers_every_target() {
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let mut seen = std::collections::BTreeSet::new();

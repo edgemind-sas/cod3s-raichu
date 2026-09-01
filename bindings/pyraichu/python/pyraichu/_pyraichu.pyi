@@ -5,6 +5,27 @@ __version__: str
 class ModelError(Exception): ...
 class SimulationError(Exception): ...
 
+class FlowConfig:
+    """Convergence policy of the continuous flow resolution, passed to
+    every entry point under a single ``flow=`` keyword. Each knob left
+    unset keeps the engine default."""
+
+    def __init__(
+        self,
+        sweep_budget: int | None = None,
+        active_set_budget: int | None = None,
+        relaxation: float | None = None,
+        tolerance: float | None = None,
+    ) -> None: ...
+    @property
+    def sweep_budget(self) -> int: ...
+    @property
+    def active_set_budget(self) -> int | None: ...
+    @property
+    def relaxation(self) -> float: ...
+    @property
+    def tolerance(self) -> float: ...
+
 def validate_model(model_json: str) -> None: ...
 def simulate_json(
     model_json: str,
@@ -14,6 +35,7 @@ def simulate_json(
     samples: list[float] | None = None,
     seed: int = 0,
     rng_stream: int = 0,
+    flow: FlowConfig | None = None,
 ) -> str: ...
 def monte_carlo_json(
     model_json: str,
@@ -23,6 +45,21 @@ def monte_carlo_json(
     seed: int = 0,
     threads: int | None = None,
     quantiles: list[float] | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
+    max_step: float | None = None,
+    tol_event: float | None = None,
+    sub_samples: int | None = None,
+    stop_at_targets: bool = False,
+    flow: FlowConfig | None = None,
+) -> str: ...
+def analyse_sequences_json(
+    model_json: str,
+    nb_runs: int,
+    t_max: float,
+    seed: int = 0,
+    threads: int | None = None,
+    flow: FlowConfig | None = None,
 ) -> str: ...
 
 class Snapshot:
@@ -40,6 +77,7 @@ class Interactive:
         confluence_check: bool = False,
         seed: int = 0,
         rng_stream: int = 0,
+        flow: FlowConfig | None = None,
     ) -> None: ...
     @property
     def time(self) -> float: ...

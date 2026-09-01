@@ -9,16 +9,22 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
 from ._pyraichu import (
+    MODEL_ENVELOPE_KEY,
+    MODEL_FORMAT_REVISION,
+    FlowConfig,
     Interactive as _RawInteractive,
     ModelError,
     SimulationError,
     __version__,
     analyse_sequences_json,
     monte_carlo_json,
+    required_features,
+    seal_model,
     simulate_json,
     validate_model,
 )
@@ -28,9 +34,12 @@ __all__ = [
     "Cascade",
     "Event",
     "Fireable",
+    "FlowConfig",
     "IndicatorEstimate",
     "Interactive",
     "JournalQuery",
+    "MODEL_ENVELOPE_KEY",
+    "MODEL_FORMAT_REVISION",
     "TransitionHistory",
     "AttributeChange",
     "McEstimates",
@@ -43,7 +52,11 @@ __all__ = [
     "expand_model",
     "interactive",
     "load_model",
+    "model_body",
     "monte_carlo",
+    "required_features",
+    "seal",
+    "seal_model",
     "simulate",
 ]
 
@@ -79,6 +92,13 @@ class SimulationResult:
     journal: list[dict[str, Any]]
     provenance: dict[str, Any]
     final_time: float
+    #: Counted work: machine-independent performance units of the run
+    #: (explicit-equation passes, accepted/rejected solver steps,
+    #: integration segments, flow sweeps, allocation capping passes,
+    #: margin evaluations, immediate-guard scans). Unlike wall-clock these
+    #: do not move with the machine, which is what makes a measurement
+    #: reproducible by a third party.
+    work: dict[str, int] = field(default_factory=dict)
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
@@ -98,9 +118,56 @@ class Model:
         return f"Model({self.name!r})"
 
 
+def model_body(document: dict[str, Any]) -> dict[str, Any]:
+    """The model body of a document, in either accepted shape.
+
+    A document is either the bare body (the whole existing corpus) or
+    that body under the mandatory format envelope
+    (``{"raichu_model": {...}, "model": {...}}``). Everything that reads
+    a model's sections goes through here, so neither shape needs a
+    special case anywhere else.
+    """
+    if MODEL_ENVELOPE_KEY in document:
+        return document["model"]
+    return document
+
+
+def seal(
+    document: dict[str, Any], extra_features: Iterable[str] = ()
+) -> dict[str, Any]:
+    """Wrap a model document in the format envelope when it needs one.
+
+    The required-feature list is derived **in Rust** from the body's own
+    content (:func:`required_features`), so an authoring layer never
+    composes it by hand and it cannot lag what the body holds. A feature
+    the document already declares is *kept*, never dropped: a name this
+    engine does not implement must reach the engine to be refused there,
+    and dropping it would restore exactly the silence the envelope
+    exists to prevent. ``extra_features`` carries the declaration of a
+    document whose body has since been rewritten (plugin expansion).
+
+    A document using only baseline constructs and declaring nothing
+    needs no envelope and its body is returned unchanged, which is why
+    the existing corpus keeps its exact shape.
+    """
+    body = model_body(document)
+    features = set(extra_features)
+    features |= set(document.get(MODEL_ENVELOPE_KEY, {}).get("requires", []))
+    features |= set(required_features(json.dumps(body)))
+    if not features:
+        return body
+    return {
+        MODEL_ENVELOPE_KEY: {
+            "format": MODEL_FORMAT_REVISION,
+            "requires": sorted(features),
+        },
+        "model": body,
+    }
+
+
 def expand_model(source: str | dict[str, Any]) -> dict[str, Any]:
     """Expand the ``"plugins"`` section of a model (if any) into core
-    material and return the resulting core-schema dict: the audit
+    material and return the resulting core-schema **body**: the audit
     window on plugin translations (see :mod:`pyraichu.plugins`)."""
     from .plugins import expand_model as _expand
 
@@ -109,7 +176,8 @@ def expand_model(source: str | dict[str, Any]) -> dict[str, Any]:
 
 
 def load_model(source: str | dict[str, Any]) -> Model:
-    """Load and validate a model from a JSON string or a dict.
+    """Load and validate a model from a JSON string or a dict, in either
+    document shape (bare body, or body under the format envelope).
 
     Models carrying a ``"plugins"`` section (specialized object schemas:
     ObjFlow, ObjFM, ObjEvent, …) are expanded into the core schema
@@ -117,12 +185,20 @@ def load_model(source: str | dict[str, Any]) -> Model:
     Raises :class:`ModelError` with a precise, typed message when the
     model is invalid (never a crash).
     """
-    model = json.loads(source) if isinstance(source, str) else source
-    if "plugins" in model:
-        model = expand_model(model)
-    model_json = json.dumps(model)
+    document = json.loads(source) if isinstance(source, str) else source
+    # What the document declares survives the plugin expansion that
+    # replaces its body: a declaration this engine cannot honour has to
+    # reach the engine, which is where it is refused by name.
+    declared = document.get(MODEL_ENVELOPE_KEY, {}).get("requires", [])
+    body = model_body(document)
+    if "plugins" in body:
+        body = expand_model(document)
+    # Sealing is a no-op for a body using baseline constructs only and
+    # declaring nothing, so the whole existing corpus keeps its exact
+    # document shape.
+    model_json = json.dumps(seal(body, declared))
     validate_model(model_json)
-    name = model.get("name", "")
+    name = body.get("name", "")
     return Model(json=model_json, name=name)
 
 
@@ -179,6 +255,7 @@ def monte_carlo(
     tol_event: float | None = None,
     sub_samples: int | None = None,
     stop_at_targets: bool = False,
+    flow: FlowConfig | None = None,
 ) -> McEstimates:
     """Estimate indicator statistics over ``nb_runs`` replicas.
 
@@ -196,6 +273,10 @@ def monte_carlo(
     sequence target (feared event) and holds the frozen state through the
     remaining sample instants: the latch semantics of target-stopped
     studies (first-occurrence measures instead of free-cycling ones).
+
+    ``flow`` is a :class:`FlowConfig` overriding the convergence policy
+    of the continuous flow resolution for every replica (engine defaults
+    when omitted).
     """
     raw = json.loads(
         monte_carlo_json(
@@ -212,6 +293,7 @@ def monte_carlo(
             tol_event,
             sub_samples,
             stop_at_targets,
+            flow,
         )
     )
     indicators = {
@@ -243,6 +325,7 @@ def analyse_sequences(
     t_max: float,
     seed: int = 0,
     threads: int | None = None,
+    flow: FlowConfig | None = None,
 ) -> list[dict[str, Any]]:
     """Native minimal-sequence analysis: the RAMS output.
 
@@ -253,9 +336,13 @@ def analyse_sequences(
     ``{events: [{obj, attr, time}], end_cause, end_time, weight}`` (``weight``
     = the number of trajectories that collapsed into it). The model must
     declare at least one target (an ``ObjEvent`` with ``"target": true``).
+
+    ``flow`` is a :class:`FlowConfig` overriding the convergence policy
+    of the continuous flow resolution for every replica (engine defaults
+    when omitted).
     """
     return json.loads(
-        analyse_sequences_json(model.json, nb_runs, t_max, seed, threads)
+        analyse_sequences_json(model.json, nb_runs, t_max, seed, threads, flow)
     )
 
 
@@ -267,6 +354,7 @@ def simulate(
     samples: list[float] | None = None,
     seed: int = 0,
     rng_stream: int = 0,
+    flow: FlowConfig | None = None,
 ) -> SimulationResult:
     """Run one simulation of ``model`` up to ``t_max``.
 
@@ -274,13 +362,22 @@ def simulate(
     indicator is recorded (dense output for continuous variables).
     ``seed``/``rng_stream`` drive the stochastic laws (ignored by
     deterministic models); the same pair replays bit-identically.
+    ``flow`` is a :class:`FlowConfig` overriding the convergence policy
+    of the continuous flow resolution (engine defaults when omitted).
     The GIL is released while the Rust engine runs. Raises
     :class:`SimulationError` on typed engine failures (instantaneous
     loop, non-confluence when ``confluence_check`` is enabled, …).
     """
     raw = json.loads(
         simulate_json(
-            model.json, t_max, journal, confluence_check, samples, seed, rng_stream
+            model.json,
+            t_max,
+            journal,
+            confluence_check,
+            samples,
+            seed,
+            rng_stream,
+            flow,
         )
     )
     events = [
@@ -299,6 +396,7 @@ def simulate(
         journal=raw["journal"],
         provenance=raw["provenance"],
         final_time=raw["final_time"],
+        work=raw.get("work", {}),
     )
 
 
@@ -336,7 +434,9 @@ class Interactive:
 
     Models carrying a ``"plugins"`` section are expanded and validated
     (as :func:`load_model` does). ``seed``/``rng_stream`` drive the
-    stochastic laws; the same pair replays bit-identically.
+    stochastic laws; the same pair replays bit-identically. ``flow`` is a
+    :class:`FlowConfig` overriding the convergence policy of the
+    continuous flow resolution (engine defaults when omitted).
     """
 
     def __init__(
@@ -347,12 +447,13 @@ class Interactive:
         confluence_check: bool = False,
         seed: int = 0,
         rng_stream: int = 0,
+        flow: FlowConfig | None = None,
     ) -> None:
         if not isinstance(model, Model):
             model = load_model(model)
         self._model = model
         self._raw = _RawInteractive(
-            model.json, t_max, journal, confluence_check, seed, rng_stream
+            model.json, t_max, journal, confluence_check, seed, rng_stream, flow
         )
 
     @property
@@ -436,6 +537,7 @@ def interactive(
     confluence_check: bool = False,
     seed: int = 0,
     rng_stream: int = 0,
+    flow: FlowConfig | None = None,
 ) -> Interactive:
     """Open an :class:`Interactive` session over ``model`` (a
     :class:`Model`, a JSON string, or a dict; plugins are expanded and
@@ -447,4 +549,5 @@ def interactive(
         confluence_check=confluence_check,
         seed=seed,
         rng_stream=rng_stream,
+        flow=flow,
     )

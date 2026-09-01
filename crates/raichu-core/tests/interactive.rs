@@ -61,6 +61,7 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
             ],
         }],
         // `up` reflects the automaton: true iff `fail` sits in `ok`.
+        allocations: vec![],
         equations: vec![],
         sensitive_functions: vec![SensitiveFunction {
             name: "reflect".into(),
@@ -94,6 +95,7 @@ fn two_component_model() -> Model {
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 
@@ -284,12 +286,14 @@ fn demand_model(ok_prob: f64) -> Model {
                     },
                 }],
             }],
+            allocations: vec![],
             equations: vec![],
             sensitive_functions: vec![reflect("success", "ok"), reflect("failure", "ko")],
         }],
         connections: vec![],
         indicators: vec![],
         targets: vec![],
+        evaluation_order: None,
     }
 }
 

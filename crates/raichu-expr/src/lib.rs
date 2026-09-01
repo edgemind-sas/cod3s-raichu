@@ -143,6 +143,15 @@ pub enum Expr {
         port: PortRef,
         /// The aggregation operator.
         agg: AggOp,
+        /// Optional **channel selector**. Absent (the default) reads the
+        /// attribute each connected out-port exports: its single, shared
+        /// value. Present, it reads instead the per-connection quantity
+        /// the compiler materialises for that channel, so two consumers
+        /// on the same out-port receive different numbers (the
+        /// conservative-flow shape). Every connected out-port must
+        /// declare the named channel; validation refuses otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<String>,
     },
     /// Compare two sub-expressions.
     Cmp {
@@ -347,6 +356,7 @@ mod tests {
                             port: "p_in".into(),
                         },
                         agg: AggOp::Sum,
+                        channel: None,
                     }),
                     rhs: Box::new(Expr::Const {
                         value: Value::Int(2),
