@@ -254,15 +254,45 @@ def _reinit_effects(
 
 # --- object expansions ------------------------------------------------------
 
+#: Constructs `pyraichu.muscadet.ObjFlow` understands (see its
+#: `_init_declarations`) that this plugin does not expand: `flows_in`,
+#: `flows_out` and `failure_modes` are the only spec keys `_expand_objflow`
+#: reads below. Without this list, a spec carrying one of these would be
+#: silently dropped: the component would still build, and the model would
+#: still run, describing a system the caller never declared. Refusing by
+#: name trades that silent wrong answer for a build-time error.
+_UNSUPPORTED_OBJFLOW_KEYS = (
+    "flows_continuous_in",
+    "flows_continuous_out",
+    "capacities",
+    "measurements_in",
+    "rules",
+    "transfers",
+)
+
 
 def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
     """Delegate to the `pyraichu.muscadet` authoring layer (same
-    semantics, serialized entry point)."""
+    semantics, serialized entry point).
+
+    Only `flows_in`, `flows_out` and `failure_modes` are wired here: the
+    other constructs `ObjFlow` supports need a system-level pass over the
+    connection list (per-edge equations, evaluation order) that this
+    per-component expansion cannot do. A spec that names one of them is
+    refused outright rather than silently built without it."""
+    name = spec["name"]
+    for key in _UNSUPPORTED_OBJFLOW_KEYS:
+        if key in spec:
+            raise ValueError(
+                f"ObjFlow `{name}`: declares `{key}`, which this plugin does not "
+                "build (it wires only flows_in, flows_out and failure_modes). "
+                "Author it through the class-based authoring surface "
+                "(`pyraichu.muscadet`) or the declaration entry point "
+                "(`pyraichu.declare`) instead"
+            )
     obj = authoring.ObjFlow.__new__(authoring.ObjFlow)
-    obj.name = spec["name"]
-    obj.flows_in = []
-    obj.flows_out = []
-    obj.failure_modes = []
+    obj.name = name
+    obj._init_declarations()
     for flow in spec.get("flows_in", []):
         obj.add_flow_in(name=flow["name"], logic=flow.get("logic", "or"))
     for flow in spec.get("flows_out", []):
