@@ -47,6 +47,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import muscadet as authoring
+from .controller import expand_objctrl
 
 __all__ = ["MuscadetPlugin"]
 
@@ -945,6 +946,7 @@ class MuscadetPlugin:
         "ObjFMInst": staticmethod(_expand_objfm_inst),
         "ObjEvent": staticmethod(_expand_objevent),
         "ObjLogicGate": staticmethod(_expand_objlogicgate),
+        "ObjCtrl": staticmethod(expand_objctrl),
     }
 
     def expand_object(
