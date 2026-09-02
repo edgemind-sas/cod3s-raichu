@@ -96,7 +96,7 @@ you.
 
 ## The object catalogue
 
-Beyond `ObjFlow`, the plugin system provides four object families, each
+Beyond `ObjFlow`, the plugin system provides five object families, each
 expanding deterministically to core components:
 
 **`ObjFM`**: a failure mode over one or several target components, with
@@ -134,6 +134,42 @@ input change; several `out_elements` broadcast the same result.
           [{"obj": "C", "attr": "ok"}]],
  "out_elements": ["ok"]}
 ```
+
+**`ObjCtrl`**: a **controller**, the peer of `ObjFlow` that carries a
+reading or a signal instead of a conserved quantity. It declares
+observation inputs (`controls_in`, a capacity level, a delivered rate or
+a constituent's share, optionally reduced over several publishers by
+`sum`, `mean` or `median`) and control outputs (`controls_out`, a boolean
+signal or a published number), and each output's value is composed from a
+**closed grammar** of four operators: `compare` (a reading against a
+threshold), `band` (two thresholds and a direction: a hysteresis band),
+`combine` (`and` / `or` / `not` / k-of-n) and `republish` (a reading,
+times a gain).
+
+Every threshold compiles to a **watched** two-state automaton, so a
+crossing is located by root-finding rather than noticed at the next
+discrete event. `band` is the operator that carries memory: a comparison
+switches back the instant its condition stops holding, so a montage gated
+on one chatters around a single level, while a band holds between its two
+edges. That is what makes a two-threshold regulation expressible.
+
+```json
+{"type": "ObjCtrl", "name": "LOW",
+ "controls_in": [{"name": "tank", "kind": "level"}],
+ "controls_out": [{"name": "run", "kind": "bool",
+                   "emit": {"op": "band", "input": "tank",
+                            "direction": "below",
+                            "activate": 6.0, "release": 8.0}}]}
+```
+
+Wired to a capacity's `tank_level_out` and to a pump's `run_in`, that is
+the heated-tank regulation: the pumps run below 6 and stop above 8. Every
+number the grammar carries is an attribute of the model
+(`run_activate`, `run_release`, `{output}_level_gain`,
+`{output}_forced`, `{output}_forced_value`,
+`{output}_signal_available`), so an instance can be tuned away from its
+declaration, an indicator can name a threshold, and an `ObjFM` can move
+one or blind an output.
 
 Models exported from a COD3S platform instance translate directly into
 these objects: see [Importing platform studies](platform-import.md).
