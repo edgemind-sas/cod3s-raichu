@@ -36,10 +36,10 @@ jobs:
           # aarch64 cross-compiles on the hosted runner; the smoke test is
           # skipped (the wheel cannot execute there).
           - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, native: false }
-          # macos-13 (the last Intel runner image) is retired: GitHub never
-          # allocates it, so the job queues forever. Cross-compile the
-          # x86_64 wheel on an arm64 runner; no native smoke test possible.
-          - { name: macos-x86_64, runner: macos-latest, target: x86_64, native: false }
+          # macOS Intel (macos-13) dropped on 2026-09-02: hosted runners for
+          # the retired Intel Mac line queue for many hours (the v0.9.0 run
+          # sat 13 h in queue and was never scheduled). Intel Mac users build
+          # the binding from source instead.
           - { name: macos-arm64, runner: macos-latest, target: aarch64, native: true }
           - { name: windows-x86_64, runner: windows-latest, target: x64, native: true }
     steps:

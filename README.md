@@ -70,13 +70,15 @@ the project documentation.
 **From a release wheel** (no Rust toolchain needed): each
 [GitHub release](https://github.com/edgemind-sas/cod3s-raichu/releases)
 ships prebuilt `pyraichu` wheels for Linux (x86_64, aarch64), macOS
-(Intel, Apple Silicon) and Windows; one abi3 wheel covers every
+(Apple Silicon) and Windows; one abi3 wheel covers every
 CPython ≥ 3.9 on its platform. Download the wheel matching your
 platform and:
 
 ```bash
 pip install pyraichu-<version>-cp39-abi3-<platform>.whl
 ```
+
+Intel Macs are not built for: use the source build below there.
 
 RAICHU is deliberately not published on PyPI: the GitHub releases are
 the distribution channel.
