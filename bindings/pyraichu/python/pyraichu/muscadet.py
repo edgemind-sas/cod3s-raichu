@@ -1862,10 +1862,7 @@ class ObjFlow:
         for operand in rule.cond:
             # Resolved here for its diagnostics; the expression itself is
             # rebuilt at build time, from the same resolution.
-            _, rate = self._operand_read(where, operand)
-            continuous = (
-                rate is not None or self._capacity_level(operand.name) is not None
-            )
+            continuous = self._operand_reads_continuously(where, operand)
             if operand.op in _CMP_OPS and continuous and operand.op not in _ORDERING_OPS:
                 raise ValueError(
                     f"{where} compares the continuous quantity `{operand.name}` "
@@ -2019,6 +2016,45 @@ class ObjFlow:
                     return _flow_fill(me, capacity, entry)
         return None
 
+    def _measures(self, name: str | None) -> bool:
+        """Whether `name` designates a measurement channel of this
+        component.
+
+        Every channel a link materialises reads a **published capacity
+        level**: the level and the weighted fill of the observed volume,
+        plus the same pair per constituent read
+        (:meth:`_MeasurementIn.channels` against
+        :meth:`_Capacity.published`). Each of them is an integrated
+        content or a sweep over integrated contents, so a measurement is
+        continuous whichever channel it names and the predicate needs no
+        case distinction."""
+        return any(name in link.channels() for link in self.measurements_in)
+
+    def _operand_reads_continuously(self, where: str, operand: _RuleOperand) -> bool:
+        """Whether a guard operand reads a continuously-evolving
+        quantity: a flow rate, a level this component holds, or a level
+        it observes over a measurement link.
+
+        One answer to that question, so the two things resting on it
+        cannot drift apart: an equality on such a quantity is refused
+        (:data:`_ORDERING_OPS`), and the mode transition carrying the
+        guard is declared **watched**, so the crossing is located instead
+        of noticed at whatever event happens to come next.
+
+        A level read over a measurement link is as continuous as it is on
+        the component holding it: the link carries an ODE target, and the
+        reader's mirror of it is swept immediately after the level it
+        mirrors at every evaluation point (see :meth:`_evaluation_order`).
+        Read as neither a rate nor a level, it produced an `inst`
+        transition, and the rule then switched at the next event some
+        other part of the model produced rather than at the crossing."""
+        _, rate = self._operand_read(where, operand)
+        return (
+            rate is not None
+            or self._capacity_level(operand.name) is not None
+            or self._measures(operand.name)
+        )
+
     def _declared_automata(self) -> dict[str, list[str]]:
         """Every automaton this component generates, with its states: the
         gates a guard may read."""
@@ -2078,8 +2114,7 @@ class ObjFlow:
         for operand in rule.cond:
             if operand.op is None:
                 continue
-            _, rate = self._operand_read(f"ObjFlow `{self.name}`", operand)
-            if rate is not None or self._capacity_level(operand.name) is not None:
+            if self._operand_reads_continuously(f"ObjFlow `{self.name}`", operand):
                 return True
         return False
 
