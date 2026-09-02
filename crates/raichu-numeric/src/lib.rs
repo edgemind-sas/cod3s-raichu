@@ -246,11 +246,33 @@ impl Dense {
     }
 }
 
+/// Index of the first margin that is **already satisfied** (`≥ 0`), if any.
+///
+/// The single expression of the firing rule "event `i` fires when
+/// `events()[i]` becomes ≥ 0", used wherever a margin vector is produced.
+///
+/// [`locate_event`] can only report a margin that turns non-negative
+/// *strictly inside* the interval it scans: its bracket test requires
+/// `prev_g < 0`. That makes "every monitored margin is strictly negative
+/// at `g_lo`" a **precondition** of the scan, and a margin already
+/// satisfied at an interval's left endpoint is invisible to it. Every
+/// site that computes a fresh margin vector must therefore test it here
+/// and report the event itself, otherwise the crossing is lost for good:
+/// the scan's `prev_g` stays non-negative from then on and the bracket
+/// can never form again.
+fn first_satisfied(margins: &[f64]) -> Option<usize> {
+    margins.iter().position(|margin| *margin >= 0.0)
+}
+
 /// Shared event-scan machinery: locate the earliest negative→non-negative
 /// transition inside `[t_lo, t_hi]` given a dense evaluator.
 ///
 /// Scans `sub_samples + 1` points then bisects the bracketing interval
 /// down to `tol_event`. Returns `(event index, time)`.
+///
+/// **Precondition**: every margin in `g_lo` is strictly negative (see
+/// [`first_satisfied`]). A crossing that already holds at `t_lo` is not
+/// reported here; it belongs to the caller that produced `g_lo`.
 #[allow(clippy::too_many_arguments)] // internal kernel shared by both backends
 fn locate_event(
     system: &mut dyn OdeSystem,
@@ -294,6 +316,45 @@ fn locate_event(
     None
 }
 
+/// After a step is committed, re-establish [`locate_event`]'s precondition
+/// from the fresh margin vector `g_hi` (evaluated by the caller at the
+/// committed step's endpoint solution `y_hi`, not the interpolant
+/// `locate_event` scanned). If a margin is already satisfied there, the
+/// crossing must be reported now: flush the pending samples strictly
+/// before `t_hi`, copy `y_hi` into `y`, and return the event; otherwise
+/// returns `None` and the caller proceeds past the step normally.
+///
+/// The margins the scan just read came from the *interpolant*; `g_hi`
+/// comes from the committed step solution, and the two disagree by
+/// round-off. A margin reaching its boundary within that round-off is
+/// negative to the scan and non-negative here: reported now, or never,
+/// since the next scan starts from this very vector (see
+/// [`first_satisfied`]).
+#[allow(clippy::too_many_arguments)] // internal kernel shared by both backends
+fn reestablish_precondition(
+    g_hi: &[f64],
+    t_hi: f64,
+    y_hi: &[f64],
+    y: &mut [f64],
+    samples: &[f64],
+    sample_cursor: &mut usize,
+    interp: &mut dyn FnMut(f64, &mut [f64]),
+    y_scratch: &mut [f64],
+    on_sample: &mut dyn FnMut(f64, &[f64]),
+) -> Option<Outcome> {
+    let index = first_satisfied(g_hi)?;
+    // Samples strictly before the event date only: one falling exactly
+    // on it is recorded post-event by the caller's next advance.
+    while *sample_cursor < samples.len() && samples[*sample_cursor] < t_hi {
+        let ts = samples[*sample_cursor];
+        interp(ts, y_scratch);
+        on_sample(ts, y_scratch);
+        *sample_cursor += 1;
+    }
+    y.copy_from_slice(y_hi);
+    Some(Outcome::Event { index, t: t_hi })
+}
+
 impl OdeSolver for DormandPrince45 {
     fn integrate(
         &mut self,
@@ -310,7 +371,7 @@ impl OdeSolver for DormandPrince45 {
         let mut g1 = vec![0.0; n_events];
         if n_events > 0 {
             system.events(t0, y, &mut g0);
-            if let Some(index) = g0.iter().position(|g| *g >= 0.0) {
+            if let Some(index) = first_satisfied(&g0) {
                 return Ok(Outcome::Event { index, t: t0 });
             }
         }
@@ -461,6 +522,19 @@ impl OdeSolver for DormandPrince45 {
                     return Ok(Outcome::Event { index, t: t_event });
                 }
                 system.events(t + h, &y_new, &mut g0);
+                if let Some(outcome) = reestablish_precondition(
+                    &g0,
+                    t + h,
+                    &y_new,
+                    y,
+                    samples,
+                    &mut sample_cursor,
+                    &mut dense_eval,
+                    &mut y_scratch,
+                    on_sample,
+                ) {
+                    return Ok(outcome);
+                }
             }
 
             // Deliver samples inside the accepted step.
@@ -528,7 +602,7 @@ impl OdeSolver for FixedEuler {
         let mut g1 = vec![0.0; n_events];
         if n_events > 0 {
             system.events(t0, y, &mut g0);
-            if let Some(index) = g0.iter().position(|g| *g >= 0.0) {
+            if let Some(index) = first_satisfied(&g0) {
                 return Ok(Outcome::Event { index, t: t0 });
             }
         }
@@ -577,6 +651,22 @@ impl OdeSolver for FixedEuler {
                     return Ok(Outcome::Event { index, t: t_event });
                 }
                 system.events(t + h, &y_new, &mut g0);
+                // Re-establishing the scan's precondition here is exactly
+                // what the adaptive backend does (see
+                // [`reestablish_precondition`]).
+                if let Some(outcome) = reestablish_precondition(
+                    &g0,
+                    t + h,
+                    &y_new,
+                    y,
+                    samples,
+                    &mut sample_cursor,
+                    &mut linear,
+                    &mut y_scratch,
+                    on_sample,
+                ) {
+                    return Ok(outcome);
+                }
             }
             while sample_cursor < samples.len() && samples[sample_cursor] <= t + h {
                 let ts = samples[sample_cursor];
@@ -743,5 +833,96 @@ mod tests {
             )
             .unwrap();
         assert_eq!(outcome, Outcome::Event { index: 0, t: 1.0 });
+    }
+
+    /// `dy/dt = slope`, margin `sign · (y − rhs)`: a straight ramp whose
+    /// boundary is reached at an exactly-representable instant, which is
+    /// also a step boundary of the integrator (`max_step` divides it).
+    struct Ramp {
+        slope: f64,
+        /// `+1` reproduces how `>=` compiles (`lhs − rhs`), `−1` how
+        /// `<=` does (`rhs − lhs`).
+        sign: f64,
+        rhs: f64,
+    }
+    impl OdeSystem for Ramp {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn rhs(&mut self, _t: f64, _y: &[f64], dydt: &mut [f64]) {
+            dydt[0] = self.slope;
+        }
+        fn n_events(&self) -> usize {
+            1
+        }
+        fn events(&mut self, _t: f64, y: &[f64], out: &mut [f64]) {
+            out[0] = self.sign * (y[0] - self.rhs);
+        }
+    }
+
+    /// A margin that reaches zero exactly at an accepted step's endpoint
+    /// is reported, not swallowed.
+    ///
+    /// The scan reads the *interpolant*, while the margin vector the next
+    /// scan starts from is refreshed from the committed step solution.
+    /// The two differ by round-off, so a boundary reached within it is
+    /// negative to the scan and non-negative in the refreshed vector; the
+    /// bracket test (`prev < 0`) then never fires again. Both orientations
+    /// are pinned: which one the round-off saves is luck, and only `−1`
+    /// (the shape `<=` compiles to) exhibited the miss.
+    #[test]
+    fn margin_reaching_zero_at_a_step_endpoint_is_reported() {
+        for (label, y0, slope, sign, rhs) in [
+            ("le-shaped: x <= 0 from 50 at -5", 50.0, -5.0, -1.0, 0.0),
+            ("le-shaped: x <= 10 from 50 at -5", 50.0, -5.0, -1.0, 10.0),
+            ("ge-shaped: x >= 50 from 0 at +5", 0.0, 5.0, 1.0, 50.0),
+        ] {
+            let mut solver = DormandPrince45::new(SolverParams::default());
+            let mut y = vec![y0];
+            let outcome = solver
+                .integrate(
+                    &mut Ramp { slope, sign, rhs },
+                    0.0,
+                    &mut y,
+                    40.0,
+                    &[],
+                    &mut |_, _| {},
+                )
+                .unwrap();
+            let Outcome::Event { index: 0, t } = outcome else {
+                panic!("{label}: crossing never located: {outcome:?}");
+            };
+            let expected = (rhs - y0) / slope;
+            assert!(
+                (t - expected).abs() < 1e-9,
+                "{label}: located t={t}, expected {expected}"
+            );
+        }
+    }
+
+    /// The same invariant on the second backend: its step loop refreshes
+    /// the margin vector the same way and had the same hole.
+    #[test]
+    fn euler_reports_a_margin_reaching_zero_at_a_step_endpoint() {
+        let mut solver = FixedEuler::new(0.1, 1e-10);
+        let mut y = vec![50.0];
+        let outcome = solver
+            .integrate(
+                &mut Ramp {
+                    slope: -5.0,
+                    sign: -1.0,
+                    rhs: 0.0,
+                },
+                0.0,
+                &mut y,
+                40.0,
+                &[],
+                &mut |_, _| {},
+            )
+            .unwrap();
+        let Outcome::Event { index: 0, t } = outcome else {
+            panic!("crossing never located: {outcome:?}");
+        };
+        assert!((t - 10.0).abs() < 1e-9, "located t={t}, expected 10.0");
     }
 }
