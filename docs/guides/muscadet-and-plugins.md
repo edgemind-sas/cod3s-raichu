@@ -96,6 +96,94 @@ you.
 
 ## The object catalogue
 
+### `ObjFlow`
+
+The plugin peer of the builder's component, and the only object that
+carries a **conserved quantity**. Its boolean sections (`flows_in`,
+`flows_out`, `failure_modes`) read the flat vocabulary shown above.
+
+Its **continuous** sections read muscadet's own declaration vocabulary,
+key for key: the vocabulary `pyraichu.declare` reads, so a key one entry
+point accepts and the other refuses does not exist.
+
+| Section | Declares |
+|---|---|
+| `flows_continuous_in` | a real-valued input: `var_in_default` (what it reads unconnected), `var_demand_default` (what a pure consumer asks for) |
+| `flows_continuous_out` | a real-valued output: `var_fed_default`, a `profile` (a declared function of time), and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`) |
+| `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `side`, `hysteresis` |
+| `measurements_in` | the reading side of a measurement link: a channel observing a published level, carrying no quantity |
+| `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow |
+| `transfers` | a transfer pair: a quantity moved because a gradient drives it, under a `ConductiveTransfer` equation |
+
+<!-- model -->
+```json
+{
+  "name": "continuous_demo",
+  "connections": [
+    {"from": {"component": "WELL", "port": "water_out"},
+     "to": {"component": "TANK", "port": "water_in"}},
+    {"from": {"component": "TANK", "port": "water_out"},
+     "to": {"component": "TOWN", "port": "water_in"}},
+    {"from": {"component": "TANK", "port": "water_out"},
+     "to": {"component": "FARM", "port": "water_in"}}
+  ],
+  "plugins": {
+    "muscadet": {
+      "objects": [
+        {"type": "ObjFlow", "name": "WELL",
+         "flows_continuous_out": [
+           {"name": "water", "var_fed_default": 6.0,
+            "profile": {"cls": "SinusoidalProfile",
+                        "amplitude": 0.4, "period": 24.0, "offset": 0.6}}]},
+        {"type": "ObjFlow", "name": "TANK",
+         "flows_continuous_in": [{"name": "water"}],
+         "flows_continuous_out": [
+           {"name": "water", "var_fed_default": 5.0,
+            "allocation": "shares",
+            "allocation_shares": {"TOWN": 0.8, "FARM": 0.2}}],
+         "capacities": [
+           {"name": "vol", "flow": "water", "capacity": 200.0,
+            "content_init": {"water": 80.0}, "fill_rate": 1.0}]},
+        {"type": "ObjFlow", "name": "TOWN",
+         "flows_continuous_in": [
+           {"name": "water", "var_demand_default": 4.0}]},
+        {"type": "ObjFlow", "name": "FARM",
+         "flows_continuous_in": [
+           {"name": "water", "var_demand_default": 2.0}]}
+      ]
+    }
+  }
+}
+```
+
+A whole continuous model is therefore writable as data, controllers
+included, and the document it expands to is **the same one** the builder
+writes for the same model: the plugin hands the declarations to a
+`System` and calls the generation the builder calls.
+
+#### The model-level pass
+
+The continuous constructs are not component-local, and that is why they
+are expanded in two steps. What a producer publishes to one consumer is
+what remains once the *other* consumers are accounted for; an allocation
+operator splits over the connections it serves; the sweep order runs
+along the flow graph. None of that is knowable while an object is
+expanded on its own, before the objects after it exist.
+
+So a plugin may implement an optional `finalize_model(model, specs)`,
+called once, after every object of every plugin has been expanded, with
+the whole model and its own object list. The muscadet plugin emits the
+connection-dependent material there.
+
+One consequence is worth knowing: the continuous network **derives** the
+`evaluation_order`, and closes it over every explicit equation and every
+allocation the model declares, controllers included. A model that both
+declares continuous flows and asserts an `evaluation_order` of its own
+has two authorities on one sweep, and is refused rather than silently
+overridden.
+
+### The other object families
+
 Beyond `ObjFlow`, the plugin system provides five object families, each
 expanding deterministically to core components:
 
@@ -181,7 +269,11 @@ these objects: see [Importing platform studies](platform-import.md).
 - **muscadet builder**: flow/reliability networks in a fraction of the
   code.
 - **Plugins**: the same high-level objects when your model comes from a
-  file or another tool.
+  file or another tool. Every construct the builder offers is declarable
+  here, continuous flows included, so a whole model is data.
 
 They interoperate: a plugin section and hand-written components can coexist
-in the same model.
+in the same model. The one boundary is the continuous network, which is
+resolved over the components the plugin declares: a continuous connection
+crossing into a hand-written component is refused, naming it, because the
+quantity it carries would be accounted for nowhere.
