@@ -466,7 +466,11 @@ def _objflow_declaration(spec: dict) -> authoring.ObjFlow:
 def _objflow_flows_in(obj: authoring.ObjFlow, spec: dict) -> None:
     """The `flows_in` section, in this plugin's own vocabulary."""
     for flow in spec.get("flows_in", []):
-        obj.add_flow_in(name=flow["name"], logic=flow.get("logic", "or"))
+        obj.add_flow_in(
+            name=flow["name"],
+            logic=flow.get("logic", "or"),
+            var_in_default=flow.get("var_in_default"),
+        )
 
 
 def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
@@ -498,6 +502,8 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 name=flow["name"],
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
+                var_is_active_default=flow.get("var_is_active_default"),
+                var_fed_available_out_init=flow.get("var_fed_available_out_init"),
             )
 
 
@@ -577,8 +583,21 @@ def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], li
     document before the objects after it have added theirs: the document
     it gets here is the one it would have with nothing connected, and
     :meth:`MuscadetPlugin.finalize_model` replaces it **in place**, at this
-    same position, once the whole model is known."""
-    return [_objflow_declaration(spec)._build()], [], []
+    same position, once the whole model is known.
+
+    Boolean input connectivity is the exception: it is decidable from the
+    connection list alone, needs no other object to have been expanded,
+    and is what a `var_in_default` boundary input hangs on. It is read
+    through the authoring layer's own derivation, so this pass, the
+    continuous rebuild and the class-based surface agree on which inputs
+    are fed."""
+    return [
+        _objflow_declaration(spec)._build(
+            connected_in=authoring.connected_in_flows(
+                model.get("connections", []), spec["name"]
+            )
+        )
+    ], [], []
 
 
 def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
@@ -1337,8 +1356,18 @@ class MuscadetPlugin:
             final = built.get(placeholder["name"])
             if final is None:
                 continue
+            # Built exactly as the first pass built it, connectivity
+            # included: `_carry_grafts` reads the difference as the graft,
+            # so a build differing by anything else would report that
+            # difference as one.
             _carry_grafts(
-                placeholder, declarations[placeholder["name"]]._build(), final
+                placeholder,
+                declarations[placeholder["name"]]._build(
+                    connected_in=authoring.connected_in_flows(
+                        model["connections"], placeholder["name"]
+                    )
+                ),
+                final,
             )
             model["components"][index] = final
         model["indicators"].extend(system.indicators(components))
