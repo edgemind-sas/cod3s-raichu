@@ -1348,7 +1348,7 @@ class ObjFlow:
         capacity: float | None = None,
         side: str | None = None,
         content_init: dict[str, float] | None = None,
-        fill_rate: float = 0.0,
+        fill_rate: float | None = 0.0,
         hysteresis: float | None = None,
     ) -> None:
         """Declare a volume this component holds over one or more of its
@@ -1426,10 +1426,17 @@ class ObjFlow:
                 f"ObjFlow `{self.name}`: capacity `{name}` must declare a "
                 f"strictly positive volume, got {capacity}"
             )
-        if not float(fill_rate) >= 0.0:  # negative or NaN
+        # `None` is the declared spelling of an unbounded fill: a volume
+        # that claims whatever its supplier can deliver while it is not
+        # full. It exists because a document has to be able to say it and
+        # JSON has no literal for an infinity, so the alternative was a
+        # string coerced by accident.
+        rate = float("inf") if fill_rate is None else float(fill_rate)
+        if not rate >= 0.0:  # negative or NaN
             raise ValueError(
                 f"ObjFlow `{self.name}`: capacity `{name}` must declare a fill "
-                f"rate that is positive or zero, got {fill_rate}"
+                f"rate that is positive, zero, or null for unbounded, got "
+                f"{fill_rate}"
             )
         width = DEFAULT_HYSTERESIS if hysteresis is None else float(hysteresis)
         if not 0.0 <= width < 1.0:
@@ -1533,7 +1540,7 @@ class ObjFlow:
             content_init={
                 key: float(value) for key, value in (content_init or {}).items()
             },
-            fill_rate=float(fill_rate),
+            fill_rate=rate,
             hysteresis=width,
         )
         self._record(self.capacities, declaration)
