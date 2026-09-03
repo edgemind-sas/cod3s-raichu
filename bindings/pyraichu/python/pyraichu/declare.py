@@ -72,9 +72,12 @@ __all__ = [
     "COMPONENT_CLASSES",
     "COMPONENT_KEYS",
     "DECLARATION_SECTIONS",
+    "FLOW_CLASSES",
+    "PLAIN_SECTIONS",
     "ComponentSpecError",
     "build_component",
     "check_spec",
+    "entry_call",
     "register_component_class",
 ]
 
@@ -455,7 +458,7 @@ FAILURE_MODE_CLASSES: dict[str, tuple[str, _Vocabulary]] = {
 #: Sections whose entries map onto one authoring method with one vocabulary.
 #: ``flows`` and ``failure_modes`` are absent: each dispatches on its entry's
 #: ``cls`` and is expanded apart.
-_PLAIN_SECTIONS: dict[str, tuple[str, _Vocabulary]] = {
+PLAIN_SECTIONS: dict[str, tuple[str, _Vocabulary]] = {
     "measurements_in": ("add_measurement_in", _MEASUREMENT_IN),
     "capacities": ("add_capacity", _CAPACITY),
     "rules": ("add_rule_set", _RULE_SET),
@@ -779,6 +782,53 @@ class _Call:
     keywords: dict[str, Any]
 
 
+def entry_call(kind: str, entry: dict, *, where: str) -> tuple[str, dict[str, Any]]:
+    """The authoring method and keyword arguments ONE declaration entry
+    expands to, ready to be called on a component.
+
+    `kind` names either a flow class (:data:`FLOW_CLASSES`, the entry's own
+    ``cls``) or a section whose entries share one vocabulary
+    (:data:`PLAIN_SECTIONS`). Every key of the entry is classified: carried
+    onto an authoring keyword, inert at the value that declares nothing, or
+    refused by name.
+
+    This is the **one** place a declaration entry is read. `build_component`
+    reaches it through the whole-component plan below, and the serialized
+    plugin path (`pyraichu.plugins.muscadet`) reaches it entry by entry for
+    the sections it carries: a key one of the two accepted and the other
+    refused would be a vocabulary that says two things.
+
+    What stays out of it is what only the whole component knows: a discrete
+    production condition resolves its operands against the component's input
+    names, so :func:`_flow_calls` converts it after this returns.
+    """
+    if kind in FLOW_CLASSES:
+        method, vocabulary = FLOW_CLASSES[kind]
+    elif kind in PLAIN_SECTIONS:
+        method, vocabulary = PLAIN_SECTIONS[kind]
+    else:
+        raise ComponentSpecError(
+            f"{where} names the declaration shape `{kind}`, which is none of "
+            f"{', '.join(sorted(set(FLOW_CLASSES) | set(PLAIN_SECTIONS)))}"
+        )
+
+    keywords = _keywords(where, entry, vocabulary)
+    # Named by the key the DECLARATION carries, not by the keyword it maps
+    # onto: a refusal that names a key the caller never wrote is a refusal
+    # the caller cannot act on.
+    for declared, keyword in (
+        ("occ_enable_flow", "enable_time"),
+        ("occ_disable_flow", "disable_time"),
+    ):
+        if keyword in keywords:
+            keywords[keyword] = _delay(where, declared, keywords[keyword])
+    if "profile" in keywords:
+        _check_declared_shape(where, "profile", keywords["profile"], _PROFILE_CLASS)
+    if "equation" in keywords:
+        _check_declared_shape(where, "equation", keywords["equation"], _TRANSFER_CLASS)
+    return method, keywords
+
+
 def _flow_calls(spec: dict, name: str) -> list[_Call]:
     """The ``flows`` section, expanded.
 
@@ -809,24 +859,12 @@ def _flow_calls(spec: dict, name: str) -> list[_Call]:
                 f"{', '.join(sorted(FLOW_CLASSES))}"
             )
 
-        method, vocabulary = FLOW_CLASSES[shape]
-        keywords = _keywords(where, entry, vocabulary)
+        method, keywords = entry_call(shape, entry, where=where)
 
         if "var_prod_cond" in keywords:
             keywords["var_prod_cond"] = _prod_cond(
                 where, keywords["var_prod_cond"], inputs
             )
-        # Named by the key the DECLARATION carries, not by the keyword it
-        # maps onto: a refusal that names a key the caller never wrote is a
-        # refusal the caller cannot act on.
-        for declared, keyword in (
-            ("occ_enable_flow", "enable_time"),
-            ("occ_disable_flow", "disable_time"),
-        ):
-            if keyword in keywords:
-                keywords[keyword] = _delay(where, declared, keywords[keyword])
-        if "profile" in keywords:
-            _check_declared_shape(where, "profile", keywords["profile"], _PROFILE_CLASS)
 
         calls.append(_Call("flows", entry.get("name", index), method, keywords))
 
@@ -898,16 +936,11 @@ def _effects(where: str, key: str, declared: Any) -> list[tuple[str, Any]]:
 
 def _plain_calls(spec: dict, name: str, section: str) -> list[_Call]:
     """One section whose entries map onto a single authoring method."""
-    method, vocabulary = _PLAIN_SECTIONS[section]
     calls = []
     for index, entry in enumerate(_entries(spec, section, name)):
         label = entry.get("name", index)
         where = f"Component {name}: {section} entry {label!r}"
-        keywords = _keywords(where, entry, vocabulary)
-        if section == "transfers":
-            _check_declared_shape(
-                where, "equation", keywords.get("equation"), _TRANSFER_CLASS
-            )
+        method, keywords = entry_call(section, entry, where=where)
         calls.append(_Call(section, label, method, keywords))
     return calls
 

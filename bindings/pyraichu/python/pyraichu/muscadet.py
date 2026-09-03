@@ -3758,6 +3758,18 @@ class System:
             if flow_out is None and flow_in is None:
                 continue
             if flow_out is None or flow_in is None:
+                stranger = source if flow_out is None else destination
+                if stranger["component"] not in self.comp:
+                    raise ValueError(
+                        f"System `{self.name}`: connection "
+                        f"{source['component']}.{source['port']} -> "
+                        f"{destination['component']}.{destination['port']} "
+                        f"carries a continuous flow into `{stranger['component']}`, "
+                        "which this system did not build. The continuous "
+                        "network is resolved over the components it declares, "
+                        "so a quantity crossing into another one is accounted "
+                        "for nowhere"
+                    )
                 raise ValueError(
                     f"System `{self.name}`: connection "
                     f"{source['component']}.{source['port']} -> "
@@ -4423,15 +4435,28 @@ class System:
                 return True
         return False
 
-    def build_dict(self) -> dict[str, Any]:
-        """Generate the native RAICHU model as a plain dict, with one
-        indicator per flow variable (muscadet naming: `comp_var`),
-        also the fixture-generation entry point.
+    def generate(
+        self, foreign: list[dict[str, Any]] | None = None
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None]:
+        """Build every registered component and add the material only the
+        connection list can supply, answering the components and the
+        evaluation order they need (``None`` when nothing is continuous).
 
-        A system carrying continuous flows needs the evaluation order
-        and the allocation operators, so its document is **sealed** in
-        the format envelope; a purely boolean system uses baseline
-        constructs only and keeps the bare body it has always had."""
+        `foreign` names components of the SAME model this system did not
+        build: none when :meth:`build_dict` writes the whole document, and
+        the rest of the model when the serialized plugin path
+        (`pyraichu.plugins.muscadet`) drives this system over a document
+        that also carries controllers, failure-mode objects or hand-written
+        components. They receive no continuous material, since they declare
+        no flow this layer resolves, but the evaluation order **closes over
+        them**: the order must cover the declared steps exactly, so a step
+        some other object emitted has to be swept or the whole model is
+        refused.
+
+        This is the one continuous generation. :meth:`build_dict` and the
+        plugin reach the per-edge equations, the R11 netting, the allocation
+        operators and the three-band order through it, so the two authoring
+        surfaces cannot answer one model differently."""
         edges = self._continuous_edges()
         self._validate_rules(edges)
         reading: dict[str, set[str]] = {}
@@ -4440,7 +4465,16 @@ class System:
         components = [
             obj._build(reading.get(name, set())) for name, obj in self.comp.items()
         ]
-        evaluation_order = self._emit_continuous_network(components, edges)
+        order = self._emit_continuous_network(components + list(foreign or []), edges)
+        return components, order
+
+    def indicators(self, components: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """One indicator per observable variable of `components`, named
+        `comp_var` as muscadet does.
+
+        `components` are the ones THIS system built (:meth:`generate`): a
+        component it did not build declares no flow it can read, and naming
+        one here would observe it by the shape of its variable names."""
         # A capacity's own variables end in a held flow's name, not in a
         # channel suffix, so they are named rather than matched: a level
         # generated and never observable would be of no use.
@@ -4471,7 +4505,7 @@ class System:
                 observable.add(f"{pair.name}_requested")
                 observable.add(f"{pair.name}_moved")
             held[name] = observable
-        indicators = []
+        indicators: list[dict[str, Any]] = []
         for component in components:
             for variable in component["attributes"]:
                 # The boolean suffixes plus the continuous channels a
@@ -4498,11 +4532,23 @@ class System:
                             },
                         }
                     )
+        return indicators
+
+    def build_dict(self) -> dict[str, Any]:
+        """Generate the native RAICHU model as a plain dict, with one
+        indicator per flow variable (muscadet naming: `comp_var`),
+        also the fixture-generation entry point.
+
+        A system carrying continuous flows needs the evaluation order
+        and the allocation operators, so its document is **sealed** in
+        the format envelope; a purely boolean system uses baseline
+        constructs only and keeps the bare body it has always had."""
+        components, evaluation_order = self.generate()
         body: dict[str, Any] = {
             "name": self.name,
             "components": components,
             "connections": self._connections,
-            "indicators": indicators,
+            "indicators": self.indicators(components),
         }
         if evaluation_order is None:
             return body

@@ -17,6 +17,41 @@ ObjFlow::
                            "failure": 4, "repair": 2,
                            "failure_cond": "is_ok_fed_out" } ] }
 
+`ObjFlow` also carries the **continuous** sections, whose entries read
+muscadet's own declaration vocabulary, key for key (the vocabulary
+`pyraichu.declare` reads, and the one place it is decided)::
+
+    { "type": "ObjFlow", "name": "TANK",
+      "flows_continuous_in":  [ { "name": "water",
+                                  "var_in_default": 0.0,
+                                  "var_demand_default": 3.0 } ],
+      "flows_continuous_out": [ { "name": "water", "var_fed_default": 5.0,
+                                  "allocation": "shares",
+                                  "allocation_shares": { "A": 0.75,
+                                                         "B": 0.25 },
+                                  "profile": { "cls": "SinusoidalProfile",
+                                               "amplitude": 0.4,
+                                               "period": 24.0,
+                                               "offset": 0.6 } } ],
+      "capacities":      [ { "name": "vol", "flow": "water",
+                             "capacity": 100.0, "fill_rate": 1.0,
+                             "content_init": { "water": 40.0 } } ],
+      "measurements_in": [ { "name": "upstream", "flows": ["water"] } ],
+      "rules":           [ { "name": "duty", "rules": [
+                               { "name": "on", "cond": ["run"],
+                                 "cons": { "elec": 1.0 },
+                                 "prod": { "water": 3.0 } } ] } ],
+      "transfers":       [ { "name": "wall", "flows": ["hot", "cold"],
+                             "equation": { "cls": "ConductiveTransfer",
+                                           "conductance": 0.5,
+                                           "potential_a":
+                                               { "measurement": "upstream" },
+                                           "potential_b": { "const": 20.0 } } } ] }
+
+Those five constructs are not component-local: what they generate depends
+on the connection list of the whole model, so it is emitted once every
+object has been expanded (:meth:`MuscadetPlugin.finalize_model`).
+
 ObjFM (cod3s `component.py:932`, behaviour `internal`, one automaton on
 the declared target set)::
 
@@ -44,12 +79,14 @@ automaton state (``"automaton"`` + ``"state"``) of ``"obj"``.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from .. import declare
 from .. import muscadet as authoring
 from .controller import expand_objctrl
 
-__all__ = ["MuscadetPlugin"]
+__all__ = ["CONTINUOUS_OBJFLOW_KEYS", "MuscadetPlugin"]
 
 
 # --- expression helpers (core schema) --------------------------------------
@@ -151,6 +188,76 @@ def _ccf_suffix(comb: tuple, order_max: int) -> str:
     underscore-separated since cod3s 1.9.0); empty for the single-target
     order-1 case. Shared by the ObjFM and ObjFMInst CCF expansions."""
     return "__cc_" + "_".join(str(i + 1) for i in comb) if order_max > 1 else ""
+
+
+def _is_inst_law(spec: Any) -> bool:
+    """Whether one per-order law spec is an instantaneous Bernoulli draw:
+    the `inst` cell of the cod3s 3x3 law matrix (either direction)."""
+    if not isinstance(spec, dict):
+        return False
+    return (spec.get("law") or spec.get("cls") or spec.get("distrib")) == "inst"
+
+
+def _inst_prob(spec: dict, *, what: str) -> float:
+    """The draw probability of an `inst` law spec, range-checked."""
+    raw = spec.get("prob", spec.get("gamma"))
+    if raw is None:
+        raise ValueError(f"{what}: an inst law is missing its `prob`/`gamma`")
+    prob = float(raw)
+    if not 0.0 <= prob <= 1.0:
+        raise ValueError(f"{what}: inst prob must be within [0, 1] (got {prob})")
+    return prob
+
+
+def _inst_edge(
+    source: str,
+    dest: str,
+    parked: str,
+    guard: dict,
+    prob: float,
+    *,
+    monitored: bool,
+    cycle_group: str | None = None,
+) -> list[dict]:
+    """The two transitions of ONE instantaneous direction (cod3s
+    `_build_inst_mode_automaton`, "unified per-edge inst semantics",
+    locked 2026-07-20): one draw per *rising edge* of the composite guard,
+    never a level-triggered re-draw.
+
+    - the **draw**, named after its destination state: a stochastic
+      branching out of ``source`` towards ``[dest (prob), parked
+      (1 - prob)]`` under ``guard``;
+    - the **re-arm**, named after the parked state it leaves: an
+      ``inst p = 1`` back to ``source`` under NOT ``guard``. Parking a
+      lost draw is the anti-Zeno latch (a level-triggered inst law would
+      otherwise re-draw forever within the same instant) and the re-arm
+      restores the mode once the condition falls.
+
+    The re-arm is never monitored: it is structure, not an event of the
+    mission (cod3s masks it with a never-matching mask)."""
+    draw: dict = {
+        "name": dest,
+        "source": source,
+        "targets": [dest, parked],
+        "guard": guard,
+        "distrib": "inst",
+        "probs": [prob],
+    }
+    if monitored:
+        draw["monitored"] = True
+        if cycle_group is not None:
+            draw["cycle_group"] = cycle_group
+    return [
+        draw,
+        {
+            "name": parked,
+            "source": parked,
+            "targets": [source],
+            "guard": _negate(guard),
+            "distrib": "inst",
+            "probs": [],
+        },
+    ]
 
 
 def _state_active(component: str, automaton: str, state: str) -> dict:
@@ -255,47 +362,116 @@ def _reinit_effects(
 
 # --- object expansions ------------------------------------------------------
 
-#: Constructs `pyraichu.muscadet.ObjFlow` understands (see its
-#: `_init_declarations`) that this plugin does not expand: `flows_in`,
-#: `flows_out` and `failure_modes` are the only spec keys `_expand_objflow`
-#: reads below. Without this list, a spec carrying one of these would be
-#: silently dropped: the component would still build, and the model would
-#: still run, describing a system the caller never declared. Refusing by
-#: name trades that silent wrong answer for a build-time error.
-_UNSUPPORTED_OBJFLOW_KEYS = (
-    "flows_continuous_in",
-    "flows_continuous_out",
-    "capacities",
-    "measurements_in",
-    "rules",
-    "transfers",
+#: Every `ObjFlow` section, IN THE ORDER IT MUST BE DECLARED IN, with the
+#: declaration shape its entries follow: a name of
+#: :data:`pyraichu.declare.FLOW_CLASSES` or
+#: :data:`~pyraichu.declare.PLAIN_SECTIONS` for the sections reading
+#: **muscadet's own declaration vocabulary**, and ``None`` for the three
+#: reading this plugin's own flatter one (`distrib` / `failure` / `repair`,
+#: `tempo`, `trigger`), which predates that vocabulary and is what the
+#: cod3s importers write.
+#:
+#: The order is `declare.DECLARATION_SECTIONS`, and it is not guessable: a
+#: capacity names flows, a rule guard may gate on the automaton a failure
+#: mode declares, a transfer pair refuses a flow a rule already carries.
+#: Declared in any other order, each of those refusals is unreachable and
+#: the misspelling it exists to catch reaches the engine instead. This
+#: table IS the order the expansion walks, so the two cannot drift.
+_OBJFLOW_SECTIONS: tuple[tuple[str, str | None], ...] = (
+    ("measurements_in", "measurements_in"),
+    ("flows_in", None),
+    ("flows_out", None),
+    ("flows_continuous_in", "FlowContinuousIn"),
+    ("flows_continuous_out", "FlowContinuousOut"),
+    ("capacities", "capacities"),
+    ("failure_modes", None),
+    ("rules", "rules"),
+    ("transfers", "transfers"),
+)
+
+#: The `ObjFlow` keys that put a component in the **continuous** network.
+#: Their presence anywhere in a plugin section is what engages the
+#: model-level finalisation (:meth:`MuscadetPlugin.finalize_model`): a
+#: purely boolean model reaches exactly the document it always did.
+CONTINUOUS_OBJFLOW_KEYS: tuple[str, ...] = tuple(
+    key for key, shape in _OBJFLOW_SECTIONS if shape is not None
 )
 
 
-def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
-    """Delegate to the `pyraichu.muscadet` authoring layer (same
-    semantics, serialized entry point).
+def _objflow_section(obj: authoring.ObjFlow, spec: dict, key: str, shape: str) -> None:
+    """Expand one declaration section of an `ObjFlow` spec onto `obj`.
 
-    Only `flows_in`, `flows_out` and `failure_modes` are wired here: the
-    other constructs `ObjFlow` supports need a system-level pass over the
-    connection list (per-edge equations, evaluation order) that this
-    per-component expansion cannot do. A spec that names one of them is
-    refused outright rather than silently built without it."""
-    name = spec["name"]
-    for key in _UNSUPPORTED_OBJFLOW_KEYS:
-        if key in spec:
+    The entries are read by `pyraichu.declare`, which owns the vocabulary
+    of every one of these sections: what a capacity, a rule set, a transfer
+    pair, a measurement channel or a continuous flow may carry is decided
+    in ONE place, so a key the declaration entry point accepts and this one
+    refuses cannot exist."""
+    entries = spec.get(key)
+    if entries is None:
+        return
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, (list, tuple)):
+        raise ValueError(
+            f"ObjFlow `{obj.name}`: `{key}` is a list of declarations, got "
+            f"{type(entries).__name__}"
+        )
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
             raise ValueError(
-                f"ObjFlow `{name}`: declares `{key}`, which this plugin does not "
-                "build (it wires only flows_in, flows_out and failure_modes). "
-                "Author it through the class-based authoring surface "
-                "(`pyraichu.muscadet`) or the declaration entry point "
-                "(`pyraichu.declare`) instead"
+                f"ObjFlow `{obj.name}`: every entry of `{key}` is a mapping, "
+                f"got {type(entry).__name__}"
             )
+        where = f"ObjFlow `{obj.name}`: `{key}` entry {entry.get('name', index)!r}"
+        method, keywords = declare.entry_call(shape, entry, where=where)
+        try:
+            getattr(obj, method)(**keywords)
+        except (ValueError, KeyError) as error:
+            # The authoring layer names the flow, the coefficient or the
+            # pattern at fault; what it cannot name is which entry asked for
+            # it, since it never saw one.
+            detail = (
+                str(error)
+                if isinstance(error, ValueError)
+                else f"{type(error).__name__}: {error}"
+            )
+            raise ValueError(f"{where}: {detail}") from error
+
+
+def _objflow_declaration(spec: dict) -> authoring.ObjFlow:
+    """One `ObjFlow` spec, as the `pyraichu.muscadet` declaration object it
+    describes: the SAME object the class-based surface builds, so both
+    surfaces reach one generator.
+
+    Nothing is emitted here. The component a declaration generates depends
+    on the connection list for every continuous construct, so the document
+    is written once the whole model is known
+    (:meth:`MuscadetPlugin.finalize_model`).
+
+    The sections are expanded in the order they must be declared in, not in
+    the order the mapping happens to list them: several of them resolve
+    against the ones before, and declared the other way round the refusal
+    that catches a misspelling is unreachable."""
     obj = authoring.ObjFlow.__new__(authoring.ObjFlow)
-    obj.name = name
+    obj.name = spec["name"]
     obj._init_declarations()
+    for key, shape in _OBJFLOW_SECTIONS:
+        if shape is None:
+            _OBJFLOW_OWN_VOCABULARY[key](obj, spec)
+        else:
+            _objflow_section(obj, spec, key, shape)
+    return obj
+
+
+def _objflow_flows_in(obj: authoring.ObjFlow, spec: dict) -> None:
+    """The `flows_in` section, in this plugin's own vocabulary."""
     for flow in spec.get("flows_in", []):
         obj.add_flow_in(name=flow["name"], logic=flow.get("logic", "or"))
+
+
+def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
+    """The `flows_out` section, in this plugin's own vocabulary: a plain
+    output, a temporised one (`tempo`) or a triggered one (`trigger`)."""
     for flow in spec.get("flows_out", []):
         if "tempo" in flow:
             tempo = flow["tempo"]
@@ -323,6 +499,10 @@ def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], li
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
             )
+
+
+def _objflow_failure_modes(obj: authoring.ObjFlow, spec: dict) -> None:
+    """The `failure_modes` section, in this plugin's own vocabulary."""
     for mode in spec.get("failure_modes", []):
         # Occurrence-law kind: accept the cod3s `cls`, the plugin `law`,
         # and the post-migration `distrib` spelling (as `_law` does).
@@ -343,7 +523,62 @@ def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], li
                 targets=mode.get("targets"),
                 failure_cond=mode.get("failure_cond"),
             )
-    return [obj._build()], [], []
+
+
+#: The three sections :data:`_OBJFLOW_SECTIONS` marks ``None``, each with
+#: the expander that reads this plugin's own vocabulary for it.
+_OBJFLOW_OWN_VOCABULARY = {
+    "flows_in": _objflow_flows_in,
+    "flows_out": _objflow_flows_out,
+    "failure_modes": _objflow_failure_modes,
+}
+
+
+def _carry_grafts(placeholder: dict, pristine: dict, rebuilt: dict) -> None:
+    """Carry onto `rebuilt` whatever ANOTHER object wrote into
+    `placeholder` while the model was being expanded.
+
+    An `external` ObjFM does exactly that: it grafts a mirror automaton and
+    its effect function into each target component, in place, during the
+    first pass. The continuous rebuild answers the declaration alone, so
+    replacing the component with it would drop the graft in silence, and
+    the target would never fail: the ObjFM would still be in the document,
+    driving a control attribute nothing reads.
+
+    `pristine` is a fresh build of the same declaration, so the difference
+    between it and `placeholder` **is** the graft, whatever list it landed
+    in and whatever a future object grafts. Members are compared whole
+    rather than by name, so nothing has to assume a naming convention.
+    """
+    for key, members in placeholder.items():
+        if not isinstance(members, list):
+            continue
+        original = [
+            json.dumps(member, sort_keys=True) for member in pristine.get(key, [])
+        ]
+        grafted = []
+        for member in members:
+            token = json.dumps(member, sort_keys=True)
+            if token in original:
+                original.remove(token)
+            else:
+                grafted.append(member)
+        if grafted:
+            rebuilt.setdefault(key, []).extend(grafted)
+
+
+def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """Delegate to the `pyraichu.muscadet` authoring layer (same
+    semantics, serialized entry point).
+
+    What a component knows on its own is emitted here. A component
+    carrying a continuous construct also needs material only the
+    connection list can supply, and this component is placed in the
+    document before the objects after it have added theirs: the document
+    it gets here is the one it would have with nothing connected, and
+    :meth:`MuscadetPlugin.finalize_model` replaces it **in place**, at this
+    same position, once the whole model is known."""
+    return [_objflow_declaration(spec)._build()], [], []
 
 
 def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
@@ -396,6 +631,13 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
 
     automata = []
     impacting: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
+    # Logical `occ` states per target: the armed occ state PLUS the parked
+    # micro-state of an inst *return* draw (a lost repair draw leaves the
+    # mode logically failed while it waits in the parked state, cod3s
+    # `_wire_state_effects_multi`). The external ctrl gate, by contrast,
+    # follows the armed occ state only, as cod3s'
+    # `target_impacting_automata` does.
+    logical_occ: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
     # Sequence monitoring: internal ObjFMs carry the sequence events on
     # their own occ/rep transitions; external modes carry them on the
     # TARGET's grafted mirror instead (cod3s drops the external ObjFM's own
@@ -420,17 +662,29 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                     [fail_guard]
                     + [_state_active(targets[i], name, repair_state) for i in comb],
                 )
-            # Repair transition: rep_indep resets instantly (structural,
+            # Occurrence edge: an inst law takes the draw + parked + re-arm
+            # machinery, parking beside the resting state (the cod3s
+            # ObjFMInst grammar, `not_<failure_state>`); a timed law builds
+            # its classic single transition.
+            inst_failure = _is_inst_law(f_law)
+            draw_parked = f"not_{failure_state}{suffix}" if inst_failure else None
+            # Repair edge: rep_indep resets instantly (structural,
             # law-independent); otherwise only an ACTIVE repair law builds
             # one: a non-repairable mode keeps its failure with an
-            # absorbing occ state (cod3s `is_occ_law_repair_active`).
+            # absorbing occ state (cod3s `is_occ_law_repair_active`). An
+            # inst repair law takes the same draw machinery, parking beside
+            # `occ` (cod3s' `<occ_state>_star` default for the return
+            # direction).
             if rep_indep:
                 repair_guard = _const(True)
                 repair_fields: dict | None = {"distrib": "delay", "time": 0.0}
+                inst_repair = False
             elif r_law is None:
                 repair_fields = None
+                inst_repair = False
             else:
-                repair_fields = _law(r_law)
+                inst_repair = _is_inst_law(r_law)
+                repair_fields = None if inst_repair else _law(r_law)
                 if external:
                     # Repair only once all combo targets are failed.
                     repair_guard = _bool_expr(
@@ -438,17 +692,30 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                         [repair_guard]
                         + [_state_active(targets[i], name, failure_state) for i in comb],
                     )
-            transitions = [
-                {
-                    "name": "failure" if order_max == 1 else occ,
-                    "source": rep,
-                    "targets": [occ],
-                    "guard": fail_guard,
-                    "monitored": monitored,
-                    "cycle_group": aut_name,
-                    **_law(f_law),
-                }
-            ]
+            repair_parked = f"{failure_state}_star{suffix}" if inst_repair else None
+            transitions: list[dict] = []
+            if inst_failure:
+                transitions += _inst_edge(
+                    rep,
+                    occ,
+                    draw_parked,
+                    fail_guard,
+                    _inst_prob(f_law, what=f"ObjFM `{name}`"),
+                    monitored=monitored,
+                    cycle_group=aut_name,
+                )
+            else:
+                transitions.append(
+                    {
+                        "name": "failure" if order_max == 1 else occ,
+                        "source": rep,
+                        "targets": [occ],
+                        "guard": fail_guard,
+                        "monitored": monitored,
+                        "cycle_group": aut_name,
+                        **_law(f_law),
+                    }
+                )
             if repair_fields is not None:
                 transitions.append(
                     {
@@ -461,25 +728,39 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                         **repair_fields,
                     }
                 )
+            elif inst_repair:
+                transitions += _inst_edge(
+                    occ,
+                    rep,
+                    repair_parked,
+                    repair_guard,
+                    _inst_prob(r_law, what=f"ObjFM `{name}`"),
+                    monitored=monitored,
+                    cycle_group=aut_name,
+                )
             automata.append(
                 {
                     "name": aut_name,
-                    "states": [rep, occ],
+                    "states": [s for s in (rep, occ, draw_parked, repair_parked) if s],
                     "init": rep,
                     "transitions": transitions,
                 }
             )
             for idx in comb:
                 impacting[targets[idx]].append((aut_name, occ))
+                logical_occ[targets[idx]].append((aut_name, occ))
+                if repair_parked is not None:
+                    logical_occ[targets[idx]].append((aut_name, repair_parked))
 
     if not external:
         # INTERNAL (default): reinitialization semantics, the ObjFM writes each
         # target attribute directly, held at its failure value while ANY
-        # impacting combination is failed (the OR gate), its initial value
-        # otherwise. cod3s models omit repair_effects here (adding them hangs
+        # impacting combination is failed (the OR gate, spanning the parked
+        # micro-state of an inst return draw), its initial value otherwise.
+        # cod3s models omit repair_effects here (adding them hangs
         # the simulator on multi-order ObjFMs).
         effects = _reinit_effects(
-            name, targets, impacting, failure_effects, repair_effects, model
+            name, targets, logical_occ, failure_effects, repair_effects, model
         )
         functions = [{"name": "apply_effects", "effects": effects}] if effects else []
         component = {
@@ -654,8 +935,13 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
     - `not_occ --[inst p=1, guard=NOT demand]--> rep`: the deterministic
       re-arm; `not_occ` absorbs the front so no re-draw happens while the
       demand holds (anti-Zeno);
-    - `occ --[exp(mu_k), guard=repair_cond]--> rep`: the repair
-      (omitted when ``mu_k = 0``: occ absorbing).
+    - `occ --[exp(mu_k) | delay(ttr), guard=repair_cond]--> rep`: the
+      repair (omitted when ``mu_k = 0``: occ absorbing), or, on the `inst`
+      cell of the repair direction, a Bernoulli **return draw**
+      `occ --> [rep (repair_gamma), occ_star (1 - repair_gamma)]` whose
+      lost branch parks in `occ_star` (still failed) and re-arms on the
+      falling repair condition: the same unified per-edge semantics as the
+      draw above, mirrored.
 
     With N targets, `failure_param = [gamma_1, …, gamma_n]` (per order)
     generates the 2^N−1 combination automata (`__cc_` suffix), one per
@@ -712,52 +998,52 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
         return g
 
     def repair_of(rs):
-        """(build_repair, law): whether an occ->rep transition is
-        generated and its law. `None` or an exponential rate 0 means no
-        repair (occ absorbing, cod3s `is_occ_law_repair_active` false); a
-        delay law or a positive exp rate builds a real repair."""
+        """(kind, law): what the occ->rep edge is. ``"none"`` (`None` or an
+        exponential rate 0: occ absorbing, cod3s
+        `is_occ_law_repair_active` false), ``"timed"`` (a delay law or a
+        positive exp rate) or ``"inst"`` (a Bernoulli return draw, the
+        `inst` cell of the repair direction)."""
         if rs is None:
-            return False, None
+            return "none", None
+        if _is_inst_law(rs):
+            return "inst", rs
         law = _law(rs) if isinstance(rs, dict) else {"distrib": "exp", "rate": float(rs)}
         if law["distrib"] == "exp" and float(law.get("rate", 0.0)) == 0.0:
-            return False, law
-        return True, law
+            return "none", law
+        return "timed", law
 
     demand = _cond_tree(spec.get("failure_cond", True), inner, outer)
-    not_demand = _negate(demand)
+    # The re-arm guard is derived inside `_inst_edge` (NOT the draw guard).
     repair_guard = _cond_tree(spec.get("repair_cond", True), inner, outer)
 
     automata = []
     impacting: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
+    # Armed occ PLUS the parked micro-state of an inst return draw: a lost
+    # repair draw leaves the mode logically failed while it waits (cod3s
+    # `_wire_state_effects_multi` spans both).
+    logical_occ: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
     for order in range(1, order_max + 1):
         gamma = gamma_of(failure_specs[order - 1])
         if gamma is None:
             continue  # inactive order (dropped, like the internal CCF)
-        build_repair, repair_law = repair_of(repair_specs[order - 1])
+        repair_kind, repair_law = repair_of(repair_specs[order - 1])
         for comb in itertools.combinations(range(order_max), order):
             suffix = _ccf_suffix(comb, order_max)
             occ = f"{failure_state}{suffix}"
             rep = f"{repair_state}{suffix}"
             absorb = f"{absorb_state}{suffix}"
+            states = [rep, occ, absorb]
             transitions = [
-                {  # the draw: rep -> occ (gamma_k) | not_occ (1 - gamma_k)
-                    "name": occ,
-                    "source": rep,
-                    "targets": [occ, absorb],
-                    "guard": demand,
-                    "distrib": "inst",
-                    "probs": [gamma],
-                },
-                {  # deterministic re-arm when the demand falls (inst p = 1)
-                    "name": absorb,
-                    "source": absorb,
-                    "targets": [rep],
-                    "guard": not_demand,
-                    "distrib": "inst",
-                    "probs": [],
-                },
+                *_inst_edge(  # the draw + its anti-Zeno parking
+                    rep,
+                    occ,
+                    absorb,
+                    demand,
+                    gamma,
+                    monitored=False,
+                ),
             ]
-            if build_repair:
+            if repair_kind == "timed":
                 transitions.append(
                     {
                         "name": rep,
@@ -767,23 +1053,43 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                         **repair_law,
                     }
                 )
+            elif repair_kind == "inst":
+                # A Bernoulli return draw out of `occ`: the repair happens
+                # with probability `repair_gamma`, a lost draw parks in
+                # `occ_star` (still failed) and re-arms once the repair
+                # condition falls (cod3s' `<occ_state>_star` for the
+                # return direction).
+                parked = f"{failure_state}_star{suffix}"
+                states.append(parked)
+                transitions += _inst_edge(
+                    occ,
+                    rep,
+                    parked,
+                    repair_guard,
+                    _inst_prob(repair_law, what=f"ObjFMInst `{name}`"),
+                    monitored=False,
+                )
             automata.append(
                 {
                     "name": f"fm{suffix}",
-                    "states": [rep, occ, absorb],
+                    "states": states,
                     "init": rep,
                     "transitions": transitions,
                 }
             )
             for idx in comb:
                 impacting[targets[idx]].append((f"fm{suffix}", occ))
+                logical_occ[targets[idx]].append((f"fm{suffix}", occ))
+                if repair_kind == "inst":
+                    logical_occ[targets[idx]].append((f"fm{suffix}", parked))
 
     # Reinitialization semantics: each target's variable holds its fail
     # value while ANY impacting combination sits in its `occ` (an OR over
-    # those occ states), the initial (or explicit repair) value otherwise:
+    # those occ states, including the parked one of an inst return draw),
+    # the initial (or explicit repair) value otherwise:
     # identical to the internal CCF, hence the shared helper.
     effects = _reinit_effects(
-        name, targets, impacting, failure_effects, repair_effects, model
+        name, targets, logical_occ, failure_effects, repair_effects, model
     )
     functions = [{"name": "apply_effects", "effects": effects}] if effects else []
 
@@ -960,3 +1266,80 @@ class MuscadetPlugin:
                 f"(supported: {sorted(self.EXPANDERS)})"
             )
         return expander(spec, model)
+
+    def finalize_model(
+        self, model: dict[str, Any], specs: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Emit the continuous network over the WHOLE model, once every
+        object has been expanded and every connection is present.
+
+        A conservative flow network is not component-local: what one
+        producer publishes to one consumer is what remains once the OTHER
+        consumers are accounted for, the allocation operator needs the list
+        of connections it splits over, and the three-band sweep order runs
+        along the flow graph. None of that is decidable while the objects
+        are expanded one at a time, which is why it is decided here.
+
+        Nothing is reimplemented: the declarations are handed to a
+        `pyraichu.muscadet.System`, and
+        :meth:`~pyraichu.muscadet.System.generate` is the same call
+        :meth:`~pyraichu.muscadet.System.build_dict` makes. The components
+        it answers **replace** the placeholders the first pass left, at
+        their own positions, so a document authored here and the same model
+        authored through the class-based surface are one document.
+
+        Answers ``None`` for a model declaring no continuous construct,
+        which is every model this plugin expanded before: it is then a
+        no-op, not a differently-shaped answer.
+        """
+        declarations: dict[str, authoring.ObjFlow] = {}
+        continuous = False
+        for spec in specs:
+            if spec.get("type") != "ObjFlow":
+                continue
+            declarations[spec["name"]] = _objflow_declaration(spec)
+            continuous = continuous or any(
+                key in spec for key in CONTINUOUS_OBJFLOW_KEYS
+            )
+        if not continuous:
+            return None
+
+        if model.get("evaluation_order"):
+            # A model-wide property has one writer, and here there are two
+            # candidates saying different things. The network DERIVES the
+            # order from the flow graph, so honouring an asserted one would
+            # sweep a consumer before its producer without a word.
+            raise ValueError(
+                "muscadet plugin: the model declares an `evaluation_order` "
+                "and the plugin declares continuous flows, whose network "
+                "derives that order (capability along the flow, demand back "
+                "against it, production along it again). Two authorities on "
+                "one sweep is a contradiction, so the asserted order is "
+                "refused rather than silently overridden: drop it, or author "
+                "the continuous part outside the plugin"
+            )
+
+        system = authoring.System(model.get("name") or "model")
+        # Driven rather than re-implemented: the system is handed the
+        # declarations and the model's own connection list, and generates
+        # exactly what it generates for a model authored class by class.
+        system.comp = declarations
+        system._connections = model["connections"]
+        foreign = [
+            component
+            for component in model["components"]
+            if component["name"] not in declarations
+        ]
+        components, order = system.generate(foreign)
+
+        built = {component["name"]: component for component in components}
+        for index, placeholder in enumerate(model["components"]):
+            final = built.get(placeholder["name"])
+            if final is None:
+                continue
+            _carry_grafts(
+                placeholder, declarations[placeholder["name"]]._build(), final
+            )
+            model["components"][index] = final
+        model["indicators"].extend(system.indicators(components))
+        return None if order is None else {"evaluation_order": order}
