@@ -405,6 +405,29 @@ def _edge_name(connection: dict[str, Any]) -> str:
     return f"{destination['component']}__{destination['port']}"
 
 
+def connected_in_flows(
+    connections: list[dict[str, Any]], component: str
+) -> set[str]:
+    """The in-flows of `component` at least one connection feeds, by flow
+    name.
+
+    The one piece of system knowledge :meth:`ObjFlow._build` needs at the
+    input end: a `var_in_default` on an input nothing feeds IS the value,
+    so its aggregation must not be emitted to overwrite the seed at t = 0.
+    Both authoring surfaces derive it here rather than each from its own
+    reading of the connection list, so a boundary input cannot be seeded
+    on one path and aggregated on the other.
+
+    Ports are matched by the schema's `{flow}_in` naming, the same rule
+    :func:`_channel_attr` and `_continuous_edges` read them by."""
+    return {
+        connection["to"]["port"][: -len("_in")]
+        for connection in connections
+        if connection["to"]["component"] == component
+        and connection["to"]["port"].endswith("_in")
+    }
+
+
 def _find_cycle(nodes, arcs):
     """The first cycle a depth-first walk closes over `arcs`, as a list
     of ``(node, label)`` steps, or ``None``.
@@ -447,6 +470,12 @@ class _FlowIn:
     name: str
     logic: str = "or"  # "or" | "and" | int k (k-out-of-n)
     k: int | None = None
+    # muscadet `FlowIn.var_in_default`: what the input reads while nothing
+    # is connected to it (`True` marks an always-fed boundary input).
+    # `None` = the muscadet default (`False`). Honoured only as long as no
+    # producer publishes on the flow: `_build` drops the aggregation of an
+    # unconnected input rather than letting it overwrite the seed.
+    var_in_default: bool | None = None
 
 
 @dataclass
@@ -466,6 +495,14 @@ class _FlowOut:
     # *inhibition* logic (up while the trigger inputs are absent); the
     # flow is fed while `up` AND the production condition holds.
     trigger: dict[str, Any] | None = None
+    # muscadet `FlowOut.var_is_active_default`: service-function dormancy
+    # through a `var_is_active` factor the caller's effects drive. `None`
+    # = no such factor: the generated model carries no `var_is_active`
+    # and stays byte-identical to what it has always been.
+    var_is_active_default: bool | None = None
+    # muscadet `FlowOut.var_fed_available_out_init`: the availability
+    # gate's initial value. `None` = the muscadet default (available).
+    var_fed_available_out_init: bool | None = None
 
 
 @dataclass
@@ -940,27 +977,45 @@ class ObjFlow:
     def add_flows(self) -> None:  # pragma: no cover - overridden
         """Declare flows (override in subclasses)."""
 
-    def add_flow_in(self, name: str, logic: str | int = "or") -> None:
+    def add_flow_in(
+        self, name: str, logic: str | int = "or", var_in_default: bool | None = None
+    ) -> None:
         """Declare an incoming flow aggregated with `logic`
-        (``"or"``, ``"and"`` or an integer k for k-out-of-n)."""
+        (``"or"``, ``"and"`` or an integer k for k-out-of-n).
+
+        `var_in_default` is what the input reads while nothing is
+        connected to it (``True`` marks an always-fed boundary input).
+        The connectivity is the caller's knowledge: ``_build`` receives
+        it through `connected_in`, and a caller that passes none has
+        every declared input treated as connected."""
         if isinstance(logic, int):
             self.flows_in.append(_FlowIn(name=name, logic="k", k=logic))
         else:
-            self.flows_in.append(_FlowIn(name=name, logic=logic))
+            self.flows_in.append(_FlowIn(name=name, logic=logic, var_in_default=var_in_default))
 
     def add_flow_out(
         self,
         name: str,
         var_prod_default: bool = False,
         var_prod_cond: list[str] | None = None,
+        var_is_active_default: bool | None = None,
+        var_fed_available_out_init: bool | None = None,
     ) -> None:
         """Declare an outgoing flow, produced unconditionally
-        (``var_prod_default=True``) or when the named in-flows are fed."""
+        (``var_prod_default=True``) or when the named in-flows are fed.
+
+        The two dormancy knobs are muscadet's: `var_is_active_default`
+        adds a ``var_is_active`` factor to the delivery (the flow stays
+        unfed until an effect sets it), and `var_fed_available_out_init`
+        seeds the availability gate. Left ``None``, the generated model
+        carries neither."""
         self.flows_out.append(
             _FlowOut(
                 name=name,
                 var_prod_default=var_prod_default,
                 var_prod_cond=list(var_prod_cond or []),
+                var_is_active_default=var_is_active_default,
+                var_fed_available_out_init=var_fed_available_out_init,
             )
         )
 
@@ -2723,13 +2778,24 @@ class ObjFlow:
 
     # --- model generation --------------------------------------------
 
-    def _build(self, connected_out: set[str] | None = None) -> dict[str, Any]:
+    def _build(
+        self,
+        connected_out: set[str] | None = None,
+        connected_in: set[str] | None = None,
+    ) -> dict[str, Any]:
         """The native component this declaration generates.
 
         `connected_out` names the continuous out-flows at least one
         connection reads, which only the system knows: an output nobody
         reads is not a bound on the rule producing it. Left out, every
         declared out-flow counts as read.
+
+        `connected_in` names the boolean in-flows at least one connection
+        feeds, the same kind of knowledge at the other end of the wire: a
+        `var_in_default` on an input nothing feeds IS the value, so its
+        aggregation is not emitted. Left out, every declared input counts
+        as connected, which is the conservative reading (the aggregation
+        of an unconnected input is a constant and the seed is lost).
 
         One helper per declared construct, appending into five shared
         lists. The call order is not presentational: those lists become
@@ -2748,7 +2814,7 @@ class ObjFlow:
         functions: list[dict] = []
         automata: list[dict] = []
 
-        self._build_flows_in(variables, ports, functions)
+        self._build_flows_in(variables, ports, functions, connected_in)
         self._build_failure_modes(automata)
         self._build_flows_out(variables, ports, functions, automata)
 
@@ -2779,18 +2845,36 @@ class ObjFlow:
         }
 
     def _build_flows_in(
-        self, variables: list[dict], ports: list[dict], functions: list[dict]
+        self,
+        variables: list[dict],
+        ports: list[dict],
+        functions: list[dict],
+        connected_in: set[str] | None = None,
     ) -> None:
         """The boolean in-flows: one `{flow}_fed_in` per declaration, an
         in port, and the sensitive function aggregating that port under
-        the declared logic (any, all, or k of n)."""
+        the declared logic (any, all, or k of n).
+
+        A `var_in_default` seeds the value and, on an input nothing feeds,
+        replaces the aggregation: the initialization axiom runs every
+        sensitive function once, so an aggregation of nothing would
+        overwrite the seed with a constant at t = 0. A connected input
+        keeps its aggregation and the seed: the first producer to publish
+        decides, which is what the default means."""
         me = self.name
         for flow in self.flows_in:
             fed_in = f"{flow.name}_fed_in"
             variables.append(
-                {"name": fed_in, "kind": "bool", "init": {"kind": "bool", "value": False}}
+                {
+                    "name": fed_in,
+                    "kind": "bool",
+                    "init": {"kind": "bool", "value": bool(flow.var_in_default)},
+                }
             )
             ports.append({"name": f"{flow.name}_in", "dir": "in"})
+            if flow.var_in_default is not None and connected_in is not None:
+                if flow.name not in connected_in:
+                    continue
             agg: dict[str, Any]
             port_ref = {"component": me, "port": f"{flow.name}_in"}
             if flow.logic == "and":
@@ -2858,7 +2942,15 @@ class ObjFlow:
     ) -> None:
         """The boolean out-flows: what the failure modes leave available,
         the production condition, and the tempo or trigger automaton
-        gating the delivery when one is declared."""
+        gating the delivery when one is declared.
+
+        Availability is *derived* here (the conjunction of the mode states
+        targeting the flow), not clamped by effects as muscadet's is, so a
+        seeded `var_fed_available_out_init` on a flow that carries failure
+        modes is recomputed at t = 0. A dormancy seed therefore needs the
+        study's own effect on `{flow}_fed_available_out` to be held: the
+        reinitialization clamp falls back on the declared initial value,
+        which is this seed."""
         me = self.name
         for flow in self.flows_out:
             fed_out = f"{flow.name}_fed_out"
@@ -2869,8 +2961,32 @@ class ObjFlow:
                 {"name": fed_out, "kind": "bool", "init": {"kind": "bool", "value": False}}
             )
             variables.append(
-                {"name": available, "kind": "bool", "init": {"kind": "bool", "value": True}}
+                {
+                    "name": available,
+                    "kind": "bool",
+                    "init": {
+                        "kind": "bool",
+                        "value": bool(
+                            flow.var_fed_available_out_init
+                            if flow.var_fed_available_out_init is not None
+                            else True
+                        ),
+                    },
+                }
             )
+            # Service-function dormancy through `var_is_active`: the third
+            # factor of muscadet's delivery (`var_prod AND var_is_active
+            # AND var_fed_available_out`), present only when a caller
+            # seeds it, so ordinary flows carry nothing new.
+            is_active = f"{flow.name}_is_active"
+            if flow.var_is_active_default is not None:
+                variables.append(
+                    {
+                        "name": is_active,
+                        "kind": "bool",
+                        "init": {"kind": "bool", "value": bool(flow.var_is_active_default)},
+                    }
+                )
             ports.append({"name": f"{flow.name}_out", "dir": "out", "attr": fed_out})
 
             # Availability follows the failure-mode automata targeting
@@ -3030,6 +3146,9 @@ class ObjFlow:
                 gate_terms = [_state_active(me, aut, "up"), prod_expr]
             else:
                 gate_terms = [prod_expr]
+
+            if flow.var_is_active_default is not None:
+                gate_terms = gate_terms + [_var(me, is_active)]
 
             fed_expr = {
                 "op": "bool",
@@ -4470,7 +4589,11 @@ class System:
         for edge in edges:
             reading.setdefault(edge.producer, set()).add(edge.flow_out)
         components = [
-            obj._build(reading.get(name, set())) for name, obj in self.comp.items()
+            obj._build(
+                reading.get(name, set()),
+                connected_in_flows(self._connections, name),
+            )
+            for name, obj in self.comp.items()
         ]
         order = self._emit_continuous_network(components + list(foreign or []), edges)
         return components, order
