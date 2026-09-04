@@ -15,7 +15,15 @@ ObjFlow::
                                     "logic": "and" | "or" | k } } ],  # FlowOutOnTrigger
       "failure_modes": [ { "name": "fm", "distrib": "delay" | "exp",
                            "failure": 4, "repair": 2,
-                           "failure_cond": "is_ok_fed_out" } ] }
+                           "failure_cond": "is_ok_fed_out",
+                           # what the mode does to the CONTINUOUS outputs
+                           # it names: a number (or {"cap": x}) is what it
+                           # LEAVES of them, {"tap": x} what it TAKES OFF,
+                           # and {"tap": x, "to": "other"} delivers what it
+                           # takes on another output of the component.
+                           "failure_effects": { "H2": { "tap": 0.1,
+                                                        "to": "H2_vent" } },
+                           "repair_effects":  { "H2": { "tap": 0.0 } } } ] }
 
 `ObjFlow` also carries the **continuous** sections, whose entries read
 muscadet's own declaration vocabulary, key for key (the vocabulary
@@ -507,8 +515,34 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
             )
 
 
+def _objflow_effects(mode: dict, key: str) -> list[tuple[str, object]] | None:
+    """One mode's declared effects on the continuous outputs, normalised
+    to the ``(pattern, value)`` pairs the authoring layer resolves.
+
+    Two spellings are accepted because both are already in the file this
+    reads: an `ObjFM` section carries its effects as a mapping of pattern
+    to value, and `pyraichu.declare` carries them as pairs. A model
+    assembled from both should not have to know which of its sections it
+    is writing in, and a mapping keeps its insertion order, so the two
+    resolve to the same declaration."""
+    declared = mode.get(key)
+    if declared is None:
+        return None
+    if isinstance(declared, dict):
+        return list(declared.items())
+    # Passed on as it stands: what an effect may be is decided by the
+    # authoring layer, in one place, and it words the refusal.
+    return list(declared)
+
+
 def _objflow_failure_modes(obj: authoring.ObjFlow, spec: dict) -> None:
-    """The `failure_modes` section, in this plugin's own vocabulary."""
+    """The `failure_modes` section, in this plugin's own vocabulary.
+
+    `failure_effects` and `repair_effects` reach the authoring layer,
+    which is what lets a mode declared here cap a continuous output or
+    tap a fraction off it. Dropped rather than passed, they would build
+    and run, and report the figures of a plant whose modelled derating
+    never happened."""
     for mode in spec.get("failure_modes", []):
         # Occurrence-law kind: accept the cod3s `cls`, the plugin `law`,
         # and the post-migration `distrib` spelling (as `_law` does).
@@ -520,6 +554,8 @@ def _objflow_failure_modes(obj: authoring.ObjFlow, spec: dict) -> None:
                 repair_time=mode["repair"],
                 targets=mode.get("targets"),
                 failure_cond=mode.get("failure_cond"),
+                failure_effects=_objflow_effects(mode, "failure_effects"),
+                repair_effects=_objflow_effects(mode, "repair_effects"),
             )
         else:
             obj.add_exp_failure_mode(
@@ -528,6 +564,8 @@ def _objflow_failure_modes(obj: authoring.ObjFlow, spec: dict) -> None:
                 repair_rate=mode["repair"],
                 targets=mode.get("targets"),
                 failure_cond=mode.get("failure_cond"),
+                failure_effects=_objflow_effects(mode, "failure_effects"),
+                repair_effects=_objflow_effects(mode, "repair_effects"),
             )
 
 

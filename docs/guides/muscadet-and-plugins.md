@@ -161,6 +161,57 @@ included, and the document it expands to is **the same one** the builder
 writes for the same model: the plugin hands the declarations to a
 `System` and calls the generation the builder calls.
 
+#### What a failure mode does to a continuous output
+
+A `failure_modes` entry may carry `failure_effects` and `repair_effects`,
+which name continuous outputs by regular expression and say what the mode
+does to them. There are two things it can do, and they are not the same:
+
+| Spelling | Meaning | Simultaneous effects compose by |
+|---|---|---|
+| `0.8`, or `{"cap": 0.8}` | a **cap**: what the mode LEAVES of the output | **minimum** |
+| `{"tap": 0.2}` | a **tap**: what fraction it TAKES OFF the output | **sum** |
+| `{"tap": 0.2, "to": "vent"}` | a routed tap: what it takes is delivered on another output of the component | **sum** |
+
+The distinction is not cosmetic, it is the arithmetic. Two caps of 0.9
+and 0.8 leave **0.8**: a cap is a constraint, and the binding one wins,
+which is what a derated capacity means. Two taps of 0.1 and 0.2 leave
+**0.7**: taps are parallel draws on one stream, so what leaves by one
+does not pass the other. Folding taps by minimum would leave 0.8 and make
+the second leak free; folding caps by sum would invent a limit neither
+component has.
+
+Nothing in the number distinguishes the two, which is why the spelling
+carries it. A bare number is a cap, the 1.x reading, so an existing
+declaration means exactly what it always did.
+
+A **routed** tap is what closes the mass balance: the fraction is moved
+to another continuous output of the same component instead of vanishing,
+and both sides divide one published quantity, `{flow}_pre_tap_*`, what
+the stream carried before its taps drew on it. Connect that output to
+wherever the fraction goes next. Without `to`, the fraction leaves the
+system, which is a loss to the environment and a legitimate model.
+
+```json
+{"type": "ObjFlow", "name": "STACK",
+ "flows_continuous_out": [{"name": "H2", "var_fed_default": 10.0},
+                          {"name": "H2_vent"}],
+ "failure_modes": [
+   {"name": "membrane_leak", "distrib": "delay",
+    "failure": 100.0, "repair": 1e9,
+    "failure_effects": {"H2": {"tap": 0.1, "to": "H2_vent"}}}]}
+```
+
+The demand channel is **not** divided by the tap rate: a plant that does
+not know about its leak produces what it was asked for and delivers less,
+and the shortfall is the consumer's. Making up the difference is
+regulation, declared as a controller.
+
+Four refusals keep a tap conserving, all at build time: a route naming
+something that is not a continuous output of the component, a route that
+loops, taps that could together take more than the stream carries, and a
+receiving output that also produces something of its own.
+
 #### The model-level pass
 
 The continuous constructs are not component-local, and that is why they

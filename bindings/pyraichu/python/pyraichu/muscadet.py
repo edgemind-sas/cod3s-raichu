@@ -119,13 +119,14 @@ routes, so a model never writes a direction clamp. Per pair ``p``:
   output was declared with. It asks upstream for what it is about to
   move, and a computed reversal crosses nothing.
 
-Time profiles (mirroring `muscadet/profile.py`) and deratings (mirroring
-`muscadet/derating.py`) are the two other things multiplying a continuous
-output's production, and they compose differently on purpose::
+Time profiles (mirroring `muscadet/profile.py`) and failure-mode effects
+(mirroring `muscadet/derating.py`) are the other things multiplying a
+continuous output's production, and they compose differently on purpose::
 
     produced = what the rule (or the declared rate) makes
                x  {flow}_out_profile
-               x  {flow}_effective_rate
+               x  {flow}_effective_rate      <- the caps, by minimum
+               x  {flow}_tap_rate            <- the taps, by sum
 
 - ``{flow}_out_profile`` is a declared **continuous** function of the
   clock, published read-only. A discontinuous one would need a watched
@@ -134,15 +135,39 @@ output's production, and they compose differently on purpose::
   refused rather than integrated across an unannounced jump;
 - ``{flow}_effective_rate`` is the **minimum** over the shared
   ``{flow}_out_rate`` (the endpoint a mode declared outside this layer
-  clamps) and one term per failure mode derating the output. The minimum
-  is order-independent and safe on repair, and each term reads its
-  mode's automaton **location**, which is what makes the return to
-  nominal implicit: leaving the failing state restores the rate with
-  nothing declared on the other side. There is no separate boolean gate
-  on a continuous flow, so a rate of zero is what stops it entirely;
-- the two are separate channels, never folded: a panel at 30 % of its
-  profile that is also derated to 0.5 produces 15 %, where one shared
-  variable folding by minimum would read 30 % and signal nothing.
+  clamps) and one term per failure mode **capping** the output. A cap
+  says what the output is left at, so simultaneous caps do not add up:
+  the binding one wins, which is what a derated capacity means and what
+  makes the fold order-independent and safe on repair;
+- ``{flow}_tap_rate`` is ``1 -`` the **sum** of what each failure mode
+  **taps** off the output. A tap says what fraction is taken away, and
+  simultaneous taps are parallel draws on one stream: what leaves by one
+  does not pass the other, so two leaks of 0.1 and 0.2 leave 0.7. Folded
+  by minimum they would leave 0.8 and the second leak would be free,
+  which is the arithmetic this channel exists to avoid;
+- a routed tap (``{"tap": x, "to": "other"}``) delivers what it takes to
+  another continuous out-flow of the component, so the fraction is moved
+  rather than extinguished and the component's balance closes. Both
+  sides read one published quantity, ``{flow}_pre_tap_*``, what the
+  stream carried before its taps drew;
+- the taps on one output are **one stage**: they all draw on that same
+  quantity, which is what makes them sum. Two stages, losses taken and
+  then further losses taken on what is left, are two streams and not one
+  output tapped twice, and they compose by product between them. A model
+  that folds both stages onto one output sums across them and gets a
+  different number;
+- the demand channel is not divided by the tap rate. A plant that does
+  not know about its leak produces what it was asked for and delivers
+  less, and the shortfall is the consumer's; making it up is regulation,
+  which is declared as a controller and not inferred from a leak;
+- each term reads its mode's automaton **location** rather than a
+  variable it wrote, which is what makes the return to nominal implicit
+  on both channels: leaving the failing state restores the contribution
+  with nothing declared on the other side. There is no separate boolean
+  gate on a continuous flow, so a cap of zero is what stops it entirely;
+- the channels are never folded together: a panel at 30 % of its profile
+  that is also capped at 0.5 produces 15 %, where one shared variable
+  folding by minimum would read 30 % and signal nothing.
 
 Only what muscadet declares as **data** translates: the conductive law
 over its two potential operands (a constant and a measurement reading)
@@ -189,6 +214,13 @@ _NO_RULE = "none"
 #: that second neutral element is never written down and has no constant
 #: of its own here.
 NOMINAL_RATE = 1.0
+
+#: The fraction of an output nothing takes off it: the neutral element
+#: of the **sum** the taps fold by. It is zero where a cap's neutral is
+#: one, which is the whole reason a cap and a tap never share a map: read
+#: as a cap, a tap of 0.1 leaves a tenth of the output instead of taking
+#: a tenth off it, and nothing in the number distinguishes the two.
+NO_TAP = 0.0
 
 #: The one transfer law and the one time profile this layer can carry as
 #: data, matching what muscadet declares. Everything else in either place
@@ -613,9 +645,9 @@ class _FlowContinuousOut:
     #: neither the output factors nor the declared default.
     capability_expr: dict[str, Any] | None = None
     #: The declared time profile multiplying what this output produces,
-    #: or ``None``. It composes with the derating rate by **product**,
-    #: never by minimum: an output at 0.3 of its profile that is also
-    #: derated to 0.5 produces 0.15, not 0.3.
+    #: or ``None``. It composes with the failure-mode rates by
+    #: **product**, never by minimum: an output at 0.3 of its profile
+    #: that is also capped at 0.5 produces 0.15, not 0.3.
     profile: _Profile | None = None
 
 
@@ -927,6 +959,28 @@ class _ContinuousEdge:
 
 
 @dataclass
+class _Effects:
+    """What one mode's declared effects do to the continuous outputs
+    they name.
+
+    Two maps and not one, because a **cap** and a **tap** are opposite
+    conventions over the same interval: a cap says what the output is
+    left at, a tap says what fraction is taken off it. They also compose
+    differently (a cap by minimum, a tap by sum), so folding them
+    together would need a conversion at every read and would silently
+    pick one convention for a number declared in the other."""
+
+    #: What each named output is left at, in [0, 1]. Neutral:
+    #: :data:`NOMINAL_RATE`.
+    caps: dict[str, float] = field(default_factory=dict)
+    #: What fraction is taken off each named output, in [0, 1]. Neutral:
+    #: :data:`NO_TAP`.
+    taps: dict[str, float] = field(default_factory=dict)
+    #: Where a tap delivers what it takes, keyed by the tapped out-flow.
+    routes: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class _FailureMode:
     name: str
     law: str  # "delay" | "exp"
@@ -934,13 +988,14 @@ class _FailureMode:
     repair_param: float
     targets: list[str] = field(default_factory=list)  # affected out-flows
     failure_cond: str | None = None  # local variable gating the failure
-    #: What this mode leaves of a continuous output while it stands, and
-    #: what it leaves once repaired, keyed by flow name and resolved from
-    #: the declared effect patterns. A flow absent from the repair map
-    #: returns to :data:`NOMINAL_RATE`: the release is implicit, a
-    #: derating having no per-step reset of its own.
-    failure_deratings: dict[str, float] = field(default_factory=dict)
-    repair_deratings: dict[str, float] = field(default_factory=dict)
+    #: What this mode does to the continuous outputs it names, while it
+    #: stands and once repaired, resolved from the declared effect
+    #: patterns. A flow absent from the repair side returns to the
+    #: neutral element of its channel (:data:`NOMINAL_RATE` for a cap,
+    #: :data:`NO_TAP` for a tap): the release is implicit, neither
+    #: channel having a per-step reset of its own.
+    failure: _Effects = field(default_factory=_Effects)
+    repair: _Effects = field(default_factory=_Effects)
 
 
 class ObjFlow:
@@ -1679,6 +1734,124 @@ class ObjFlow:
                     "no stream to sit on"
                 )
 
+    def _refuse_ill_formed_taps(self) -> None:
+        """Refuse every tap declaration that would not conserve.
+
+        Run from :meth:`_build` and **not** from :meth:`_record`, unlike
+        the other conservation guard: a tap names the output it delivers
+        into, which the modeller is free to declare after the mode, so
+        an early diagnostic here would refuse a well-formed component for
+        the order its lines were written in.
+
+        Five refusals, each closing a way for matter to appear or vanish
+        without saying so:
+
+        - a route naming something other than a continuous out-flow of
+          this component, or naming the tapped flow itself;
+        - the two sides of one tap routing to different outputs, which
+          would move the fraction elsewhere on repair;
+        - taps on one output that can together take more than all of it,
+          which is what lets :meth:`_tap_rate_expr` do without a clamp;
+        - a receiving output that also produces, which would add what it
+          was handed to what it makes and count the fraction twice;
+        - a cycle in the routing, an output feeding back into a stream it
+          is fed from, which has no fixpoint the sweep could reach."""
+        me = f"ObjFlow `{self.name}`"
+        declared = [flow.name for flow in self.flows_continuous_out]
+        routes: dict[str, str] = {}
+
+        for flow in declared:
+            for mode, _, _ in self._taps_on(flow):
+                sides = {
+                    side
+                    for side in (
+                        mode.failure.routes.get(flow),
+                        mode.repair.routes.get(flow),
+                    )
+                    if side is not None
+                }
+                if len(sides) > 1:
+                    raise ValueError(
+                        f"{me}: failure mode `{mode.name}` taps `{flow}` to "
+                        f"{sorted(sides)}, one destination on each side. A "
+                        "route belongs to the tap and not to the state it is "
+                        "read in; declare the same `to` on both sides, or on "
+                        "one of them only"
+                    )
+                if not sides:
+                    continue
+                destination = sides.pop()
+                if destination == flow:
+                    raise ValueError(
+                        f"{me}: failure mode `{mode.name}` taps `{flow}` to "
+                        "itself. A tap moves a fraction OUT of its stream, so "
+                        "delivering it back to that same stream takes nothing "
+                        "off it; drop the `to` if the fraction is meant to "
+                        "leave the system"
+                    )
+                if destination not in declared:
+                    raise ValueError(
+                        f"{me}: failure mode `{mode.name}` taps `{flow}` to "
+                        f"`{destination}`, which is not a continuous out-flow "
+                        f"of this component (it declares {declared}). What a "
+                        "tap takes is delivered on an output of the component "
+                        "it is taken from; connect that output to wherever the "
+                        "fraction goes next"
+                    )
+                routes[flow] = destination
+
+        for flow in declared:
+            taken = sum(
+                max(failed, repaired) for _, failed, repaired in self._taps_on(flow)
+            )
+            if taken > NOMINAL_RATE:
+                raise ValueError(
+                    f"{me}: the failure modes tapping `{flow}` can together "
+                    f"take {taken:g} of it. Taps are parallel draws on one "
+                    "stream and compose by sum, so they cannot between them "
+                    "take more than the stream carries"
+                )
+
+        produced = {
+            flow for rule_set in self.rule_sets for flow in rule_set.produced()
+        } | {pair.source for pair in self.transfers if pair.is_conduit}
+        for destination in set(routes.values()):
+            flow = next(
+                declared_out
+                for declared_out in self.flows_continuous_out
+                if declared_out.name == destination
+            )
+            reason = None
+            if destination in produced:
+                reason = "a rule set of this component already produces it"
+            elif flow.capability_expr is not None:
+                reason = "it carries a declared capability of its own"
+            elif flow.var_fed_default:
+                reason = f"it is declared at a rate of {flow.var_fed_default:g}"
+            elif self._has_transfer_delta(destination):
+                reason = "a transfer pair already adds to it"
+            if reason is not None:
+                raise ValueError(
+                    f"{me}: `{destination}` receives what a tap takes, and "
+                    f"{reason}. A receiving output carries what was taken off "
+                    "another stream and nothing else, or the fraction is "
+                    "counted twice; declare a separate output for it"
+                )
+
+        for start in routes:
+            seen = [start]
+            node = routes.get(start)
+            while node is not None:
+                if node in seen:
+                    raise ValueError(
+                        f"{me}: the taps route in a cycle, {' -> '.join(seen)} "
+                        f"-> {node}. An output cannot be fed a fraction of a "
+                        "stream it feeds; the sweep has no order that settles "
+                        "both"
+                    )
+                seen.append(node)
+                node = routes.get(node)
+
     def _capacity_of(self, flow: str) -> _Capacity | None:
         """The volume holding `flow`, or ``None``. A flow buffers in one
         volume, which :meth:`add_capacity` enforces."""
@@ -2402,8 +2575,9 @@ class ObjFlow:
         (muscadet's `cond_occ_12`).
 
         `failure_effects` and `repair_effects` **derate** continuous
-        outputs: see :meth:`_resolve_deratings` for their shape and for
-        why the return to nominal needs no declaration."""
+        outputs: see :meth:`_resolve_effects` for their shape, for the
+        cap/tap distinction, and for why the return to nominal needs no
+        declaration."""
         self.failure_modes.append(
             _FailureMode(
                 name=name,
@@ -2412,10 +2586,10 @@ class ObjFlow:
                 repair_param=repair_time,
                 targets=list(targets or []),
                 failure_cond=failure_cond,
-                failure_deratings=self._resolve_deratings(
+                failure=self._resolve_effects(
                     name, "failure_effects", failure_effects
                 ),
-                repair_deratings=self._resolve_deratings(
+                repair=self._resolve_effects(
                     name, "repair_effects", repair_effects
                 ),
             )
@@ -2423,11 +2597,11 @@ class ObjFlow:
 
     # --- deratings ------------------------------------------------------
 
-    def _resolve_deratings(
+    def _resolve_effects(
         self, mode: str, key: str, effects: list[tuple[str, Any]] | None
-    ) -> dict[str, float]:
-        """The continuous outputs a mode's declared effects derate, and
-        what each is left at (R6, R18).
+    ) -> _Effects:
+        """What a mode's declared effects do to the continuous outputs
+        they name (R6, R18).
 
         An effect is a ``(pattern, value)`` pair, the pattern being a
         regular expression matched **anchored** against both the flow
@@ -2436,10 +2610,26 @@ class ObjFlow:
         ``"H2"`` would name ``H2O`` as well and a declaration meant for
         one output would silently derate its neighbour.
 
-        The value is what the mode LEAVES of the output, in ``[0, 1]``;
-        ``False`` is the muscadet idiom for a total loss and reads as
-        zero. There is no separate boolean gate on a continuous flow, so
-        a rate of zero is what stops production entirely.
+        The value says which of the two things a mode can do to an output
+        it names, and the two are not interchangeable:
+
+        - a bare number, or the equivalent ``{"cap": x}``, is a **cap**:
+          what the mode LEAVES of the output, in ``[0, 1]``. ``False`` is
+          the muscadet idiom for a total loss and reads as zero. Caps
+          compose by **minimum**, the binding constraint winning, which
+          is what a derated capacity is: a valve stuck at 0.8 and a pump
+          degraded to 0.9 leave 0.8 of the output between them;
+        - ``{"tap": x}`` is a **tap**: what fraction the mode TAKES OFF
+          the output, in ``[0, 1]``. Taps compose by **sum**, being
+          parallel draws on one stream: leaks of 0.1 and 0.2 leave 0.7,
+          where a minimum would leave 0.8 and make the second leak free.
+          ``{"tap": x, "to": "other"}`` delivers what it takes to another
+          continuous out-flow of this component, which is what closes the
+          mass balance; without ``to`` the fraction leaves the system, a
+          loss to the environment being a legitimate model.
+
+        There is no separate boolean gate on a continuous flow, so a cap
+        of zero is what stops production entirely.
 
         A pattern reaching no continuous output is **refused** rather
         than dropped: an effect that reaches nothing builds, runs to
@@ -2447,7 +2637,7 @@ class ObjFlow:
         modelled failure never happened, which is the defect class this
         refusal exists to close. A discrete out-flow is gated through
         `targets`, not here."""
-        resolved: dict[str, float] = {}
+        resolved = _Effects()
         where = f"ObjFlow `{self.name}`: failure mode `{mode}`"
         for entry in effects or []:
             if not isinstance(entry, (tuple, list)) or len(entry) != 2:
@@ -2456,59 +2646,227 @@ class ObjFlow:
                     "a (pattern, value) pair"
                 )
             pattern, value = entry
-            try:
-                matched = [
-                    flow.name
-                    for flow in self.flows_continuous_out
-                    if _matches_flow(pattern, flow.name)
-                    or _matches_flow(pattern, f"{flow.name}_fed_out")
-                ]
-            except re.error as error:
+            matched = self._effect_targets(where, key, pattern)
+            kind, rate, destination = self._effect_value(where, key, pattern, value)
+            if kind == "cap":
+                for flow in matched:
+                    resolved.caps[flow] = rate
+                continue
+            if destination is not None and len(matched) > 1:
                 raise ValueError(
-                    f"{where} declares the {key} pattern `{pattern}`, which is "
-                    f"not a regular expression: {error}"
-                ) from None
-            if not matched:
-                declared = [flow.name for flow in self.flows_continuous_out]
-                raise ValueError(
-                    f"{where} declares the {key} pattern `{pattern}`, which "
-                    f"names no continuous out-flow of this component (it "
-                    f"declares {declared}). An effect reaching nothing is a "
-                    "silent no-op; a discrete out-flow is gated through "
-                    "`targets` instead"
-                )
-            rate = float(value)
-            if not 0.0 <= rate <= 1.0:
-                raise ValueError(
-                    f"{where} declares the {key} pattern `{pattern}` at "
-                    f"{rate:g}; a derating is what the mode LEAVES of the "
-                    "output, so it lies in [0, 1]"
+                    f"{where} declares the {key} pattern `{pattern}` as a tap "
+                    f"delivering to `{destination}`, but the pattern names "
+                    f"{matched}. A routed tap moves matter out of ONE stream, "
+                    "so its pattern names a single output; declare one effect "
+                    "per tapped flow"
                 )
             for flow in matched:
-                resolved[flow] = rate
+                resolved.taps[flow] = rate
+                if destination is not None:
+                    resolved.routes[flow] = destination
         return resolved
 
-    def _deratings_on(self, flow: str) -> list[tuple[_FailureMode, float, float]]:
-        """The modes derating `flow`, with what each leaves of it while
-        it stands and once repaired.
+    def _effect_targets(self, where: str, key: str, pattern: Any) -> list[str]:
+        """The continuous out-flows an effect pattern names, refusing a
+        pattern that names none."""
+        try:
+            matched = [
+                flow.name
+                for flow in self.flows_continuous_out
+                if _matches_flow(pattern, flow.name)
+                or _matches_flow(pattern, f"{flow.name}_fed_out")
+            ]
+        except re.error as error:
+            raise ValueError(
+                f"{where} declares the {key} pattern `{pattern}`, which is "
+                f"not a regular expression: {error}"
+            ) from None
+        if not matched:
+            declared = [flow.name for flow in self.flows_continuous_out]
+            raise ValueError(
+                f"{where} declares the {key} pattern `{pattern}`, which "
+                f"names no continuous out-flow of this component (it "
+                f"declares {declared}). An effect reaching nothing is a "
+                "silent no-op; a discrete out-flow is gated through "
+                "`targets` instead"
+            )
+        return matched
+
+    def _effect_value(
+        self, where: str, key: str, pattern: Any, value: Any
+    ) -> tuple[str, float, str | None]:
+        """One effect's value, as ``(kind, rate, destination)`` with kind
+        ``"cap"`` or ``"tap"``.
+
+        The spelling carries which convention is meant, never the
+        magnitude: nothing in the number 0.1 distinguishes a tenth left
+        from a tenth taken, so a value that does not say is a cap by the
+        1.x reading and never a guess made on the figure."""
+        if not isinstance(value, dict):
+            return ("cap", self._effect_rate(where, key, pattern, "cap", value), None)
+        unknown = sorted(set(value) - {"cap", "tap", "to"})
+        if unknown:
+            raise ValueError(
+                f"{where} declares the {key} pattern `{pattern}` with the "
+                f"unknown key(s) {unknown}; an effect carries `cap` (what it "
+                "leaves), `tap` (what it takes off) and, on a tap, `to` "
+                "(where what it takes is delivered)"
+            )
+        if ("cap" in value) == ("tap" in value):
+            both = "both" if "cap" in value else "neither"
+            raise ValueError(
+                f"{where} declares the {key} pattern `{pattern}` with {both} "
+                "`cap` and `tap`. An effect either CAPS the output at what it "
+                "leaves or TAPS a fraction off it; the two are opposite "
+                "conventions over the same interval, so one effect declares "
+                "exactly one of them"
+            )
+        if "cap" in value:
+            if "to" in value:
+                raise ValueError(
+                    f"{where} declares the {key} pattern `{pattern}` as a cap "
+                    "carrying `to`. A cap bounds what the output delivers and "
+                    "moves nothing, so it has nothing to deliver anywhere; "
+                    "`to` belongs to a tap"
+                )
+            return (
+                "cap",
+                self._effect_rate(where, key, pattern, "cap", value["cap"]),
+                None,
+            )
+        destination = value.get("to")
+        if destination is not None and not isinstance(destination, str):
+            raise ValueError(
+                f"{where} declares the {key} pattern `{pattern}` with "
+                f"`to` = {destination!r}; a route names one continuous "
+                "out-flow of this component"
+            )
+        return (
+            "tap",
+            self._effect_rate(where, key, pattern, "tap", value["tap"]),
+            destination,
+        )
+
+    def _effect_rate(
+        self, where: str, key: str, pattern: Any, kind: str, value: Any
+    ) -> float:
+        """One effect's fraction, refused outside ``[0, 1]``. The message
+        states the convention the number is read in, which is the whole
+        of what separates the two kinds."""
+        meaning = (
+            "what the mode LEAVES of the output"
+            if kind == "cap"
+            else "what fraction the mode TAKES OFF the output"
+        )
+        try:
+            rate = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{where} declares the {key} pattern `{pattern}` at "
+                f"{value!r}; a {kind} is {meaning}, so it is a number in "
+                "[0, 1]"
+            ) from None
+        if not 0.0 <= rate <= 1.0:
+            raise ValueError(
+                f"{where} declares the {key} pattern `{pattern}` at "
+                f"{rate:g}; a {kind} is {meaning}, so it lies in [0, 1]"
+            )
+        return rate
+
+    def _caps_on(self, flow: str) -> list[tuple[_FailureMode, float, float]]:
+        """The modes capping `flow`, with what each leaves of it while it
+        stands and once repaired.
 
         The repair value defaults to :data:`NOMINAL_RATE`: a mode owns
-        its derating, so it owns the release, and a derating has no
-        per-step reset of its own. A mode declaring a repair effect keeps
-        that value instead, a mode returning degraded rather than as-new
-        being a legitimate model."""
+        its cap, so it owns the release, and a cap has no per-step reset
+        of its own. A mode declaring a repair effect keeps that value
+        instead, a mode returning degraded rather than as-new being a
+        legitimate model."""
         return [
             (
                 mode,
-                mode.failure_deratings.get(flow, NOMINAL_RATE),
-                mode.repair_deratings.get(flow, NOMINAL_RATE),
+                mode.failure.caps.get(flow, NOMINAL_RATE),
+                mode.repair.caps.get(flow, NOMINAL_RATE),
             )
             for mode in self.failure_modes
-            if flow in mode.failure_deratings or flow in mode.repair_deratings
+            if flow in mode.failure.caps or flow in mode.repair.caps
         ]
 
-    # --- what a continuous output's production is multiplied by ---------
+    def _taps_on(self, flow: str) -> list[tuple[_FailureMode, float, float]]:
+        """The modes tapping `flow`, with what fraction each takes off it
+        while it stands and once repaired.
 
+        The repair value defaults to :data:`NO_TAP` for the reason a
+        cap's defaults to :data:`NOMINAL_RATE`: the release belongs to
+        the mode, and this channel's neutral element is zero."""
+        return [
+            (
+                mode,
+                mode.failure.taps.get(flow, NO_TAP),
+                mode.repair.taps.get(flow, NO_TAP),
+            )
+            for mode in self.failure_modes
+            if flow in mode.failure.taps or flow in mode.repair.taps
+        ]
+
+    def _tap_route(self, flow: str, mode: _FailureMode) -> str | None:
+        """Where `mode`'s tap on `flow` delivers, or ``None`` when the
+        fraction leaves the system.
+
+        Read from either side: the route is a property of the tap, not of
+        the state it is read in. Two sides naming different destinations
+        is refused by :meth:`_refuse_ill_formed_taps`, so the two lookups
+        cannot disagree by the time this is read."""
+        return mode.failure.routes.get(flow) or mode.repair.routes.get(flow)
+
+    def _tap_ordered_outputs(self) -> list[str]:
+        """The continuous out-flows, ordered so that a stream comes
+        before every output its taps deliver into.
+
+        Declaration order will not do: an output that receives a tap
+        reads the base of the stream it is fed from, and nothing stops a
+        modeller from declaring the receiver first. Chained taps then
+        settle in the wrong order and the receiver sweeps on a base its
+        source has not written yet. The walk terminates because
+        :meth:`_refuse_ill_formed_taps` has already ruled out a cycle."""
+        routes: dict[str, str] = {}
+        for flow in self.flows_continuous_out:
+            for mode, _, _ in self._taps_on(flow.name):
+                destination = self._tap_route(flow.name, mode)
+                if destination is not None:
+                    routes[flow.name] = destination
+
+        ordered: list[str] = []
+        placed: set[str] = set()
+
+        def place(flow: str) -> None:
+            if flow in placed:
+                return
+            placed.add(flow)
+            for source, destination in routes.items():
+                if destination == flow:
+                    place(source)
+            ordered.append(flow)
+
+        for flow in self.flows_continuous_out:
+            place(flow.name)
+        return ordered
+
+    def _tapped_into(
+        self, destination: str
+    ) -> list[tuple[str, _FailureMode, float, float]]:
+        """The taps delivering into `destination`: the stream each draws
+        from, the mode owning it, and its two fractions.
+
+        Walked in declaration order of the streams and then of the modes,
+        so what the receiving output sums is ordered by the declaration
+        and not by a dictionary."""
+        found: list[tuple[str, _FailureMode, float, float]] = []
+        for flow in self.flows_continuous_out:
+            for mode, failed, repaired in self._taps_on(flow.name):
+                if self._tap_route(flow.name, mode) == destination:
+                    found.append((flow.name, mode, failed, repaired))
+        return found
     def _conduit_on(self, flow: str) -> _Transfer | None:
         """The conduit metering `flow`, or ``None``. A flow is metered by
         at most one, :meth:`add_transfer` refusing a second claim on it."""
@@ -2517,20 +2875,93 @@ class ObjFlow:
                 return pair
         return None
 
-    def _produced_by_rules(self) -> set[str]:
+    def _produced_outputs(self) -> set[str]:
         """The continuous outputs whose delivery is something other than
-        their declared rate: what a rule set makes, and what a conduit
-        meters across.
+        their declared rate: what a rule set makes, what a conduit meters
+        across, and what a routed tap hands to a receiving output.
 
         These are exactly the outputs carrying a ``{flow}_produced_out``,
         what was actually made as opposed to what could have been, and it
         is that quantity the allocation distributes. Derived here rather
-        than at each of the two places that need it, because it is a
-        property of the component's own declarations and neither of them
-        knows anything the other does not."""
-        return {
+        than at each of the places that need it, because it is a property
+        of the component's own declarations and none of them knows
+        anything the others do not.
+
+        A receiver inherits the distinction from its sources: it carries
+        a production only where at least one stream feeding it publishes
+        one, since a fraction of what was merely *available* upstream is
+        not something that was made. Reached by fixpoint because a tap
+        may feed an output that is itself tapped; the walk is monotone,
+        so it terminates whether or not the routing graph is acyclic, and
+        :meth:`_refuse_ill_formed_taps` is what rules the cycle out."""
+        produced = {
             flow for rule_set in self.rule_sets for flow in rule_set.produced()
         } | {pair.source for pair in self.transfers if pair.is_conduit}
+        while True:
+            grown = produced | {
+                flow.name
+                for flow in self.flows_continuous_out
+                if any(
+                    source in produced
+                    for source, _, _, _ in self._tapped_into(flow.name)
+                )
+            }
+            if grown == produced:
+                return produced
+            produced = grown
+
+    def _tap_split(
+        self,
+        flow: str,
+        channel: str,
+        expr: dict[str, Any],
+        variables: list[dict],
+        equations: list[dict],
+    ) -> dict[str, Any]:
+        """`expr` with this output's taps taken off it, publishing what
+        it carried before they drew as ``{flow}_pre_tap_{channel}_out``.
+
+        Published, and not inlined, because the outputs a tap delivers
+        into read it: both sides of a routed tap then divide one and the
+        same number, so what one stream loses is exactly what the others
+        gain and the component's balance closes by construction rather
+        than by two expressions agreeing. An output nothing taps is
+        returned untouched and publishes nothing extra."""
+        if not self._taps_on(flow):
+            return expr
+        pre_tap = f"{flow}_pre_tap_{channel}_out"
+        variables.append(_float_attribute(pre_tap, 0.0))
+        equations.append({"target": pre_tap, "kind": "explicit", "expr": expr})
+        return {
+            "op": "mul",
+            "args": [_var(self.name, pre_tap), _var(self.name, f"{flow}_tap_rate")],
+        }
+
+    def _tap_delivery(self, destination: str, channel: str) -> list[dict[str, Any]]:
+        """What each tap routed into `destination` hands it: the fraction
+        it takes, of what its own stream carried before any tap drew.
+
+        A source publishing what it actually made is read on that
+        quantity; one that publishes only what it could deliver is read
+        on that, which is what it delivers. The two cannot be mixed up:
+        the channel a source is read on is decided by
+        :meth:`_produced_outputs`, the same predicate that decides
+        whether the source publishes a production at all."""
+        produced = self._produced_outputs()
+        terms = []
+        for source, mode, failed, repaired in self._tapped_into(destination):
+            made = channel == "produced" and source in produced
+            carried = "produced" if made else "capability"
+            terms.append(
+                {
+                    "op": "mul",
+                    "args": [
+                        _var(self.name, f"{source}_pre_tap_{carried}_out"),
+                        self._mode_term(mode, failed, repaired),
+                    ],
+                }
+            )
+        return terms
 
     def _has_transfer_delta(self, flow: str) -> bool:
         """Whether a two-stream pair adds a signed delta to `flow`."""
@@ -2602,7 +3033,7 @@ class ObjFlow:
         would signal it."""
         factors = [
             _var(self.name, f"{flow.name}_effective_rate")
-            if self._deratings_on(flow.name)
+            if self._caps_on(flow.name)
             else _var(self.name, f"{flow.name}_out_rate")
         ]
         if flow.profile is not None:
@@ -2642,16 +3073,42 @@ class ObjFlow:
         the return to nominal implicit: leaving the failing state
         restores the rate with nothing declared on the other side."""
         terms = [_var(self.name, f"{flow}_out_rate")]
-        for mode, failed, repaired in self._deratings_on(flow):
-            terms.append(
-                {
-                    "op": "if",
-                    "cond": _state_active(self.name, mode.name, "nok"),
-                    "then": _float(failed),
-                    "otherwise": _float(repaired),
-                }
-            )
+        for mode, failed, repaired in self._caps_on(flow):
+            terms.append(self._mode_term(mode, failed, repaired))
         return _min(terms)
+
+    def _mode_term(
+        self, mode: _FailureMode, failed: float, repaired: float
+    ) -> dict[str, Any]:
+        """What one mode contributes to a channel, read from its
+        automaton **location** rather than from a variable it wrote.
+
+        That is what makes the return to nominal implicit on both
+        channels: leaving the failing state restores the contribution
+        with nothing declared on the other side."""
+        return {
+            "op": "if",
+            "cond": _state_active(self.name, mode.name, "nok"),
+            "then": _float(failed),
+            "otherwise": _float(repaired),
+        }
+
+    def _tap_rate_expr(self, flow: str) -> dict[str, Any]:
+        """What the taps LEAVE of `flow`: one minus the sum of what each
+        mode takes off it (R6).
+
+        A sum and not a minimum, because taps are parallel draws on one
+        stream: what leaves by one does not pass the other, so two leaks
+        of 0.1 and 0.2 leave 0.7. Folded by minimum they would leave 0.8,
+        and the second leak would cost nothing. The sum is bounded at one
+        by :meth:`_refuse_ill_formed_taps`, at build time and over all
+        the modes at once, so this expression needs no clamp and the
+        component cannot be relieved of more than it carries."""
+        taken = [
+            self._mode_term(mode, failed, repaired)
+            for mode, failed, repaired in self._taps_on(flow)
+        ]
+        return {"op": "sub", "lhs": _float(NOMINAL_RATE), "rhs": _sum(taken)}
 
     def _profile_expr(self, profile: _Profile) -> dict[str, Any]:
         """The clamped sinusoid, as an expression of simulation time."""
@@ -2767,10 +3224,10 @@ class ObjFlow:
                 repair_param=repair_rate,
                 targets=list(targets or []),
                 failure_cond=failure_cond,
-                failure_deratings=self._resolve_deratings(
+                failure=self._resolve_effects(
                     name, "failure_effects", failure_effects
                 ),
-                repair_deratings=self._resolve_deratings(
+                repair=self._resolve_effects(
                     name, "repair_effects", repair_effects
                 ),
             )
@@ -2808,6 +3265,9 @@ class ObjFlow:
         # twice, and a conservation guard has to hold at the point the
         # document is written.
         self._refuse_flows_carried_twice()
+        # Not re-run but run once, and only here: a tap names an output
+        # that may legitimately be declared after the mode taking it.
+        self._refuse_ill_formed_taps()
 
         variables: list[dict] = []
         ports: list[dict] = []
@@ -3309,14 +3769,23 @@ class ObjFlow:
         ports: list[dict],
         equations: list[dict],
     ) -> None:
-        """The continuous out-flows: the rate their deratings leave, the
-        profile scaling them, their three channels, the out port carrying
-        the per-connection channels, and what they could deliver.
+        """The continuous out-flows: the rate their caps leave, the
+        fraction their taps take off, the profile scaling them, their
+        three channels, the out port carrying the per-connection
+        channels, and what they could deliver.
 
         What could be delivered and what was actually made are two
         equations, not one: they differ as soon as a rule has several
-        outputs, and it is the second that the allocation distributes."""
+        outputs, and it is the second that the allocation distributes.
+
+        A tapped output publishes a third quantity, ``{flow}_pre_tap_*``,
+        which is what it carried before its taps drew on it. Named rather
+        than inlined for two reasons that are one: the receiving output
+        reads it to know what it was handed, so both sides of a routed
+        tap divide the same number, and what left the stream is legible
+        beside what stayed on it."""
         me = self.name
+        produced_outputs = self._produced_outputs()
         for continuous_out in self.flows_continuous_out:
             flow_name = continuous_out.name
             # muscadet's shared `{flow}_out_rate`: the derating endpoint,
@@ -3324,9 +3793,9 @@ class ObjFlow:
             # layer, so a mode that derates the flow has one place to
             # write and nothing to fight over.
             variables.append(_float_attribute(f"{flow_name}_out_rate", NOMINAL_RATE))
-            if self._deratings_on(flow_name):
-                # What the failure modes bearing on this output leave of
-                # it, folded by minimum with the shared rate above.
+            if self._caps_on(flow_name):
+                # What the failure modes capping this output leave of it,
+                # folded by minimum with the shared rate above.
                 variables.append(
                     _float_attribute(f"{flow_name}_effective_rate", NOMINAL_RATE)
                 )
@@ -3335,6 +3804,21 @@ class ObjFlow:
                         "target": f"{flow_name}_effective_rate",
                         "kind": "explicit",
                         "expr": self._effective_rate_expr(flow_name),
+                    }
+                )
+            if self._taps_on(flow_name):
+                # What the failure modes tapping this output leave of it
+                # once each has taken its fraction: a separate channel
+                # from the cap above and never folded into it, the two
+                # composing differently and meaning opposite things.
+                variables.append(
+                    _float_attribute(f"{flow_name}_tap_rate", NOMINAL_RATE)
+                )
+                equations.append(
+                    {
+                        "target": f"{flow_name}_tap_rate",
+                        "kind": "explicit",
+                        "expr": self._tap_rate_expr(flow_name),
                     }
                 )
             if continuous_out.profile is not None:
@@ -3385,6 +3869,13 @@ class ObjFlow:
                     "op": "mul",
                     "args": factors + [_sum(rule_capability[flow_name])],
                 }
+            elif self._tapped_into(flow_name):
+                # An output that receives: what it carries is what the
+                # taps routed into it took off their own streams, and
+                # nothing else. `_refuse_ill_formed_taps` is what
+                # guarantees "nothing else", a receiver being allowed no
+                # production of its own.
+                nominal = _sum(self._tap_delivery(flow_name, "capability"))
             elif continuous_out.capability_expr is not None:
                 nominal = continuous_out.capability_expr
             else:
@@ -3407,7 +3898,13 @@ class ObjFlow:
                 {
                     "target": f"{flow_name}_capability_out",
                     "kind": "explicit",
-                    "expr": self._capacity_bounded_capability(flow_name, nominal),
+                    "expr": self._tap_split(
+                        flow_name,
+                        "capability",
+                        self._capacity_bounded_capability(flow_name, nominal),
+                        variables,
+                        equations,
+                    ),
                 }
             )
             if conduit is not None:
@@ -3428,6 +3925,27 @@ class ObjFlow:
                                     _clamped_at_zero(_var(me, f"{flow_name}_fed_in")),
                                 ],
                             },
+                        ),
+                    }
+                )
+            elif self._tapped_into(flow_name) and flow_name in produced_outputs:
+                # A receiver whose sources publish what they actually
+                # made: what it was handed is a fraction of that, never
+                # of what they merely could have made.
+                variables.append(_float_attribute(f"{flow_name}_produced_out", 0.0))
+                equations.append(
+                    {
+                        "target": f"{flow_name}_produced_out",
+                        "kind": "explicit",
+                        "expr": self._tap_split(
+                            flow_name,
+                            "produced",
+                            self._capacity_bounded_capability(
+                                flow_name,
+                                _sum(self._tap_delivery(flow_name, "produced")),
+                            ),
+                            variables,
+                            equations,
                         ),
                     }
                 )
@@ -3463,7 +3981,13 @@ class ObjFlow:
                     {
                         "target": f"{flow_name}_produced_out",
                         "kind": "explicit",
-                        "expr": self._capacity_bounded_capability(flow_name, produced),
+                        "expr": self._tap_split(
+                            flow_name,
+                            "produced",
+                            self._capacity_bounded_capability(flow_name, produced),
+                            variables,
+                            equations,
+                        ),
                     }
                 )
 
@@ -3996,7 +4520,7 @@ class System:
 
         for name, obj in self.comp.items():
             component = by_name[name]
-            produced_by_rules = obj._produced_by_rules()
+            produced_by_rules = obj._produced_outputs()
             for flow in obj.flows_continuous_out:
                 port = f"{flow.name}_out"
                 served = out_edges.get((name, flow.name), [])
@@ -4226,8 +4750,10 @@ class System:
         # potentials a conductive law is written over.
         for name, obj in self.comp.items():
             for flow in obj.flows_continuous_out:
-                if obj._deratings_on(flow.name):
+                if obj._caps_on(flow.name):
                     step(name, f"{flow.name}_effective_rate")
+                if obj._taps_on(flow.name):
+                    step(name, f"{flow.name}_tap_rate")
                 if flow.profile is not None:
                     step(name, f"{flow.name}_out_profile")
             for pair in obj.transfers:
@@ -4253,6 +4779,14 @@ class System:
             for pair in self.comp[producer].transfers:
                 if not pair.is_conduit:
                     step(producer, f"{pair.name}_moved")
+            # What each tapped stream carried before its taps drew, for
+            # every stream of the component at once and ahead of the
+            # capabilities: an output that RECEIVES a tap reads the base
+            # of the output it is fed from, and the two are ordered by
+            # the routing, not by which was declared first.
+            for flow_name in self.comp[producer]._tap_ordered_outputs():
+                if self.comp[producer]._taps_on(flow_name):
+                    step(producer, f"{flow_name}_pre_tap_capability_out")
             for flow in self.comp[producer].flows_continuous_out:
                 port = f"{flow.name}_out"
                 step(producer, f"{flow.name}_capability_out")
@@ -4281,7 +4815,13 @@ class System:
 
         # 3. Production, along the flow again.
         for producer in topological:
-            produced_by_rules = self.comp[producer]._produced_by_rules()
+            produced_by_rules = self.comp[producer]._produced_outputs()
+            for flow_name in self.comp[producer]._tap_ordered_outputs():
+                if (
+                    self.comp[producer]._taps_on(flow_name)
+                    and flow_name in produced_by_rules
+                ):
+                    step(producer, f"{flow_name}_pre_tap_produced_out")
             for flow in self.comp[producer].flows_continuous_out:
                 served = out_edges.get((producer, flow.name), [])
                 if flow.name in produced_by_rules:
@@ -4623,8 +5163,12 @@ class System:
             for measurement in obj.measurements_in:
                 observable.update(measurement.channels())
             for flow in obj.flows_continuous_out:
-                if obj._deratings_on(flow.name):
+                if obj._caps_on(flow.name):
                     observable.add(f"{flow.name}_effective_rate")
+                if obj._taps_on(flow.name):
+                    observable.add(f"{flow.name}_tap_rate")
+                    observable.add(f"{flow.name}_pre_tap_capability_out")
+                    observable.add(f"{flow.name}_pre_tap_produced_out")
                 if flow.profile is not None:
                     observable.add(f"{flow.name}_out_profile")
                 if obj._has_transfer_delta(flow.name):
