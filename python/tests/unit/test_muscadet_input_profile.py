@@ -241,24 +241,24 @@ def test_the_plugin_carries_an_input_profile():
         )
 
 
-# --- the limitation, pinned so it cannot change in silence --------------
+# --- a profile moves whether or not anything else does -------------------
 
 
 @pytest.mark.parametrize("side", ["in", "out"])
-def test_a_profile_needs_something_to_integrate(side):
-    """A model with a profile and NO continuous state anywhere reports
-    the profile's value at t = 0 at every sample instant.
+def test_a_profile_moves_with_nothing_to_integrate(side):
+    """A model whose ONLY time dependence is the profile, with no volume
+    and no ODE anywhere, still follows its curve.
 
-    The engine has nothing to advance, so it evaluates the sweep once and
-    the sample flush records the variables as they stand. It is the same
-    on both sides, which is what makes it a property of sampling rather
-    than of the profile, and the two are asserted together so a change to
-    one that missed the other would be caught.
+    The engine decides whether continuous evolution runs at all, and used
+    to decide it on the ODE attributes and the armed hazards alone. A
+    declared profile is an explicit equation over the clock and nothing
+    else, so a model carrying one and nothing else found nothing to
+    advance: it evaluated the sweep once at the initial instant and
+    reported that value at every sample instant for the rest of the run,
+    a curve reported as a constant with nothing to signal it.
 
-    This is pinned rather than fixed: what a sample means when nothing
-    integrates is a contract decision, not an implementation detail, and
-    every model in the corpus that carries a profile also carries a
-    volume."""
+    Both sides are asserted together, so a change to one that missed the
+    other is caught."""
 
     class Source(mu.ObjFlow):
         def add_flows(self):
@@ -276,6 +276,60 @@ def test_a_profile_needs_something_to_integrate(side):
     system.connect("S", "w", "T", "w")
     result = system.simulate(t_max=24.0, samples=HOURS)
 
-    published = sampled(result, f"{'S' if side == 'out' else 'T'}_w_{side}_profile", 6.0)
-    assert published == curve_at(0.0)
-    assert published != pytest.approx(curve_at(6.0))
+    owner = "S" if side == "out" else "T"
+    for hour in HOURS:
+        assert abs(
+            sampled(result, f"{owner}_w_{side}_profile", hour) - curve_at(hour)
+        ) < CROSSING_TOL, hour
+        assert abs(sampled(result, "T_w_fed_in", hour) - curve_at(hour)) < (
+            CROSSING_TOL
+        ), hour
+
+
+def test_a_watched_guard_on_a_profile_is_located_with_nothing_to_integrate():
+    """The worse half of the same defect, and the reason it was worth
+    fixing rather than documenting: a guard on a profiled quantity was
+    never crossed, because the quantity never moved.
+
+    The curve passes 0.8 on its way up, at the hour whose sine is 0.5,
+    which is 2. A mode watching it must fire there and nowhere else."""
+
+    class Source(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_out(
+                name="w", var_fed_default=1.0, profile=CURVE
+            )
+
+    class Alarm(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="w", var_demand_in_default=100.0)
+            self.add_flow_continuous_out(name="alarm")
+            self.add_rule_set(
+                name="trip",
+                rules=[
+                    {
+                        "cond": [{"name": "w", "op": ">", "value": 0.8}],
+                        "cons": {},
+                        "prod": {"alarm": 1.0},
+                    }
+                ],
+            )
+
+    class Watcher(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="alarm", var_demand_in_default=100.0)
+
+    system = mu.System("watched_profile")
+    system.add_component(Source, "S")
+    system.add_component(Alarm, "A")
+    system.add_component(Watcher, "W")
+    system.connect("S", "w", "A", "w")
+    system.connect("A", "alarm", "W", "alarm")
+    # sin(2 pi t / 24) = 0.5 at t = 2, and the curve is 0.8 there.
+    assert abs(curve_at(2.0) - 0.8) < 1e-12
+    result = system.simulate(t_max=12.0, samples=[1.9, 2.1, 6.0, 11.0])
+    assert abs(sampled(result, "W_alarm_fed_in", 1.9)) < CROSSING_TOL
+    assert abs(sampled(result, "W_alarm_fed_in", 2.1) - 1.0) < CROSSING_TOL
+    assert abs(sampled(result, "W_alarm_fed_in", 6.0) - 1.0) < CROSSING_TOL
+    # And back below on the way down, at t = 10.
+    assert abs(sampled(result, "W_alarm_fed_in", 11.0)) < CROSSING_TOL
