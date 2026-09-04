@@ -133,6 +133,33 @@ pub struct EngineConfig {
     /// Safety cap on fixpoint iterations: beyond it the model is
     /// declared to have an instantaneous loop (typed error, not a hang).
     pub max_fixpoint_iterations: usize,
+    /// Safety cap on how many times ONE transition may fire in a single
+    /// trajectory. Beyond it the model is declared to be chattering
+    /// (typed error, not a run that never ends). `0` disables the cap.
+    ///
+    /// The two Zeno guards this sits beside catch a loop that does not
+    /// advance time: [`EngineError::WatchedLoop`] counts firings at one
+    /// instant, [`EngineError::FlowChattering`] counts segment restarts
+    /// at one instant. Neither sees a **limit cycle**, where time does
+    /// advance, by a little, every turn. A volume oscillating across its
+    /// bound at the scale of its hysteresis is the case this was built
+    /// for: it fires hundreds of thousands of times, produces a
+    /// trajectory that looks right at every sample instant, and never
+    /// finishes.
+    pub max_transition_firings: u64,
+    /// Safety cap on how many times the continuous flow network may
+    /// restart an integration segment in a single trajectory. Beyond it
+    /// the active set is declared to be chattering (typed error, not a
+    /// run that never ends). `0` disables the cap.
+    ///
+    /// The companion of [`Self::max_transition_firings`] on the flow
+    /// side, and it exists for the same blind spot.
+    /// [`EngineError::FlowChattering`] resets its count as soon as the
+    /// clock moves by one event-location tolerance, so a cycle that
+    /// advances time by a little every turn escapes it: the run does not
+    /// fail, it grinds. A plant restarting a segment on every accepted
+    /// solver step is the case this was built for.
+    pub max_flow_restarts: u64,
     /// Numerical parameters of the default ODE backend (explicit,
     /// recorded as provenance: validation-contract level 3).
     pub ode: SolverParams,
@@ -162,6 +189,8 @@ impl Default for EngineConfig {
             stop_at_targets: false,
             confluence_check: false,
             max_fixpoint_iterations: 10_000,
+            max_transition_firings: 100_000,
+            max_flow_restarts: 100_000,
             ode: SolverParams::default(),
             samples: Vec::new(),
             seed: 0,
@@ -293,6 +322,52 @@ pub enum EngineError {
         /// Qualified `operator[consumer]` name of every edge that
         /// crossed there, comma separated.
         edges: String,
+    },
+    /// The continuous flow network restarted segments past its budget:
+    /// a limit cycle in the active set, where time advances a little
+    /// every turn and [`Self::FlowChattering`] cannot see it.
+    #[error(
+        "the active set of the continuous flow network restarted \
+         {restarts} segments between t={since} and t={time} (average step \
+         {step:e}): the network is chattering, not evolving; edges \
+         crossing most recently: {edges}. Raise `max_flow_restarts` if \
+         this is genuinely a fast-switching model"
+    )]
+    FlowLimitCycle {
+        /// Restarts counted, which is the budget.
+        restarts: u64,
+        /// When the first restart happened.
+        since: f64,
+        /// When the budget ran out.
+        time: f64,
+        /// Mean simulated time between two restarts: the number that
+        /// says this is a cycle at a numerical scale, not a physical one.
+        step: f64,
+        /// Qualified `operator[consumer]` name of the edges that crossed
+        /// at the last restart, comma separated.
+        edges: String,
+    },
+    /// One transition fired past its budget: a limit cycle, where time
+    /// advances a little every turn and neither Zeno guard can see it.
+    #[error(
+        "transition `{transition}` fired {firings} times between t={since} \
+         and t={time} (average step {step:e}): the model is chattering, not \
+         evolving. Raise `max_transition_firings` if this is genuinely a \
+         high-frequency model"
+    )]
+    TransitionChattering {
+        /// Qualified name of the transition that ran away.
+        transition: String,
+        /// Firings counted, which is the budget.
+        firings: u64,
+        /// When it first fired.
+        since: f64,
+        /// When the budget ran out.
+        time: f64,
+        /// Mean simulated time between two of its firings: the number
+        /// that says this is a cycle at a numerical scale rather than a
+        /// physical one.
+        step: f64,
     },
 }
 
@@ -559,6 +634,10 @@ pub struct Snapshot {
     sampled: Vec<IndicatorSeries>,
     sample_cursor: usize,
     watched_streak: (f64, usize),
+    firings: Vec<u64>,
+    first_firing: Vec<f64>,
+    flow_restarts: u64,
+    first_flow_restart: f64,
     rng: ChaCha8Rng,
     worklist: BTreeSet<FnIdx>,
 }
@@ -1782,6 +1861,15 @@ pub struct Engine<'m> {
     sample_cursor: usize,
     /// Consecutive watched firings without time advancing (Zeno guard).
     watched_streak: (f64, usize),
+    /// Per transition: how many times it has fired, and when it first
+    /// did. The pair is what turns a runaway count into a diagnosis, the
+    /// span being what says a cycle is numerical rather than physical.
+    firings: Vec<u64>,
+    first_firing: Vec<f64>,
+    /// Segment restarts of the flow network over the whole run, and when
+    /// the first one happened: the flow-side counterpart of `firings`.
+    flow_restarts: u64,
+    first_flow_restart: f64,
     /// Replica generator (master seed + substream; `schedule_stochastic` draws).
     rng: ChaCha8Rng,
     /// Whether the model carries any stochastic distribution (provenance).
@@ -1933,6 +2021,10 @@ impl<'m> Engine<'m> {
                 .collect(),
             sample_cursor: 0,
             watched_streak: (0.0, 0),
+            firings: vec![0; model.transitions.len()],
+            first_firing: vec![f64::NAN; model.transitions.len()],
+            flow_restarts: 0,
+            first_flow_restart: f64::NAN,
             rng,
             stochastic,
             worklist: BTreeSet::new(),
@@ -2195,6 +2287,10 @@ impl<'m> Engine<'m> {
             sampled: self.sampled.clone(),
             sample_cursor: self.sample_cursor,
             watched_streak: self.watched_streak,
+            firings: self.firings.clone(),
+            first_firing: self.first_firing.clone(),
+            flow_restarts: self.flow_restarts,
+            first_flow_restart: self.first_flow_restart,
             rng: self.rng.clone(),
             worklist: self.worklist.clone(),
         }
@@ -2218,6 +2314,10 @@ impl<'m> Engine<'m> {
         self.sampled = snap.sampled.clone();
         self.sample_cursor = snap.sample_cursor;
         self.watched_streak = snap.watched_streak;
+        self.firings = snap.firings.clone();
+        self.first_firing = snap.first_firing.clone();
+        self.flow_restarts = snap.flow_restarts;
+        self.first_flow_restart = snap.first_flow_restart;
         self.rng = snap.rng.clone();
         self.worklist = snap.worklist.clone();
         // The indexed watched set is *derived*, never carried: rewinding
@@ -2550,6 +2650,7 @@ impl<'m> Engine<'m> {
             });
         }
         self.events.push(event.clone());
+        self.note_firing(trans_idx)?;
         // Sequence analysis: record the entry into a monitored state.
         if self.config.sequences && transition.monitored {
             self.seq_events.push(SeqEvent {
@@ -2978,6 +3079,7 @@ impl<'m> Engine<'m> {
                             edges: self.edge_names(&stuck),
                         });
                     }
+                    self.note_flow_restart(&stuck)?;
                     if self.time >= t_target {
                         return Ok(None);
                     }
@@ -3006,6 +3108,78 @@ impl<'m> Engine<'m> {
                 .continuous_rates
                 .iter()
                 .any(|&idx| self.pending[idx].is_some())
+    }
+
+    /// Limit-cycle guard on the flow side: the active set must not
+    /// restart segments past its budget over the whole run.
+    ///
+    /// [`EngineError::FlowChattering`] resets as soon as the clock moves
+    /// by one event-location tolerance, so it sees only a cycle frozen
+    /// in time. This one counts across the run, which is what catches a
+    /// network restarting a segment on every accepted solver step: no
+    /// single instant is stuck, and the run grinds instead of failing.
+    fn note_flow_restart(&mut self, stuck: &[usize]) -> Result<(), EngineError> {
+        let budget = self.config.max_flow_restarts;
+        if budget == 0 {
+            return Ok(());
+        }
+        if self.flow_restarts == 0 {
+            self.first_flow_restart = self.time;
+        }
+        self.flow_restarts += 1;
+        if self.flow_restarts < budget {
+            return Ok(());
+        }
+        let since = self.first_flow_restart;
+        Err(EngineError::FlowLimitCycle {
+            restarts: self.flow_restarts,
+            since,
+            time: self.time,
+            step: if self.flow_restarts > 1 {
+                (self.time - since) / (self.flow_restarts - 1) as f64
+            } else {
+                0.0
+            },
+            edges: self.edge_names(stuck),
+        })
+    }
+
+    /// Limit-cycle guard: one transition must not fire past its budget
+    /// in a single trajectory.
+    ///
+    /// The two guards beside this one catch a loop that does not advance
+    /// time at all. This one catches the case where time advances by a
+    /// little every turn, which is what a volume oscillating across its
+    /// bound at the scale of its hysteresis does: the run never fails,
+    /// it simply never ends, and the trajectory looks right at every
+    /// sample instant while it happens. The mean step reported is what
+    /// makes the diagnosis land, being a numerical scale and not a
+    /// physical one.
+    fn note_firing(&mut self, trans_idx: TransIdx) -> Result<(), EngineError> {
+        let budget = self.config.max_transition_firings;
+        if budget == 0 {
+            return Ok(());
+        }
+        if self.firings[trans_idx] == 0 {
+            self.first_firing[trans_idx] = self.time;
+        }
+        self.firings[trans_idx] += 1;
+        if self.firings[trans_idx] < budget {
+            return Ok(());
+        }
+        let since = self.first_firing[trans_idx];
+        let span = self.time - since;
+        Err(EngineError::TransitionChattering {
+            transition: self.model.transitions[trans_idx].name.clone(),
+            firings: self.firings[trans_idx],
+            since,
+            time: self.time,
+            step: if self.firings[trans_idx] > 1 {
+                span / (self.firings[trans_idx] - 1) as f64
+            } else {
+                0.0
+            },
+        })
     }
 
     /// Zeno guard: watched transitions must not keep firing without

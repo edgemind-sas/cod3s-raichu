@@ -175,7 +175,7 @@ fn seal_model(model_json: &str) -> PyResult<String> {
 ///
 /// The GIL is released while the engine runs.
 #[pyfunction]
-#[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, samples = None, seed = 0, rng_stream = 0, flow = None))]
+#[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, samples = None, seed = 0, rng_stream = 0, flow = None, max_transition_firings = None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn simulate_json(
     py: Python<'_>,
@@ -187,10 +187,12 @@ fn simulate_json(
     seed: u64,
     rng_stream: u64,
     flow: Option<FlowConfig>,
+    max_transition_firings: Option<u64>,
 ) -> PyResult<String> {
     let compiled = parse_and_compile(model_json)?;
     let flow = flow_policy(flow);
     py.detach(|| {
+        let defaults = EngineConfig::default();
         let config = EngineConfig {
             t_max,
             journal,
@@ -199,7 +201,9 @@ fn simulate_json(
             seed,
             rng_stream,
             flow,
-            ..EngineConfig::default()
+            max_transition_firings: max_transition_firings
+                .unwrap_or(defaults.max_transition_firings),
+            ..defaults
         };
         let engine =
             Engine::new(&compiled, config).map_err(|e| SimulationError::new_err(e.to_string()))?;

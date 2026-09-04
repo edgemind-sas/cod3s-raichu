@@ -212,6 +212,43 @@ promises the flows more precisely than a boundary crossing can be
 located, and a freshly resolved network can re-cross its own boundary on
 the spot.
 
+## When a run never ends
+
+A simulation that grinds is worse than one that fails: the trajectory
+reads correctly at every sample instant while it happens, so the only
+symptom is the wall clock.
+
+Two Zeno guards have always caught a loop that does **not** advance time
+(`WatchedLoop` for transitions, `FlowChattering` for the flow active
+set). Neither can see a **limit cycle**, where the clock does move, by a
+little, every turn. Two budgets close that:
+
+| Knob | Caps | Default |
+|---|---|---|
+| `max_transition_firings` | how many times ONE transition may fire in a trajectory | 100 000 |
+| `max_flow_restarts` | how many segments the flow network may restart in a trajectory | 100 000 |
+
+Both fail with the culprit named and the **mean simulated step** between
+its turns. That number is the diagnosis: microseconds between firings of
+a bound automaton is a numerical scale, and no model of a plant means it.
+
+```
+transition `T.buffer_bounds.buffer_reach_full` fired 100000 times
+between t=4.000000000000002 and t=4.799998091533782
+(average step 8.0e-6): the model is chattering, not evolving.
+```
+
+Set either to `0` to lift it: a genuinely fast-switching model is a
+legitimate thing to want, and a cap that could not be raised would be a
+limit on what may be modelled rather than a diagnostic.
+
+The commonest cause is not a numerical setting at all. A volume that
+declares no pass-through demand asks for nothing once full, falls below
+its bound by the hysteresis width, claims its fill rate again and
+refills: declare `var_demand_default` on its inlet and the cycle
+disappears. The second commonest is a guard comparing a **rate**, whose
+value depends on the decision the guard makes.
+
 ## Choosing a setting
 
 - **Keep the defaults** for correctness-critical work, small models, or

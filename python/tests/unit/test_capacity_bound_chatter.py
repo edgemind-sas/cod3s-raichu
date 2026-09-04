@@ -1,62 +1,45 @@
-"""A buffer that claims a fill rate and also delivers chatters at its
-full bound, forever, and nothing says so.
+"""A volume that asks for nothing when full does not drain: it chatters,
+and the engine now says so.
 
-This is a **known defect**, pinned here rather than left to be found
-again. It was found while authoring an industrial plant whose buffer does
-exactly this, and it is what stops that plant from running at all.
+`add_capacity` documents that a full volume carries upstream "what it can
+still take, which is what currently leaves it, capped by the demand
+already passing through it", and warns that a volume declaring no
+pass-through demand "asks for nothing once full, and therefore drains".
 
-What happens
-------------
+**It does not drain.** It asks for nothing, falls below its bound by the
+width of the hysteresis band, leaves the bound, claims its fill rate
+again, refills at once, and re-enters. The cycle turns at the scale of
+the hysteresis, `1e-6` of the volume: for a volume of 4 drained at 1 that
+is four microseconds a turn, a quarter of a million turns over five units
+of time, and tens of millions over the horizon an industrial study asks
+for.
 
-A volume declaring `fill_rate` claims that rate for itself while it has
-room. Give it an outflow as well and, the instant it fills, the two
-compete:
+Nothing saw it before. `WatchedLoop` counts watched firings **at one
+instant** and these are at different instants; `FlowChattering` counts
+active-set restarts **within one segment** and each turn is its own
+segment. Time does advance, by a little, every turn. So the run did not
+fail: it advanced, produced a trajectory that reads correctly at every
+sample instant, and never finished.
 
-1. the volume reaches its bound and stops taking;
-2. its outflow keeps running, so the content falls below the bound;
-3. the bound is left, the claim resumes, and the volume refills at once;
-4. the bound is reached again.
+`max_transition_firings` closes that. It is not a fix for the model, it
+is the guarantee that a model like this fails loudly rather than
+silently, which is the whole difference between a wrong answer and no
+answer.
 
-The cycle repeats every **four microseconds**, which is the
-event-location tolerance: at t = 4 exactly, where the buffer below fills,
-and 62 500 times per half unit of time thereafter. The content sits at
-3.999997 and never moves. The hysteresis band that exists to prevent
-exactly this does not, because the claim of 2 against a drain of 1 carries
-the content back across the band inside a single step.
-
-Why nothing catches it
-----------------------
-
-The engine has two guards and neither can see this. `WatchedLoop` counts
-watched firings **at one instant**, and these are at different instants,
-four microseconds apart. `FlowChattering` counts active-set restarts
-within one integration segment, and each of these cycles is its own
-segment. So the run does not fail: it advances, emitting a quarter of a
-million events over five units of time, and would emit tens of millions
-over the twenty units the plant's own study asks for.
-
-That is the serious half. A simulator that produces a non-physical
-trajectory must fail loudly; this one runs, and the only symptom is that
-it never finishes.
-
-What this test asserts
-----------------------
-
-The **correct** behaviour, marked `xfail(strict=True)`: a buffer filling
-against a steady supply reaches its bound once and stays there. The day
-the defect is fixed, this test passes, strict mode turns that into a
-failure, and whoever fixed it is told to delete the marker.
+The cure for the model is one declaration, and it is asserted here beside
+the diagnosis so the error message has something true to point at.
 """
 
 import pytest
 
+import pyraichu
 import pyraichu.muscadet as mu
 
 #: Where the buffer fills: capacity 4, net inflow 1 from an empty start.
 FILLS_AT = 4.0
 
 
-def buffer_with_claim(fill_rate: float) -> mu.System:
+def buffer_system(pass_through: float, fill_rate: float = 2.0) -> mu.System:
     """A supply of 3, a buffer of 4 claiming `fill_rate` on top of the
     demand passing through it, and a load taking 1."""
 
@@ -66,7 +49,9 @@ def buffer_with_claim(fill_rate: float) -> mu.System:
 
     class Buffer(mu.ObjFlow):
         def add_flows(self):
-            self.add_flow_continuous_in(name="H2")
+            self.add_flow_continuous_in(
+                name="H2", var_demand_in_default=pass_through
+            )
             self.add_flow_continuous_out(name="H2", var_fed_default=2.0)
             self.add_capacity(
                 name="buffer",
@@ -89,20 +74,47 @@ def buffer_with_claim(fill_rate: float) -> mu.System:
     return system
 
 
-def test_a_buffer_that_claims_nothing_is_stable():
-    """The control: with no claim the buffer never fills, because it
-    only asks for what passes through it, and nothing chatters.
+# --- 1. the model that is right ------------------------------------------
 
-    This is what makes the failure below a property of the claim and not
-    of the capacity, the outflow or the supply."""
-    result = buffer_with_claim(fill_rate=0.0).simulate(t_max=5.0)
+
+def test_a_buffer_that_declares_its_pass_through_demand_holds():
+    """The cure, and it is one declaration.
+
+    Full, the volume asks for what leaves it, so what enters equals what
+    leaves and the content sits on the bound. Two events for the whole
+    run: leaving empty, and reaching full."""
+    result = buffer_system(pass_through=1.0).simulate(
+        t_max=8.0, samples=[3.0, 5.0, 8.0]
+    )
+    assert len(result.events) == 2, result.events
+    content = dict(result.samples["T_buffer_content"])
+    entering = dict(result.samples["T_H2_fed_in"])
+    leaving = dict(result.samples["T_H2_fed_out"])
+    for instant in (5.0, 8.0):
+        assert abs(content[instant] - 4.0) < 1e-9, instant
+        assert abs(entering[instant] - leaving[instant]) < 1e-9, instant
+
+
+def test_a_buffer_that_claims_nothing_never_fills_and_never_chatters():
+    """The other stable model: with no claim the volume only asks for
+    what passes through it, so it never fills and nothing crosses a
+    bound.
+
+    Between the two, the failure below is a property of the claim WITHOUT
+    the demand, and not of the capacity, the outflow or the supply."""
+    result = buffer_system(pass_through=0.0, fill_rate=0.0).simulate(t_max=5.0)
     assert len(result.events) == 0, result.events[:5]
 
 
-def test_a_buffer_reaches_its_bound_before_it_fills():
-    """Up to the bound the trajectory is exact: the buffer takes its
-    claim of 2, delivers 1, and rises at 1 per unit time."""
-    result = buffer_with_claim(fill_rate=2.0).simulate(
+# --- 2. the model that is under-declared, and the diagnosis --------------
+
+
+def test_the_trajectory_is_exact_right_up_to_the_bound():
+    """The chatter is at the bound and nowhere before it: up to t = 4 the
+    buffer takes its claim of 2, delivers 1, and rises at 1 per unit
+    time. A model that is wrong from the start would be a different
+    finding."""
+    result = buffer_system(pass_through=0.0).simulate(
         t_max=1.0, samples=[0.25, 0.75]
     )
     content = dict(result.samples["T_buffer_content"])
@@ -110,36 +122,38 @@ def test_a_buffer_reaches_its_bound_before_it_fills():
     assert abs(content[0.75] - 0.75) < 1e-6
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known defect: a buffer claiming a fill rate chatters at its full "
-        "bound, every 4 us, without terminating and without either Zeno "
-        "guard seeing it. Delete this marker when it is fixed."
-    ),
-)
-def test_a_full_buffer_settles_on_its_bound():
-    """What should happen: the buffer reaches its bound once, at t = 4,
-    and stays there.
+def test_an_under_declared_buffer_fails_loudly_at_its_bound():
+    """What this guard exists for: the run stops, names the transition
+    that ran away, and reports the mean step between its firings.
 
-    A handful of events is the whole of a correct run: entering the
-    bound, and whatever the flow resolution needs to settle around it.
-    What happens instead is 125 000."""
-    result = buffer_with_claim(fill_rate=2.0).simulate(t_max=4.5)
-    assert len(result.events) < 10, (
-        f"{len(result.events)} events; the bound is being crossed "
-        f"repeatedly from t={result.events[1].time if len(result.events) > 1 else '?'}"
+    That step is the number that makes the diagnosis land. Microseconds
+    between firings of a bound automaton is a numerical scale, not a
+    physical one, and no model of a plant means it."""
+    with pytest.raises(pyraichu.SimulationError) as raised:
+        buffer_system(pass_through=0.0).simulate(t_max=8.0)
+    message = str(raised.value)
+    assert "buffer_bounds" in message, message
+    assert "chattering, not evolving" in message, message
+    # It ran away at the bound, not before it.
+    assert f"t={FILLS_AT}" in message.replace("t=4.000000000000002", "t=4.0"), message
+
+
+def test_the_guard_can_be_lifted_for_a_genuinely_fast_model():
+    """A cap that could not be raised would be a limit on what may be
+    modelled rather than a diagnostic. Zero disables it, and the
+    under-declared buffer then runs to its horizon as it used to: slowly,
+    and wrongly, but by the modeller's choice."""
+    result = buffer_system(pass_through=0.0).simulate(
+        t_max=4.05, max_transition_firings=0
     )
+    assert len(result.events) > 1000, len(result.events)
 
 
-def test_the_chatter_is_at_the_bound_and_not_before_it():
-    """The defect is localised, so a fix can be judged: every event past
-    the first is at or after the instant the buffer fills, and they are
-    spaced by the event-location tolerance rather than by anything
-    physical."""
-    result = buffer_with_claim(fill_rate=2.0).simulate(t_max=4.2)
-    events = result.events
-    assert len(events) > 1000, "the defect has changed shape; re-read it"
-    assert all(event.time >= FILLS_AT - 1e-6 for event in events[1:])
-    gaps = [b.time - a.time for a, b in zip(events[2:20], events[3:21])]
-    assert all(abs(gap - 4e-6) < 1e-7 for gap in gaps), gaps
+def test_the_budget_is_per_transition_and_not_per_run():
+    """A model with many transitions firing normally is not caught by a
+    cap on one of them, which is what makes the cap usable at a low
+    value."""
+    result = buffer_system(pass_through=1.0).simulate(
+        t_max=8.0, max_transition_firings=3
+    )
+    assert len(result.events) == 2, result.events
