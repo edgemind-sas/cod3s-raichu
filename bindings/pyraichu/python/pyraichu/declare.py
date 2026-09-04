@@ -325,6 +325,12 @@ _CONTINUOUS_OUT = _Vocabulary(
         "allocation_shares": "allocation_shares",
         "allocation_priorities": "allocation_priorities",
         "profile": "profile",
+        # No muscadet counterpart: a ceiling on what an output can
+        # deliver per unit time is a property of the equipment that
+        # neither muscadet nor the class it mirrors carries, and the
+        # industrial corpus this layer is validated against declares one
+        # on its electrolyser.
+        "max_rate": "max_rate",
     },
     inert=dict(_FLOW_SHARED, var_type="float", var_demand_in_default=0.0),
     uncarried=dict(

@@ -649,6 +649,18 @@ class _FlowContinuousOut:
     #: **product**, never by minimum: an output at 0.3 of its profile
     #: that is also capped at 0.5 produces 0.15, not 0.3.
     profile: _Profile | None = None
+    #: A ceiling on what this output can deliver per unit time, or
+    #: ``None``. It bounds the quantity WHEREVER it comes from: a rule
+    #: set producing the flow, a declared rate, a conduit metering it. On
+    #: a rule-produced output it also bounds the scale the rule runs at,
+    #: which is what makes the demand carried upstream the demand for
+    #: what will actually be made rather than for what was asked.
+    #:
+    #: Distinct from a cap declared by a failure mode, which is a
+    #: FRACTION of nominal and belongs to the mode that declares it: this
+    #: is an absolute quantity and a property of the equipment. The two
+    #: compose by minimum, the binding one winning, as two ceilings do.
+    max_rate: float | None = None
 
 
 @dataclass
@@ -1105,6 +1117,7 @@ class ObjFlow:
         allocation_shares: dict[Any, float] | None = None,
         allocation_priorities: dict[Any, float] | None = None,
         profile: dict[str, Any] | None = None,
+        max_rate: float | None = None,
     ) -> None:
         """Declare a real-valued output delivering `var_fed_default`
         when asked without bound.
@@ -1127,7 +1140,23 @@ class ObjFlow:
         transition from a function's breakpoints. The profile composes
         with the derating rate by **product**, never by minimum: an
         output at 0.3 of its profile that is also derated to 0.5
-        produces 0.15."""
+        produces 0.15.
+
+        `max_rate` is a ceiling on what this output can deliver per unit
+        time: the equipment cannot make more, whatever it is fed and
+        whatever is asked of it. On an output a rule set produces it also
+        bounds the scale the rule runs at, so what the component asks its
+        own suppliers for is what it will actually make and not what it
+        was asked for. It is an absolute quantity, where a failure mode's
+        cap is a fraction of nominal; the two compose by minimum, as two
+        ceilings do."""
+        if max_rate is not None and max_rate < 0.0:
+            raise ValueError(
+                f"ObjFlow `{self.name}`: continuous out-flow `{name}` declares "
+                f"`max_rate`={max_rate:g}; a ceiling on a delivered quantity "
+                "is not negative. A ceiling of zero is an output that "
+                "delivers nothing"
+            )
         if allocation not in ("proportional", "shares", "priority"):
             raise ValueError(
                 f"ObjFlow `{self.name}`: continuous out-flow `{name}` declares "
@@ -1149,6 +1178,7 @@ class ObjFlow:
                     else None
                 ),
                 profile=self._parse_profile(name, profile),
+                max_rate=None if max_rate is None else float(max_rate),
             )
         )
 
@@ -2500,7 +2530,15 @@ class ObjFlow:
         flow so a guard can read it but draws none of it, so it is not
         limited by it. A rule nothing constrains, having no consumed
         flow at all, runs at its nominal scale of 1 and produces exactly
-        its declared quantities."""
+        its declared quantities.
+
+        An output declaring a `max_rate` bounds this scale as well, at
+        `max_rate / coefficient`. Here and not only on the delivered
+        quantity, because this scale is what the derived demand is built
+        from: bounded only at the output, the component would go on
+        asking its suppliers for what it was asked for while making the
+        lesser quantity its ceiling allows, and the difference would be
+        drawn upstream and lost."""
         terms = [
             {
                 "op": "div",
@@ -2510,7 +2548,23 @@ class ObjFlow:
             for flow, coefficient in rule.cons.items()
             if coefficient > 0
         ]
+        terms += [
+            _float(ceiling / coefficient)
+            for flow, coefficient in rule.prod.items()
+            if coefficient > 0
+            for ceiling in [self._max_rate_on(flow)]
+            if ceiling is not None
+        ]
         return _min(terms) if terms else _float(1.0)
+
+    def _max_rate_on(self, flow: str) -> float | None:
+        """The ceiling declared on `flow`, or ``None``. Looked up rather
+        than threaded through, a rule naming a flow by name and not by
+        the declaration that carries it."""
+        for declared in self.flows_continuous_out:
+            if declared.name == flow:
+                return declared.max_rate
+        return None
 
     def _rule_demand_scale(
         self,
@@ -3039,6 +3093,22 @@ class ObjFlow:
         if flow.profile is not None:
             factors.append(_var(self.name, f"{flow.name}_out_profile"))
         return factors
+
+    def _bounded_by_max_rate(
+        self, flow: _FlowContinuousOut, expr: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`expr` bounded by the output's declared ceiling, or `expr`
+        itself where none is declared.
+
+        Applied to the delivered quantity and not only to the rule scale,
+        because an output need not come from a rule at all: a declared
+        rate, a conduit's crossing and a routed tap's delivery each reach
+        this point by their own branch, and a ceiling that bound only one
+        of them would be a property of the declaration it was written
+        beside rather than of the equipment."""
+        if flow.max_rate is None:
+            return expr
+        return _min([expr, _float(flow.max_rate)])
 
     def _conduit_crossing(self, conduit: _Transfer) -> dict[str, Any]:
         """What a conduit is about to move: the computed quantity, scaled
@@ -3883,6 +3953,7 @@ class ObjFlow:
                     "op": "mul",
                     "args": factors + [_float(continuous_out.var_fed_default)],
                 }
+            nominal = self._bounded_by_max_rate(continuous_out, nominal)
             if self._has_transfer_delta(flow_name):
                 # The base a two-stream pair sits on, named rather than
                 # inlined: the pair caps what it moves by what the origin
@@ -3957,10 +4028,13 @@ class ObjFlow:
                 # shares the scale the least demanded one allows, which
                 # is what keeps correlated outputs in proportion.
                 variables.append(_float_attribute(f"{flow_name}_produced_out", 0.0))
-                produced: dict[str, Any] = {
-                    "op": "mul",
-                    "args": factors + [_sum(rule_production[flow_name])],
-                }
+                produced: dict[str, Any] = self._bounded_by_max_rate(
+                    continuous_out,
+                    {
+                        "op": "mul",
+                        "args": factors + [_sum(rule_production[flow_name])],
+                    },
+                )
                 if self._has_transfer_delta(flow_name):
                     # What the rule made, named rather than inlined for
                     # the reason the capability base is: a pair caps what
