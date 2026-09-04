@@ -312,6 +312,8 @@ _CONTINUOUS_IN = _Vocabulary(
         # `var_demand_default` on the INPUT; this layer spells the same
         # quantity `var_demand_in_default`.
         "var_demand_default": "var_demand_in_default",
+        # The counterpart of the output's profile, in the same shape.
+        "profile": "profile",
     },
     inert=dict(_FLOW_SHARED, var_type="float"),
     uncarried=_FLOW_UNCARRIED,

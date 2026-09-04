@@ -553,6 +553,12 @@ class _FlowContinuousIn:
     #: model is generated. It is read last of the three, so a conduit or
     #: a rule set on the same flow takes precedence over it.
     demand_expr: dict[str, Any] | None = None
+    #: A declared time profile scaling what this input asks for, or
+    #: ``None``. The counterpart of the output's, and the same shape: a
+    #: demand that varies with the clock is as ordinary as a production
+    #: that does, and the asymmetry was an accident of which side was
+    #: built first.
+    profile: _Profile | None = None
 
 
 @dataclass
@@ -1091,6 +1097,7 @@ class ObjFlow:
         name: str,
         var_demand_in_default: float = 0.0,
         var_in_default: float = 0.0,
+        profile: dict[str, Any] | None = None,
     ) -> None:
         """Declare a real-valued input, aggregating every incoming
         connection by sum.
@@ -1099,13 +1106,21 @@ class ObjFlow:
         producers for while nothing derives a demand for it (a pure
         consumer derives none); `var_in_default` is what the input
         reads, on both the received and the capability channel, when
-        nothing is connected to it."""
+        nothing is connected to it.
+
+        `profile` is a declared **continuous** function of simulation
+        time multiplying what this input asks for, in the same shape and
+        under the same refusal as an output's: a demand that varies with
+        the clock is as ordinary as a production that does. It scales the
+        demand whatever the demand is derived from, so a rule set
+        consuming the flow is scaled with it."""
         self._reject_flow_clash(name, "in")
         self.flows_continuous_in.append(
             _FlowContinuousIn(
                 name=name,
                 var_demand_in_default=float(var_demand_in_default),
                 var_in_default=float(var_in_default),
+                profile=self._parse_profile(name, profile),
             )
         )
 
@@ -3792,8 +3807,10 @@ class ObjFlow:
         The demand has one source of the four, in this order of
         precedence: a conduit metering the flow, the rule sets consuming
         it, a declared `demand_expr`, and failing all three the declared
-        constant. Whichever it is, the volume holding the flow bounds
-        it."""
+        constant. Whichever it is, a declared time profile scales it and
+        the volume holding the flow bounds it, in that order: the profile
+        says how much is wanted, the volume says how much of that there
+        is room for."""
         for continuous_in in self.flows_continuous_in:
             flow_name = continuous_in.name
             variables.append(
@@ -3809,6 +3826,23 @@ class ObjFlow:
                     f"{flow_name}_capability_in", continuous_in.var_in_default
                 )
             )
+            if continuous_in.profile is not None:
+                # A read-only publication of the factor the demand sweep
+                # applies, as on an output: writing it has no effect, the
+                # next evaluation overwriting it from the curve.
+                variables.append(
+                    _float_attribute(
+                        f"{flow_name}_in_profile",
+                        continuous_in.profile.factor(0.0),
+                    )
+                )
+                equations.append(
+                    {
+                        "target": f"{flow_name}_in_profile",
+                        "kind": "explicit",
+                        "expr": self._profile_expr(continuous_in.profile),
+                    }
+                )
             ports.append({"name": f"{flow_name}_in", "dir": "in"})
             conduit = self._conduit_on(flow_name)
             if conduit is not None:
@@ -3823,6 +3857,11 @@ class ObjFlow:
                 base = continuous_in.demand_expr
             else:
                 base = _float(continuous_in.var_demand_in_default)
+            if continuous_in.profile is not None:
+                base = {
+                    "op": "mul",
+                    "args": [base, _var(self.name, f"{flow_name}_in_profile")],
+                }
             equations.append(
                 {
                     "target": f"{flow_name}_demand_in",
@@ -4823,6 +4862,9 @@ class System:
         # transfers come after the measurements, whose readings are the
         # potentials a conductive law is written over.
         for name, obj in self.comp.items():
+            for flow in obj.flows_continuous_in:
+                if flow.profile is not None:
+                    step(name, f"{flow.name}_in_profile")
             for flow in obj.flows_continuous_out:
                 if obj._caps_on(flow.name):
                     step(name, f"{flow.name}_effective_rate")
@@ -5236,6 +5278,9 @@ class System:
                     observable.add(f"{capacity.name}_fill_{entry.name}")
             for measurement in obj.measurements_in:
                 observable.update(measurement.channels())
+            for flow in obj.flows_continuous_in:
+                if flow.profile is not None:
+                    observable.add(f"{flow.name}_in_profile")
             for flow in obj.flows_continuous_out:
                 if obj._caps_on(flow.name):
                     observable.add(f"{flow.name}_effective_rate")
