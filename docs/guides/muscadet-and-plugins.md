@@ -109,7 +109,7 @@ point accepts and the other refuses does not exist.
 | Section | Declares |
 |---|---|
 | `flows_continuous_in` | a real-valued input: `var_in_default` (what it reads unconnected), `var_demand_default` (what a pure consumer asks for) |
-| `flows_continuous_out` | a real-valued output: `var_fed_default`, a `profile` (a declared function of time), and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`) |
+| `flows_continuous_out` | a real-valued output: `var_fed_default`, a `max_rate` ceiling, a `profile` (a declared function of time), and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`) |
 | `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `side`, `hysteresis` |
 | `measurements_in` | the reading side of a measurement link: a channel observing a published level, carrying no quantity |
 | `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow |
@@ -160,6 +160,27 @@ A whole continuous model is therefore writable as data, controllers
 included, and the document it expands to is **the same one** the builder
 writes for the same model: the plugin hands the declarations to a
 `System` and calls the generation the builder calls.
+
+#### A ceiling on what an output can deliver
+
+`max_rate` says the equipment cannot make more than that per unit time,
+whatever it is fed and whatever is asked of it. It has no muscadet
+counterpart and it is not a failure-mode cap: a cap is a **fraction** of
+nominal owned by the mode that declares it, this is an **absolute
+quantity** that stands for the whole run. The two compose by minimum, as
+two ceilings do.
+
+On an output a rule set produces, the ceiling bounds the **scale the rule
+runs at** as well as the quantity delivered, which is the half that
+matters: bounded only at the output, the component would go on drawing
+the full quantity from its suppliers while delivering the lesser quantity
+its ceiling allows, and the difference would vanish inside it. An
+electrolyser capped at 0.4 therefore asks its water and its power supply
+for what 0.4 of hydrogen needs, and no more.
+
+A rule's outputs are correlated, so a ceiling on one holds the others
+down in proportion rather than letting them produce a surplus with
+nowhere to go.
 
 #### What a failure mode does to a continuous output
 
