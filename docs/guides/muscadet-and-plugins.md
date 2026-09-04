@@ -108,8 +108,8 @@ point accepts and the other refuses does not exist.
 
 | Section | Declares |
 |---|---|
-| `flows_continuous_in` | a real-valued input: `var_in_default` (what it reads unconnected), `var_demand_default` (what a pure consumer asks for), a `profile` scaling that demand over time |
-| `flows_continuous_out` | a real-valued output: `var_fed_default`, a `max_rate` ceiling, a `profile` (a declared function of time), and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`) |
+| `flows_continuous_in` | a real-valued input: `var_in_default` (what it reads unconnected), `var_demand_default` (what a pure consumer asks for), a `profile` scaling that demand over time, `publish_rate` to make what it receives observable |
+| `flows_continuous_out` | a real-valued output: `var_fed_default`, a `max_rate` ceiling, a `profile` (a declared function of time), `publish_rate` to make what it delivers observable, and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`) |
 | `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `side`, `hysteresis`. A volume holding more than one flow also publishes each constituent's `ratio`, its fraction of the mixture |
 | `measurements_in` | the reading side of a measurement link: a channel observing a published level, carrying no quantity |
 | `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow |
@@ -160,6 +160,25 @@ A whole continuous model is therefore writable as data, controllers
 included, and the document it expands to is **the same one** the builder
 writes for the same model: the plugin hands the declarations to a
 `System` and calls the generation the builder calls.
+
+#### What a controller can observe
+
+A controller reads measurement channels, and a channel needs a publisher.
+There are two, and between them they cover the three natures a
+measurement can have:
+
+| Nature | Published by | Channel |
+|---|---|---|
+| `level` | a volume | `{cap}_level`, `{cap}_level_{flow}` |
+| `ratio` | a volume of more than one constituent | `{cap}_ratio_{flow}` |
+| `rate` | a flow declaring `publish_rate` | `{flow}_rate` |
+
+A rate carries what actually crossed and not what could have, and one
+name serves both directions: what an observer wants is the quantity
+crossing the wire, and which side of it the publisher sits on is the
+publisher's business. It is declared rather than implied, because
+publishing every rate would put a port and an equation on every flow of
+every model for the few an observer reads.
 
 #### Three quantities a volume publishes per constituent
 

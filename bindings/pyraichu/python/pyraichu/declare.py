@@ -314,6 +314,9 @@ _CONTINUOUS_IN = _Vocabulary(
         "var_demand_default": "var_demand_in_default",
         # The counterpart of the output's profile, in the same shape.
         "profile": "profile",
+        # No muscadet counterpart: materialise the rate this flow carries
+        # as an observable channel, for a controller to threshold.
+        "publish_rate": "publish_rate",
     },
     inert=dict(_FLOW_SHARED, var_type="float"),
     uncarried=_FLOW_UNCARRIED,
@@ -333,6 +336,8 @@ _CONTINUOUS_OUT = _Vocabulary(
         # industrial corpus this layer is validated against declares one
         # on its electrolyser.
         "max_rate": "max_rate",
+        # No muscadet counterpart either: see the input's own entry.
+        "publish_rate": "publish_rate",
     },
     inert=dict(_FLOW_SHARED, var_type="float", var_demand_in_default=0.0),
     uncarried=dict(

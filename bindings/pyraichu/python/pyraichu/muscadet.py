@@ -545,6 +545,11 @@ class _FlowContinuousIn:
     name: str
     var_demand_in_default: float = 0.0
     var_in_default: float = 0.0
+    #: Whether this flow publishes the rate it carries as an observable
+    #: channel. Declared and not inferred: a rate is a quantity of the
+    #: flow network, and publishing every one of them would put a port on
+    #: every flow of every model for the few an observer reads.
+    publish_rate: bool = False
     #: Replaces the constant demand with a declared expression, for a
     #: caller that has one to hand. It is an escape hatch onto the
     #: generated equation and nothing in this module assigns it: a rule
@@ -667,6 +672,9 @@ class _FlowContinuousOut:
     #: is an absolute quantity and a property of the equipment. The two
     #: compose by minimum, the binding one winning, as two ceilings do.
     max_rate: float | None = None
+    #: Whether this flow publishes the rate it carries as an observable
+    #: channel. See :class:`_FlowContinuousIn`.
+    publish_rate: bool = False
 
 
 @dataclass
@@ -879,6 +887,15 @@ def _fill_alias(channel: str, flow: str | None = None) -> str:
     """The name a measurement channel publishes a weighted fill under.
     See :func:`_level_alias`."""
     return f"{channel}_fill" if flow is None else f"{channel}_fill_{flow}"
+
+
+def _rate_alias(channel: str) -> str:
+    """The name a flow publishes the rate it carries under.
+
+    One name for both directions on purpose: what an observer wants is
+    the quantity crossing the wire, and which side of it the publisher
+    sits on is the publisher's business."""
+    return f"{channel}_rate"
 
 
 def _ratio_alias(channel: str, flow: str) -> str:
@@ -1143,6 +1160,7 @@ class ObjFlow:
         var_demand_in_default: float = 0.0,
         var_in_default: float = 0.0,
         profile: dict[str, Any] | None = None,
+        publish_rate: bool = False,
     ) -> None:
         """Declare a real-valued input, aggregating every incoming
         connection by sum.
@@ -1158,7 +1176,13 @@ class ObjFlow:
         under the same refusal as an output's: a demand that varies with
         the clock is as ordinary as a production that does. It scales the
         demand whatever the demand is derived from, so a rule set
-        consuming the flow is scaled with it."""
+        consuming the flow is scaled with it.
+
+        `publish_rate` materialises the quantity this input receives as
+        an observable channel, `{flow}_rate` on a port of its own, so a
+        controller can threshold what a component consumes. Declared and
+        not implied: publishing every rate would put a port on every flow
+        of every model for the few an observer reads."""
         self._reject_flow_clash(name, "in")
         self.flows_continuous_in.append(
             _FlowContinuousIn(
@@ -1166,6 +1190,7 @@ class ObjFlow:
                 var_demand_in_default=float(var_demand_in_default),
                 var_in_default=float(var_in_default),
                 profile=self._parse_profile(name, profile),
+                publish_rate=bool(publish_rate),
             )
         )
 
@@ -1178,6 +1203,7 @@ class ObjFlow:
         allocation_priorities: dict[Any, float] | None = None,
         profile: dict[str, Any] | None = None,
         max_rate: float | None = None,
+        publish_rate: bool = False,
     ) -> None:
         """Declare a real-valued output delivering `var_fed_default`
         when asked without bound.
@@ -1209,7 +1235,13 @@ class ObjFlow:
         own suppliers for is what it will actually make and not what it
         was asked for. It is an absolute quantity, where a failure mode's
         cap is a fraction of nominal; the two compose by minimum, as two
-        ceilings do."""
+        ceilings do.
+
+        `publish_rate` materialises the quantity this output delivers as
+        an observable channel, `{flow}_rate` on a port of its own, so a
+        controller can threshold what a component produces. It carries
+        what actually crossed and not what could have: an observer
+        watching a supply wants what arrived."""
         if max_rate is not None and max_rate < 0.0:
             raise ValueError(
                 f"ObjFlow `{self.name}`: continuous out-flow `{name}` declares "
@@ -1239,6 +1271,7 @@ class ObjFlow:
                 ),
                 profile=self._parse_profile(name, profile),
                 max_rate=None if max_rate is None else float(max_rate),
+                publish_rate=bool(publish_rate),
             )
         )
 
@@ -3871,6 +3904,26 @@ class ObjFlow:
                     f"{flow_name}_capability_in", continuous_in.var_in_default
                 )
             )
+            if continuous_in.publish_rate:
+                variables.append(
+                    _float_attribute(
+                        _rate_alias(flow_name), continuous_in.var_in_default
+                    )
+                )
+                ports.append(
+                    {
+                        "name": f"{_rate_alias(flow_name)}_out",
+                        "dir": "out",
+                        "attr": _rate_alias(flow_name),
+                    }
+                )
+                equations.append(
+                    {
+                        "target": _rate_alias(flow_name),
+                        "kind": "explicit",
+                        "expr": _var(self.name, f"{flow_name}_fed_in"),
+                    }
+                )
             if continuous_in.profile is not None:
                 # A read-only publication of the factor the demand sweep
                 # applies, as on an output: writing it has no effect, the
@@ -3995,6 +4048,26 @@ class ObjFlow:
             variables.append(_float_attribute(f"{flow_name}_capability_out", 0.0))
             variables.append(_float_attribute(f"{flow_name}_demand_out", 0.0))
             variables.append(_float_attribute(f"{flow_name}_fed_out", 0.0))
+            if continuous_out.publish_rate:
+                # What actually crossed, on a port of its own: an observer
+                # watching a supply wants what arrived, not what could
+                # have. Swept after `fed_out`, which the order below
+                # places.
+                variables.append(_float_attribute(_rate_alias(flow_name), 0.0))
+                ports.append(
+                    {
+                        "name": f"{_rate_alias(flow_name)}_out",
+                        "dir": "out",
+                        "attr": _rate_alias(flow_name),
+                    }
+                )
+                equations.append(
+                    {
+                        "target": _rate_alias(flow_name),
+                        "kind": "explicit",
+                        "expr": _var(me, f"{flow_name}_fed_out"),
+                    }
+                )
             ports.append(
                 {
                     "name": f"{flow_name}_out",
@@ -5038,8 +5111,20 @@ class System:
                 if served:
                     step(producer, f"{flow.name}_alloc")
                 step(producer, f"{flow.name}_fed_out")
+                if flow.publish_rate:
+                    step(producer, _rate_alias(flow.name))
                 for edge in served:
                     step(edge.consumer, f"{edge.flow_in}_fed_in")
+                    published = next(
+                        (
+                            declared
+                            for declared in self.comp[edge.consumer].flows_continuous_in
+                            if declared.name == edge.flow_in and declared.publish_rate
+                        ),
+                        None,
+                    )
+                    if published is not None:
+                        step(edge.consumer, _rate_alias(edge.flow_in))
             # What a conduit moved is what its flow delivered, so it is
             # read once that delivery is settled.
             for pair in self.comp[producer].transfers:
@@ -5376,7 +5461,11 @@ class System:
             for flow in obj.flows_continuous_in:
                 if flow.profile is not None:
                     observable.add(f"{flow.name}_in_profile")
+                if flow.publish_rate:
+                    observable.add(_rate_alias(flow.name))
             for flow in obj.flows_continuous_out:
+                if flow.publish_rate:
+                    observable.add(_rate_alias(flow.name))
                 if obj._caps_on(flow.name):
                     observable.add(f"{flow.name}_effective_rate")
                 if obj._taps_on(flow.name):
