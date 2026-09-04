@@ -881,6 +881,15 @@ def _fill_alias(channel: str, flow: str | None = None) -> str:
     return f"{channel}_fill" if flow is None else f"{channel}_fill_{flow}"
 
 
+def _ratio_alias(channel: str, flow: str) -> str:
+    """The name a measurement channel publishes a constituent's ratio
+    under. See :func:`_level_alias`.
+
+    A ratio has no total: the ratios of a volume sum to one, so a
+    channel-wide ratio would be the constant 1 and say nothing.""" 
+    return f"{channel}_ratio_{flow}"
+
+
 @dataclass
 class _CapacityFlow:
     """One flow a capacity holds, and how much volume a unit of it
@@ -918,6 +927,13 @@ class _Capacity:
     def initial_fill(self) -> float:
         return sum(self.content_of(e.name) * e.weight for e in self.flows) / self.volume
 
+    def initial_ratio(self, flow: str) -> float:
+        """What fraction of the initial content one constituent is, and
+        zero for a volume that starts empty: the same convention the
+        swept equation carries."""
+        total = sum(self.content_of(e.name) for e in self.flows)
+        return self.content_of(flow) / total if total > 0.0 else 0.0
+
     def published(self) -> list[tuple[str, str]]:
         """The ``(port alias, exported attribute)`` pairs the capacity
         publishes: the two totals, then each constituent.
@@ -925,7 +941,15 @@ class _Capacity:
         The totals alone would not do. A volume holding water and heat is
         at a temperature of ``heat / water``, while the total level is
         their weighted sum, which is neither term; an observer wanting
-        the ratio needs both, so both are published."""
+        the ratio needs both, so both are published.
+
+        A volume holding **more than one** constituent publishes each
+        one's ratio as well, what fraction of the whole it is. That is a
+        third quantity and not a convenience: the observer's output
+        grammar carries no arithmetic, so a controller thresholding a
+        fraction can only read one that is already published. A volume
+        holding a single constituent publishes none, its ratio being
+        identically one wherever it holds anything."""
         pairs = [
             (_level_alias(self.name), f"{self.name}_content"),
             (_fill_alias(self.name), f"{self.name}_fill"),
@@ -940,7 +964,20 @@ class _Capacity:
             pairs.append(
                 (_fill_alias(self.name, entry.name), f"{self.name}_fill_{entry.name}")
             )
+            if self.publishes_ratios:
+                pairs.append(
+                    (
+                        _ratio_alias(self.name, entry.name),
+                        f"{self.name}_ratio_{entry.name}",
+                    )
+                )
         return pairs
+
+    @property
+    def publishes_ratios(self) -> bool:
+        """Whether this volume publishes a ratio per constituent: only a
+        volume holding more than one."""
+        return len(self.flows) > 1
 
 
 @dataclass
@@ -953,6 +990,12 @@ class _MeasurementIn:
     #: the totals.
     flows: list[str] = field(default_factory=list)
 
+    #: Whether the observed volume publishes a ratio per constituent,
+    #: which only a volume holding more than one does. Declared on the
+    #: reader because the reader is built before the pairing is known,
+    #: and set from the publisher when the two are matched.
+    ratios: bool = False
+
     def channels(self) -> list[str]:
         """The variables (and, suffixed with ``_in``, the ports) this
         reader materialises, in the order the publisher lists them."""
@@ -960,6 +1003,8 @@ class _MeasurementIn:
         for flow in self.flows:
             names.append(_level_alias(self.name, flow))
             names.append(_fill_alias(self.name, flow))
+            if self.ratios:
+                names.append(_ratio_alias(self.name, flow))
         return names
 
 
@@ -4197,6 +4242,7 @@ class ObjFlow:
         for capacity in self.capacities:
             contents: list[dict[str, Any]] = []
             fills: list[dict[str, Any]] = []
+            ratios: list[tuple[str, str]] = []
             for entry in capacity.flows:
                 content = f"{capacity.name}_content_{entry.name}"
                 fill = f"{capacity.name}_fill_{entry.name}"
@@ -4233,6 +4279,12 @@ class ObjFlow:
                         "expr": _flow_fill(me, capacity, entry),
                     }
                 )
+                if capacity.publishes_ratios:
+                    ratio = f"{capacity.name}_ratio_{entry.name}"
+                    variables.append(
+                        _float_attribute(ratio, capacity.initial_ratio(entry.name))
+                    )
+                    ratios.append((ratio, content))
 
             initial_fill = capacity.initial_fill()
             variables.append(
@@ -4259,6 +4311,32 @@ class ObjFlow:
                     "expr": _sum(fills),
                 }
             )
+            # After the total, which they divide by. An empty volume has
+            # a total of zero and every ratio reads 0 there: nothing is
+            # no fraction of nothing, and the alternative is a division
+            # the sweep would have to answer with a non-number.
+            for ratio, content in ratios:
+                equations.append(
+                    {
+                        "target": ratio,
+                        "kind": "explicit",
+                        "expr": {
+                            "op": "if",
+                            "cond": {
+                                "op": "cmp",
+                                "cmp": "gt",
+                                "lhs": _var(me, f"{capacity.name}_content"),
+                                "rhs": _float(0.0),
+                            },
+                            "then": {
+                                "op": "div",
+                                "lhs": _var(me, content),
+                                "rhs": _var(me, f"{capacity.name}_content"),
+                            },
+                            "otherwise": _float(0.0),
+                        },
+                    }
+                )
 
             width = capacity.hysteresis
             automata.append(
@@ -4461,6 +4539,12 @@ class System:
                 f"`{holder}` does not hold (it holds {volume.flow_names})"
             )
 
+        # The reader materialises its channels from its own declaration,
+        # and only the pairing knows whether the volume it reads publishes
+        # ratios. Set before the connections are made, so the variables
+        # exist by the time they are wired.
+        link.ratios = volume.publishes_ratios
+
         pairs = [
             (_level_alias(capacity), _level_alias(channel)),
             (_fill_alias(capacity), _fill_alias(channel)),
@@ -4468,6 +4552,10 @@ class System:
         for flow in link.flows:
             pairs.append((_level_alias(capacity, flow), _level_alias(channel, flow)))
             pairs.append((_fill_alias(capacity, flow), _fill_alias(channel, flow)))
+            if volume.publishes_ratios:
+                pairs.append(
+                    (_ratio_alias(capacity, flow), _ratio_alias(channel, flow))
+                )
         for published, read in pairs:
             self.connect(holder, published, observer, read)
 
@@ -4853,6 +4941,11 @@ class System:
                     step(name, f"{capacity.name}_fill_{entry.name}")
                 step(name, f"{capacity.name}_fill")
                 step(name, f"{capacity.name}_content")
+                # After the total they divide by, and before the
+                # observers below read them.
+                if capacity.publishes_ratios:
+                    for entry in capacity.flows:
+                        step(name, f"{capacity.name}_ratio_{entry.name}")
         for name, obj in self.comp.items():
             for measurement in obj.measurements_in:
                 for variable in measurement.channels():
@@ -5276,6 +5369,8 @@ class System:
                 for entry in capacity.flows:
                     observable.add(f"{capacity.name}_content_{entry.name}")
                     observable.add(f"{capacity.name}_fill_{entry.name}")
+                    if capacity.publishes_ratios:
+                        observable.add(f"{capacity.name}_ratio_{entry.name}")
             for measurement in obj.measurements_in:
                 observable.update(measurement.channels())
             for flow in obj.flows_continuous_in:
