@@ -8,9 +8,15 @@ unusable for want of a publisher, exactly as the `ratio` kind was.
 `publish_rate` on a continuous flow materialises `{flow}_rate` on a port
 of its own. One name for both directions on purpose: what an observer
 wants is the quantity crossing the wire, and which side of it the
-publisher sits on is the publisher's business. It carries what actually
-crossed and not what could have, because an observer watching a supply
-wants what arrived.
+publisher sits on is the publisher's business.
+
+It carries one of two quantities, and the distinction is not cosmetic. A
+meter recording what a component consumed wants the **delivery**, which
+is the thing it measures. A regulator deciding whether to call on a
+reserve wants the **capability**: reading the delivery instead closes a
+loop through its own decision, the reserve reducing the draw on the
+supply and the lower draw calling for more reserve. `true` is the
+delivery, which is what the channel carried when it had no choice.
 
 Declared and not implied: publishing every rate would put a port and an
 equation on every flow of every model for the few an observer reads.
@@ -191,3 +197,103 @@ def test_a_controller_thresholds_a_published_rate():
     for hour in (3.0, 6.0, 12.0, 18.0):
         assert sampled(result, "CTRL_E_rate", hour) == sampled(result, "S_E_rate", hour)
         assert sampled(result, "CTRL_low", hour) is (curve_at(hour) < 12.0), hour
+
+
+# --- the two quantities -------------------------------------------------
+
+
+def two_quantities(demand: float = 4.0) -> mu.System:
+    """A supply following the curve and a load asking for less than it:
+    the two quantities differ everywhere the demand binds."""
+
+    class Source(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_out(
+                name="E",
+                var_fed_default=1.0,
+                profile=CURVE,
+                publish_rate="capability",
+            )
+
+    class Load(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(
+                name="E", var_demand_in_default=demand, publish_rate="delivered"
+            )
+
+    system = mu.System("quantities")
+    system.add_component(Source, "S")
+    system.add_component(Load, "L")
+    system.connect("S", "E", "L", "E")
+    return system
+
+
+def test_a_capability_channel_follows_the_supply_and_not_the_draw():
+    """The supply rises to 20 while the load asks for 4: the capability
+    channel reads the curve throughout."""
+    result = two_quantities().simulate(t_max=24.0, samples=HOURS)
+    for hour in HOURS:
+        assert abs(sampled(result, "S_E_rate", hour) - curve_at(hour)) < CROSSING_TOL
+
+
+def test_a_delivered_channel_follows_the_draw():
+    """On the same run, the other end reads what crossed, which is the
+    demand wherever the demand binds and the supply where it does not."""
+    result = two_quantities().simulate(t_max=24.0, samples=HOURS)
+    for hour in HOURS:
+        expected = min(4.0, curve_at(hour))
+        assert abs(sampled(result, "L_E_rate", hour) - expected) < CROSSING_TOL, hour
+
+
+def test_the_two_quantities_really_do_differ():
+    """Asserted, so the pair of tests above cannot both pass on a run
+    where the distinction is invisible."""
+    result = two_quantities().simulate(t_max=24.0, samples=HOURS)
+    differing = [
+        hour
+        for hour in HOURS
+        if abs(sampled(result, "S_E_rate", hour) - sampled(result, "L_E_rate", hour))
+        > CROSSING_TOL
+    ]
+    assert len(differing) >= 2, differing
+
+
+def test_true_is_the_delivered_quantity():
+    """A declaration written before the distinction existed still means
+    what it meant: `true` and `"delivered"` generate one document."""
+
+    def load(spelling):
+        class Load(mu.ObjFlow):
+            def add_flows(self):
+                self.add_flow_continuous_in(
+                    name="E", var_demand_in_default=4.0, publish_rate=spelling
+                )
+
+        system = mu.System("spelling")
+        system.add_component(Load, "L")
+        return system.build_dict()
+
+    assert load(True) == load("delivered")
+    assert load(True) != load("capability")
+
+
+def test_a_capability_channel_is_swept_with_the_capability_band():
+    """It belongs to the band that computes what could cross, not to the
+    one that computes what did: read after the delivery, an observer's
+    own decision would reach back into what it observes."""
+    order = [
+        f"{entry['component']}.{entry['attribute']}"
+        for entry in two_quantities().build_dict()["model"]["evaluation_order"]
+    ]
+    assert order.index("S.E_capability_out") < order.index("S.E_rate")
+    assert order.index("S.E_rate") < order.index("S.E_fed_out")
+    assert order.index("L.E_fed_in") < order.index("L.E_rate")
+
+
+def test_an_unknown_quantity_is_refused():
+    class Wrong(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_out(name="E", publish_rate="potential")
+
+    with pytest.raises(ValueError, match="a rate channel carries one of"):
+        Wrong("S")

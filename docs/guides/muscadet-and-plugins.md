@@ -171,14 +171,24 @@ measurement can have:
 |---|---|---|
 | `level` | a volume | `{cap}_level`, `{cap}_level_{flow}` |
 | `ratio` | a volume of more than one constituent | `{cap}_ratio_{flow}` |
-| `rate` | a flow declaring `publish_rate` | `{flow}_rate` |
+| `rate` | a flow declaring `publish_rate`, as what crossed or what could | `{flow}_rate` |
 
-A rate carries what actually crossed and not what could have, and one
-name serves both directions: what an observer wants is the quantity
+One name serves both directions: what an observer wants is the quantity
 crossing the wire, and which side of it the publisher sits on is the
-publisher's business. It is declared rather than implied, because
-publishing every rate would put a port and an equation on every flow of
-every model for the few an observer reads.
+publisher's business.
+
+A rate channel carries one of two quantities, and the choice matters.
+`publish_rate: "delivered"` (or `true`) is what **crossed**, which is
+what a meter measures. `publish_rate: "capability"` is what **could**
+cross, which is what a regulator deciding whether to call on a reserve
+needs: reading the delivery instead closes a loop through its own
+decision, the reserve reducing the draw on the supply and the lower draw
+calling for more reserve. The two are swept in different bands for that
+reason.
+
+It is declared rather than implied, because publishing every rate would
+put a port and an equation on every flow of every model for the few an
+observer reads.
 
 #### Three quantities a volume publishes per constituent
 

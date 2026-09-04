@@ -315,7 +315,8 @@ _CONTINUOUS_IN = _Vocabulary(
         # The counterpart of the output's profile, in the same shape.
         "profile": "profile",
         # No muscadet counterpart: materialise the rate this flow carries
-        # as an observable channel, for a controller to threshold.
+        # as an observable channel, for a controller to threshold. Either
+        # what crossed or what could have, `true` meaning the first.
         "publish_rate": "publish_rate",
     },
     inert=dict(_FLOW_SHARED, var_type="float"),

@@ -207,6 +207,21 @@ _CONTINUOUS_CHANNELS = ("demand", "capability", "alloc")
 #: default rule. It consumes nothing and produces nothing there.
 _NO_RULE = "none"
 
+#: What a published rate channel may carry: the quantity that crossed,
+#: or the quantity that could have. They differ wherever a supply is not
+#: fully drawn, and which one an observer wants depends on what it is
+#: watching for.
+#:
+#: A regulator deciding whether to call on a reserve wants the
+#: **capability**: reading the delivery instead closes a loop through its
+#: own decision, the reserve reducing the draw on the supply and the
+#: lower draw calling for more reserve. A meter recording what a
+#: component consumed wants the **delivery**, which is the thing it
+#: measures.
+RATE_DELIVERED = "delivered"
+RATE_CAPABILITY = "capability"
+RATE_QUANTITIES = (RATE_DELIVERED, RATE_CAPABILITY)
+
 #: The rate of an output nothing derates: the neutral element of the
 #: minimum the deratings fold by. A profile is the neutral element of a
 #: **product** instead, which is why the two never fold together; an
@@ -545,11 +560,12 @@ class _FlowContinuousIn:
     name: str
     var_demand_in_default: float = 0.0
     var_in_default: float = 0.0
-    #: Whether this flow publishes the rate it carries as an observable
-    #: channel. Declared and not inferred: a rate is a quantity of the
-    #: flow network, and publishing every one of them would put a port on
-    #: every flow of every model for the few an observer reads.
-    publish_rate: bool = False
+    #: Which quantity this flow publishes as an observable rate channel,
+    #: or ``None`` for none. Declared and not inferred: a rate is a
+    #: quantity of the flow network, and publishing every one of them
+    #: would put a port on every flow of every model for the few an
+    #: observer reads.
+    publish_rate: str | None = None
     #: Replaces the constant demand with a declared expression, for a
     #: caller that has one to hand. It is an escape hatch onto the
     #: generated equation and nothing in this module assigns it: a rule
@@ -672,9 +688,9 @@ class _FlowContinuousOut:
     #: is an absolute quantity and a property of the equipment. The two
     #: compose by minimum, the binding one winning, as two ceilings do.
     max_rate: float | None = None
-    #: Whether this flow publishes the rate it carries as an observable
-    #: channel. See :class:`_FlowContinuousIn`.
-    publish_rate: bool = False
+    #: Which quantity this flow publishes as an observable rate channel,
+    #: or ``None`` for none. See :class:`_FlowContinuousIn`.
+    publish_rate: str | None = None
 
 
 @dataclass
@@ -1160,7 +1176,7 @@ class ObjFlow:
         var_demand_in_default: float = 0.0,
         var_in_default: float = 0.0,
         profile: dict[str, Any] | None = None,
-        publish_rate: bool = False,
+        publish_rate: bool | str | None = None,
     ) -> None:
         """Declare a real-valued input, aggregating every incoming
         connection by sum.
@@ -1190,9 +1206,28 @@ class ObjFlow:
                 var_demand_in_default=float(var_demand_in_default),
                 var_in_default=float(var_in_default),
                 profile=self._parse_profile(name, profile),
-                publish_rate=bool(publish_rate),
+                publish_rate=self._rate_quantity(name, publish_rate),
             )
         )
+
+    def _rate_quantity(self, flow: str, declared: Any) -> str | None:
+        """Which quantity a flow's rate channel carries, normalised.
+
+        ``True`` is the delivered quantity, which is what the channel
+        carried when it had no choice, so a declaration written before
+        the distinction existed still means what it meant."""
+        if declared is None or declared is False:
+            return None
+        if declared is True:
+            return RATE_DELIVERED
+        if declared not in RATE_QUANTITIES:
+            raise ValueError(
+                f"ObjFlow `{self.name}`: continuous flow `{flow}` declares "
+                f"`publish_rate`={declared!r}; a rate channel carries one of "
+                f"{list(RATE_QUANTITIES)} (or `true` for "
+                f"`{RATE_DELIVERED}`)"
+            )
+        return declared
 
     def add_flow_continuous_out(
         self,
@@ -1203,7 +1238,7 @@ class ObjFlow:
         allocation_priorities: dict[Any, float] | None = None,
         profile: dict[str, Any] | None = None,
         max_rate: float | None = None,
-        publish_rate: bool = False,
+        publish_rate: bool | str | None = None,
     ) -> None:
         """Declare a real-valued output delivering `var_fed_default`
         when asked without bound.
@@ -1271,7 +1306,7 @@ class ObjFlow:
                 ),
                 profile=self._parse_profile(name, profile),
                 max_rate=None if max_rate is None else float(max_rate),
-                publish_rate=bool(publish_rate),
+                publish_rate=self._rate_quantity(name, publish_rate),
             )
         )
 
@@ -3904,7 +3939,7 @@ class ObjFlow:
                     f"{flow_name}_capability_in", continuous_in.var_in_default
                 )
             )
-            if continuous_in.publish_rate:
+            if continuous_in.publish_rate is not None:
                 variables.append(
                     _float_attribute(
                         _rate_alias(flow_name), continuous_in.var_in_default
@@ -3921,7 +3956,12 @@ class ObjFlow:
                     {
                         "target": _rate_alias(flow_name),
                         "kind": "explicit",
-                        "expr": _var(self.name, f"{flow_name}_fed_in"),
+                        "expr": _var(
+                            self.name,
+                            f"{flow_name}_fed_in"
+                            if continuous_in.publish_rate == RATE_DELIVERED
+                            else f"{flow_name}_capability_in",
+                        ),
                     }
                 )
             if continuous_in.profile is not None:
@@ -4048,11 +4088,10 @@ class ObjFlow:
             variables.append(_float_attribute(f"{flow_name}_capability_out", 0.0))
             variables.append(_float_attribute(f"{flow_name}_demand_out", 0.0))
             variables.append(_float_attribute(f"{flow_name}_fed_out", 0.0))
-            if continuous_out.publish_rate:
-                # What actually crossed, on a port of its own: an observer
-                # watching a supply wants what arrived, not what could
-                # have. Swept after `fed_out`, which the order below
-                # places.
+            if continuous_out.publish_rate is not None:
+                # On a port of its own, carrying whichever of the two
+                # quantities was declared. Swept after the one it
+                # reports, which the order below places.
                 variables.append(_float_attribute(_rate_alias(flow_name), 0.0))
                 ports.append(
                     {
@@ -4065,7 +4104,12 @@ class ObjFlow:
                     {
                         "target": _rate_alias(flow_name),
                         "kind": "explicit",
-                        "expr": _var(me, f"{flow_name}_fed_out"),
+                        "expr": _var(
+                            me,
+                            f"{flow_name}_fed_out"
+                            if continuous_out.publish_rate == RATE_DELIVERED
+                            else f"{flow_name}_capability_out",
+                        ),
                     }
                 )
             ports.append(
@@ -5046,6 +5090,10 @@ class System:
         # so a scale never sizes itself on a constant the same pass has
         # not reached.
         unconnected_inputs("capability_in")
+        for name, obj in self.comp.items():
+            for flow in obj.flows_continuous_in:
+                if flow.publish_rate == RATE_CAPABILITY:
+                    step(name, _rate_alias(flow.name))
         for producer in topological:
             # A rule set turns the capability of what it consumes into
             # the capability of what it produces, so its scale is swept
@@ -5072,6 +5120,13 @@ class System:
             for flow in self.comp[producer].flows_continuous_out:
                 port = f"{flow.name}_out"
                 step(producer, f"{flow.name}_capability_out")
+                # A channel carrying what COULD cross belongs to this
+                # band and not to the delivery band: read after the
+                # delivery, it would close a loop through the observer's
+                # own decision, which is the reason the two quantities
+                # are distinguishable at all.
+                if flow.publish_rate == RATE_CAPABILITY:
+                    step(producer, _rate_alias(flow.name))
                 served = out_edges.get((producer, flow.name), [])
                 for edge in served:
                     step(producer, _channel_attr(port, "capability", edge.name))
@@ -5111,7 +5166,7 @@ class System:
                 if served:
                     step(producer, f"{flow.name}_alloc")
                 step(producer, f"{flow.name}_fed_out")
-                if flow.publish_rate:
+                if flow.publish_rate == RATE_DELIVERED:
                     step(producer, _rate_alias(flow.name))
                 for edge in served:
                     step(edge.consumer, f"{edge.flow_in}_fed_in")
@@ -5119,7 +5174,8 @@ class System:
                         (
                             declared
                             for declared in self.comp[edge.consumer].flows_continuous_in
-                            if declared.name == edge.flow_in and declared.publish_rate
+                            if declared.name == edge.flow_in
+                            and declared.publish_rate == RATE_DELIVERED
                         ),
                         None,
                     )
@@ -5461,10 +5517,10 @@ class System:
             for flow in obj.flows_continuous_in:
                 if flow.profile is not None:
                     observable.add(f"{flow.name}_in_profile")
-                if flow.publish_rate:
+                if flow.publish_rate is not None:
                     observable.add(_rate_alias(flow.name))
             for flow in obj.flows_continuous_out:
-                if flow.publish_rate:
+                if flow.publish_rate is not None:
                     observable.add(_rate_alias(flow.name))
                 if obj._caps_on(flow.name):
                     observable.add(f"{flow.name}_effective_rate")
