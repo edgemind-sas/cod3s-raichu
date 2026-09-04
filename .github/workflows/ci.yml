@@ -42,6 +42,27 @@ jobs:
           pip install target/wheels/pyraichu-*.whl
           python -c "import pyraichu; print(pyraichu.__version__)"
 
+  # RAICHU on its own: the engine through its binding, the muscadet
+  # authoring layer, the declaration vocabulary and the plugins. No
+  # PyCATSHOO, no recorded reference, so a failure here is an internal
+  # regression and the whole suite answers in seconds.
+  unit:
+    name: Python unit suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build and install the wheel
+        run: |
+          pipx run maturin build -m bindings/pyraichu/Cargo.toml
+          pip install target/wheels/pyraichu-*.whl pytest
+      - name: Run the unit suite
+        run: pytest python/tests/unit -q
+
   docs:
     name: Docs examples + RAICHU-side benchmark
     runs-on: ubuntu-latest
@@ -75,4 +96,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Explain skip
-        run: echo "PyCATSHOO oracle unavailable on hosted runners; run 'uv run pytest python/tests/validation' locally."
+        run: echo "PyCATSHOO oracle unavailable on hosted runners; run 'uv run pytest python/tests/validation' locally. What needs no oracle runs in the 'unit' job above."
