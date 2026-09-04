@@ -355,6 +355,7 @@ def simulate(
     seed: int = 0,
     rng_stream: int = 0,
     flow: FlowConfig | None = None,
+    max_transition_firings: int | None = None,
 ) -> SimulationResult:
     """Run one simulation of ``model`` up to ``t_max``.
 
@@ -364,9 +365,16 @@ def simulate(
     deterministic models); the same pair replays bit-identically.
     ``flow`` is a :class:`FlowConfig` overriding the convergence policy
     of the continuous flow resolution (engine defaults when omitted).
-    The GIL is released while the Rust engine runs. Raises
+    ``max_transition_firings`` caps how many times ONE transition may
+    fire in this trajectory, beyond which the model is declared to be
+    chattering and the run fails with a diagnosis naming it. It is what
+    turns a limit cycle, where time advances by a little every turn and
+    neither Zeno guard can see it, into a typed error rather than a run
+    that never ends. ``0`` disables it; omitted, the engine default
+    applies. The GIL is released while the Rust engine runs. Raises
     :class:`SimulationError` on typed engine failures (instantaneous
-    loop, non-confluence when ``confluence_check`` is enabled, …).
+    loop, chattering, non-confluence when ``confluence_check`` is
+    enabled, …).
     """
     raw = json.loads(
         simulate_json(
@@ -378,6 +386,7 @@ def simulate(
             seed,
             rng_stream,
             flow,
+            max_transition_firings,
         )
     )
     events = [
