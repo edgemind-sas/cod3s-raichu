@@ -110,7 +110,7 @@ point accepts and the other refuses does not exist.
 |---|---|
 | `flows_continuous_in` | a real-valued input: `var_in_default` (what it reads unconnected), `var_demand_default` (what a pure consumer asks for), a `profile` scaling that demand over time |
 | `flows_continuous_out` | a real-valued output: `var_fed_default`, a `max_rate` ceiling, a `profile` (a declared function of time), and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`) |
-| `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `side`, `hysteresis` |
+| `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `side`, `hysteresis`. A volume holding more than one flow also publishes each constituent's `ratio`, its fraction of the mixture |
 | `measurements_in` | the reading side of a measurement link: a channel observing a published level, carrying no quantity |
 | `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow |
 | `transfers` | a transfer pair: a quantity moved because a gradient drives it, under a `ConductiveTransfer` equation |
@@ -160,6 +160,25 @@ A whole continuous model is therefore writable as data, controllers
 included, and the document it expands to is **the same one** the builder
 writes for the same model: the plugin hands the declarations to a
 `System` and calls the generation the builder calls.
+
+#### Three quantities a volume publishes per constituent
+
+| Published | Divided by | Answers |
+|---|---|---|
+| `{cap}_level_{flow}` | nothing | how much of it is held |
+| `{cap}_fill_{flow}` | the declared volume | how full the vessel is |
+| `{cap}_ratio_{flow}` | what the vessel holds | what the **mixture** is |
+
+The third is the one a flammability threshold is written on: two per cent
+of hydrogen in a room means two per cent of what the room holds, not two
+per cent of the room. A controller cannot compute it, its output grammar
+being closed at four operators with no arithmetic among them, so a
+fraction a controller can threshold is one the volume publishes.
+
+Only a volume holding **more than one** constituent publishes ratios: a
+single-flow volume's ratio is identically one wherever it holds anything.
+An **empty** volume reads 0 on every ratio, nothing being no fraction of
+nothing.
 
 #### A ceiling on what an output can deliver
 
