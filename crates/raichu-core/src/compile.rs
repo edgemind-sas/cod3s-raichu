@@ -436,6 +436,16 @@ pub struct CompiledModel {
     /// evaluation point). Positional unless the model declares an
     /// `evaluation_order`.
     pub explicit: Vec<CStep>,
+    /// Whether any step of the explicit sweep reads the simulation
+    /// clock.
+    ///
+    /// Such a step varies continuously with **no ODE attribute behind
+    /// it**: a declared time profile is one, and nothing else in the
+    /// model need move for it to. The engine reads this to decide that
+    /// continuous evolution must run at all, so that the sweep is
+    /// re-evaluated as the clock advances rather than once at the
+    /// initial instant and never again.
+    pub explicit_reads_time: bool,
     /// Indices of watched transitions (monitored during continuous
     /// evolution, never date-scheduled).
     pub watched: Vec<TransIdx>,
@@ -702,7 +712,7 @@ impl CExpr {
 
     /// Whether this expression reads the simulation time (which makes
     /// it continuously varying even without ODE attributes).
-    fn reads_time(&self) -> bool {
+    pub(crate) fn reads_time(&self) -> bool {
         match self {
             CExpr::Time => true,
             CExpr::Const(_) | CExpr::Var(_) | CExpr::StateActive { .. } | CExpr::PortAgg { .. } => {
@@ -1371,6 +1381,12 @@ impl CompiledModel {
             indicators,
             targets,
             ode,
+            explicit_reads_time: explicit.iter().any(|step| match step {
+                CStep::Equation { expr, .. } => expr.reads_time(),
+                // An allocation distributes a quantity it is handed; it
+                // reads no clock of its own.
+                CStep::Allocate(_) => false,
+            }),
             explicit,
             watched,
             flow_margins,

@@ -2987,11 +2987,21 @@ impl<'m> Engine<'m> {
     }
 
     /// Whether continuous evolution must run: the model has ODE
-    /// attributes, or an armed hazard varies continuously (`reschedule_modifiable`
-    /// under `integrate_continuous`: possibly with no ODE at all, e.g. a
-    /// time-dependent rate).
+    /// attributes, an armed hazard varies continuously
+    /// (`reschedule_modifiable` under `integrate_continuous`: possibly
+    /// with no ODE at all, e.g. a time-dependent rate), or a step of the
+    /// explicit sweep reads the clock.
+    ///
+    /// The third case has no state behind it at all. A declared time
+    /// profile is an explicit equation over `time` and nothing else, so
+    /// without this the engine would find nothing to advance, evaluate
+    /// the sweep once at the initial instant, and report that value at
+    /// every sample instant and to every watched guard for the rest of
+    /// the run: a curve reported as a constant, with nothing to signal
+    /// it.
     fn needs_integration(&self) -> bool {
         !self.model.ode.is_empty()
+            || self.model.explicit_reads_time
             || self
                 .continuous_rates
                 .iter()
