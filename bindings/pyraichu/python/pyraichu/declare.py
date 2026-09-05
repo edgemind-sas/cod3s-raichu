@@ -625,16 +625,18 @@ def _prod_cond_operand(where: str, operand: Any, inputs: set[str]) -> str:
             f"operand is a flow name or a mapping carrying `name`"
         )
 
-    for key in ("negate", "op", "value"):
+    for key in ("negate", "op", "value", "release"):
         if operand.get(key) is not None and operand.get(key) is not False:
             raise ComponentSpecError(
                 f"{where} declares the production-condition operand key "
                 f"`{key}`, which this layer does not carry: a discrete "
-                f"production condition reads flow names, and a negation or a "
-                f"threshold has no counterpart here"
+                f"production condition reads flow names, and a negation, a "
+                f"threshold or its band has no counterpart here"
             )
 
-    unknown = sorted(set(operand) - {"name", "port", "negate", "op", "value"})
+    unknown = sorted(
+        set(operand) - {"name", "port", "negate", "op", "value", "release"}
+    )
     if unknown:
         raise ComponentSpecError(
             f"{where} carries unknown production-condition operand keys "
