@@ -209,6 +209,47 @@ single-flow volume's ratio is identically one wherever it holds anything.
 An **empty** volume reads 0 on every ratio, nothing being no fraction of
 nothing.
 
+#### A band on a rule's threshold
+
+A rule condition comparing a quantity carries `value`, the threshold the
+rule is entered on. It may also carry `release`, the threshold it is
+**left** on. Between the two the mode holds whatever it already was.
+
+```python
+{"name": "Elec", "port": "in", "op": ">=", "value": 4.0, "release": 2.0}
+```
+
+One threshold is right whenever nothing in the model pushes back on the
+quantity being read: the mode switches where the read crosses, and stays
+switched. It is wrong when the rule **itself moves** what it reads. Then
+each of the two states produces the condition that justifies the other,
+the mode has no fixpoint, and it alternates at the scale of the numerical
+hysteresis of the crossing rather than at any physical scale. The engine
+now names that as a `TransitionChattering` failure instead of grinding
+through it, but naming it is not curing it.
+
+The band is the cure, and it does not remove the loop: the dependency is
+still there. What changes is that crossing the band costs physical time,
+so the cycle gets a physical period. That is why the answer is a band and
+not the removal of the threshold, which would throw away a real
+constraint: an electrolyser genuinely cannot run below a fraction of its
+nominal power.
+
+Four declarations are refused, each of them a band that would look
+declared and behave as though it were not:
+
+| Refused | Why |
+|---|---|
+| `release` with no `op`/`value` | a band widens a comparison, so there has to be one |
+| a band on `==` or `!=` | no side to be left on |
+| `release` equal to `value` | a band of zero width is the single threshold it replaces |
+| `release` on the wrong side | entered on the way up, a rule is left on the way down |
+
+A band belongs to the rule that declares it and governs only the
+transitions **leaving** that rule. Rules stay ordered: an earlier,
+higher-priority rule is still tested at its own entry threshold, so a
+band never quietly disables the priority order.
+
 #### A ceiling on what an output can deliver
 
 `max_rate` says the equipment cannot make more than that per unit time,

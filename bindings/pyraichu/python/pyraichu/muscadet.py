@@ -701,6 +701,17 @@ class _RuleOperand:
     `port` disambiguating a name carried on both sides), or an
     automaton-state gate (`automaton` + `state`). `op` and `value` turn
     the read into a numeric comparison; `negate` inverts a boolean one.
+
+    `release` turns that comparison into a **band**: `value` is the
+    threshold at which the rule is entered, `release` the one at which it
+    is left, and between the two the mode holds whatever it already was.
+    A single threshold makes the rule switch at the exact point where the
+    read crosses it, which is right for a quantity nothing in the model
+    pushes back on, and wrong for one the rule itself moves: there the
+    two states each produce the condition that justifies the other and
+    the mode has no fixpoint. The band is the standard cure, and the cost
+    of crossing it is what gives the cycle a physical period instead of a
+    numerical one.
     """
 
     name: str | None = None
@@ -710,13 +721,19 @@ class _RuleOperand:
     negate: bool = False
     op: str | None = None
     value: float | None = None
+    release: float | None = None
 
     def label(self) -> str:
         """The operand as it reads in a diagnostic."""
         if self.automaton is not None:
             return f"{self.automaton} in {self.state}"
         if self.op is not None:
-            return f"{self.name} {self.op} {float(self.value):g}"
+            band = (
+                f" (until {float(self.release):g})"
+                if self.release is not None
+                else ""
+            )
+            return f"{self.name} {self.op} {float(self.value):g}{band}"
         return f"not {self.name}" if self.negate else str(self.name)
 
 
@@ -2281,7 +2298,17 @@ class ObjFlow:
                 f"a mapping: {spec!r}"
             )
         unknown = sorted(
-            set(spec) - {"name", "port", "automaton", "state", "negate", "op", "value"}
+            set(spec)
+            - {
+                "name",
+                "port",
+                "automaton",
+                "state",
+                "negate",
+                "op",
+                "value",
+                "release",
+            }
         )
         if unknown:
             raise ValueError(
@@ -2295,6 +2322,7 @@ class ObjFlow:
             negate=bool(spec.get("negate", False)),
             op=spec.get("op"),
             value=spec.get("value"),
+            release=spec.get("release"),
         )
         if (operand.name is None) == (operand.automaton is None):
             raise ValueError(
@@ -2324,7 +2352,55 @@ class ObjFlow:
                     "and no value"
                 )
             operand.value = float(operand.value)
+        if operand.release is not None:
+            self._check_band(where, operand)
         return operand
+
+    @staticmethod
+    def _check_band(where: str, operand: _RuleOperand) -> None:
+        """Refuse a hysteresis band that is not one.
+
+        Every refusal here is a band that would look declared and behave
+        as though it were not: silently reverting to a single threshold is
+        the one outcome worth ruling out, since the reason for declaring a
+        band at all is a mode that chatters without it."""
+        if operand.op is None:
+            raise ValueError(
+                f"{where} declares `release`={float(operand.release):g} on "
+                f"`{operand.name}` without comparing it; a band widens a "
+                "comparison, so it needs `op` and `value`"
+            )
+        if operand.op not in _ORDERING_OPS:
+            raise ValueError(
+                f"{where} declares a band on `{operand.name} {operand.op}`; a "
+                f"band needs an ordering comparison ({', '.join(_ORDERING_OPS)}), "
+                "since it says which side the rule is left on"
+            )
+        operand.release = float(operand.release)
+        if operand.release == operand.value:
+            raise ValueError(
+                f"{where} declares `release` equal to `value` "
+                f"({float(operand.value):g}) on `{operand.name}`; that is a "
+                "band of zero width, which is the single threshold it was "
+                "meant to replace: widen it or drop the key"
+            )
+        rising = operand.op in (">", ">=")
+        if rising and operand.release > operand.value:
+            raise ValueError(
+                f"{where} enters on `{operand.name} {operand.op} "
+                f"{float(operand.value):g}` and would leave at "
+                f"{float(operand.release):g}, above it; a rule entered on the "
+                "way up is left on the way down, so `release` sits BELOW "
+                "`value`"
+            )
+        if not rising and operand.release < operand.value:
+            raise ValueError(
+                f"{where} enters on `{operand.name} {operand.op} "
+                f"{float(operand.value):g}` and would leave at "
+                f"{float(operand.release):g}, below it; a rule entered on the "
+                "way down is left on the way up, so `release` sits ABOVE "
+                "`value`"
+            )
 
     def _operand_read(
         self, where: str, operand: _RuleOperand
@@ -2480,20 +2556,39 @@ class ObjFlow:
             return {"op": "bool", "bool_op": "not", "args": [read]}
         return read
 
-    def _rule_operand_negation(self, operand: _RuleOperand) -> dict[str, Any]:
+    def _rule_operand_negation(
+        self, operand: _RuleOperand, releasing: bool = False
+    ) -> dict[str, Any]:
         """The operand denied, with a comparison **complemented** rather
-        than wrapped in a `not`: see :data:`_NEGATED_OPS`."""
+        than wrapped in a `not`: see :data:`_NEGATED_OPS`.
+
+        `releasing` denies the operand at its band's far edge instead of
+        at the edge it was entered on. It is set on the rule the mode is
+        currently in and on no other: an earlier rule the mode might move
+        UP to is still tested at its own entry threshold, so a band widens
+        the rule that holds it and never the ones competing for it."""
         if operand.op is not None:
+            threshold = (
+                operand.value
+                if not releasing or operand.release is None
+                else operand.release
+            )
             return self._rule_operand_expr(
-                replace(operand, op=_NEGATED_OPS[operand.op])
+                replace(operand, op=_NEGATED_OPS[operand.op], value=threshold)
             )
         return self._rule_operand_expr(replace(operand, negate=not operand.negate))
 
-    def _rule_guard_negation(self, rule: _Rule) -> dict[str, Any]:
+    def _rule_guard_negation(
+        self, rule: _Rule, releasing: bool = False
+    ) -> dict[str, Any]:
         """A rule's guard denied: the disjunction of its denied operands,
         by De Morgan, so every comparison in it is complemented."""
         return _bool(
-            "or", [self._rule_operand_negation(operand) for operand in rule.cond]
+            "or",
+            [
+                self._rule_operand_negation(operand, releasing)
+                for operand in rule.cond
+            ],
         )
 
     def _rule_guard_expr(self, rule: _Rule) -> dict[str, Any]:
@@ -2512,14 +2607,20 @@ class ObjFlow:
         return False
 
     def _rule_selection_guard(
-        self, rule_set: _RuleSet, target: str
+        self, rule_set: _RuleSet, target: str, source: str | None = None
     ) -> tuple[dict[str, Any], bool]:
         """When the mode enters `target`, and whether that entry is a
         located crossing.
 
         Rules are ordered, so a guarded rule is selected when its own
         guard holds and no earlier one does; the default (or the "no
-        rule" mode) is selected when no guard holds at all."""
+        rule" mode) is selected when no guard holds at all.
+
+        `source` is the mode being left. It matters only to a rule that
+        declares a **band**: the rule the mode is in is denied at its
+        release threshold rather than at its entry one, which is what
+        makes the mode hold inside the band instead of switching on the
+        first crossing."""
         guarded = [
             (index, rule)
             for index, rule in enumerate(rule_set.rules)
@@ -2543,8 +2644,20 @@ class ObjFlow:
         else:
             reading = [rule for _, rule in guarded]
             earlier = reading
+        held = (
+            next(
+                (
+                    rule
+                    for index, rule in guarded
+                    if rule_set.label(index) == source
+                ),
+                None,
+            )
+            if source is not None
+            else None
+        )
         for rule in earlier:
-            terms.append(self._rule_guard_negation(rule))
+            terms.append(self._rule_guard_negation(rule, releasing=rule is held))
         return _bool("and", terms), any(
             self._rule_reads_continuously(rule) for rule in reading
         )
@@ -2566,7 +2679,9 @@ class ObjFlow:
             for target in states:
                 if source == target:
                     continue
-                guard, located = self._rule_selection_guard(rule_set, target)
+                guard, located = self._rule_selection_guard(
+                    rule_set, target, source
+                )
                 transition: dict[str, Any] = {
                     "name": f"{rule_set.name}_{source}_to_{target}",
                     "source": source,
