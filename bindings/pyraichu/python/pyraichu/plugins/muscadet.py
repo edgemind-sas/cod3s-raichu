@@ -368,6 +368,160 @@ def _reinit_effects(
     return effects
 
 
+# --- one writer per reinitialized attribute (cross-mode composition) --------
+#
+# A reinitialization effect is a TOTAL assignment: the attribute holds the
+# failure value while the mode's gate is true and its REST value otherwise.
+# That rest branch is the mode asserting what the attribute is when it is
+# not failed, and it is only legitimate while the mode is the attribute's
+# sole writer. Two failure modes declared on the same target write the same
+# attribute, and each one, healthy, then overwrites the other's failure with
+# the rest value: the trajectory loses a failure nothing repaired, and no
+# cut set ever pairs two modes (the DIL Quai divergence,
+# `docs/2026-09-05-dil-quai-parity-verdict.md`).
+#
+# PyCATSHOO does not have the problem because the rest value is not the
+# mode's to assert: the target variable carries the reinitialization
+# property (`setReinitialized(True)`), which restores it once per fixpoint
+# pass, and each mode only clamps its failure value while its own state is
+# active (cod3s `FmWiringMixin._wire_state_effects_multi`, whose
+# `not_occ` clamp is empty by convention). RAICHU's core has no such
+# per-variable reset, so the expansion folds it into the effect; the fold
+# is correct per attribute, not per mode.
+#
+# Hence this pass: every reinitialization writer of one attribute becomes
+# ONE writer whose rest branch is reached only when NO mode holds it
+# failed. It runs in `finalize_model`, the one place where every component
+# exists: an internal ObjFM may be declared before its targets, so the
+# merge cannot happen while the objects are expanded one at a time.
+
+
+def _reinit_writer_sites(specs: list[dict]) -> set[tuple[str, str]]:
+    """The ``(component, sensitive function)`` pairs that carry ObjFM
+    reinitialization effects, read from the DECLARATIONS.
+
+    Naming the two emission sites rather than recognising an expression
+    shape is what keeps this pass off everything else that may write an
+    attribute (a logic gate, a controller, a user function): those are
+    not reinitialization writers and merging them would change semantics
+    the mode never claimed.
+    """
+    sites: set[tuple[str, str]] = set()
+    for spec in specs:
+        kind = spec.get("type")
+        if kind == "ObjFMInst":
+            sites.add((spec["name"], "apply_effects"))
+        elif kind == "ObjFM":
+            if spec.get("behaviour", "internal") == "internal":
+                sites.add((spec["name"], "apply_effects"))
+            else:
+                # external / external_rep_indep graft their effects onto
+                # each target, under the mode's own function name.
+                for target in spec.get("targets") or []:
+                    sites.add((target, f"apply_{spec['name']}"))
+    return sites
+
+
+def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
+    """Give every reinitialized attribute exactly ONE writer, in place.
+
+    Attributes written by a single mode are left untouched, which is
+    every model expanded before this pass existed. Where several modes
+    write one attribute, their effects are folded into the first writer:
+    the gate becomes the OR of theirs when they agree on the failure
+    value (the ordinary case: the same physical loss declared by several
+    modes), and a declaration-ordered chain when they do not, so that a
+    disagreement resolves the same way on every run instead of by
+    whichever clamp the fixpoint applied last.
+
+    The rest branches must agree: two modes claiming different values for
+    "nobody has failed this attribute" is a contradiction about what the
+    attribute IS, and the only way to state it is an explicit
+    ``repair_effects`` on a shared target, which is a write-war in
+    PyCATSHOO too.
+    """
+    sites = _reinit_writer_sites(specs)
+    if not sites:
+        return
+    # Emission order: components as they were expanded, then functions,
+    # then effects. It decides which writer hosts the fold and, when the
+    # failure values disagree, which one wins.
+    claims: dict[tuple[str, str], list[tuple[dict, dict]]] = {}
+    for component in model.get("components", []) or []:
+        for function in component.get("sensitive_functions", []) or []:
+            if (component.get("name"), function.get("name")) not in sites:
+                continue
+            for effect in function.get("effects", []) or []:
+                target = effect.get("target") or {}
+                key = (target.get("component"), target.get("attribute"))
+                claims.setdefault(key, []).append((function, effect))
+
+    dropped: set[int] = set()
+    touched: list[dict] = []
+    for (component_name, attribute), entries in claims.items():
+        if len(entries) < 2:
+            continue
+        values = [effect["value"] for _, effect in entries]
+        for value in values:
+            if not (isinstance(value, dict) and value.get("op") == "if"):
+                raise AssertionError(
+                    "muscadet plugin: a reinitialization effect on "
+                    f"`{component_name}.{attribute}` is not the expected "
+                    "conditional; the merge pass and the emission drifted"
+                )
+        rest = values[0]["otherwise"]
+        for value in values[1:]:
+            if value["otherwise"] != rest:
+                raise ValueError(
+                    f"the failure modes writing `{component_name}."
+                    f"{attribute}` disagree on its value when none of them "
+                    "has failed it (an explicit `repair_effects` on a "
+                    "shared target): an attribute has one rest state, so "
+                    "declare the same one, or stop sharing the target"
+                )
+        fail = values[0]["then"]
+        if all(value["then"] == fail for value in values):
+            merged = {
+                "op": "if",
+                "cond": _bool_expr("or", [value["cond"] for value in values]),
+                "then": fail,
+                "otherwise": rest,
+            }
+        else:
+            merged = rest
+            for value in reversed(values):
+                merged = {
+                    "op": "if",
+                    "cond": value["cond"],
+                    "then": value["then"],
+                    "otherwise": merged,
+                }
+        entries[0][1]["value"] = merged
+        for function, effect in entries[1:]:
+            dropped.add(id(effect))
+            touched.append(function)
+
+    if not dropped:
+        return
+    for function in touched:
+        function["effects"] = [
+            effect for effect in function["effects"] if id(effect) not in dropped
+        ]
+    # A writer whose every effect was folded elsewhere carries nothing:
+    # drop it rather than emit an empty function, which is what the
+    # expansion does for a mode with no effects at all.
+    for component in model.get("components", []) or []:
+        functions = component.get("sensitive_functions")
+        if not functions:
+            continue
+        component["sensitive_functions"] = [
+            function
+            for function in functions
+            if function.get("effects")
+            or (component.get("name"), function.get("name")) not in sites
+        ]
+
+
 # --- object expansions ------------------------------------------------------
 
 #: Every `ObjFlow` section, IN THE ORDER IT MUST BE DECLARED IN, with the
@@ -1327,8 +1481,20 @@ class MuscadetPlugin:
     def finalize_model(
         self, model: dict[str, Any], specs: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
-        """Emit the continuous network over the WHOLE model, once every
-        object has been expanded and every connection is present.
+        """Close the expansion over the WHOLE model: give every
+        reinitialized attribute one writer, then emit the continuous
+        network, once every object has been expanded and every
+        connection is present.
+
+        **One writer per reinitialized attribute** (see
+        :func:`_merge_reinit_writers`). A reinitialization effect states
+        both what the attribute is while its mode has failed it and what
+        it is otherwise, so two modes sharing a target each undo the
+        other's failure. Which modes write one attribute is not decidable
+        while the objects are expanded one at a time: an internal ObjFM
+        resolves its targets by name and may be declared before them.
+
+        **The continuous network.**
 
         A conservative flow network is not component-local: what one
         producer publishes to one consumer is what remains once the OTHER
@@ -1346,9 +1512,11 @@ class MuscadetPlugin:
         authored through the class-based surface are one document.
 
         Answers ``None`` for a model declaring no continuous construct,
-        which is every model this plugin expanded before: it is then a
-        no-op, not a differently-shaped answer.
+        which is every model this plugin expanded before: nothing but the
+        merge above runs, and the answer is not a differently-shaped one.
         """
+        _merge_reinit_writers(model, specs)
+
         declarations: dict[str, authoring.ObjFlow] = {}
         continuous = False
         for spec in specs:
