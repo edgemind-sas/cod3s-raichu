@@ -139,6 +139,33 @@ fn validate_model(model_json: &str) -> PyResult<()> {
     parse_and_compile(model_json).map(|_| ())
 }
 
+/// Switching loops of a model, as JSON: a cycle automaton to variable to
+/// automaton where some automaton switches on a single threshold.
+///
+/// A warning and never a refusal. The loop itself is legitimate, a
+/// thermostat is one; what makes it pathological is a switch with no
+/// band, so a loop whose every switch has one is not reported.
+#[pyfunction]
+fn switching_loops_json(model_json: &str) -> PyResult<String> {
+    let compiled = parse_and_compile(model_json)?;
+    // Read off the compiled model: the walk already ran once, at compile
+    // time, and running it again here would answer the same question
+    // twice.
+    let found: Vec<_> = compiled
+        .switching_loops
+        .iter()
+        .map(|loop_| {
+            serde_json::json!({
+                "automata": loop_.automata,
+                "bandless": loop_.bandless,
+                "through": loop_.through,
+                "message": loop_.describe(),
+            })
+        })
+        .collect();
+    serde_json::to_string(&found).map_err(|e| ModelError::new_err(e.to_string()))
+}
+
 /// Feature names an authored model document requires, derived from the
 /// constructs it contains (never from a declaration).
 ///
@@ -506,6 +533,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("ModelError", py.get_type::<ModelError>())?;
     module.add("SimulationError", py.get_type::<SimulationError>())?;
     module.add_function(wrap_pyfunction!(validate_model, module)?)?;
+    module.add_function(wrap_pyfunction!(switching_loops_json, module)?)?;
     module.add_function(wrap_pyfunction!(required_features, module)?)?;
     module.add_function(wrap_pyfunction!(seal_model, module)?)?;
     module.add_function(wrap_pyfunction!(simulate_json, module)?)?;
