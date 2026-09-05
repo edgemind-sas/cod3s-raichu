@@ -356,6 +356,7 @@ def simulate(
     rng_stream: int = 0,
     flow: FlowConfig | None = None,
     max_transition_firings: int | None = None,
+    max_flow_restarts: int | None = None,
 ) -> SimulationResult:
     """Run one simulation of ``model`` up to ``t_max``.
 
@@ -366,15 +367,18 @@ def simulate(
     ``flow`` is a :class:`FlowConfig` overriding the convergence policy
     of the continuous flow resolution (engine defaults when omitted).
     ``max_transition_firings`` caps how many times ONE transition may
-    fire in this trajectory, beyond which the model is declared to be
-    chattering and the run fails with a diagnosis naming it. It is what
-    turns a limit cycle, where time advances by a little every turn and
-    neither Zeno guard can see it, into a typed error rather than a run
-    that never ends. ``0`` disables it; omitted, the engine default
-    applies. The GIL is released while the Rust engine runs. Raises
-    :class:`SimulationError` on typed engine failures (instantaneous
-    loop, chattering, non-confluence when ``confluence_check`` is
-    enabled, …).
+    fire in this trajectory, and ``max_flow_restarts`` how many times the
+    active set of the continuous flow network may change, beyond which
+    the model is declared to be chattering and the run fails with a
+    diagnosis naming the transition, or the edges that crossed last.
+    Together they are what turns a limit cycle, where time advances by a
+    little every turn and neither Zeno guard can see it, into a typed
+    error rather than a run that never ends: the first catches a mode
+    that flips, the second a network whose routing does. ``0`` disables
+    either; omitted, the engine default applies. The GIL is released
+    while the Rust engine runs. Raises :class:`SimulationError` on typed
+    engine failures (instantaneous loop, chattering, non-confluence when
+    ``confluence_check`` is enabled, …).
     """
     raw = json.loads(
         simulate_json(
@@ -387,6 +391,7 @@ def simulate(
             rng_stream,
             flow,
             max_transition_firings,
+            max_flow_restarts,
         )
     )
     events = [

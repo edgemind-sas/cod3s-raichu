@@ -228,6 +228,8 @@ little, every turn. Two budgets close that:
 | `max_transition_firings` | how many times ONE transition may fire in a trajectory | 100 000 |
 | `max_flow_restarts` | how many segments the flow network may restart in a trajectory | 100 000 |
 
+Both are keywords of `simulate`, and both take `0` to lift them.
+
 Both fail with the culprit named and the **mean simulated step** between
 its turns. That number is the diagnosis: microseconds between firings of
 a bound automaton is a numerical scale, and no model of a plant means it.
@@ -241,6 +243,11 @@ between t=4.000000000000002 and t=4.799998091533782
 Set either to `0` to lift it: a genuinely fast-switching model is a
 legitimate thing to want, and a cap that could not be raised would be a
 limit on what may be modelled rather than a diagnostic.
+
+Neither stands in for the other. A mode that flips is caught by the
+first and leaves the flow network untouched; a network that re-routes is
+caught by the second while its transitions behave. Reach for the one
+that matches what the diagnosis named.
 
 The commonest cause is not a numerical setting at all. A volume that
 declares no pass-through demand asks for nothing once full, falls below

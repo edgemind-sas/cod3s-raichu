@@ -36,6 +36,8 @@ def simulate_json(
     seed: int = 0,
     rng_stream: int = 0,
     flow: FlowConfig | None = None,
+    max_transition_firings: int | None = None,
+    max_flow_restarts: int | None = None,
 ) -> str: ...
 def monte_carlo_json(
     model_json: str,
