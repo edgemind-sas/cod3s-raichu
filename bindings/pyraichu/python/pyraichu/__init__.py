@@ -26,6 +26,7 @@ from ._pyraichu import (
     required_features,
     seal_model,
     simulate_json,
+    switching_loops_json,
     validate_model,
 )
 from .journal import Cascade, JournalQuery, TransitionHistory, AttributeChange
@@ -58,6 +59,7 @@ __all__ = [
     "seal",
     "seal_model",
     "simulate",
+    "switching_loops",
 ]
 
 
@@ -344,6 +346,32 @@ def analyse_sequences(
     return json.loads(
         analyse_sequences_json(model.json, nb_runs, t_max, seed, threads, flow)
     )
+
+
+def switching_loops(model: Model) -> list[dict]:
+    """Switching loops of ``model``, found without simulating it.
+
+    A switching loop is a cycle of the dependency graph, automaton to
+    variable to automaton: an automaton whose guard reads a quantity that
+    its own decision moves. Each of its two states then produces the
+    condition that justifies the other, so the mode has no fixpoint and
+    what sets its period is the width of the narrowest threshold on the
+    cycle rather than anything physical.
+
+    A **warning and never a refusal**: the loop itself is legitimate, a
+    thermostat is one, and so is every controlled tank. What makes one
+    pathological is a switch with no band, so a loop is reported only
+    when some automaton on it is entered and left at the same threshold,
+    and a loop whose every switch has a band is silent.
+
+    Each entry carries ``automata`` (the cycle), ``bandless`` (those of
+    them that switch on a single threshold), ``through`` (the variables
+    the cycle passes through) and a ready-phrased ``message``. The cure
+    is a band on the threshold, or reading a quantity the rule does not
+    move; the run-time counterpart is ``max_transition_firings``, which
+    catches the same thing after the wait rather than before it.
+    """
+    return json.loads(switching_loops_json(model.json))
 
 
 def simulate(

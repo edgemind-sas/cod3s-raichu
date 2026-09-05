@@ -256,6 +256,36 @@ refills: declare `var_demand_default` on its inlet and the cycle
 disappears. The second commonest is a guard comparing a **rate**, whose
 value depends on the decision the guard makes.
 
+## Finding the loop before the run
+
+Both budgets above are run-time: they name the culprit after the fact and
+after the wait. `switching_loops(model)` finds the same class of fault
+from the compiled tables alone, before anything is simulated.
+
+```python
+for found in pyraichu.switching_loops(model):
+    print(found["message"])
+```
+
+What it looks for is a cycle of the dependency graph, automaton to
+variable to automaton: an automaton whose guard reads a quantity that its
+own decision moves. Each of the two states then produces the condition
+that justifies the other, so the mode has no fixpoint and what sets its
+period is the width of the narrowest threshold on the cycle rather than
+anything physical.
+
+It **warns and never refuses**, and that is the design rather than
+caution. The loop is not the fault: a thermostat is a switching loop, and
+so is every controlled tank. What makes one pathological is a switch with
+no band, so a loop is reported only when some automaton on it is entered
+and left at the same threshold, and a loop whose every switch has a band
+is silent.
+
+Each entry carries the automaton to act on (`bandless`), the whole cycle
+(`automata`, `through`) so the finding can be checked rather than
+trusted, and a ready-phrased `message`. The cure is a band on the
+threshold, or reading a quantity the rule does not move.
+
 ## Choosing a setting
 
 - **Keep the defaults** for correctness-critical work, small models, or

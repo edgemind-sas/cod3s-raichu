@@ -28,6 +28,7 @@
 pub mod compile;
 pub mod engine;
 pub mod flow;
+pub mod loops;
 pub mod sequence;
 
 pub use compile::{CompileError, CompiledModel, MarginIndex, WatchedIdx};
@@ -37,5 +38,6 @@ pub use engine::{
     Snapshot, WorkCounters,
 };
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
+pub use loops::{switching_loops, SwitchingLoop};
 pub use raichu_numeric::{SolverParams, SolverStats};
 pub use sequence::{analyse, filter_cycles, group_sequences, minimal_sequences};

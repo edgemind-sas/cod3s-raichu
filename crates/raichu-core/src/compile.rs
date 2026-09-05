@@ -446,6 +446,15 @@ pub struct CompiledModel {
     /// re-evaluated as the clock advances rather than once at the
     /// initial instant and never again.
     pub explicit_reads_time: bool,
+    /// Switching loops found in this model: an automaton whose guard
+    /// reads a quantity its own decision moves, where some automaton on
+    /// the cycle switches on a single threshold.
+    ///
+    /// Computed once here rather than on demand, so a caller that wants
+    /// the diagnosis pays nothing for it and one that does not is warned
+    /// anyway (see [`crate::loops`]). Never a refusal: the loop is
+    /// legitimate, the missing band is what is not.
+    pub switching_loops: Vec<crate::loops::SwitchingLoop>,
     /// Indices of watched transitions (monitored during continuous
     /// evolution, never date-scheduled).
     pub watched: Vec<TransIdx>,
@@ -677,7 +686,7 @@ impl Resolver {
 impl CExpr {
     /// Collect the attribute and automaton sensitivity sets of this
     /// expression (which changes must re-trigger a function reading it).
-    fn collect_sensitivity(&self, vars: &mut Vec<VarIdx>, auts: &mut Vec<AutIdx>) {
+    pub(crate) fn collect_sensitivity(&self, vars: &mut Vec<VarIdx>, auts: &mut Vec<AutIdx>) {
         match self {
             CExpr::Const(_) => {}
             CExpr::Var(idx) => vars.push(*idx),
@@ -1369,7 +1378,7 @@ impl CompiledModel {
             .map(|(i, a)| (a.name.clone(), i))
             .collect();
 
-        Ok(CompiledModel {
+        let mut compiled = CompiledModel {
             name: model.name.clone(),
             var_names,
             var_init,
@@ -1393,6 +1402,16 @@ impl CompiledModel {
             margin_index,
             var_index,
             automaton_index,
-        })
+            switching_loops: Vec::new(),
+        };
+        // Structural diagnostics come last, on the finished tables. A
+        // warning and never a refusal: the loop itself is legitimate, and
+        // `tracing` costs nothing where no subscriber is installed, so a
+        // library caller pays nothing and an application sees it.
+        compiled.switching_loops = crate::loops::switching_loops(&compiled);
+        for found in &compiled.switching_loops {
+            tracing::warn!(model = %compiled.name, "{}", found.describe());
+        }
+        Ok(compiled)
     }
 }
