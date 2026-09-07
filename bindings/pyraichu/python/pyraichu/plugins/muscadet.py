@@ -377,8 +377,8 @@ def _reinit_effects(
 # sole writer. Two failure modes declared on the same target write the same
 # attribute, and each one, healthy, then overwrites the other's failure with
 # the rest value: the trajectory loses a failure nothing repaired, and no
-# cut set ever pairs two modes (the DIL Quai divergence,
-# `docs/2026-09-05-dil-quai-parity-verdict.md`).
+# cut set ever pairs two modes. Found on a real platform study, where
+# the reference engine paired them and this one did not.
 #
 # PyCATSHOO does not have the problem because the rest value is not the
 # mode's to assert: the target variable carries the reinitialization
@@ -396,30 +396,122 @@ def _reinit_effects(
 # merge cannot happen while the objects are expanded one at a time.
 
 
-def _reinit_writer_sites(specs: list[dict]) -> set[tuple[str, str]]:
+def _reinit_writer_sites(specs: list[dict]) -> dict[tuple[str, str], str]:
     """The ``(component, sensitive function)`` pairs that carry ObjFM
-    reinitialization effects, read from the DECLARATIONS.
+    reinitialization effects, read from the DECLARATIONS, each mapped to
+    the mode that emitted it.
 
     Naming the two emission sites rather than recognising an expression
     shape is what keeps this pass off everything else that may write an
     attribute (a logic gate, a controller, a user function): those are
     not reinitialization writers and merging them would change semantics
     the mode never claimed.
+
+    The mode carried alongside is what lets a refusal name the modes that
+    write one attribute: a site says WHERE the effect sits, and for an
+    external mode that is the target's component, not the mode's.
     """
-    sites: set[tuple[str, str]] = set()
+    sites: dict[tuple[str, str], str] = {}
     for spec in specs:
         kind = spec.get("type")
         if kind == "ObjFMInst":
-            sites.add((spec["name"], "apply_effects"))
+            sites[(spec["name"], "apply_effects")] = spec["name"]
         elif kind == "ObjFM":
             if spec.get("behaviour", "internal") == "internal":
-                sites.add((spec["name"], "apply_effects"))
+                sites[(spec["name"], "apply_effects")] = spec["name"]
             else:
                 # external / external_rep_indep graft their effects onto
                 # each target, under the mode's own function name.
                 for target in spec.get("targets") or []:
-                    sites.add((target, f"apply_{spec['name']}"))
+                    sites[(target, f"apply_{spec['name']}")] = spec["name"]
     return sites
+
+
+def _reinit_claims(
+    model: dict, sites: dict[tuple[str, str], str]
+) -> dict[tuple[str, str], list[tuple[str, dict, dict]]]:
+    """Every reinitialization effect of the model, indexed by the
+    ``(component, attribute)`` it writes, as ``(mode, function, effect)``.
+
+    Emission order is preserved: components as they were expanded, then
+    functions, then effects. It decides which writer hosts a fold and,
+    when the failure values disagree, which one wins.
+    """
+    claims: dict[tuple[str, str], list[tuple[str, dict, dict]]] = {}
+    for component in model.get("components", []) or []:
+        for function in component.get("sensitive_functions", []) or []:
+            site = (component.get("name"), function.get("name"))
+            if site not in sites:
+                continue
+            mode = sites[site]
+            for effect in function.get("effects", []) or []:
+                target = effect.get("target") or {}
+                key = (target.get("component"), target.get("attribute"))
+                claims.setdefault(key, []).append((mode, function, effect))
+    return claims
+
+
+def _persistent_availability_gates(specs: list[dict]) -> dict[tuple[str, str], str]:
+    """The availability gates an ``ObjFlow`` declares PERSISTENT, indexed
+    by the ``(component, attribute)`` they are and carrying the flow they
+    belong to.
+
+    `fed_available_reset: false` is the platform spelling of muscadet's
+    ``FlowOut.var_fed_available_out_reset``, which switches the per-step
+    reinitialization of ``{flow}_fed_available_out`` off.
+    """
+    gates: dict[tuple[str, str], str] = {}
+    for spec in specs:
+        if spec.get("type") != "ObjFlow":
+            continue
+        for flow in spec.get("flows_out") or []:
+            if flow.get("var_fed_available_out_reset") is False:
+                gates[(spec["name"], f"{flow['name']}_fed_available_out")] = flow["name"]
+    return gates
+
+
+def _refuse_a_held_write_on_a_persistent_gate(model: dict, specs: list[dict]) -> None:
+    """A persistent availability gate written by a failure mode has no
+    faithful expansion here, so it is refused by name.
+
+    `fed_available_reset: false` asks for a gate that MEMORISES. muscadet
+    switches the per-step reinitialization off
+    (``setReinitialized(False)``) and the variable then keeps whatever was
+    last written to it, which is how a detection or an alarm is made to
+    latch. This engine has no per-variable reset to switch off: a mode's
+    effect is HELD, re-evaluated to a fixpoint while the mode's state
+    lasts, and the expansion completes it with the rest branch that
+    reinitialization would have restored (:func:`_reinit_effect`). Built
+    that way the gate would come back up on repair, which is the opposite
+    of what the persistence was declared for, and nothing in the model
+    would say so.
+
+    A persistent gate that NO mode writes needs nothing, and that is the
+    ordinary case: the control travels on every output port of a library
+    that declares it, while only a handful of ports are ever written.
+    Neither engine restores such a gate and neither writes it, so both
+    leave it at its declared initial value for the whole sequence.
+    """
+    gates = _persistent_availability_gates(specs)
+    if not gates:
+        return
+    claims = _reinit_claims(model, _reinit_writer_sites(specs))
+    for key, flow in sorted(gates.items()):
+        entries = claims.get(key)
+        if not entries:
+            continue
+        component, attribute = key
+        modes = sorted({mode for mode, _, _ in entries})
+        raise ValueError(
+            f"muscadet plugin: the availability gate `{component}.{attribute}` "
+            f"is declared persistent (`fed_available_reset: false` on flow "
+            f"`{flow}`), and the failure mode(s) {modes} write it. A held "
+            "effect on a gate that is never reinitialized has no faithful "
+            "expansion here: this engine restores the rest state the mode "
+            "declares, so the gate would come back up on repair instead of "
+            "latching. Declare the flow with a reinitialized gate "
+            "(`fed_available_reset: true`), or stop writing it."
+        )
 
 
 def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
@@ -443,25 +535,14 @@ def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
     sites = _reinit_writer_sites(specs)
     if not sites:
         return
-    # Emission order: components as they were expanded, then functions,
-    # then effects. It decides which writer hosts the fold and, when the
-    # failure values disagree, which one wins.
-    claims: dict[tuple[str, str], list[tuple[dict, dict]]] = {}
-    for component in model.get("components", []) or []:
-        for function in component.get("sensitive_functions", []) or []:
-            if (component.get("name"), function.get("name")) not in sites:
-                continue
-            for effect in function.get("effects", []) or []:
-                target = effect.get("target") or {}
-                key = (target.get("component"), target.get("attribute"))
-                claims.setdefault(key, []).append((function, effect))
+    claims = _reinit_claims(model, sites)
 
     dropped: set[int] = set()
     touched: list[dict] = []
     for (component_name, attribute), entries in claims.items():
         if len(entries) < 2:
             continue
-        values = [effect["value"] for _, effect in entries]
+        values = [effect["value"] for _, _, effect in entries]
         for value in values:
             if not (isinstance(value, dict) and value.get("op") == "if"):
                 raise AssertionError(
@@ -496,8 +577,8 @@ def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
                     "then": value["then"],
                     "otherwise": merged,
                 }
-        entries[0][1]["value"] = merged
-        for function, effect in entries[1:]:
+        entries[0][2]["value"] = merged
+        for _, function, effect in entries[1:]:
             dropped.add(id(effect))
             touched.append(function)
 
@@ -998,6 +1079,11 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
     # `OR(impacting ObjFM automata in occ)`; in `external_rep_indep` the
     # trigger is transient, so the control also latches on the target's own
     # occ state (held until the target repairs on its own).
+    # Whether the mode can fire at all: `impacting` is filled per ACTIVE order,
+    # so a mode with every order inactive impacts nothing and every mirror it
+    # grafts stays in its rest state for the whole run.
+    can_fire = any(impacting[t] for t in targets)
+
     ctrl_attributes = []
     ctrl_functions = []
     for target in targets:
@@ -1005,12 +1091,17 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         ctrl_attributes.append(
             {"name": ctrl, "kind": "bool", "init": {"kind": "bool", "value": False}}
         )
-        if not impacting[target]:
-            raise ValueError(
-                f"ObjFM `{name}` ({behaviour}): target `{target}` is impacted by no "
-                "active failure order, so its control attribute could never become "
-                "true: declare at least one order with a failure law"
-            )
+        # A mode whose orders are ALL inactive is how an analyst neutralises a
+        # failure mode without deleting it: every rate at zero, the declaration
+        # kept in the AMDEC. cod3s builds it and it does nothing, and the
+        # platform emits it as such, and real studies carry them. Refusing
+        # it here used to reject the WHOLE model over a declaration that cannot
+        # do anything, which is a hard stop for a benign shape.
+        #
+        # The control is then constant false, which is precisely the inert
+        # behaviour intended. It is still built rather than skipped: the
+        # target's mirror reads it, and a target that keeps its mirror keeps
+        # the arithmetic every other mode was written against.
         occ_gates = [_state_active(name, aut, st) for aut, st in impacting[target]]
         if rep_indep:
             occ_gates = occ_gates + [_state_active(target, name, failure_state)]
@@ -1062,7 +1153,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 f"sensitive function named `{apply_fn}`: rename the ObjFM"
             )
         ctrl = f"ctrl_{name}_{target}"
-        if rep_indep:
+        if rep_indep and can_fire:
             # The target owns its repair: order-1 law of the ObjFM, gated by the
             # user repair_cond evaluated on the target.
             if repair_laws[0] is None:
@@ -1080,7 +1171,12 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 **_law(repair_laws[0]),
             }
         else:
-            # external: the target mirror follows the control attribute.
+            # external, or an inert `external_rep_indep`: the target mirror
+            # follows the control attribute. An inert mode never enters the
+            # mirror's failure state, so this transition is unreachable and the
+            # order-1 repair law it would otherwise carry is not required.
+            # Demanding it refused the whole model over a mode that does
+            # nothing, the same hard stop the control above removes.
             repair_transition = {
                 "name": repair_state,
                 "source": failure_state,
@@ -1486,6 +1582,14 @@ class MuscadetPlugin:
         network, once every object has been expanded and every
         connection is present.
 
+        **Persistent availability gates** (see
+        :func:`_refuse_a_held_write_on_a_persistent_gate`). A gate the
+        platform declared with `fed_available_reset: false` is refused
+        when a mode writes it, and needs nothing when none does. Which
+        modes write a gate is a whole-model question, so it is asked
+        here, and before the merge below, so the refusal names the modes
+        that declared the effects rather than the one that hosts the fold.
+
         **One writer per reinitialized attribute** (see
         :func:`_merge_reinit_writers`). A reinitialization effect states
         both what the attribute is while its mode has failed it and what
@@ -1515,6 +1619,7 @@ class MuscadetPlugin:
         which is every model this plugin expanded before: nothing but the
         merge above runs, and the answer is not a differently-shaped one.
         """
+        _refuse_a_held_write_on_a_persistent_gate(model, specs)
         _merge_reinit_writers(model, specs)
 
         declarations: dict[str, authoring.ObjFlow] = {}
