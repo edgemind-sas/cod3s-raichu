@@ -495,15 +495,60 @@ def _check_param_names(fm: dict, occ_kind: str, rep_kind: str, where: str) -> No
             )
 
 
-def _alias(fm: dict, native: str, legacy: str, where: str) -> Any:
-    """Read one field under its native and its legacy spelling (cod3s
-    refuses a double set the same way): both present must agree, otherwise
-    the native one wins and the legacy one is the fallback."""
-    if native in fm and legacy in fm and fm[native] != fm[legacy]:
+#: Sentinel for "this alias has no schema default", distinct from a legacy
+#: spelling whose default legitimately *is* ``None``.
+_NO_DEFAULT = object()
+
+
+def _alias(
+    fm: dict,
+    native: str,
+    legacy: str,
+    where: str,
+    *,
+    legacy_default: Any = _NO_DEFAULT,
+) -> Any:
+    """Read one field under its native and its legacy spelling.
+
+    Both present and disagreeing is a refusal (cod3s refuses a double set
+    the same way); otherwise the native one wins and the legacy one is the
+    fallback.
+
+    ``legacy_default`` is what keeps that refusal honest on a **serialised**
+    study. A platform study.yaml is dumped from a Pydantic model, so it
+    carries the schema default of every field the author never touched: the
+    presence of a key proves nothing about intent. cod3s declares
+    ``failure_cond`` and ``repair_cond`` with a default of ``True``
+    ("always fireable"), and the platform writes the real condition under
+    the native spelling, so every mode carrying a repair condition arrived
+    here with ``not_occ_cond`` set AND ``repair_cond: True`` beside it, and
+    was refused for a contradiction nobody had written (COD3S #175). A
+    legacy spelling left at its declared default therefore carries no
+    intent and does not contradict anything.
+    """
+
+    def _meaningful(key: str) -> bool:
+        # A spelling carries intent when it is present AND says something
+        # its default does not already say.
+        return key in fm and not (
+            legacy_default is not _NO_DEFAULT and fm[key] == legacy_default
+        )
+
+    if _meaningful(native) and _meaningful(legacy) and fm[native] != fm[legacy]:
         raise TranslationError(
             f"{where}: both {native!r} and its legacy alias {legacy!r} are "
             "set with different values: set exactly one"
         )
+    if _meaningful(native):
+        return fm[native]
+    if _meaningful(legacy):
+        return fm[legacy]
+    if legacy_default is not _NO_DEFAULT:
+        # Neither spelling says anything. Absent and "left at the default"
+        # are the same statement, so answer as if the field were absent:
+        # otherwise a serialised study would build a spec that a hand-written
+        # one does not, for a field nobody set.
+        return None
     return fm[native] if native in fm else fm.get(legacy)
 
 
@@ -594,10 +639,10 @@ def _translate_objmode2s(fm: dict) -> dict:
     # Conditions: `failure_cond` is the wire alias of `occ_cond`, and the
     # repair face is `not_occ_cond` (`repair_cond` being its legacy
     # spelling, which the pre-native dialects carry).
-    occ_cond = _alias(fm, "occ_cond", "failure_cond", where)
+    occ_cond = _alias(fm, "occ_cond", "failure_cond", where, legacy_default=True)
     if occ_cond is not None:
         spec["failure_cond"] = occ_cond
-    not_occ_cond = _alias(fm, "not_occ_cond", "repair_cond", where)
+    not_occ_cond = _alias(fm, "not_occ_cond", "repair_cond", where, legacy_default=True)
     if not_occ_cond is not None:
         spec["repair_cond"] = not_occ_cond
 
