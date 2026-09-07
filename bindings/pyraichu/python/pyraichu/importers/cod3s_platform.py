@@ -61,6 +61,22 @@ _BOOL_ROLES = {
     # availability gate's initial value.
     "active_init": ("output", "var_is_active_default"),
     "fed_available_init": ("output", "var_fed_available_out_init"),
+    # The availability gate's RESET control (muscadet
+    # `FlowOut.var_fed_available_out_reset`, applied as `setReinitialized`).
+    # `True`, the reference importer's default, is what this engine does
+    # natively: the gate is re-derived at every fixpoint pass and falls back
+    # to the value it was declared with as soon as no mode holds it down.
+    # `False` asks for a gate that MEMORISES, and the engine has no
+    # per-variable reset to switch off, so the plugin honours the control the
+    # only way it truthfully can (`_refuse_a_held_write_on_a_persistent_gate`,
+    # `plugins/muscadet.py`): by doing nothing when no mode writes the gate,
+    # since both engines then leave it at its initial value for the whole
+    # sequence, and by refusing when one does.
+    #
+    # The control reaches every output port of a library that declares it, so
+    # reading it is what lets such a library run here at all: unknown, the
+    # role took the whole model down at the first instance carrying it.
+    "fed_available_reset": ("output", "var_fed_available_out_reset"),
 }
 _KNOWN_OVERRIDES = {_LOGIC_ROLE, *_BOOL_ROLES}
 
@@ -330,7 +346,12 @@ def translate_export(payload: dict) -> dict[str, Any]:
                 )
             else:
                 entry: dict[str, Any] = {"name": fname, "var_prod_cond": flow["prod_cond"]}
-                for role in ("prod_init", "active_init", "fed_available_init"):
+                for role in (
+                    "prod_init",
+                    "active_init",
+                    "fed_available_init",
+                    "fed_available_reset",
+                ):
                     entry.update(
                         _bool_role(
                             role, overrides, claimed, cname=cname, fname=fname, direction="output"

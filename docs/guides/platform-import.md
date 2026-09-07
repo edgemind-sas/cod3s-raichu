@@ -148,6 +148,16 @@ offending artefact in the message: a tempo/on-trigger flow type, a
 missing required key. The translator refuses to guess: a model that
 translates is a model whose semantics are covered.
 
+One refusal comes from the model as a whole rather than from a single
+artefact, and it is raised when the model is expanded: an availability
+gate the platform declared **persistent** (`fed_available_reset` off, so
+the gate keeps its last value instead of falling back to its own at
+every step) and that a **held** failure effect writes. RAICHU has no
+per-variable reset to switch off, and a held effect carries the rest
+state its mode declares, so such a gate would come back up on repair
+instead of latching. A persistent gate no mode writes is built as
+declared: nothing restores it and nothing writes it.
+
 <!-- skip -->
 ```python
 from pyraichu.importers import TranslationError
