@@ -35,6 +35,11 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
   and interfaces, automata, and expression-tree guards, effects and ODE
   right-hand sides, all as plain JSON. A `pyraichu.muscadet` authoring
   layer and a JSON plugin system provide higher-level idioms.
+- **An engine of `muscadet`**: the reliability modelling façade exposes an
+  engine extension point, and installing `pyraichu` registers RAICHU there.
+  A muscadet model then runs here by naming the engine, importing nothing:
+  `system.simulate(params, engine="raichu")`. See
+  [Running a muscadet model on RAICHU](docs/guides/muscadet-engine.md).
 - **Explainability**: an optional, queryable causal journal (event →
   triggered functions → variable changes → rescheduling), zero-cost when
   disabled.

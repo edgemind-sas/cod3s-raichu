@@ -13,10 +13,14 @@ vocabulary it reads is **muscadet's own declaration spec**, section for section
 and key for key, rather than a parallel one invented here. A declaration written
 for muscadet is the declaration this module reads.
 
-It owns two entry points:
+It owns four entry points, two per scale:
 
-- :func:`check_spec` validates a declaration and builds nothing;
-- :func:`build_component` turns it into a live component.
+- :func:`check_spec` validates a component declaration and builds nothing;
+- :func:`build_component` turns it into a live component;
+- :func:`check_system_spec` and :func:`build_system` do the same for a whole
+  system, which is the scale that carries what no component knows: how they
+  are wired. That document is ``muscadet.declare.system_spec``, the one an
+  engine receives at muscadet's extension point.
 
 **The order is the whole difficulty, and it is not guessable.**
 :data:`DECLARATION_SECTIONS` writes it down once. It is neither alphabetical nor
@@ -63,20 +67,26 @@ from __future__ import annotations
 
 import inspect
 import itertools
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from . import muscadet as authoring
 
 __all__ = [
+    "AVAILABILITY_SUFFIX",
     "COMPONENT_CLASSES",
     "COMPONENT_KEYS",
     "DECLARATION_SECTIONS",
     "FLOW_CLASSES",
     "PLAIN_SECTIONS",
+    "SYSTEM_SPEC_VERSION",
     "ComponentSpecError",
+    "SystemSpecError",
     "build_component",
+    "build_system",
     "check_spec",
+    "check_system_spec",
     "entry_call",
     "register_component_class",
 ]
@@ -218,10 +228,15 @@ _FUNCTION_KEYS = {
     ),
 }
 
+#: The connection filter that filters nothing: muscadet's own default, one
+#: entry matching every backend class name. It is what its read-back writes on
+#: a flow nobody restricted, so it is the value that says nothing here.
+_ANY_COMPONENT_AUTHORIZED = [{"class_name_bkd": ".*"}]
+
 #: What every flow declaration carries beside its own family's keys: fields
 #: muscadet writes on every flow and that declare nothing here.
 _FLOW_SHARED = {
-    "component_authorized": None,
+    "component_authorized": _ANY_COMPONENT_AUTHORIZED,
     "combine": None,
 }
 
@@ -237,14 +252,29 @@ _FLOW_UNCARRIED = dict(
         "to a measurement channel instead. Declare one with "
         "`add_measurement_in` and combine its readings there"
     ),
+    component_authorized=(
+        "which component classes may connect to this flow. muscadet refuses a "
+        "connection its filter excludes; this layer wires what the connection "
+        "list says and checks no class, so a narrowed filter would be a "
+        "refusal the model declares and never gets. Leave it at the default "
+        "that filters nothing and keep the restriction on the muscadet side"
+    ),
 )
+
+#: What a DISCRETE flow carries by default where it has fed nothing yet.
+#: muscadet's read-back writes the field on every flow, and writes `False`
+#: there, so `False` is the value that says nothing on both sides. Written as
+#: a name rather than inline because the two discrete vocabularies below must
+#: not drift apart: read back through one and refused through the other, one
+#: muscadet component would be buildable and its neighbour not.
+_DISCRETE_FED_DEFAULT = False
 
 _DISCRETE_IN = _Vocabulary(
     carried={"name": "name", "logic": "logic"},
     inert=dict(
         _FLOW_SHARED,
         var_type="bool",
-        var_fed_default=None,
+        var_fed_default=_DISCRETE_FED_DEFAULT,
         var_in_default=False,
         var_available_in_default=True,
     ),
@@ -260,7 +290,7 @@ _DISCRETE_OUT_KEYS = {
 _DISCRETE_OUT_INERT = dict(
     _FLOW_SHARED,
     var_type="bool",
-    var_fed_default=None,
+    var_fed_default=_DISCRETE_FED_DEFAULT,
     var_is_active_default=True,
     var_fed_available_out_init=True,
     var_fed_available_out_reset=True,
@@ -374,6 +404,26 @@ FLOW_CLASSES: dict[str, tuple[str, _Vocabulary]] = {
 _INPUT_CLASSES = frozenset(
     {"FlowDiscreteIn", "FlowIn", "FlowContinuousIn"},
 )
+
+#: The flow classes whose entries declare a DISCRETE OUTPUT. A failure mode
+#: reaches one by **gating** it and a continuous one by **derating** it, and
+#: the two are not spelled alike on this side: see :func:`_gate_effects`.
+_DISCRETE_OUT_CLASSES = frozenset(
+    {
+        "FlowDiscreteOut",
+        "FlowOut",
+        "FlowDiscreteOutTempo",
+        "FlowOutTempo",
+        "FlowDiscreteOutOnTrigger",
+        "FlowOutOnTrigger",
+    },
+)
+
+#: How muscadet names the availability gate of a discrete output: the variable
+#: a mode clamps to stop that output producing. It is the dominant 1.x
+#: spelling of "this mode kills this output", the flow's own name being the
+#: other one, and both are read here.
+AVAILABILITY_SUFFIX = "_fed_available_out"
 
 _MEASUREMENT_IN = _Vocabulary(
     carried={"name": "name", "flows": "flows"},
@@ -920,9 +970,132 @@ def _failure_mode_calls(spec: dict, name: str) -> list[_Call]:
             if key in keywords:
                 keywords[key] = _effects(where, key, keywords[key])
 
+        _apply_gate_effects(where, spec, keywords)
+
         calls.append(_Call("failure_modes", entry.get("name", index), method, keywords))
 
     return calls
+
+
+def _discrete_out_flows(spec: dict) -> list[str]:
+    """The discrete outputs a component declares, in declaration order."""
+    return [
+        entry["name"]
+        for entry in spec.get("flows") or []
+        if isinstance(entry, dict)
+        and entry.get("cls") in _DISCRETE_OUT_CLASSES
+        and isinstance(entry.get("name"), str)
+    ]
+
+
+def _pattern_names(where: str, key: str, pattern: Any, candidate: str) -> bool:
+    """Whether an effect pattern names ``candidate``, ANCHORED.
+
+    muscadet's own rule (``muscadet.derating.match_flow_name``), and anchored
+    for its reason: unanchored, ``"H2"`` would name ``H2O`` too and an effect
+    meant for one output would reach its neighbour.
+    """
+    if not isinstance(pattern, str):
+        return False
+    try:
+        return re.search(f"^{pattern}$", candidate) is not None
+    except re.error as error:
+        raise ComponentSpecError(
+            f"{where} declares the `{key}` pattern {pattern!r}, which is not a "
+            f"regular expression: {error}"
+        ) from None
+
+
+def _gate_effects(
+    where: str,
+    key: str,
+    effects: list[tuple[str, Any]],
+    discrete_outs: list[str],
+    gating: bool,
+) -> tuple[list[str], list[tuple[str, Any]]]:
+    """Split a mode's effects into the discrete outputs they GATE and the rest.
+
+    The one place the two layers spell the same statement differently, and
+    therefore the one place the translation belongs. muscadet says "this mode
+    kills this output" with an effect on the output's availability, reached by
+    either of two spellings -- the flow's own name, or the
+    ``{flow}_fed_available_out`` variable behind it. This layer says it with
+    the mode's ``targets``, and keeps ``failure_effects`` for what a mode does
+    to a CONTINUOUS output, which is derate it rather than kill it.
+
+    Left untranslated, such an effect names no continuous output and the
+    authoring layer refuses the whole component -- which is what a muscadet
+    model reaching this layer used to do.
+
+    ``gating`` is the value that means "gated" for the direction being read:
+    ``False`` on the failure side, ``True`` on the repair side. A repair
+    effect restoring availability is ABSORBED rather than carried: the gate
+    has a per-step reset on both sides, so leaving the failing state restores
+    the output with nothing declared. The opposite value in either direction
+    is refused rather than reduced: a failure that makes an output available,
+    or a repair that keeps it down, is a statement neither layer's gate makes.
+    """
+    gated: list[str] = []
+    remaining: list[tuple[str, Any]] = []
+    for pattern, value in effects:
+        named = [
+            flow
+            for flow in discrete_outs
+            if _pattern_names(where, key, pattern, flow)
+            or _pattern_names(where, key, pattern, f"{flow}{AVAILABILITY_SUFFIX}")
+        ]
+        if not named:
+            remaining.append((pattern, value))
+            continue
+        if bool(value) is not gating:
+            raise ComponentSpecError(
+                f"{where} declares `{key}` {(pattern, value)!r} on the "
+                f"discrete output(s) {named}: the availability of a discrete "
+                f"output is a gate, and on this side of the mode it can only "
+                f"be {gating!r}. A mode returning an output degraded rather "
+                f"than as-new is a continuous statement, declared as a rate"
+            )
+        gated += [flow for flow in named if flow not in gated]
+    return gated, remaining
+
+
+def _apply_gate_effects(where: str, spec: dict, keywords: dict[str, Any]) -> None:
+    """Rewrite a mode's availability effects into its ``targets``, in place.
+
+    Nothing is refused here for the ABSENCE of a gate: a mode naming neither
+    an availability effect nor a target keeps the meaning this layer has
+    always given it, every discrete output. That absence means the opposite in
+    muscadet's own document, where a mode clamps what it names and nothing
+    else, and the two readings are reconciled one scale up -- see
+    :func:`_refuse_ungated_modes`, which the system-scale entry point runs and
+    the component-scale one does not.
+    """
+    discrete_outs = _discrete_out_flows(spec)
+    if not discrete_outs:
+        return
+
+    gated, keywords["failure_effects"] = _gate_effects(
+        where,
+        "failure_effects",
+        keywords.get("failure_effects") or [],
+        discrete_outs,
+        gating=False,
+    )
+    _, keywords["repair_effects"] = _gate_effects(
+        where,
+        "repair_effects",
+        keywords.get("repair_effects") or [],
+        discrete_outs,
+        gating=True,
+    )
+    for key in ("failure_effects", "repair_effects"):
+        if not keywords[key]:
+            del keywords[key]
+
+    declared = list(keywords.get("targets") or [])
+    targets = declared + [flow for flow in gated if flow not in declared]
+    if targets:
+        keywords["targets"] = targets
 
 
 def _effects(where: str, key: str, declared: Any) -> list[tuple[str, Any]]:
@@ -1227,3 +1400,285 @@ def build_component(
 
     system.comp[name] = component
     return component
+
+
+# ---------------------------------------------------------------------------
+# The SYSTEM scale: what a component declaration cannot carry
+# ---------------------------------------------------------------------------
+
+#: Version of the system declaration this module reads, muscadet's own
+#: (``muscadet.declare.SYSTEM_SPEC_VERSION``). A document from a future MAJOR
+#: is refused with its own number rather than half-built into a system nobody
+#: can explain: the whole point of the document is that two engines read the
+#: same thing, so a reader that guesses defeats it.
+SYSTEM_SPEC_VERSION = "1.0.0"
+
+#: The suffix pair of an ordinary flow connection, and the third channel a
+#: discrete trigger flow offers. Ordered longest first, so ``f_trigger_in``
+#: resolves to the trigger of ``f`` rather than to a flow called ``f_trigger``.
+_IN_SUFFIXES = ("_trigger_in", "_in")
+
+#: What a capacity publishes its level on, and what a measurement channel
+#: reads it with. Recognising the pair is what tells a MEASUREMENT link from a
+#: flow connection: both are message boxes ending in ``_out`` and ``_in``, and
+#: read as a flow connection a level link would wire two flows that do not
+#: exist.
+_LEVEL_OUT_SUFFIX = "_level_out"
+_LEVEL_IN_SUFFIX = "_level_in"
+
+
+class SystemSpecError(ValueError):
+    """A system declaration this layer refuses to build."""
+
+
+def _connection_ends(entry: Any, index: int) -> tuple[str, str, str, str]:
+    """One connection entry, read as its four strings."""
+    if not isinstance(entry, dict):
+        raise SystemSpecError(
+            f"connection {index}: a connection is a mapping, got "
+            f"{type(entry).__name__}"
+        )
+    missing = [
+        key
+        for key in ("source", "source_box", "target", "target_box")
+        if not entry.get(key)
+    ]
+    if missing:
+        raise SystemSpecError(f"connection {entry!r}: missing {missing}")
+    return (
+        str(entry["source"]),
+        str(entry["source_box"]),
+        str(entry["target"]),
+        str(entry["target_box"]),
+    )
+
+
+def _wire_connections(system: authoring.System, entries: list) -> None:
+    """Wire every declared connection, refusing what has no counterpart.
+
+    Three families of message-box pair reach this layer, and telling them
+    apart is the whole of the work: they are all ``{something}_out`` joined to
+    ``{something}_in``, and the wrong reading of a level link would connect
+    two flows nobody declared.
+
+    - ``{f}_out`` to ``{f}_in`` is an ordinary flow connection;
+    - ``{f}_out`` to ``{f}_trigger_in`` is a trigger's third channel;
+    - ``{c}_level_out`` to ``{ch}_level_in`` **anchors a measurement link**,
+      which is not one connection but a family of them: the totals, one pair
+      per constituent, and the ratios when the volume publishes them.
+      :meth:`~pyraichu.muscadet.System.connect_measurement` emits that whole
+      family from the pair alone, so the anchor is honoured and the rest of
+      the family is then RECOGNISED rather than re-wired. Recognised against
+      what the call actually emitted, never against a second guess at the
+      naming convention: a document carrying a member the call does not emit
+      is refused, and that is exactly the case where the two sides disagree
+      about what the link is made of.
+    """
+    absorbed: set[tuple[str, str, str, str]] = set()
+    deferred: list[tuple[str, str, str, str]] = []
+
+    for index, entry in enumerate(entries or []):
+        ends = _connection_ends(entry, index)
+        source, source_box, target, target_box = ends
+        for name in (source, target):
+            if name not in system.comp:
+                raise SystemSpecError(
+                    f"connection {entry!r}: `{name}` is not a declared "
+                    f"component of system `{system.name}`"
+                )
+
+        if source_box.endswith(_LEVEL_OUT_SUFFIX) and target_box.endswith(
+            _LEVEL_IN_SUFFIX
+        ):
+            before = len(system._connections)
+            capacity = source_box[: -len(_LEVEL_OUT_SUFFIX)]
+            channel = target_box[: -len(_LEVEL_IN_SUFFIX)]
+            try:
+                system.connect_measurement(source, capacity, target, channel)
+            except ValueError as error:
+                raise SystemSpecError(f"connection {entry!r}: {error}") from error
+            absorbed |= {
+                (
+                    source,
+                    made["from"]["port"],
+                    target,
+                    made["to"]["port"],
+                )
+                for made in system._connections[before:]
+            }
+            continue
+
+        deferred.append(ends)
+
+    for source, source_box, target, target_box in deferred:
+        if (source, source_box, target, target_box) in absorbed:
+            # A member of a measurement link its anchor already emitted.
+            continue
+        if not source_box.endswith("_out"):
+            raise SystemSpecError(
+                f"connection {source}.{source_box} -> {target}.{target_box}: a "
+                f"connection leaves an output box, whose name ends in '_out'"
+            )
+        flow_out = source_box[: -len("_out")]
+        for suffix in _IN_SUFFIXES:
+            if target_box.endswith(suffix):
+                flow_in = target_box[: -len(suffix)]
+                break
+        else:
+            raise SystemSpecError(
+                f"connection {source}.{source_box} -> {target}.{target_box}: a "
+                f"connection enters an input box, whose name ends in one of "
+                f"{list(_IN_SUFFIXES)}"
+            )
+        if suffix == "_trigger_in":
+            if flow_in != flow_out:
+                raise SystemSpecError(
+                    f"connection {source}.{source_box} -> {target}.{target_box}: "
+                    f"a trigger is wired from the output of the SAME flow, and "
+                    f"`{flow_out}` is not `{flow_in}`"
+                )
+            system.connect_trigger(source, target, flow_out)
+        else:
+            system.connect(source, flow_out, target, flow_in)
+
+
+def check_system_spec(spec: Any) -> None:
+    """Validate a system declaration, building nothing.
+
+    Sorting a batch before paying the build, and the reason the version is
+    checked HERE rather than deeper: a document from a major nobody reads is
+    refused with its own number, at the door.
+    """
+    if not isinstance(spec, dict):
+        raise SystemSpecError(
+            f"a system declaration is a mapping, got {type(spec).__name__}"
+        )
+    version = spec.get("version")
+    if version is None:
+        raise SystemSpecError("a system declaration carries a 'version'")
+    major = str(version).split(".")[0]
+    if major != SYSTEM_SPEC_VERSION.split(".")[0]:
+        raise SystemSpecError(
+            f"system declaration version {version!r} is not readable here, "
+            f"which reads {SYSTEM_SPEC_VERSION.split('.')[0]}.x"
+        )
+    components = spec.get("components")
+    if not isinstance(components, dict):
+        raise SystemSpecError(
+            "'components' is a mapping of name to component declaration"
+        )
+    for name, component in components.items():
+        check_spec({**component, "name": component.get("name", name)})
+    for index, entry in enumerate(spec.get("connections") or []):
+        source, _, target, _ = _connection_ends(entry, index)
+        for side, named in (("source", source), ("target", target)):
+            if named not in components:
+                raise SystemSpecError(
+                    f"connection {entry!r}: {side} {named!r} is not a declared "
+                    f"component"
+                )
+
+
+def build_system(
+    spec: Any,
+    system: authoring.System | None = None,
+    classes: dict[str, type] | None = None,
+) -> authoring.System:
+    """Build a whole system from a declaration held in data.
+
+    The system-scale counterpart of :func:`build_component`, and the reader of
+    ``muscadet.declare.system_spec``: what it adds over reading each component
+    is the part no component knows, which is how they are wired.
+
+    Components first, then the wiring: not a preference, a connection needs
+    both its ends to exist.
+
+    What is deliberately NOT here is the observation: an indicator is named on
+    the DOCUMENT, and this layer's authoring surface emits its own from the
+    variables it generated. Reconciling the two is the business of whoever
+    turns the built system into a model to run, which is
+    :mod:`pyraichu.muscadet_engine`.
+
+    Parameters
+    ----------
+    spec : dict
+        A declaration produced by ``muscadet.declare.system_spec``, or written
+        by hand.
+    system : pyraichu.muscadet.System, optional
+        An existing system to fill. Given one, the caller owns its naming.
+    classes : dict, optional
+        The component classes a declaration's ``cls`` may name.
+
+    Returns
+    -------
+    pyraichu.muscadet.System
+
+    Raises
+    ------
+    SystemSpecError
+        For a document this layer cannot read, and for a wiring with no
+        counterpart here.
+    ComponentSpecError
+        Through :func:`build_component`, for a component declaration.
+    """
+    check_system_spec(spec)
+
+    if system is None:
+        system = authoring.System(name=spec.get("name") or "system")
+
+    for name, component in spec["components"].items():
+        declared = {**component, "name": component.get("name", name)}
+        _refuse_ungated_modes(declared)
+        build_component(system, declared, classes=classes)
+
+    _wire_connections(system, spec.get("connections"))
+    return system
+
+
+def _refuse_ungated_modes(spec: dict) -> None:
+    """Refuse a failure mode of ``spec`` that gates no discrete output.
+
+    The one point where the two vocabularies read the same ABSENCE in
+    opposite directions, and the reason it is caught here rather than in
+    :func:`build_component`.
+
+    A failure mode of this layer gates the availability of the component's
+    discrete outputs, and an empty ``targets`` means EVERY one of them
+    (`pyraichu.muscadet.ObjFlow._build_flows_out`). A failure mode of muscadet
+    is a two-state automaton that clamps exactly the variables its effects
+    name, so a mode naming none clamps nothing. Built as it stands, a muscadet
+    mode that derates a continuous output -- or that only flips a state an
+    indicator watches -- would silently kill every discrete output of its
+    component.
+
+    Refused rather than reinterpreted: this layer has no spelling for "gates
+    none of them", and inventing one would change what a declaration written
+    for this layer has always meant. The refusal names the outputs at stake so
+    a modeller can say which ones the mode kills.
+
+    Applied at the SYSTEM scale only, which is where the document is known to
+    be muscadet's: :func:`build_component` reads a declaration that may as
+    well have been written for this layer, and its meaning is left alone.
+    """
+    discrete_outs = _discrete_out_flows(spec)
+    if not discrete_outs:
+        return
+    name = spec.get("name")
+    for index, entry in enumerate(_entries(spec, "failure_modes", name)):
+        if entry.get("targets"):
+            continue
+        where = f"Component {name}: failure mode {entry.get('name', index)!r}"
+        gated, _ = _gate_effects(
+            where,
+            "failure_effects",
+            _effects(where, "failure_effects", entry.get("failure_effects")),
+            discrete_outs,
+            gating=False,
+        )
+        if not gated:
+            raise SystemSpecError(
+                f"{where} gates none of the discrete outputs {discrete_outs} "
+                f"of its component, and here an empty target list means ALL of "
+                f"them. Declare which outputs the mode kills, on its "
+                f"`failure_effects` or its `targets`"
+            )

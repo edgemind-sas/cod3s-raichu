@@ -432,6 +432,11 @@ these objects: see [Importing platform studies](platform-import.md).
 - **Plugins**: the same high-level objects when your model comes from a
   file or another tool. Every construct the builder offers is declarable
   here, continuous flows included, so a whole model is data.
+- **muscadet itself**, if you already write it: RAICHU registers at its
+  engine extension point, so a muscadet model runs here by naming the engine
+  and importing nothing. See
+  [Running a muscadet model on RAICHU](muscadet-engine.md); the builder above
+  is then the adapter that receives the declaration, and you do not write it.
 
 They interoperate: a plugin section and hand-written components can coexist
 in the same model. The one boundary is the continuous network, which is
