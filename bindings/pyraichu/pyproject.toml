@@ -22,6 +22,17 @@ dynamic = ["version"]
 [project.urls]
 Repository = "https://github.com/edgemind-sas/raichu"
 
+# muscadet is a modelling facade over more than one engine: it exposes an
+# extension point and imports no engine. This is how RAICHU reaches it.
+#
+# The entry point's NAME is how a run selects the engine
+# (`system.simulate(..., engine="raichu")`), and its value resolves to the hook
+# that registers it. Advertised rather than imported, so a study that chooses
+# RAICHU imports nothing: installing pyraichu IS the registration, and the
+# choice of engine is a setting rather than a line of code.
+[project.entry-points."muscadet.engines"]
+raichu = "pyraichu.muscadet_engine:register"
+
 [tool.maturin]
 # The Rust extension is exposed as the private module `pyraichu._pyraichu`;
 # the pure-Python package under python/ wraps it (py.typed + stubs).
