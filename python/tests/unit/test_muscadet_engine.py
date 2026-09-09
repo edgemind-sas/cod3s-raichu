@@ -5,8 +5,8 @@ registers there and becomes the engine a muscadet run may select. This module
 pins the RAICHU side of that seam, and it pins it **oracle-free**: everything
 here is either the distribution's own metadata, the declaration reader, or a
 trajectory RAICHU computes on its own. What needs PyCATSHOO alive -- the same
-model answering alike on both engines -- is the cross-validation suite's, under
-`python/tests/validation/test_muscadet_engine_parity.py`.
+model answering alike on both engines -- belongs to the cross-validation
+suite, which runs where a PyCATSHOO installation is available.
 
 Four things are pinned, and the first two are the ones a modeller feels:
 
