@@ -364,9 +364,24 @@ absorbing. Three behaviours:
 - `external_rep_indep`: a trigger model: the mode resets instantly and
   each target latches the failure until it repairs on its own law.
 
-**`ObjFMInst`**: failure *on solicitation*: one Bernoulli draw per
-demand front (probability `gamma` per common-cause order), exponential
-repair; the anti-Zeno re-arm guarantees one draw per front.
+Either direction may also carry an **on-demand** law
+(`{"law": "inst", "prob": …}`): one Bernoulli draw per rising edge of
+that direction's condition, its lost branch parking in a micro-state
+that re-arms when the condition falls (the anti-Zeno latch: one draw per
+front, never a re-draw within the instant). The behaviours and the law
+matrix are orthogonal, so an on-demand occurrence composes with the two
+external behaviours: the draw's guard then carries the mutual lock on
+top of the solicitation, and a combination draws on the rising edge of
+"solicited **and** every target of the combination at rest".
+
+One combination is refused by name: an on-demand law in the **return**
+direction under `external_rep_indep`, where that law is each target's
+own repair and has no solicitation to draw on.
+
+**`ObjFMInst`**: the same failure *on solicitation* under the historical
+vocabulary (scalar `gamma` per common-cause order, exponential repair),
+with the `internal` behaviour only. `ObjFM` above is where a new model
+should express an on-demand mode.
 
 **`ObjEvent`**: a monitored event over a condition tree, with
 occurrence/clearance tempos (a repair during the tempo cancels the

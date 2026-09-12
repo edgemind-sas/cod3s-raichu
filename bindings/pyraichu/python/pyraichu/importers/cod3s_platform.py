@@ -614,16 +614,9 @@ def _translate_objmode2s(fm: dict) -> dict:
 
     behaviour = fm.get("behaviour", "internal")
     on_demand = occ_kind == "inst"
-    if on_demand and behaviour != "internal":
-        # The on-demand expander builds the internal behaviour only: an
-        # external on-demand mode would be silently built internal.
-        raise TranslationError(
-            f"{where}: an on-demand (inst) occurrence is only expanded with "
-            f"the `internal` behaviour, got {behaviour!r}"
-        )
 
     spec: dict[str, Any] = {
-        "type": "ObjFMInst" if on_demand else "ObjFM",
+        "type": _on_demand_expander(on_demand, behaviour),
         "name": _require(fm, "fm_name", where=where),
         "targets": targets,
         "behaviour": behaviour,
@@ -659,28 +652,98 @@ def _translate_objmode2s(fm: dict) -> dict:
     return spec
 
 
+def _on_demand_expander(on_demand: bool, behaviour: str) -> str:
+    """Which plugin object type an occurrence law routes to.
+
+    An on-demand (`inst`) occurrence has two readers, and the behaviour
+    decides which one. `ObjFMInst` is the dedicated on-demand expander and
+    builds the `internal` behaviour only, which is why an external mode
+    used to be refused here rather than silently built internal. `ObjFM`
+    is the unified one: it reads the whole 3x3 law matrix, the `inst`
+    cell included, under all three behaviours, so an external on-demand
+    mode goes there instead.
+
+    `internal` deliberately keeps the reader it has always had. The two
+    expanders build the same states and the same draw / re-arm / return
+    edges, but not the same monitoring: `ObjFM` carries the mission's
+    sequence events on those edges and `ObjFMInst` does not, so moving
+    `internal` over would change what every already-validated on-demand
+    study reports. It costs nothing to leave where it is, since the
+    behaviour an external mode needs is exactly what `ObjFMInst` lacks.
+    """
+    if not on_demand:
+        return "ObjFM"
+    return "ObjFMInst" if behaviour == "internal" else "ObjFM"
+
+
+def _legacy_inst_gamma(value: Any, where: str) -> dict | None:
+    """One `failure_param` entry of the legacy on-demand dialect → the
+    per-order occurrence law dict. `None` stays the inactive-order marker;
+    an inst prob of 0 is a valid never-drawing order, as on the native
+    wire."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("prob", value.get("gamma"))
+    return {"law": "inst", "prob": _inst_probability(value, where)}
+
+
+def _inst_probability(raw: Any, where: str) -> float:
+    try:
+        prob = float(raw)
+    except (TypeError, ValueError):
+        raise TranslationError(f"{where}: invalid inst prob {raw!r}") from None
+    if not 0.0 <= prob <= 1.0:
+        raise TranslationError(f"{where}: inst prob must be within [0, 1], got {prob}")
+    return prob
+
+
+def _legacy_inst_return(value: Any, where: str) -> dict | None:
+    """One `repair_param` entry of the legacy on-demand dialect → the
+    per-order return law dict. The dialect writes an exponential rate, and
+    a rate of 0 is cod3s' inactive marker (`is_occ_law_repair_active`
+    false: `occ` stays absorbing), so it reads as no return edge at all."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        raise TranslationError(f"{where}: invalid repair rate {value!r}") from None
+    if rate <= 0.0:
+        return None
+    return {"law": "exp", "rate": rate}
+
+
 def _translate_objfminst(fm: dict) -> dict:
     """Legacy on-demand dialect (`cls: ObjFMInst`): the same 3-state
     Bernoulli expansion as the native inst cell, under the historical
     failure/repair vocabulary and scalar per-order gammas."""
     where = f"failure mode `{fm.get('fm_name', '<unnamed>')}`"
     behaviour = fm.get("behaviour", "internal")
-    if behaviour != "internal":
-        raise TranslationError(
-            f"{where}: an on-demand (inst) failure mode is only expanded with "
-            f"the `internal` behaviour, got {behaviour!r}"
-        )
+    expander = _on_demand_expander(True, behaviour)
 
     # Same activity convention as the native wire: `None` is the explicit
     # inactive-order marker, any other value passes through (a number or a
     # `{distrib: inst, prob: …}` dict).
+    failure = list(_require(fm, "failure_param", where=where))
+    repair = list(_require(fm, "repair_param", where=where))
+    if expander == "ObjFM":
+        # The unified expander reads per-order LAW DICTS, where this
+        # dialect writes bare numbers: a gamma on the occurrence face, an
+        # exponential rate on the return one. Spelling them out is what
+        # keeps the two dialects one mode, and it is a translation, not a
+        # second reading of the law.
+        failure = [_legacy_inst_gamma(value, where) for value in failure]
+        repair = [_legacy_inst_return(value, where) for value in repair]
     spec: dict[str, Any] = {
-        "type": "ObjFMInst",
+        "type": expander,
         "name": _require(fm, "fm_name", where=where),
         "targets": list(_require(fm, "targets", where=where)),
         "behaviour": behaviour,
-        "failure": list(_require(fm, "failure_param", where=where)),
-        "repair": list(_require(fm, "repair_param", where=where)),
+        "failure": failure,
+        "repair": repair,
         "failure_effects": dict(fm.get("failure_effects") or {}),
     }
     if fm.get("repair_effects"):

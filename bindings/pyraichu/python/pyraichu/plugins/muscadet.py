@@ -889,7 +889,13 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
       grafted into each target; a combination can only (re)fail once its
       targets are repaired and (re)repair once they are failed;
     - ``external_rep_indep`` (trigger): the ObjFM resets instantly and each
-      target latches the failure until it repairs on its own order-1 law."""
+      target latches the failure until it repairs on its own order-1 law.
+
+    The three behaviours are read on EVERY cell of the 3x3 law matrix, the
+    ``inst`` (on-demand) occurrence included: this is the one expansion of a
+    mode, and a behaviour is a property of how its effects reach the targets,
+    never of the law that fires it. `ObjFMInst` covers the same on-demand
+    occurrence under the historical vocabulary, and only ``internal``."""
     import itertools
 
     behaviour = spec.get("behaviour", "internal")
@@ -906,6 +912,12 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
     order_max = len(targets)
     failure_state = spec.get("failure_state", "occ")
     repair_state = spec.get("repair_state", "rep")
+    # Where a lost occurrence draw parks (on-demand occurrence only). cod3s
+    # pins the name per study (`occ_parked_state`); left unsaid it is the
+    # ObjFMInst grammar's `not_<failure_state>`, which is also what the
+    # dedicated on-demand expander defaults to, so the two dialects of one
+    # mode keep naming the same state.
+    absorb_state = spec.get("absorb_state") or f"not_{failure_state}"
     failure_effects: dict = spec.get("failure_effects", {})
     repair_effects: dict = spec.get("repair_effects", {})
 
@@ -955,11 +967,15 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                     + [_state_active(targets[i], name, repair_state) for i in comb],
                 )
             # Occurrence edge: an inst law takes the draw + parked + re-arm
-            # machinery, parking beside the resting state (the cod3s
-            # ObjFMInst grammar, `not_<failure_state>`); a timed law builds
-            # its classic single transition.
+            # machinery, parking beside the resting state (`absorb_state`
+            # above); a timed law builds its classic single transition.
+            # Under an external behaviour the guard the draw fires on is the
+            # composite one built just above, mutual lock included: a
+            # combination draws on the rising edge of "solicited AND every
+            # target of the combination at rest", which is what cod3s hands
+            # `ObjMode2S._build_inst_mode_automaton` as its `occ_cond`.
             inst_failure = _is_inst_law(f_law)
-            draw_parked = f"not_{failure_state}{suffix}" if inst_failure else None
+            draw_parked = f"{absorb_state}{suffix}" if inst_failure else None
             # Repair edge: rep_indep resets instantly (structural,
             # law-independent); otherwise only an ACTIVE repair law builds
             # one: a non-repairable mode keeps its failure with an
@@ -1160,6 +1176,18 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 raise ValueError(
                     f"ObjFM `{name}` (external_rep_indep): the order-1 repair "
                     "law is inactive but drives each target's repair"
+                )
+            if _is_inst_law(repair_laws[0]):
+                # An on-demand OCCURRENCE composes with this behaviour; an
+                # on-demand RETURN does not. Here the order-1 return law is
+                # the target's own repair, a timed edge with no solicitation
+                # to draw on, so an `inst` law has nothing to be drawn by.
+                # Named rather than approximated into a delay.
+                raise ValueError(
+                    f"ObjFM `{name}` (external_rep_indep): the order-1 repair "
+                    "law is an on-demand (inst) draw, and it drives each "
+                    "target's own repair, which has no solicitation to draw "
+                    "on: declare a timed return law"
                 )
             repair_transition = {
                 "name": repair_state,
