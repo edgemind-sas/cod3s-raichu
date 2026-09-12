@@ -66,11 +66,17 @@ indicator (`nb-occurrences`, `sojourn-time`).
 
 **Study**:
 
-- `failure_modes`: `ObjFMExp` / `ObjFMDelay`, including per-order
-  common-cause parameter lists; a **zero exponential rate marks an
-  inactive order** (dropped, as the platform does), and an active
-  failure with an inactive repair yields a non-repairable mode
-  (absorbing failure state);
+- `failure_modes`: the native `ObjMode2S` wire the production translator
+  emits, and the legacy `ObjFMExp` / `ObjFMDelay` / `ObjFMInst`
+  dialects, including per-order common-cause parameter lists; a **zero
+  exponential rate marks an inactive order** (dropped, as the platform
+  does), and an active failure with an inactive repair yields a
+  non-repairable mode (absorbing failure state). The whole 3x3 law
+  matrix is read on both directions (`exp`, `delay`, and the on-demand
+  `inst` draw), under the three behaviours (`internal`, `external`,
+  `external_rep_indep`) and in any combination: an on-demand occurrence
+  under an external behaviour draws on the rising edge of "solicited
+  **and** every target of the combination at rest";
 - `events`: `ObjEvent` feared events; the study's `targets` list flags
   them as sequence-analysis targets;
 - `indicators`: state indicators on the declared events, with their
