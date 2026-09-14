@@ -58,6 +58,19 @@ with `system.build_dict()`. An `add_flow_in(name=…, logic="and")` (or an
 integer *k* for k-out-of-n) changes the aggregation; `add_flow_out_tempo`
 and `add_flow_out_on_trigger` add delayed and inhibition-driven flows.
 
+!!! warning "A trigger input you forget to wire"
+
+    `add_flow_out_on_trigger` delivers while its trigger input is
+    **absent**, which is how the loss of a main equipment starts a cold
+    standby. An input nothing is connected to counts as absent: the
+    standby then delivers from the initial instant, whatever the trigger
+    logic (`"and"`, `"or"` or an integer *k*) and for ever, since no
+    connection can ever bring it down again. That is muscadet's own
+    reading of an unconnected input, and the engines agree on it, so a
+    forgotten `connect_trigger` shows up as a redundancy that is always
+    running rather than as an error. Wire the trigger, or declare the
+    output with `add_flow_out` if it is not a standby at all.
+
 ## Plugins: the same objects as data
 
 The same high-level objects can be expressed as **pure JSON**, in a
@@ -378,6 +391,18 @@ One combination is refused by name: an on-demand law in the **return**
 direction under `external_rep_indep`, where that law is each target's
 own repair and has no solicitation to draw on.
 
+A condition (`failure_cond`, `repair_cond`, an event's `cond`, a gate's
+`cond`) is the cod3s OR-of-AND leaf grammar, each leaf reading either a
+variable (`"attr"`) or an automaton state (`"automaton"` + `"state"`) of
+`"obj"`. **`"obj"` is optional, on both shapes**: a leaf that names none
+reads the component the condition is *carried by*, which for a failure
+mode is its target, resolved one target per common-cause combination and
+required on every target that combination acts on. So a mode conditioned
+on its own component writes `{"attr": "ok_fed_in", "value": true}` and
+names nothing. An `ObjEvent` and an `ObjLogicGate` carry no such
+component: there every leaf names what it watches, and one that does not
+is refused by name.
+
 **`ObjFMInst`**: the same failure *on solicitation* under the historical
 vocabulary (scalar `gamma` per common-cause order, exponential repair),
 with the `internal` behaviour only. `ObjFM` above is where a new model
@@ -447,6 +472,11 @@ these objects: see [Importing platform studies](platform-import.md).
 - **Plugins**: the same high-level objects when your model comes from a
   file or another tool. Every construct the builder offers is declarable
   here, continuous flows included, so a whole model is data.
+- **muscadet itself**, if you already write it: RAICHU registers at its
+  engine extension point, so a muscadet model runs here by naming the engine
+  and importing nothing. See
+  [Running a muscadet model on RAICHU](muscadet-engine.md); the builder above
+  is then the adapter that receives the declaration, and you do not write it.
 
 They interoperate: a plugin section and hand-written components can coexist
 in the same model. The one boundary is the continuous network, which is

@@ -60,6 +60,7 @@ nav:
       - Causal journal: guides/causal-journal.md
       - Sequence analysis: guides/sequence-analysis.md
       - muscadet & plugins: guides/muscadet-and-plugins.md
+      - Running a muscadet model: guides/muscadet-engine.md
       - Platform import: guides/platform-import.md
       - Parallelism: guides/parallelism.md
   - Benchmarks:
