@@ -82,7 +82,12 @@ ObjEvent (cod3s `component.py:825`)::
       "tempo_occ": 2, "tempo_not_occ": 1 }
 
 Condition-tree leaves reference either a variable (``"attr"``) or an
-automaton state (``"automaton"`` + ``"state"``) of ``"obj"``.
+automaton state (``"automaton"`` + ``"state"``) of ``"obj"``. ``"obj"``
+is **optional**, on both shapes: a leaf that names none reads the
+component the condition is carried by, which is the failure mode's
+target (one per common-cause combination, as cod3s resolves it). An
+``ObjEvent`` and an ``ObjLogicGate`` carry no such component, so there a
+leaf names what it watches.
 """
 
 from __future__ import annotations
@@ -113,9 +118,33 @@ def _const(value: Any) -> dict:
 _OPE = {"==": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge"}
 
 
-def _leaf(leaf: dict) -> dict:
-    """One condition-tree leaf → core comparison expression."""
-    obj = leaf["obj"]
+def _leaf(leaf: dict, *, carrier: str | None = None, where: str = "a condition") -> dict:
+    """One condition-tree leaf → core comparison expression.
+
+    ``obj`` is OPTIONAL in a cod3s leaf: omitted, the leaf reads the
+    component the condition is carried by, which cod3s resolves by handing
+    that component to `prepare_attr_tree` as its `obj_default`
+    (`cod3s/pycatshoo/common.py`). `carrier` is that component, passed by
+    the caller which knows it rather than guessed here, and it applies to
+    both leaf shapes, the variable read (``attr``) and the state read
+    (``automaton``/``state``), since cod3s defaults the one ``obj`` both
+    of them name.
+
+    `carrier` is ``None`` where the construct has no carrier at all: an
+    EVENT observes arbitrary components (cod3s compiles its tree with no
+    `obj_default`) and a LOGIC GATE names its sources. There a leaf has to
+    name what it watches, and saying so is what this refuses with.
+    """
+    obj = leaf.get("obj") or carrier
+    if not obj:
+        raise ValueError(
+            f"{where}: the leaf {leaf!r} names no `obj`, and the object "
+            "carrying it has no component the leaf could read instead. A "
+            "leaf with no `obj` reads the component the condition is "
+            "carried by, which is a failure mode's target; an event "
+            "observes arbitrary components and a logic gate names its "
+            "sources, so name the `obj` the leaf watches"
+        )
     ope = _OPE[leaf.get("ope", "==")]
     if "attr" in leaf:
         lhs = {"op": "attr", "attr": {"component": obj, "attribute": leaf["attr"]}}
@@ -140,26 +169,36 @@ def _cond_tree(
     outer_logic: str = "any",
     cond_operator: str = "==",
     cond_value: bool = True,
+    *,
+    carrier: str | None = None,
+    where: str = "a condition",
 ) -> dict:
     """cod3s condition specification → core boolean expression.
 
     Accepts the cod3s shapes: a bare bool, a single leaf dict, a list of
     leaves (one AND group) or a list of lists (OR of AND groups):
-    mirroring `sanitize_cond_format`.
+    mirroring `sanitize_cond_format`. `carrier` is the component a leaf
+    reads when it names no `obj` (see :func:`_leaf`).
     """
     if isinstance(cond, bool):
         base = _const(cond)
     else:
         # One normalisation, shared with the logic-gate path: the two must
         # not be able to drift on the same cod3s input.
-        groups = _cond_groups(cond, inner_logic)
+        groups = _cond_groups(cond, inner_logic, carrier=carrier, where=where)
         base = {"op": "bool", "bool_op": _LOGIC[outer_logic], "args": groups}
     if cond_operator == "==" and cond_value is True:
         return base
     return {"op": "cmp", "cmp": _OPE[cond_operator], "lhs": base, "rhs": _const(cond_value)}
 
 
-def _cond_groups(cond: Any, inner_logic: str = "all") -> list[dict]:
+def _cond_groups(
+    cond: Any,
+    inner_logic: str = "all",
+    *,
+    carrier: str | None = None,
+    where: str = "a condition",
+) -> list[dict]:
     """Normalize a cond spec to the list of per-group boolean expressions
     (each an inner-logic aggregation of its leaves): the OR-of-AND groups
     that `_cond_tree` ORs together and that the logic gate aggregates by
@@ -171,9 +210,43 @@ def _cond_groups(cond: Any, inner_logic: str = "all") -> list[dict]:
     elif cond and all(isinstance(c, dict) for c in cond):
         cond = [cond]
     return [
-        {"op": "bool", "bool_op": _LOGIC[inner_logic], "args": [_leaf(c) for c in group]}
+        {
+            "op": "bool",
+            "bool_op": _LOGIC[inner_logic],
+            "args": [_leaf(c, carrier=carrier, where=where) for c in group],
+        }
         for group in cond
     ]
+
+
+def _cond_tree_over(
+    cond: Any,
+    carriers: list[str],
+    inner_logic: str = "all",
+    outer_logic: str = "any",
+    *,
+    where: str,
+) -> dict:
+    """A mode's condition over the targets one common-cause combination
+    acts on.
+
+    cod3s compiles the tree ONCE PER TARGET of the combination and requires
+    it on every one of them (`ObjFM.get_failure_cond` builds one
+    `prepare_attr_tree(..., obj_default=comp)` per `target_comps` and
+    `all()`s the results). That only shows when a leaf names no `obj`: a
+    tree whose every leaf names one is the same expression for each
+    carrier, so the conjunction collapses and the guard of an explicit
+    condition is byte for byte the one built before.
+    """
+    trees: list[dict] = []
+    # `[None]` is the degenerate no-target case: a mode with no target has
+    # nothing to resolve an implicit leaf against, and `_leaf` says so
+    # rather than this raising on an empty list of trees.
+    for carrier in carriers or [None]:
+        tree = _cond_tree(cond, inner_logic, outer_logic, carrier=carrier, where=where)
+        if tree not in trees:
+            trees.append(tree)
+    return trees[0] if len(trees) == 1 else {"op": "bool", "bool_op": "and", "args": trees}
 
 
 def _negate(expr: dict) -> dict:
@@ -470,6 +543,77 @@ def _persistent_availability_gates(specs: list[dict]) -> dict[tuple[str, str], s
     return gates
 
 
+def _conditioned_productions(specs: list[dict]) -> dict[tuple[str, str], str]:
+    """The production variables an ``ObjFlow`` already gives a WRITER,
+    indexed by the ``(component, attribute)`` they are and carrying the
+    flow they belong to.
+
+    A discrete output that declares ``var_prod_cond`` gets an
+    ``update_{flow}_prod_available`` function; one that declares none gets
+    no writer at all, which is what leaves the variable free for a mode to
+    latch (see :meth:`pyraichu.muscadet.ObjFlow._build_flows_out`).
+    """
+    productions: dict[tuple[str, str], str] = {}
+    for spec in specs:
+        if spec.get("type") != "ObjFlow":
+            continue
+        for flow in spec.get("flows_out") or []:
+            if flow.get("var_prod_cond"):
+                productions[(spec["name"], f"{flow['name']}_prod_available")] = flow[
+                    "name"
+                ]
+    return productions
+
+
+def _refuse_a_latched_production_a_condition_also_writes(
+    model: dict, specs: list[dict]
+) -> None:
+    """A mode latching a production its own flow's condition rewrites has
+    no faithful expansion here, so it is refused by name.
+
+    Writing ``{flow}_prod_available`` is how a DORMANT output is started,
+    and it is carried exactly while the flow declares no production
+    condition: nothing else writes the variable, and the latch is the only
+    writer there is.
+
+    Declare a condition as WELL and muscadet has two writers on one
+    variable, resolved by the order events happen in: the production
+    method fires when an operand changes, the mode's effect fires when the
+    mode does, and whichever ran last stands. This engine has no such
+    ordering (an effect is HELD and re-evaluated to a fixpoint), so the
+    held write wins at every evaluation and the condition never shows.
+    Measured against PyCATSHOO on a source-fed flow: the reference
+    produces from t = 0, this engine only from the mode's own date.
+
+    The same shape is refused on the declaration route, by
+    :func:`pyraichu.declare._refuse_a_latched_production_a_condition_also_writes`;
+    the two routes carry different things into ``finalize_model`` (flow
+    specs here, mode objects there), so each asks the question where it
+    can see both halves.
+    """
+    productions = _conditioned_productions(specs)
+    if not productions:
+        return
+    claims = _reinit_claims(model, _reinit_writer_sites(specs))
+    for key, flow in sorted(productions.items()):
+        entries = claims.get(key)
+        if not entries:
+            continue
+        component, attribute = key
+        modes = sorted({mode for mode, _, _ in entries})
+        raise ValueError(
+            f"muscadet plugin: the production `{component}.{attribute}` is "
+            f"written by the failure mode(s) {modes}, and flow `{flow}` also "
+            "declares a production condition, which writes that same "
+            "variable. muscadet resolves the two by the order events happen "
+            "in; here an effect is held and re-evaluated, so it wins at every "
+            "evaluation and the condition never shows. A DORMANT output a "
+            "mode starts declares NO `var_prod_cond` and keeps its "
+            f"`var_prod_default`; drop the condition, or stop writing "
+            f"`{attribute}`"
+        )
+
+
 def _refuse_a_held_write_on_a_persistent_gate(model: dict, specs: list[dict]) -> None:
     """A persistent availability gate written by a failure mode has no
     faithful expansion here, so it is refused by name.
@@ -718,8 +862,21 @@ def _objflow_flows_in(obj: authoring.ObjFlow, spec: dict) -> None:
 
 def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
     """The `flows_out` section, in this plugin's own vocabulary: a plain
-    output, a temporised one (`tempo`) or a triggered one (`trigger`)."""
+    output, a temporised one (`tempo`) or a triggered one (`trigger`).
+
+    ``var_fed_available_out_reset`` is handed on with the seed beside it,
+    though nothing generated reads it: what reads it is the refusal of a
+    gate that is DERIVED from the component's own failure modes and
+    persistent at once (`pyraichu.muscadet.ObjFlow._build_flows_out`).
+    :func:`_refuse_a_held_write_on_a_persistent_gate` asks the same
+    question of the OTHER writer, a mode object declared beside the
+    component, so between them the two routes refuse one shape rather
+    than each half of it."""
     for flow in spec.get("flows_out", []):
+        gate = {
+            "var_fed_available_out_init": flow.get("var_fed_available_out_init"),
+            "var_fed_available_out_reset": flow.get("var_fed_available_out_reset"),
+        }
         if "tempo" in flow:
             tempo = flow["tempo"]
             obj.add_flow_out_tempo(
@@ -729,6 +886,7 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 init_enable=tempo.get("init_enable", False),
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
+                **gate,
             )
         elif "trigger" in flow:
             trigger = flow["trigger"]
@@ -739,6 +897,7 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 trigger_logic=trigger.get("logic", "or"),
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
+                **gate,
             )
         else:
             obj.add_flow_out(
@@ -746,7 +905,7 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
                 var_is_active_default=flow.get("var_is_active_default"),
-                var_fed_available_out_init=flow.get("var_fed_available_out_init"),
+                **gate,
             )
 
 
@@ -957,8 +1116,23 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
             aut_name = f"fm{suffix}"
             occ = f"{failure_state}{suffix}"
             rep = f"{repair_state}{suffix}"
-            fail_guard = _cond_tree(spec.get("failure_cond", True), inner, outer)
-            repair_guard = _cond_tree(spec.get("repair_cond", True), inner, outer)
+            # The carriers a leaf with no `obj` reads: the targets THIS
+            # combination acts on, as cod3s resolves them (`_cond_tree_over`).
+            carriers = [targets[i] for i in comb]
+            fail_guard = _cond_tree_over(
+                spec.get("failure_cond", True),
+                carriers,
+                inner,
+                outer,
+                where=f"ObjFM `{name}`: `failure_cond`",
+            )
+            repair_guard = _cond_tree_over(
+                spec.get("repair_cond", True),
+                carriers,
+                inner,
+                outer,
+                where=f"ObjFM `{name}`: `repair_cond`",
+            )
             if external:
                 # Mutual lock: fail only once all combo targets are repaired.
                 fail_guard = _bool_expr(
@@ -1193,7 +1367,16 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 "name": repair_state,
                 "source": failure_state,
                 "targets": [repair_state],
-                "guard": _cond_tree(spec.get("repair_cond", True), inner, outer),
+                # This edge belongs to ONE target, so that is the carrier a
+                # leaf with no `obj` reads (cod3s hands `get_repair_cond`
+                # the single `[target_comp]` here).
+                "guard": _cond_tree(
+                    spec.get("repair_cond", True),
+                    inner,
+                    outer,
+                    carrier=target,
+                    where=f"ObjFM `{name}`: `repair_cond`",
+                ),
                 "monitored": True,
                 "cycle_group": name,
                 **_law(repair_laws[0]),
@@ -1347,10 +1530,6 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
             return "none", law
         return "timed", law
 
-    demand = _cond_tree(spec.get("failure_cond", True), inner, outer)
-    # The re-arm guard is derived inside `_inst_edge` (NOT the draw guard).
-    repair_guard = _cond_tree(spec.get("repair_cond", True), inner, outer)
-
     automata = []
     impacting: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
     # Armed occ PLUS the parked micro-state of an inst return draw: a lost
@@ -1368,6 +1547,24 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
             rep = f"{repair_state}{suffix}"
             absorb = f"{absorb_state}{suffix}"
             states = [rep, occ, absorb]
+            # The carriers a leaf with no `obj` reads: the targets THIS
+            # combination acts on, as the internal CCF resolves them.
+            carriers = [targets[i] for i in comb]
+            demand = _cond_tree_over(
+                spec.get("failure_cond", True),
+                carriers,
+                inner,
+                outer,
+                where=f"ObjFMInst `{name}`: `failure_cond`",
+            )
+            # The re-arm guard is derived inside `_inst_edge` (NOT the draw guard).
+            repair_guard = _cond_tree_over(
+                spec.get("repair_cond", True),
+                carriers,
+                inner,
+                outer,
+                where=f"ObjFMInst `{name}`: `repair_cond`",
+            )
             transitions = [
                 *_inst_edge(  # the draw + its anti-Zeno parking
                     rep,
@@ -1451,6 +1648,10 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
         spec.get("outer_logic", "any"),
         spec.get("cond_operator", "=="),
         spec.get("cond_value", True),
+        # No carrier: an event has no target, and cod3s compiles its tree
+        # with no `obj_default`, so each leaf names what it watches.
+        carrier=None,
+        where=f"ObjEvent `{name}`: `cond`",
     )
     component = {
         "name": name,
@@ -1519,7 +1720,11 @@ def _expand_objlogicgate(spec: dict, model: dict) -> tuple[list[dict], list[dict
     name = spec["name"]
     kind = spec.get("kind", "or")
     inner = spec.get("inner_logic", "all")
-    groups = _cond_groups(spec.get("cond", []), inner)
+    # No carrier: a gate is a combinational function of the sources its
+    # leaves name, and it holds nothing a leaf could read instead.
+    groups = _cond_groups(
+        spec.get("cond", []), inner, carrier=None, where=f"ObjLogicGate `{name}`: `cond`"
+    )
     if not groups:
         # An empty condition would silently evaluate as a CONSTANT gate
         # (empty OR = false, empty AND = true): fail at build time instead.
@@ -1618,6 +1823,13 @@ class MuscadetPlugin:
         here, and before the merge below, so the refusal names the modes
         that declared the effects rather than the one that hosts the fold.
 
+        **Latched productions** (see
+        :func:`_refuse_a_latched_production_a_condition_also_writes`), for
+        the same reason and asked the same way: a mode may start a DORMANT
+        output by writing its `{flow}_prod_available`, but not one whose
+        flow declares a production condition, because that condition emits
+        a writer of its own and the two contradict each other.
+
         **One writer per reinitialized attribute** (see
         :func:`_merge_reinit_writers`). A reinitialization effect states
         both what the attribute is while its mode has failed it and what
@@ -1648,6 +1860,7 @@ class MuscadetPlugin:
         merge above runs, and the answer is not a differently-shaped one.
         """
         _refuse_a_held_write_on_a_persistent_gate(model, specs)
+        _refuse_a_latched_production_a_condition_also_writes(model, specs)
         _merge_reinit_writers(model, specs)
 
         declarations: dict[str, authoring.ObjFlow] = {}

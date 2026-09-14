@@ -455,17 +455,23 @@ def _edge_name(connection: dict[str, Any]) -> str:
 def connected_in_flows(
     connections: list[dict[str, Any]], component: str
 ) -> set[str]:
-    """The in-flows of `component` at least one connection feeds, by flow
-    name.
+    """The in-ports of `component` at least one connection feeds, each
+    minus its `_in` suffix.
 
     The one piece of system knowledge :meth:`ObjFlow._build` needs at the
-    input end: a `var_in_default` on an input nothing feeds IS the value,
-    so its aggregation must not be emitted to overwrite the seed at t = 0.
+    input end, and it is needed twice:
+
+    - an in-flow, read as `{flow}`: a `var_in_default` on an input nothing
+      feeds IS the value, so its aggregation must not be emitted to
+      overwrite the seed at t = 0;
+    - a trigger port, read as `{flow}_trigger`: a `FlowOutOnTrigger` whose
+      trigger nothing feeds is armed from the initial instant.
+
     Both authoring surfaces derive it here rather than each from its own
     reading of the connection list, so a boundary input cannot be seeded
     on one path and aggregated on the other.
 
-    Ports are matched by the schema's `{flow}_in` naming, the same rule
+    Ports are matched by the schema's `{port}_in` naming, the same rule
     :func:`_channel_attr` and `_continuous_edges` read them by."""
     return {
         connection["to"]["port"][: -len("_in")]
@@ -550,6 +556,15 @@ class _FlowOut:
     # muscadet `FlowOut.var_fed_available_out_init`: the availability
     # gate's initial value. `None` = the muscadet default (available).
     var_fed_available_out_init: bool | None = None
+    # muscadet `FlowOut.var_fed_available_out_reset`: whether the gate is
+    # reinitialized to that seed at every step. `None` and `True` are
+    # muscadet's default and this engine's own semantics -- the gate is
+    # re-derived at every fixpoint pass. `False` asks for a gate that
+    # MEMORISES, which this engine has no per-variable reset to switch
+    # off: it is honoured where nothing writes the gate, which is every
+    # port of a library that declares the control and never touches it,
+    # and refused where a failure mode derives it (see `_build_flows_out`).
+    var_fed_available_out_reset: bool | None = None
 
 
 @dataclass
@@ -752,6 +767,21 @@ class _Rule:
         """A rule carrying no guard is the default of its set: it applies
         when no guarded rule matches."""
         return not self.cond
+
+
+#: What one entry of a rule set may carry, and what
+#: :meth:`ObjFlow._parse_rule` refuses anything outside of. Named rather than
+#: written inline at the check, so a reader of a muscadet declaration can
+#: CONFRONT this surface with what a muscadet read-back writes instead of
+#: restating it: see the cross-validation suite's
+#: `test_muscadet_declaration_vocabulary.py`, which needs muscadet.
+RULE_KEYS = frozenset({"name", "cond", "cons", "prod"})
+
+#: The same, for one operand of a rule's guard
+#: (:meth:`ObjFlow._parse_operand`).
+RULE_OPERAND_KEYS = frozenset(
+    {"name", "port", "automaton", "state", "negate", "op", "value", "release"}
+)
 
 
 @dataclass
@@ -1168,15 +1198,17 @@ class ObjFlow:
         var_prod_cond: list[str] | None = None,
         var_is_active_default: bool | None = None,
         var_fed_available_out_init: bool | None = None,
+        var_fed_available_out_reset: bool | None = None,
     ) -> None:
         """Declare an outgoing flow, produced unconditionally
         (``var_prod_default=True``) or when the named in-flows are fed.
 
-        The two dormancy knobs are muscadet's: `var_is_active_default`
+        The three dormancy knobs are muscadet's: `var_is_active_default`
         adds a ``var_is_active`` factor to the delivery (the flow stays
-        unfed until an effect sets it), and `var_fed_available_out_init`
-        seeds the availability gate. Left ``None``, the generated model
-        carries neither."""
+        unfed until an effect sets it), `var_fed_available_out_init`
+        seeds the availability gate, and `var_fed_available_out_reset`
+        says whether that gate falls back on the seed at every step.
+        Left ``None``, the generated model carries none of them."""
         self.flows_out.append(
             _FlowOut(
                 name=name,
@@ -1184,6 +1216,7 @@ class ObjFlow:
                 var_prod_cond=list(var_prod_cond or []),
                 var_is_active_default=var_is_active_default,
                 var_fed_available_out_init=var_fed_available_out_init,
+                var_fed_available_out_reset=var_fed_available_out_reset,
             )
         )
 
@@ -2237,11 +2270,11 @@ class ObjFlow:
         where = f"ObjFlow `{self.name}`: rule set `{set_name}`, rule {index}"
         if not isinstance(spec, dict):
             raise ValueError(f"{where} is not a mapping: {spec!r}")
-        unknown = sorted(set(spec) - {"name", "cond", "cons", "prod"})
+        unknown = sorted(set(spec) - RULE_KEYS)
         if unknown:
             raise ValueError(
-                f"{where} carries unknown keys {unknown} (expected `name`, "
-                "`cond`, `cons`, `prod`)"
+                f"{where} carries unknown keys {unknown} (expected "
+                f"{', '.join('`' + key + '`' for key in sorted(RULE_KEYS))})"
             )
 
         rule = _Rule(
@@ -2297,19 +2330,7 @@ class ObjFlow:
                 f"{where} carries a guard operand that is neither a name nor "
                 f"a mapping: {spec!r}"
             )
-        unknown = sorted(
-            set(spec)
-            - {
-                "name",
-                "port",
-                "automaton",
-                "state",
-                "negate",
-                "op",
-                "value",
-                "release",
-            }
-        )
+        unknown = sorted(set(spec) - RULE_OPERAND_KEYS)
         if unknown:
             raise ValueError(
                 f"{where} carries a guard operand with unknown keys {unknown}"
@@ -3469,17 +3490,25 @@ class ObjFlow:
         init_enable: bool = False,
         var_prod_default: bool = False,
         var_prod_cond: list[str] | None = None,
+        var_fed_available_out_init: bool | None = None,
+        var_fed_available_out_reset: bool | None = None,
     ) -> None:
         """muscadet `FlowOutTempo`: the flow feeds while a
         disabled↔enabled automaton sits in `enabled`; the enable
         (resp. disable) transition is a delay of `enable_time`
         (`disable_time`) guarded on the production condition (resp. its
-        negation), reset on interruption."""
+        negation), reset on interruption.
+
+        The availability gate's two knobs are the base class's and are
+        read here for the same reason muscadet reads them here: the
+        temporised delivery still ANDs ``{name}_fed_available_out``."""
         self.flows_out.append(
             _FlowOut(
                 name=name,
                 var_prod_default=var_prod_default,
                 var_prod_cond=list(var_prod_cond or []),
+                var_fed_available_out_init=var_fed_available_out_init,
+                var_fed_available_out_reset=var_fed_available_out_reset,
                 tempo={
                     "enable_time": enable_time,
                     "disable_time": disable_time,
@@ -3496,17 +3525,25 @@ class ObjFlow:
         trigger_logic: str | int = "or",
         var_prod_default: bool = False,
         var_prod_cond: list[str] | None = None,
+        var_fed_available_out_init: bool | None = None,
+        var_fed_available_out_reset: bool | None = None,
     ) -> None:
         """muscadet `FlowOutOnTrigger`: the flow feeds while a down↔up
         automaton sits in `up`, with *inhibition* logic: `up` is armed
         while the trigger aggregate (`"and"`, `"or"` or k-out-of-n over
         the `{name}_trigger_in` port) is false, `down` while it is
-        true; both transitions are delays, reset on interruption."""
+        true; both transitions are delays, reset on interruption.
+
+        The availability gate's two knobs are the base class's, read
+        here as on the temporised output: the delivery still ANDs
+        ``{name}_fed_available_out``."""
         self.flows_out.append(
             _FlowOut(
                 name=name,
                 var_prod_default=var_prod_default,
                 var_prod_cond=list(var_prod_cond or []),
+                var_fed_available_out_init=var_fed_available_out_init,
+                var_fed_available_out_reset=var_fed_available_out_reset,
                 trigger={
                     "time_up": trigger_time_up,
                     "time_down": trigger_time_down,
@@ -3560,12 +3597,14 @@ class ObjFlow:
         reads is not a bound on the rule producing it. Left out, every
         declared out-flow counts as read.
 
-        `connected_in` names the boolean in-flows at least one connection
-        feeds, the same kind of knowledge at the other end of the wire: a
+        `connected_in` names the in-ports at least one connection feeds,
+        the same kind of knowledge at the other end of the wire: a
         `var_in_default` on an input nothing feeds IS the value, so its
-        aggregation is not emitted. Left out, every declared input counts
-        as connected, which is the conservative reading (the aggregation
-        of an unconnected input is a constant and the seed is lost).
+        aggregation is not emitted, and a trigger port nothing feeds is
+        armed from the initial instant. Left out, every declared input
+        counts as connected, which is the conservative reading (the
+        aggregation of an unconnected input is a constant and the seed is
+        lost).
 
         One helper per declared construct, appending into five shared
         lists. The call order is not presentational: those lists become
@@ -3589,7 +3628,7 @@ class ObjFlow:
 
         self._build_flows_in(variables, ports, functions, connected_in)
         self._build_failure_modes(automata)
-        self._build_flows_out(variables, ports, functions, automata)
+        self._build_flows_out(variables, ports, functions, automata, connected_in)
 
         # Continuous flows. What is emitted here is what the component
         # knows on its own; everything that reads the connection list
@@ -3712,10 +3751,16 @@ class ObjFlow:
         ports: list[dict],
         functions: list[dict],
         automata: list[dict],
+        connected_in: set[str] | None = None,
     ) -> None:
         """The boolean out-flows: what the failure modes leave available,
         the production condition, and the tempo or trigger automaton
         gating the delivery when one is declared.
+
+        `connected_in` is read for one thing only, and at the trigger: a
+        `FlowOutOnTrigger` whose trigger port nothing feeds is armed from
+        the initial instant, so its automaton is declared `up` rather
+        than reaching it through a transition of zero delay.
 
         Availability is *derived* here (the conjunction of the mode states
         targeting the flow), not clamped by effects as muscadet's is, so a
@@ -3723,7 +3768,18 @@ class ObjFlow:
         modes is recomputed at t = 0. A dormancy seed therefore needs the
         study's own effect on `{flow}_fed_available_out` to be held: the
         reinitialization clamp falls back on the declared initial value,
-        which is this seed."""
+        which is this seed.
+
+        Production, on the other hand, is a VARIABLE and not an
+        expression, exactly as muscadet's ``var_prod_available`` is, and
+        the reason is the one the variable exists for over there: the
+        function that writes it is emitted only when a production
+        condition is declared, so a flow WITHOUT one has no writer at all
+        and a failure mode may latch it to start a dormant output. An
+        inline expression has nothing to latch. With a condition the
+        function rewrites the variable at every evaluation and a mode's
+        effect is erased by it, which is what muscadet's sensitive method
+        does to the same variable."""
         me = self.name
         for flow in self.flows_out:
             fed_out = f"{flow.name}_fed_out"
@@ -3747,6 +3803,21 @@ class ObjFlow:
                     },
                 }
             )
+            # muscadet's `FlowOut.var_prod_available`, and a variable for
+            # the same reason: it is the one attribute of a discrete
+            # output a failure mode may WRITE to start a dormant
+            # function. Emitted on every discrete output, whether or not
+            # a production condition is declared, because what tells the
+            # dormant case apart is the absence of the WRITER below, not
+            # the absence of the variable.
+            prod_available = f"{flow.name}_prod_available"
+            variables.append(
+                {
+                    "name": prod_available,
+                    "kind": "bool",
+                    "init": {"kind": "bool", "value": bool(flow.var_prod_default)},
+                }
+            )
             # Service-function dormancy through `var_is_active`: the third
             # factor of muscadet's delivery (`var_prod AND var_is_active
             # AND var_fed_available_out`), present only when a caller
@@ -3767,6 +3838,30 @@ class ObjFlow:
             relevant = [
                 m for m in self.failure_modes if not m.targets or flow.name in m.targets
             ]
+            if relevant and flow.var_fed_available_out_reset is False:
+                # A gate declared PERSISTENT and DERIVED at once has no
+                # faithful expansion: persistence asks the gate to keep
+                # whatever it was last written to, and the writer below
+                # recomputes it from the mode states at every pass, so
+                # the gate would come back up on repair instead of
+                # latching. Refused by name for the reason the plugin
+                # route refuses the same shape (`pyraichu.plugins.
+                # muscadet._refuse_a_held_write_on_a_persistent_gate`):
+                # a divergence a study has no way of noticing is worse
+                # than a model it cannot run.
+                raise ValueError(
+                    f"ObjFlow `{me}`: the availability gate "
+                    f"`{available}` is declared persistent "
+                    f"(`var_fed_available_out_reset=False` on flow "
+                    f"`{flow.name}`), and the failure mode(s) "
+                    f"{sorted(m.name for m in relevant)} derive it. This "
+                    f"engine has no per-variable reset to switch off: the "
+                    f"gate is recomputed from the mode states at every "
+                    f"evaluation, so it would come back up on repair "
+                    f"instead of memorising. Declare a reinitialized gate "
+                    f"(`var_fed_available_out_reset=True`), or take the "
+                    f"flow out of the mode's targets"
+                )
             if relevant:
                 avail_expr = _bool(
                     "and", [_state_active(me, m.name, "ok") for m in relevant]
@@ -3810,18 +3905,42 @@ class ObjFlow:
                     if all(isinstance(g, list) for g in flow.var_prod_cond)
                     else [flow.var_prod_cond]
                 )
-                prod_expr: dict[str, Any] = _bool(
-                    "or",
-                    [
-                        _bool("and", [prod_ref(cond) for cond in group])
-                        for group in groups
-                    ],
+                functions.append(
+                    {
+                        "name": f"update_{prod_available}",
+                        "effects": [
+                            {
+                                "target": {
+                                    "component": me,
+                                    "attribute": prod_available,
+                                },
+                                "value": _bool(
+                                    "or",
+                                    [
+                                        _bool(
+                                            "and",
+                                            [prod_ref(cond) for cond in group],
+                                        )
+                                        for group in groups
+                                    ],
+                                ),
+                            }
+                        ],
+                    }
                 )
-            else:
-                prod_expr = {
-                    "op": "const",
-                    "value": {"kind": "bool", "value": bool(flow.var_prod_default)},
-                }
+            # No production condition, no writer: the variable keeps
+            # whatever it holds, which is its declared initial value
+            # until a failure mode writes it. That gap IS the dormant
+            # function, and it is muscadet's own (`update_sensitive_
+            # methods` subscribes the production method to the operands
+            # of `var_prod_cond`, so an empty condition leaves it
+            # unsubscribed and the variable unwritten).
+
+            # What the delivery and the tempo automaton read from here
+            # on: the variable, never the condition that writes it.
+            # Reading the condition again would re-derive the production
+            # at the point of use and step over a mode's latch.
+            prod_expr: dict[str, Any] = _var(me, prod_available)
 
             if flow.tempo is not None:
                 # FlowOutTempo: fed while `enabled`; the production
@@ -3869,10 +3988,39 @@ class ObjFlow:
                 port_ref = {"component": me, "port": port_name}
                 logic = flow.trigger["logic"]
                 if logic == "and":
+                    # An UNCONNECTED trigger port reads `False`, not the
+                    # vacuous truth of a conjunction over nothing.
+                    # muscadet aggregates that port with an explicit
+                    # no-connection value and passes `False` for the three
+                    # logics (`flow.py`: `andValue(False)`,
+                    # `orValue(False)`, `sumValue(0) >= k`), so a trigger
+                    # nothing feeds INHIBITS NOTHING and the backup runs.
+                    # `any` and `sum` already answer that on an empty
+                    # port; `all` does not, so the emptiness is written
+                    # into the expression rather than left to the
+                    # aggregate's own convention -- and written as a
+                    # condition on the port, not on the connection list,
+                    # so the guard means the same thing whatever is wired
+                    # to it.
                     trigger_agg: dict[str, Any] = {
-                        "op": "port_agg",
-                        "port": port_ref,
-                        "agg": "all",
+                        "op": "bool",
+                        "bool_op": "and",
+                        "args": [
+                            {"op": "port_agg", "port": port_ref, "agg": "all"},
+                            {
+                                "op": "cmp",
+                                "cmp": "ge",
+                                "lhs": {
+                                    "op": "port_agg",
+                                    "port": port_ref,
+                                    "agg": "count",
+                                },
+                                "rhs": {
+                                    "op": "const",
+                                    "value": {"kind": "int", "value": 1},
+                                },
+                            },
+                        ],
                     }
                 elif logic == "or":
                     trigger_agg = {"op": "port_agg", "port": port_ref, "agg": "any"}
@@ -3887,11 +4035,28 @@ class ObjFlow:
                     raise ValueError(
                         "trigger logic must be 'and', 'or', or a positive integer"
                     )
+                # ... and it inhibits nothing FROM THE INITIAL INSTANT.
+                # With nothing connected the aggregate is false for ever:
+                # the up transition is enabled at t = 0 and the down one
+                # never is, so `down` is a state of zero duration. The
+                # reference engine fires that zero-delay transition inside
+                # the initial instant and already reads `up` at t = 0;
+                # declaring the initial state as `up` is what makes the
+                # two agree there, and it is exact rather than cosmetic
+                # since no connection can ever bring the trigger down
+                # again. A declared `time_up` is a real wait, so it keeps
+                # its transition: the automaton starts `down` and rises at
+                # that date on both engines.
+                armed_from_the_start = (
+                    connected_in is not None
+                    and f"{flow.name}_trigger" not in connected_in
+                    and float(flow.trigger["time_up"]) == 0.0
+                )
                 automata.append(
                     {
                         "name": aut,
                         "states": ["down", "up"],
-                        "init": "down",
+                        "init": "up" if armed_from_the_start else "down",
                         "transitions": [
                             {
                                 "name": f"{flow.name}_trigger_up",

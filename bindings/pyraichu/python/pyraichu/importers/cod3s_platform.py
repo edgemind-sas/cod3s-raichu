@@ -28,7 +28,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["TranslationError", "Translation", "translate", "translate_export", "translate_study"]
+__all__ = [
+    "TranslationError",
+    "Translation",
+    "event_object",
+    "failure_mode_object",
+    "translate",
+    "translate_export",
+    "translate_study",
+]
 
 
 class TranslationError(ValueError):
@@ -552,6 +560,29 @@ def _alias(
     return fm[native] if native in fm else fm.get(legacy)
 
 
+def failure_mode_object(fm: dict) -> dict:
+    """The muscadet-plugin object a cod3s failure-mode declaration means.
+
+    The one translation from the cod3s mode wire to
+    :mod:`pyraichu.plugins.muscadet`, and public because a platform study is
+    not the only place that wire comes from: a muscadet system declaration
+    carries the SAME vocabulary for a standalone mode -- it is the mode class's
+    own constructor keywords either way -- and :mod:`pyraichu.declare` reads it
+    through here rather than writing a second, lesser expansion of its own.
+
+    What the caller owes is a normalised mapping: the ``cls`` the class table
+    knows, one value per common-cause order rather than a document's nested
+    lists, and condition leaves carrying the object they watch. What it gets
+    back is an ``ObjFM`` or ``ObjFMInst`` object, named after the mode.
+
+    Raises
+    ------
+    TranslationError
+        For a mode class or a construct this expansion does not cover.
+    """
+    return _translate_failure_mode(fm)
+
+
 def _translate_failure_mode(fm: dict) -> dict:
     cls = fm.get("cls", "ObjFMExp")
     where = f"failure mode `{fm.get('fm_name', '<unnamed>')}`"
@@ -759,27 +790,96 @@ def _translate_objfminst(fm: dict) -> dict:
     return spec
 
 
-def _translate_event(ev: dict, target_names: set[str]) -> dict:
+#: The six comparisons an event's ``cond_operator`` may name, and the two
+#: truth functions its logics may. Spelled alike by cod3s, by muscadet's
+#: ``MODE_OPERATORS`` / ``MODE_LOGIC`` and by the plugin's own ``_OPE`` /
+#: ``_LOGIC``, so nothing is translated here -- but a spelling outside them
+#: reaches the plugin as a bare `KeyError` naming a dict nobody declared,
+#: which is precisely what this module exists not to do.
+_EVENT_OPERATORS = ("==", "!=", "<", "<=", ">", ">=")
+_EVENT_LOGIC = ("all", "any")
+
+#: The keys an event carries beside its name and its condition, each spelled
+#: the way ``cod3s.ObjEvent.__init__`` takes it and read by
+#: :func:`pyraichu.plugins.muscadet._expand_objevent` under the same name.
+_EVENT_KEYS = (
+    "inner_logic",
+    "outer_logic",
+    "cond_operator",
+    "cond_value",
+    "tempo_occ",
+    "tempo_not_occ",
+    "event_aut_name",
+    "occ_state_name",
+    "not_occ_state_name",
+)
+
+
+def event_object(ev: dict) -> dict:
+    """The muscadet-plugin object a cod3s EVENT declaration means.
+
+    The sibling of :func:`failure_mode_object`, and public for the same
+    reason: a platform study is not the only place an event comes from. A
+    muscadet system declaration carries the same vocabulary for a standalone
+    event -- it is ``cod3s.ObjEvent``'s own constructor keywords either way --
+    and :mod:`pyraichu.declare` reads it through here rather than writing a
+    second, lesser expansion.
+
+    Named apart from :func:`failure_mode_object` rather than folded into it:
+    an event is not a failure mode. It has no target, no effect and no
+    common-cause order, so the two share no key beyond the condition, and one
+    function reading both would refuse a mode's fault in an event's
+    vocabulary.
+
+    What the caller owes is the declaration as cod3s spells it, with its
+    condition leaves carrying the object they watch. What it gets back is an
+    ``ObjEvent`` object, named after the event.
+
+    Raises
+    ------
+    TranslationError
+        For a missing name or condition, or for a comparison or a truth
+        function spelled outside the ones the three layers share.
+    """
     where = f"event `{ev.get('name', '<unnamed>')}`"
     spec = {
         "type": "ObjEvent",
-        "name": _require(ev, "name", where="study events"),
+        "name": _require(ev, "name", where=where),
         "cond": _require(ev, "cond", where=where),
     }
-    for key in (
-        "inner_logic",
-        "outer_logic",
-        "cond_operator",
-        "cond_value",
-        "tempo_occ",
-        "tempo_not_occ",
-        "event_aut_name",
-        "occ_state_name",
-        "not_occ_state_name",
-    ):
+    for key in _EVENT_KEYS:
         if key in ev:
             spec[key] = ev[key]
-    if ev["name"] in target_names:
+
+    operator = spec.get("cond_operator", "==")
+    if operator not in _EVENT_OPERATORS:
+        raise TranslationError(
+            f"{where}: cond_operator {operator!r} is not one of "
+            f"{list(_EVENT_OPERATORS)}"
+        )
+    for key in ("inner_logic", "outer_logic"):
+        if key in spec and spec[key] not in _EVENT_LOGIC:
+            raise TranslationError(
+                f"{where}: {key} {spec[key]!r} is not one of "
+                f"{list(_EVENT_LOGIC)}; a declaration carries the NAME of a "
+                f"truth function, never the function"
+            )
+    for key in ("tempo_occ", "tempo_not_occ"):
+        if key in spec:
+            spec[key] = _as_float(spec[key], where=where, what=key)
+    return spec
+
+
+def _translate_event(ev: dict, target_names: set[str]) -> dict:
+    """One STUDY event, as the plugin object plus what only a study knows.
+
+    ``target_names`` is the study's own notion and has no counterpart in a
+    system declaration: an event named there is a sequence-analysis target,
+    which ends and labels a trajectory. Everything else is
+    :func:`event_object`'s.
+    """
+    spec = event_object(ev)
+    if spec["name"] in target_names:
         spec["target"] = True
     return spec
 
