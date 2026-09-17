@@ -58,6 +58,22 @@ with `system.build_dict()`. An `add_flow_in(name=…, logic="and")` (or an
 integer *k* for k-out-of-n) changes the aggregation; `add_flow_out_tempo`
 and `add_flow_out_on_trigger` add delayed and inhibition-driven flows.
 
+!!! note "What a flow input reads while nothing feeds it"
+
+    Its **declared** value, `var_in_default`, and not the aggregation's
+    own answer over an empty port: a conjunction over nothing would be
+    the vacuous truth, so an `and` input nobody wired would read *fed*
+    and the output it conditions would deliver for ever. It reads
+    `False` instead, on all four logics, which is muscadet's default and
+    the safe direction: the component starves, visibly, instead of
+    delivering on a forgotten wire.
+
+    `add_flow_in(name=…, var_in_default=True)` says the opposite on
+    purpose, and it is how a model **grounds a chain at its edge**: an
+    external supply, a utility nobody modelled. It says nothing at all
+    once a connection is there, whatever the logic: what feeds the
+    input decides, exactly as if no default had been declared.
+
 !!! warning "A trigger input you forget to wire"
 
     `add_flow_out_on_trigger` delivers while its trigger input is

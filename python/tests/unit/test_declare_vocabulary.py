@@ -430,6 +430,55 @@ def test_a_runtime_state_handle_is_dropped_rather_than_read():
     assert declare.check_spec(spec) == "PUMP"
 
 
+def test_a_boundary_input_declared_on_a_discrete_flow_is_carried():
+    """`var_in_default` on a BOOLEAN input is what an unconnected input
+    reads, and `True` is how a model grounds a chain at its physical edge:
+    an external supply, a utility nobody modelled.
+
+    It used to be inert here, accepted at muscadet's `False` and refused
+    at `True`, which refused the whole component rather than the one
+    field -- and refused exactly the models whose own consistency check
+    tells the modeller to mark those inputs. Carried now, on the four
+    logics."""
+    method, keywords = declare.entry_call(
+        "FlowIn",
+        {"cls": "FlowIn", "name": "call", "logic": "and", "var_in_default": True},
+        where="Component PUMP: flow 'call'",
+    )
+
+    assert method == "add_flow_in"
+    assert keywords["var_in_default"] is True
+
+
+def test_the_availability_counterpart_stays_inert_at_its_neutral_value():
+    """`var_available_in_default` is the same idea on the OTHER channel,
+    and muscadet's default there, `True`, is its neutral element: out of
+    connection the feed channel decides alone, and wired, a producer's
+    `fed` already entails its `available`. So `True` says nothing and is
+    accepted; `False` would say something this layer cannot honour and is
+    refused by name."""
+    accepted = a_heat_pump(
+        flows=[
+            {"cls": "FlowIn", "name": "call", "var_available_in_default": True},
+            {"cls": "FlowOut", "name": "healthy"},
+        ],
+        rules=[],
+    )
+    assert declare.check_spec(accepted) == "PUMP"
+
+    refused = a_heat_pump(
+        flows=[
+            {"cls": "FlowIn", "name": "call", "var_available_in_default": False},
+            {"cls": "FlowOut", "name": "healthy"},
+        ],
+        rules=[],
+    )
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.check_spec(refused)
+
+    assert "var_available_in_default" in str(raised.value)
+
+
 def test_a_flow_key_this_layer_cannot_carry_is_refused_by_name():
     """`var_demand_in_default` on an OUTPUT is muscadet's aggregated
     demand read when no consumer is connected. This layer derives that
