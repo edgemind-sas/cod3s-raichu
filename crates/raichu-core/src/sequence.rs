@@ -13,6 +13,9 @@
 //!   longer super-sequence that includes one (order-dependent, matching
 //!   cod3s' `compute_minimal_sequences`).
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+
 use crate::engine::{SeqEvent, Sequence};
 
 /// Ordered `(obj, attr)` signature of a sequence: the identity used for
@@ -24,6 +27,19 @@ fn signature(seq: &Sequence) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// Hash of what [`group_sequences`] merges on: the end cause and the
+/// ordered `(obj, attr)` signature. A bucket key only, never an identity:
+/// what decides a merge is the exact comparison the caller then runs.
+fn signature_hash(seq: &Sequence) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    seq.end_cause.hash(&mut hasher);
+    for event in &seq.events {
+        event.obj.hash(&mut hasher);
+        event.attr.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Group raw trajectory sequences: bucket by end cause, merge sequences with
 /// an identical ordered `(obj, attr)` signature (weights summed, event and
 /// end times averaged), and sort each bucket by descending weight (ties keep
@@ -31,14 +47,27 @@ fn signature(seq: &Sequence) -> Vec<(&str, &str)> {
 #[must_use]
 pub fn group_sequences(raw: Vec<Sequence>) -> Vec<Sequence> {
     // (end_cause, signature) → index into `merged`, preserving first-seen
-    // order (a plain Vec scan keeps the reduction byte-deterministic).
-    // The accumulated weight *is* `merged[i].weight`, so no parallel count
-    // vector is kept: one number, one owner, nothing to keep in sync.
+    // order. The accumulated weight *is* `merged[i].weight`, so no
+    // parallel count vector is kept: one number, one owner, nothing to
+    // keep in sync.
+    //
+    // The lookup goes through a hash of the signature rather than a scan
+    // of `merged`, because a scan is quadratic in the number of DISTINCT
+    // sequences, which on a repairable system is very nearly the number of
+    // replicas: 20 000 of them took 1.3 s of pure comparison, and doubling
+    // the campaign quadrupled it. A hash bucket holds the candidate slots,
+    // and the exact comparison below still decides, so a collision costs a
+    // comparison and never a wrong merge. Order is untouched: slots are
+    // created in first-seen order and merged into in corpus order, which
+    // is what keeps the float reduction byte-deterministic.
     let mut merged: Vec<Sequence> = Vec::new();
+    let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
     for seq in raw {
         // Signatures are compared in place: materialising them would
-        // allocate on both sides of every candidate of this O(n²) scan.
-        let pos = merged.iter().position(|m| {
+        // allocate on both sides of every candidate.
+        let slots = buckets.entry(signature_hash(&seq)).or_default();
+        let pos = slots.iter().copied().find(|&i| {
+            let m: &Sequence = &merged[i];
             m.end_cause == seq.end_cause
                 && m.events.len() == seq.events.len()
                 && m.events
@@ -58,7 +87,10 @@ pub fn group_sequences(raw: Vec<Sequence>) -> Vec<Sequence> {
                     (merged[i].end_time * acc_weight + seq.end_time * seq.weight) / n;
                 merged[i].weight = n;
             }
-            None => merged.push(seq),
+            None => {
+                slots.push(merged.len());
+                merged.push(seq);
+            }
         }
     }
     // Stable sort by descending weight (ties keep first-seen order).
@@ -81,7 +113,6 @@ pub fn filter_cycles(sequences: Vec<Sequence>) -> Vec<Sequence> {
             // event is dropped. The component is part of the key so two
             // DIFFERENT failure modes sharing an automaton name (e.g. every
             // ObjFM's `fm__cc_1`) can never cancel each other.
-            use std::collections::HashMap;
             let mut last: HashMap<(&str, &str), (usize, usize)> = HashMap::new();
             for (i, ev) in seq.events.iter().enumerate() {
                 if let Some(g) = ev.cycle_group.as_deref() {
