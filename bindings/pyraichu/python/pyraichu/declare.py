@@ -113,6 +113,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import muscadet as authoring
+from .indicators import (
+    GENERATED_INDICATORS,
+    generated_indicators,
+    merge_indicators,
+)
 
 __all__ = [
     "AVAILABILITY_SUFFIX",
@@ -3488,11 +3493,21 @@ def check_system_spec(spec: Any) -> None:
     Both shapes of component declaration are validated: a flow component and a
     standalone failure mode are entries of the same section, told apart by
     :data:`COMPONENT_KIND_KEY`.
+
+    **The model level is an OPEN vocabulary**, unlike the component level:
+    measured on 2026-09-17, a key nothing here knows is accepted by this
+    function and dropped by :func:`build_document`, where an unknown key on a
+    component is refused by name against :data:`COMPONENT_KEYS`. So
+    :data:`~pyraichu.indicators.GENERATED_INDICATORS` needed no door opened to
+    be read, only a reader; what it does need is that its VALUE be checked
+    here, since a key read by truthiness alone would take the string
+    ``"false"`` for an instruction to observe everything.
     """
     if not isinstance(spec, dict):
         raise SystemSpecError(
             f"a system declaration is a mapping, got {type(spec).__name__}"
         )
+    generated_indicators(spec, refuse=SystemSpecError)
     version = spec.get("version")
     if version is None:
         raise SystemSpecError("a system declaration carries a 'version'")
@@ -3637,9 +3652,21 @@ def _build_flow_system(
     does not build: they are named here because the WIRING is the system's, and
     a connection reaching a controller has to resolve against what that
     controller declares. See :func:`_wire_connections`.
+
+    The system is built with the document's own answer on the generated
+    indicator set, so :meth:`~pyraichu.muscadet.System.build_dict` writes the
+    document this declaration describes and not the one a class-based author
+    would have written. A system the CALLER supplied is left as the caller set
+    it: it is the caller's system, and this reader fills it rather than
+    configures it.
     """
     if system is None:
-        system = authoring.System(name=spec.get("name") or "system")
+        system = authoring.System(
+            name=spec.get("name") or "system",
+            generated_indicators=generated_indicators(
+                spec, refuse=SystemSpecError
+            ),
+        )
 
     for declared in flows.values():
         _refuse_ungated_modes(declared)
@@ -3735,6 +3762,10 @@ def build_document(
         "connections": built._connections,
         "indicators": [],
         "targets": [],
+        # Written here and not only at the end, because the plugin
+        # finalisation below reads the model to decide the same thing: one
+        # key, read by whichever writer gets there first.
+        GENERATED_INDICATORS: built.generated_indicators,
     }
 
     declared = {**flows, **modes}
@@ -3779,7 +3810,32 @@ def build_document(
         # the placeholder and its pristine copy IS the graft.
         _carry_grafts(placeholder, original, final)
     body["components"] = rebuilt + foreign
-    body["indicators"] = built.indicators(rebuilt) + body["indicators"]
+    # The flow components' own indicators FIRST, then what the objects
+    # expanded above emitted, MERGED rather than concatenated, by the rule
+    # every writer of an indicator goes through. The first of the two is
+    # emitted only where the document asked for it
+    # (:data:`~pyraichu.indicators.GENERATED_INDICATORS`); what an object
+    # emits for the attributes it generated is its own, and is written
+    # whatever the document answered on that key.
+    #
+    # Reachable, and not a precaution: an indicator's name is FLATTENED to
+    # `{component}_{variable}`, so two different observations meet as soon as
+    # one component's name ends where the other's variable begins. A tank
+    # `TANK` whose capacity `level` publishes `level_content` is observed as
+    # `TANK_level_content`, and so is the signal `content` of a controller
+    # named `TANK_level` -- naming a controller after the level it watches
+    # being the ordinary way to name one. Concatenated, the document came out
+    # carrying that name twice and the engine refused it on `duplicate
+    # indicator name`, naming the indicator and neither writer.
+    body["indicators"] = merge_indicators(
+        built.indicators(rebuilt) if built.generated_indicators else [],
+        body["indicators"],
+        collision=lambda name, emitted, already: SystemSpecError(
+            f"indicator {name!r} is emitted on {emitted} by an object of the "
+            f"document while the rebuilt flow components already observe "
+            f"{already} under that name"
+        ),
+    )
 
     if order is None:
         return body
@@ -4012,7 +4068,24 @@ def _expand_object(plugin: Any, obj: dict, body: dict) -> None:
         raise ComponentSpecError(f"{_object_where(obj)}: {detail}") from error
     body["components"] += components
     body["connections"] += connections
-    body["indicators"] += indicators
+    # By the same rule the plugin expansion uses, and for the same reason: an
+    # object emits indicators under the name its domain spells the observation
+    # with, and a second writer of that observation is naming one indicator.
+    #
+    # Two OBJECTS meet here the way an object and a flow component meet above,
+    # and for the same flattening: a controller `P` with a signal `q_r` and a
+    # controller `P_q` with a signal `r` both emit `P_q_r`. Neither knows about
+    # the other -- an object is expanded on its own -- so the encounter can
+    # only be seen from here.
+    merge_indicators(
+        body.setdefault("indicators", []),
+        indicators,
+        collision=lambda name, emitted, already: ComponentSpecError(
+            f"{_object_where(obj)}: the indicator {name!r} is emitted on "
+            f"{emitted} while the document already observes {already} under "
+            f"that name"
+        ),
+    )
 
 
 def _refuse_ungated_modes(spec: dict) -> None:

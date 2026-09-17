@@ -253,6 +253,7 @@ def test_the_and_aggregate_carries_the_emptiness_of_its_port():
 TRIGGERED_DOCUMENT = {
     "version": 1,
     "name": "standby",
+    "generated_indicators": True,
     "components": {
         "Grid": {
             "name": "Grid",

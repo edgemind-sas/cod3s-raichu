@@ -190,6 +190,7 @@ def test_the_plugin_carries_an_input_profile():
 
     spec = {
         "name": "profiled_demand",
+        "generated_indicators": True,
         "plugins": {
             "muscadet": {
                 "objects": [

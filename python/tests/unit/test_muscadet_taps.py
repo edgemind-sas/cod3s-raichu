@@ -591,6 +591,7 @@ def test_the_plugin_carries_a_tap_to_the_authoring_layer():
 
     spec = {
         "name": "tapped_source",
+        "generated_indicators": True,
         "plugins": {
             "muscadet": {
                 "objects": [

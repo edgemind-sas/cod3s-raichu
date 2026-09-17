@@ -135,6 +135,7 @@ def test_a_controller_thresholds_a_published_rate():
     the curve rather than a stale reading."""
     spec = {
         "name": "rate_control",
+        "generated_indicators": True,
         "plugins": {
             "muscadet": {
                 "objects": [
