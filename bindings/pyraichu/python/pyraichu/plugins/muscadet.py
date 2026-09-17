@@ -97,6 +97,11 @@ from typing import Any
 
 from .. import declare
 from .. import muscadet as authoring
+from ..indicators import (
+    GENERATED_INDICATORS,
+    generated_indicators,
+    merge_indicators,
+)
 from .controller import expand_objctrl
 
 __all__ = ["CONTINUOUS_OBJFLOW_KEYS", "MuscadetPlugin"]
@@ -1855,9 +1860,21 @@ class MuscadetPlugin:
         their own positions, so a document authored here and the same model
         authored through the class-based surface are one document.
 
-        Answers ``None`` for a model declaring no continuous construct,
-        which is every model this plugin expanded before: nothing but the
-        merge above runs, and the answer is not a differently-shaped one.
+        Answers ``None`` for a model declaring no continuous construct:
+        there is no network to rebuild and no sweep order to derive, so
+        nothing but the closures above runs on the components.
+
+        **The generated indicator set is decided by the model, not by the
+        rebuild.** The set is emitted when the model carries
+        :data:`~pyraichu.indicators.GENERATED_INDICATORS`, whether or not
+        anything continuous is declared. Until 2026-09-17 it rode on the
+        early answer above: a model with a tank somewhere was observed
+        variable by variable and the same model without one was observed
+        only by what it declared, so removing a buffer to compare two
+        variants took ten observations away from components that had nothing
+        to do with it, and no message said so. The presence of a construct
+        in one corner of a model is not a statement about what the model is
+        for; the key is.
         """
         _refuse_a_held_write_on_a_persistent_gate(model, specs)
         _refuse_a_latched_production_a_condition_also_writes(model, specs)
@@ -1872,10 +1889,14 @@ class MuscadetPlugin:
             continuous = continuous or any(
                 key in spec for key in CONTINUOUS_OBJFLOW_KEYS
             )
-        if not continuous:
+        wanted = generated_indicators(
+            model,
+            refuse=lambda message: ValueError(f"muscadet plugin: {message}"),
+        )
+        if not continuous and not wanted:
             return None
 
-        if model.get("evaluation_order"):
+        if continuous and model.get("evaluation_order"):
             # A model-wide property has one writer, and here there are two
             # candidates saying different things. The network DERIVES the
             # order from the flow graph, so honouring an asserted one would
@@ -1890,37 +1911,83 @@ class MuscadetPlugin:
                 "the continuous part outside the plugin"
             )
 
-        system = authoring.System(model.get("name") or "model")
+        system = authoring.System(
+            model.get("name") or "model", generated_indicators=wanted
+        )
         # Driven rather than re-implemented: the system is handed the
         # declarations and the model's own connection list, and generates
         # exactly what it generates for a model authored class by class.
         system.comp = declarations
         system._connections = model["connections"]
-        foreign = [
-            component
-            for component in model["components"]
-            if component["name"] not in declarations
-        ]
-        components, order = system.generate(foreign)
+        order = None
+        if continuous:
+            foreign = [
+                component
+                for component in model["components"]
+                if component["name"] not in declarations
+            ]
+            components, order = system.generate(foreign)
 
-        built = {component["name"]: component for component in components}
-        for index, placeholder in enumerate(model["components"]):
-            final = built.get(placeholder["name"])
-            if final is None:
-                continue
-            # Built exactly as the first pass built it, connectivity
-            # included: `_carry_grafts` reads the difference as the graft,
-            # so a build differing by anything else would report that
-            # difference as one.
-            _carry_grafts(
-                placeholder,
-                declarations[placeholder["name"]]._build(
-                    connected_in=authoring.connected_in_flows(
-                        model["connections"], placeholder["name"]
-                    )
-                ),
-                final,
+            built = {component["name"]: component for component in components}
+            for index, placeholder in enumerate(model["components"]):
+                final = built.get(placeholder["name"])
+                if final is None:
+                    continue
+                # Built exactly as the first pass built it, connectivity
+                # included: `_carry_grafts` reads the difference as the graft,
+                # so a build differing by anything else would report that
+                # difference as one.
+                _carry_grafts(
+                    placeholder,
+                    declarations[placeholder["name"]]._build(
+                        connected_in=authoring.connected_in_flows(
+                            model["connections"], placeholder["name"]
+                        )
+                    ),
+                    final,
+                )
+                model["components"][index] = final
+        else:
+            # Nothing to rebuild, so the components stay exactly as the first
+            # pass wrote them and the set is read off THEM. `generate` is not
+            # called at all: it would answer the declarations alone, dropping
+            # whatever another object grafted into a component, and there is
+            # no network here for it to resolve.
+            components = [
+                component
+                for component in model["components"]
+                if component["name"] in declarations
+            ]
+        if wanted:
+            # Which writer produced the other entry, named as the modeller can
+            # act on it: the rebuild when there is one, the model's own
+            # request when the set is emitted over components nothing rebuilt.
+            emitter = (
+                "rebuilding the continuous network"
+                if continuous
+                else f"the indicator set `{GENERATED_INDICATORS}` asks for"
             )
-            model["components"][index] = final
-        model["indicators"].extend(system.indicators(components))
+            # MERGED, never appended. The generated set carries one indicator
+            # per observable variable, and a document that DECLARED one of
+            # them wrote it under the name this emission uses --
+            # `{component}_{variable}` is muscadet's convention on both sides
+            # -- so appending recopies it and the engine refuses the whole
+            # model on `duplicate indicator name`, naming the modeller's
+            # indicator rather than the layer that doubled it. Same rule as
+            # the declaration route's own assembly
+            # (`muscadet_engine._merge_indicators`), and the same function:
+            # the two routes assemble one document from opposite sides, and
+            # two copies of the rule is how they drifted apart.
+            merge_indicators(
+                model.setdefault("indicators", []),
+                system.indicators(components),
+                collision=lambda name, emitted, already: ValueError(
+                    f"muscadet plugin: {emitter} emits the indicator "
+                    f"{name!r} on {emitted}, and the model already observes "
+                    f"{already} under that name. One name for two "
+                    f"observations is an estimate whose reader cannot tell "
+                    f"which one it is: rename the declared indicator, or "
+                    f"declare it on what the layer observes"
+                ),
+            )
         return None if order is None else {"evaluation_order": order}

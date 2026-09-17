@@ -244,6 +244,7 @@ def test_the_plugin_carries_the_ceiling():
 
     spec = {
         "name": "ceiling",
+        "generated_indicators": True,
         "plugins": {
             "muscadet": {
                 "objects": [

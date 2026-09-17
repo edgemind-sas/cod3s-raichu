@@ -155,6 +155,12 @@ def declared() -> dict:
         "name": MODEL_NAME,
         "components": [],
         "indicators": [],
+        # The model asks for the generated set, which is what the builder
+        # on the other side writes by default and states explicitly: without
+        # it on BOTH sides the two documents would differ by this key alone
+        # and the identity below would be measuring the default, not the
+        # semantics.
+        "generated_indicators": True,
         "connections": [
             link("S", "feed_out", "R", "feed_in"),
             link("R", "product_out", "T", "product_in"),
@@ -362,6 +368,7 @@ def a_regulated_tank() -> dict:
         "name": "regulated",
         "components": [],
         "indicators": [],
+        "generated_indicators": True,
         "connections": [
             link("S", "w_out", "T", "w_in"),
             link("T", "vol_level_out", "LOW", "vol_level_in"),
@@ -718,6 +725,7 @@ def an_externally_failed_pair() -> dict:
         "name": "ccf",
         "components": [],
         "indicators": [],
+        "generated_indicators": True,
         "connections": [
             link("P1", "w_out", "L", "w_in"),
             link("P2", "w_out", "L", "w_in"),

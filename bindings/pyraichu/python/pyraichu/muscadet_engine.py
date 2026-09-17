@@ -68,6 +68,7 @@ from .declare import (
     event_automaton,
     event_occurrence_state,
 )
+from .indicators import merge_indicators
 
 __all__ = [
     "ENGINE_DESCRIPTION",
@@ -393,11 +394,14 @@ def _merge_indicators(
     one on a variable this layer generates without observing, or one on the
     state of an event, which no variable stands for.
 
-    A declared name already taken by a DIFFERENT observation is refused rather
-    than resolved: two indicators of one name is a result whose reader cannot
-    tell which he got. Compared on the WHOLE entry rather than on its ``attr``,
-    which a state indicator carries none of: an entry compared on a key it has
-    not would read as equal to every other one of its kind.
+    The reconciliation itself is :func:`pyraichu.indicators.merge_indicators`,
+    the one rule every writer of an indicator goes through: a name nobody
+    holds is added, a name held by the same observation is one indicator, a
+    name held by a different one is refused. It is shared rather than restated
+    because the plugin route assembles the same document from the other side
+    -- there the generated entries are merged into the declared ones -- and a
+    second copy of the rule is a second chance for the two routes to disagree,
+    which is what they did until 2026-09-15.
 
     **The estimate comes back under the DECLARED name, and a consumer keyed on
     ``{component}_{attribute}`` will not always find it.** Worth stating here
@@ -420,26 +424,14 @@ def _merge_indicators(
     document never declared, and two names for one observation is exactly what
     the refusal above exists to prevent.
     """
-    existing = {
-        entry["name"]: entry for entry in body.get("indicators") or [] if "name" in entry
-    }
-
-    def observation(entry: Mapping) -> dict:
-        return {key: value for key, value in entry.items() if key != "name"}
-
-    for spec in declared or []:
-        wanted = _indicator(spec, events, derived)
-        already = existing.get(wanted["name"])
-        if already is None:
-            body.setdefault("indicators", []).append(wanted)
-            existing[wanted["name"]] = wanted
-            continue
-        if observation(already) != observation(wanted):
-            raise SystemSpecError(
-                f"indicator {wanted['name']!r} is declared on "
-                f"{observation(wanted)} while the generated model already "
-                f"observes {observation(already)} under that name"
-            )
+    body["indicators"] = merge_indicators(
+        list(body.get("indicators") or []),
+        (_indicator(spec, events, derived) for spec in declared or []),
+        collision=lambda name, wanted, already: SystemSpecError(
+            f"indicator {name!r} is declared on {wanted} while the generated "
+            f"model already observes {already} under that name"
+        ),
+    )
 
 
 def _target_names(targets: Any) -> list[str]:

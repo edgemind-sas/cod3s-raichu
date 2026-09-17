@@ -196,6 +196,7 @@ from . import (
     seal,
     simulate,
 )
+from .indicators import GENERATED_INDICATORS
 
 __all__ = ["DEFAULT_HYSTERESIS", "ObjFlow", "System"]
 
@@ -4891,10 +4892,17 @@ class System:
     """A muscadet-style system: add components, connect flows, simulate
     through the RAICHU engine."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, generated_indicators: bool = True):
         self.name = name
         self.comp: dict[str, ObjFlow] = {}
         self._connections: list[dict] = []
+        #: Whether the document this system writes asks for the generated
+        #: indicator set (:data:`pyraichu.indicators.GENERATED_INDICATORS`).
+        #: **True** here and false in the document format, which is not a
+        #: contradiction: a system built class by class is the muscadet
+        #: authoring surface, whose models have always been observed variable
+        #: by variable, and a document written by hand declares what it wants.
+        self.generated_indicators = generated_indicators
 
     def add_component(self, cls: Type[ObjFlow], name: str) -> ObjFlow:
         """Instantiate `cls` under `name` and register it."""
@@ -5911,13 +5919,31 @@ class System:
         A system carrying continuous flows needs the evaluation order
         and the allocation operators, so its document is **sealed** in
         the format envelope; a purely boolean system uses baseline
-        constructs only and keeps the bare body it has always had."""
+        constructs only and keeps the bare body it has always had.
+
+        The generated set is governed by
+        :data:`~pyraichu.indicators.GENERATED_INDICATORS`, and the key is
+        **written into the body** rather than left implicit. Two reasons, and
+        the second is the load-bearing one:
+
+        * a document says what it holds, so a reader of the file knows why it
+          carries eleven indicators and not one, without knowing which
+          authoring surface wrote it;
+        * the plugin expansion and this builder write **one document** for one
+          model (`test_plugin_continuous.py`), and they cannot if one of them
+          states the key and the other relies on a default. The identity is
+          the evidence that there is one implementation of the continuous
+          semantics and not two, which is worth more than the saved line.
+        """
         components, evaluation_order = self.generate()
         body: dict[str, Any] = {
             "name": self.name,
             "components": components,
             "connections": self._connections,
-            "indicators": self.indicators(components),
+            "indicators": (
+                self.indicators(components) if self.generated_indicators else []
+            ),
+            GENERATED_INDICATORS: self.generated_indicators,
         }
         if evaluation_order is None:
             return body

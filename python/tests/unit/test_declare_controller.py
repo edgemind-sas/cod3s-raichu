@@ -290,6 +290,10 @@ def a_document(*components, connections):
     return {
         "version": "1.0.0",
         "name": "controlled",
+        # Every trajectory below reads an observation nobody declared, so the
+        # document asks for the generated set: what a declaration does not
+        # ask for, no route emits.
+        "generated_indicators": True,
         "components": {entry["name"]: entry for entry in components},
         "connections": list(connections),
     }

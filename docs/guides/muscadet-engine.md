@@ -416,6 +416,71 @@ in this repository fixes it, and nothing here should: registering the same
 observation a second time under a name the document never wrote is what the
 "two indicators of one name" refusal exists to prevent.
 
+**One name, one indicator, whichever layer wrote it.** A declared indicator
+usually names an observation the layer was going to emit anyway, since the
+`VAR` naming agrees on both sides, so the assemblies **reconcile** rather
+than concatenate: a name nobody holds is added, a name held by the same
+observation is one indicator, and a name held by a *different* observation
+is refused there, where both are still in hand and the refusal can say which
+two writers disagree. It is one rule
+(`pyraichu.indicators.merge_indicators`), used by the declaration route and
+by the plugin expansion alike. Until 2026-09-15 only the first had it: a
+document declaring an indicator **and** a continuous construct came out of
+`expand_model` carrying that name twice, and the engine refused the whole
+model on `duplicate indicator name`, naming the modeller's indicator rather
+than the rebuild that recopied it. Removing the continuous part made the
+same document load, which is what made the cause hard to see.
+
+**Two observations can meet on one name without either being declared
+twice**, because the name is flattened: `{component}_{variable}` puts a
+component's name and a variable's name side by side with nothing between
+them. A tank `TANK` whose capacity `level` publishes `level_content` is
+observed as `TANK_level_content`, and so is the signal `content` of a
+controller named `TANK_level`, and naming a controller after the level it
+watches is the ordinary way to name one. That is refused, and refused
+with both observations printed side by side, rather than reaching the engine
+as a name carried twice.
+
+**The model says whether it wants the generated set, and both routes read
+it.** Beside the indicators it declares, a model may ask for the one this
+layer generates -- one per observable variable, named `{component}_{variable}`
+-- through a key of its own at model level:
+
+```json
+{"name": "plant", "generated_indicators": true,
+ "indicators": [{"name": "availability", "target": "attribute",
+                 "attr": {"component": "SNK", "attribute": "power_fed_in"}}]}
+```
+
+The key is spelled the same and at the same level in a system declaration
+(`muscadet.declare.system_spec`) and in a RAICHU document carrying a
+`plugins.muscadet` section, and `System.build_dict` writes it into every
+document it produces rather than leaving it to a default, so the two
+authoring surfaces write one document for one model.
+
+**Absent, it is false**, and false is the declared indicators and nothing
+else. That is what costs the existing corpus nothing: every COD3S Platform
+study is boolean and reaches the engine through the plugin expansion, which
+emitted nothing of its own for them. Measured on two reference studies, the
+production runner's `indicators.csv` is byte for byte what it was.
+
+Until 2026-09-17 there was no key, and the answer was read off the model's
+own shape: a model carrying no continuous construct never reached the plugin
+expansion's rebuild, so through the plugins it observed what the document
+declared and nothing more, while the declaration route emitted the generated
+set in every case. Two routes then disagreed on one model, and worse, the
+presence of a tank **somewhere** in a model decided what every component of
+it was observed by -- taking a buffer out to compare two variants silently
+took ten observations away from components that had nothing to do with it.
+The rebuild still runs where there is a network to resolve; it no longer
+decides what is observed.
+
+A value that is not a boolean is refused on either route, `"false"` being a
+true string. A model-level key nothing reads is **ignored**, silently: the
+component level is a closed vocabulary and refuses an unknown key by name,
+the model level is open, so `generated_indicator` one letter short is read by
+nobody and the model observes what it declared with no message.
+
 ## A controller beside the flow graph
 
 The third shape, `"controller"`, is a `muscadet.ObjCtrl`: a **peer** of a flow

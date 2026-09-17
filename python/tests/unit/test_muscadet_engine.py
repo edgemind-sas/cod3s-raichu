@@ -120,6 +120,9 @@ def rbd_declaration():
     return {
         "version": "1.0.0",
         "name": "rbd",
+        # The study observes every flow variable, not only the one it names:
+        # a declaration that wants the generated set says so.
+        "generated_indicators": True,
         "components": {
             "S": _component("S", "Source", [_flow_out(prod_default=True)]),
             "B1": _component(

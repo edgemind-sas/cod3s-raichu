@@ -13,7 +13,11 @@ Registering a plugin::
 
 A plugin implements ``expand_object(spec: dict, model: dict) ->
 (components, connections, indicators)`` where the returned lists are
-core-schema fragments appended to the model. A plugin that also derives
+core-schema fragments added to the model. Components and connections are
+appended; indicators are **merged by name**
+(:func:`pyraichu.indicators.merge_indicators`), because a plugin naming an
+observation the document already declares is naming one indicator, not
+asking for a second. A plugin that also derives
 a **model-wide** property (the evaluation order, first of them) returns
 a fourth element: a dict of model-level keys, listed in
 ``MODEL_LEVEL_KEYS``. Three-element returns stay valid.
@@ -37,6 +41,7 @@ import copy
 from typing import Any, Protocol
 
 from .._pyraichu import MODEL_ENVELOPE_KEY
+from ..indicators import merge_indicators
 
 __all__ = ["MODEL_LEVEL_KEYS", "PLUGINS", "expand_model", "Plugin"]
 
@@ -127,7 +132,20 @@ def expand_model(model: dict[str, Any]) -> dict[str, Any]:
             components, connections, indicators = fragments[:3]
             model["components"].extend(components)
             model["connections"].extend(connections)
-            model["indicators"].extend(indicators)
+            # Indicators MERGE where components and connections append: a
+            # plugin emits one per observable it generated, under the name
+            # the domain spells it with, which is the name a document
+            # declaring the same observation already used. Two entries of
+            # one name make the engine refuse the whole model, and the
+            # refusal names the indicator rather than the expansion that
+            # recopied it -- so the second writer of one observation adds
+            # nothing here, and a second writer of a DIFFERENT observation
+            # under that name is refused where both are still in hand.
+            merge_indicators(
+                model["indicators"],
+                indicators,
+                collision=_expansion_collision(plugin_name),
+            )
             updates = fragments[3] if len(fragments) > 3 else None
             _apply_model_level(model, plugin_name, updates)
 
@@ -138,6 +156,20 @@ def expand_model(model: dict[str, Any]) -> dict[str, Any]:
             continue
         _apply_model_level(model, plugin_name, finalize(model, specs))
     return model
+
+
+def _expansion_collision(plugin_name: str):
+    """How the expansion refuses one indicator name over two observations."""
+
+    def refuse(name: str, emitted: dict, already: dict) -> Exception:
+        return ValueError(
+            f"plugin `{plugin_name}` emits the indicator {name!r} on "
+            f"{emitted}, and the model already observes {already} under that "
+            f"name. One name for two observations is an estimate whose reader "
+            f"cannot tell which one it is: rename one of them"
+        )
+
+    return refuse
 
 
 def _apply_model_level(
