@@ -459,17 +459,16 @@ def connected_in_flows(
     minus its `_in` suffix.
 
     The one piece of system knowledge :meth:`ObjFlow._build` needs at the
-    input end, and it is needed twice:
+    input end, and it is needed once: a trigger port, read as
+    `{flow}_trigger`, since a `FlowOutOnTrigger` whose trigger nothing
+    feeds is armed from the initial instant and the automaton is declared
+    in `up` rather than reaching it through a zero-delay transition.
 
-    - an in-flow, read as `{flow}`: a `var_in_default` on an input nothing
-      feeds IS the value, so its aggregation must not be emitted to
-      overwrite the seed at t = 0;
-    - a trigger port, read as `{flow}_trigger`: a `FlowOutOnTrigger` whose
-      trigger nothing feeds is armed from the initial instant.
-
-    Both authoring surfaces derive it here rather than each from its own
-    reading of the connection list, so a boundary input cannot be seeded
-    on one path and aggregated on the other.
+    The boolean in-flows read it no more, and that is the point of their
+    cure: what an in-flow answers out of connection is written into its
+    own aggregating expression (`count(p) >= 1`), so the rule holds
+    whatever the connection list says and a component generates the same
+    document wherever it is instantiated.
 
     Ports are matched by the schema's `{port}_in` naming, the same rule
     :func:`_channel_attr` and `_continuous_edges` read them by."""
@@ -526,8 +525,9 @@ class _FlowIn:
     # muscadet `FlowIn.var_in_default`: what the input reads while nothing
     # is connected to it (`True` marks an always-fed boundary input).
     # `None` = the muscadet default (`False`). Honoured only as long as no
-    # producer publishes on the flow: `_build` drops the aggregation of an
-    # unconnected input rather than letting it overwrite the seed.
+    # producer publishes on the flow: `_build` writes the emptiness into
+    # the aggregating expression, so the declaration decides out of
+    # connection and the aggregate decides once a wire is there.
     var_in_default: bool | None = None
 
 
@@ -1183,13 +1183,17 @@ class ObjFlow:
 
         `var_in_default` is what the input reads while nothing is
         connected to it (``True`` marks an always-fed boundary input).
-        The connectivity is the caller's knowledge: ``_build`` receives
-        it through `connected_in`, and a caller that passes none has
-        every declared input treated as connected."""
+        It is carried on the FOUR logics, k-out-of-n included: dropping
+        it there used to be silent, so a caller who had declared a
+        boundary input got the opposite answer and no diagnostic."""
         if isinstance(logic, int):
-            self.flows_in.append(_FlowIn(name=name, logic="k", k=logic))
+            self.flows_in.append(
+                _FlowIn(name=name, logic="k", k=logic, var_in_default=var_in_default)
+            )
         else:
-            self.flows_in.append(_FlowIn(name=name, logic=logic, var_in_default=var_in_default))
+            self.flows_in.append(
+                _FlowIn(name=name, logic=logic, var_in_default=var_in_default)
+            )
 
     def add_flow_out(
         self,
@@ -3598,13 +3602,14 @@ class ObjFlow:
         declared out-flow counts as read.
 
         `connected_in` names the in-ports at least one connection feeds,
-        the same kind of knowledge at the other end of the wire: a
-        `var_in_default` on an input nothing feeds IS the value, so its
-        aggregation is not emitted, and a trigger port nothing feeds is
-        armed from the initial instant. Left out, every declared input
-        counts as connected, which is the conservative reading (the
-        aggregation of an unconnected input is a constant and the seed is
-        lost).
+        the same kind of knowledge at the other end of the wire, and it
+        is read for the trigger port alone: a `FlowOutOnTrigger` whose
+        trigger nothing feeds is armed from the initial instant, so the
+        automaton starts in `up` rather than crossing a zero-delay
+        transition to get there. Left out, every declared trigger counts
+        as connected. The BOOLEAN in-flows read none of it: what one
+        answers out of connection is written into its own expression
+        (see :meth:`_build_flows_in`).
 
         One helper per declared construct, appending into five shared
         lists. The call order is not presentational: those lists become
@@ -3626,7 +3631,7 @@ class ObjFlow:
         functions: list[dict] = []
         automata: list[dict] = []
 
-        self._build_flows_in(variables, ports, functions, connected_in)
+        self._build_flows_in(variables, ports, functions)
         self._build_failure_modes(automata)
         self._build_flows_out(variables, ports, functions, automata, connected_in)
 
@@ -3661,18 +3666,35 @@ class ObjFlow:
         variables: list[dict],
         ports: list[dict],
         functions: list[dict],
-        connected_in: set[str] | None = None,
     ) -> None:
         """The boolean in-flows: one `{flow}_fed_in` per declaration, an
         in port, and the sensitive function aggregating that port under
         the declared logic (any, all, or k of n).
 
-        A `var_in_default` seeds the value and, on an input nothing feeds,
-        replaces the aggregation: the initialization axiom runs every
-        sensitive function once, so an aggregation of nothing would
-        overwrite the seed with a constant at t = 0. A connected input
-        keeps its aggregation and the seed: the first producer to publish
-        decides, which is what the default means."""
+        muscadet answers an in-flow nothing feeds with its declared
+        `var_in_default` (`FlowDiscreteIn`, default `False`), and the
+        aggregates alone do not: `all` over an empty port is the vacuous
+        truth, and `sum >= 0` over one is true as well. So the emptiness
+        is written INTO the expression, as `count(p) >= 1`, exactly as
+        the trigger port next door writes it and for the same reason --
+        a rule written on the port means the same thing whatever is
+        wired to it, and a model rebuilt with one connection more has
+        nothing to regenerate.
+
+        Reading it the other way round -- dropping the aggregation of an
+        input the connection list does not name -- is what this used to
+        do, and it was wrong twice: it needed system knowledge the
+        component does not have, and it left the bare aggregation in
+        place on every input that declared no default, where the
+        initialization axiom overwrote the `False` seed with the vacuous
+        truth at t = 0.
+
+        `or` keeps its bare `any`: an `any` that answers true already
+        names a connection, so the emptiness needs no term of its own
+        there. `and` and k do need one, and muscadet's own dissymmetry is
+        the tell: it passes the default as an ARGUMENT of the aggregate
+        for `and` and `or` (`andValue`, `orValue`) and as an early return
+        guarded by `nbCnx() == 0` for an integer k."""
         me = self.name
         for flow in self.flows_in:
             fed_in = f"{flow.name}_fed_in"
@@ -3684,22 +3706,56 @@ class ObjFlow:
                 }
             )
             ports.append({"name": f"{flow.name}_in", "dir": "in"})
-            if flow.var_in_default is not None and connected_in is not None:
-                if flow.name not in connected_in:
-                    continue
             agg: dict[str, Any]
             port_ref = {"component": me, "port": f"{flow.name}_in"}
+            connected = {
+                "op": "cmp",
+                "cmp": "ge",
+                "lhs": {"op": "port_agg", "port": port_ref, "agg": "count"},
+                "rhs": {"op": "const", "value": {"kind": "int", "value": 1}},
+            }
             if flow.logic == "and":
-                agg = {"op": "port_agg", "port": port_ref, "agg": "all"}
+                agg = {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                        {"op": "port_agg", "port": port_ref, "agg": "all"},
+                        connected,
+                    ],
+                }
             elif flow.logic == "k":
                 agg = {
-                    "op": "cmp",
-                    "cmp": "ge",
-                    "lhs": {"op": "port_agg", "port": port_ref, "agg": "sum"},
-                    "rhs": {"op": "const", "value": {"kind": "int", "value": flow.k}},
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                        {
+                            "op": "cmp",
+                            "cmp": "ge",
+                            "lhs": {"op": "port_agg", "port": port_ref, "agg": "sum"},
+                            "rhs": {
+                                "op": "const",
+                                "value": {"kind": "int", "value": flow.k},
+                            },
+                        },
+                        connected,
+                    ],
                 }
             else:
                 agg = {"op": "port_agg", "port": port_ref, "agg": "any"}
+            if flow.var_in_default:
+                # A declared always-fed boundary input: what it reads out
+                # of connection is the declaration, not the aggregate.
+                # The seed says the same thing, but the seed alone does
+                # not survive the initialization axiom, which runs every
+                # sensitive function once.
+                agg = {
+                    "op": "bool",
+                    "bool_op": "or",
+                    "args": [
+                        agg,
+                        {"op": "bool", "bool_op": "not", "args": [connected]},
+                    ],
+                }
             functions.append(
                 {
                     "name": f"update_{fed_in}",

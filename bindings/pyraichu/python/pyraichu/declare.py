@@ -380,12 +380,28 @@ _FLOW_UNCARRIED = dict(
 _DISCRETE_FED_DEFAULT = False
 
 _DISCRETE_IN = _Vocabulary(
-    carried={"name": "name", "logic": "logic"},
+    carried={
+        "name": "name",
+        "logic": "logic",
+        # What the input reads WHILE NOTHING FEEDS IT (muscadet
+        # `FlowDiscreteIn.var_in_default`, default False). Carried rather
+        # than inert because `True` is how a model grounds a chain at the
+        # physical edge -- an always-fed boundary input -- and refusing it
+        # refused the whole model rather than the one field.
+        "var_in_default": "var_in_default",
+    },
     inert=dict(
         _FLOW_SHARED,
         var_type="bool",
         var_fed_default=_DISCRETE_FED_DEFAULT,
-        var_in_default=False,
+        # The same thing on the AVAILABILITY channel, and the one value it
+        # is ever declared at is the neutral element: out of connection
+        # muscadet reads `fed = agg_in(...) AND agg_avail(..., True)`, so
+        # the feed channel decides alone. Connected, this layer has no
+        # availability port at all: a producer's `{flow}_fed_out` already
+        # ANDs its own `{flow}_fed_available_out`, so fed implies
+        # available per producer and every aggregate this layer writes is
+        # monotone. `False` would say something, and is refused.
         var_available_in_default=True,
     ),
     uncarried=_FLOW_UNCARRIED,
