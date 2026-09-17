@@ -1099,3 +1099,134 @@ def test_a_document_carrying_no_controller_reads_exactly_as_before():
     assert declare.build_document(document) == declare.build_system(
         document
     ).build_dict()
+
+
+# --- a mode that REACHES a controller ----------------------------------
+#
+# R44 makes three endpoints of a controller ordinary attributes a `cod3s.ObjFM`
+# writes by their exact name, so a mode reaching one is not an exotic corner:
+# it is the cyber scenario the whole port exists for -- an instrument that is
+# not destroyed but made to stop speaking, the reading still right, the band
+# underneath still activated, and the order never arriving.
+#
+# What stood in the way was the document build. Its mode pass resolved a
+# target against the flow components and the modes alone, so a mode naming a
+# controller was refused as affecting a component "which the document does not
+# declare" -- the scenario turned away at the door, before either engine saw
+# anything.
+
+#: Where the blinding mode fires, and how long it holds. Both past `START`, so
+#: the comparison underneath is HOLDING throughout: that is what tells a
+#: blinded output from one whose condition simply stopped.
+BLIND_DATE = 5.0
+UNBLIND_DELAY = 3.0
+
+
+def a_blinding_mode(target="PUMP", output="run"):
+    """`add_component(cls="ObjFMDelay", targets=[<a controller>], ...)`.
+
+    Both polarities are written, because neither the availability endpoint nor
+    the signal it gates is reinitialised: what does not fall back to rest on
+    its own has to be handed back.
+    """
+    return {
+        "name": f"{target}__blind",
+        "kind": "two_state_mode",
+        "cls": "ObjFMDelay",
+        "fm_name": "blind",
+        "targets": [target],
+        "target_name": target,
+        "failure_effects": {f"{output}_signal_available": False},
+        "failure_param_name": ["ttf"],
+        "failure_param": [BLIND_DATE],
+        "repair_effects": {f"{output}_signal_available": True},
+        "repair_param_name": ["ttr"],
+        "repair_param": [UNBLIND_DELAY],
+    }
+
+
+def test_a_mode_may_name_a_controller_among_the_components_it_reaches():
+    """The refusal that used to arrive first, and the component it now builds.
+
+    Structural on purpose, and paired with the trajectory below: this one says
+    the mode was BUILT, the next says it was built onto something that answers.
+    """
+    body = body_of(a_filled_tank(extra=[a_blinding_mode()]))
+    assert "PUMP__blind" in {entry["name"] for entry in body["components"]}
+
+
+def test_a_blinded_output_stops_carrying_its_comparison_and_is_handed_back():
+    """The measurement, and the only thing that says the effect reached the
+    engine rather than the document.
+
+    The level reads `t`, so the comparison holds from `START` on and never
+    stops. What the gate downstream reads is therefore the availability
+    endpoint and nothing else: True from 2, False from 5, True again from 8.
+    An engine that derived only the falling edge -- the endpoint is not
+    reinitialised, so nothing puts it back on its own -- would answer a gate
+    that never closes again.
+    """
+    document = a_filled_tank(extra=[a_blinding_mode()])
+    model = pyraichu.load_model(json.dumps(declare.build_document(document)))
+    result = pyraichu.simulate(model, t_max=12.0)
+    switched = settled(result.indicators["GATE_run_fed_in"])
+
+    assert switched[0][1] is False, switched
+    dates = [time for time, _ in switched[1:]]
+    values = [value for _, value in switched[1:]]
+    assert values == [True, False, True], switched
+    for reached, expected in zip(dates, (START, BLIND_DATE, BLIND_DATE + UNBLIND_DELAY)):
+        assert abs(reached - expected) < CROSSING_TOL, switched
+
+
+def test_a_mode_naming_a_controller_that_is_not_there_is_still_refused():
+    """The refusal the fix must not have taken away: what was wrong before was
+    the LIST a target is looked up in, never that it was looked up."""
+    document = a_filled_tank(extra=[a_blinding_mode(target="NOBODY")])
+    with pytest.raises(declare.ComponentSpecError, match="does not declare"):
+        declare.build_document(document)
+
+
+# --- the one attribute the two layers spell apart -----------------------
+
+
+def test_a_controller_answers_the_boolean_outputs_the_two_layers_name_apart():
+    """muscadet holds a boolean output's signal in `{output}_signal_out`, so
+    that a mode's unanchored regular expression has a name of its own to anchor
+    on; this layer holds it in `{output}` and exports it on `{output}_out`.
+    Every other name a controller exposes is shared, which is why this one is
+    written down rather than left to be discovered by a refusal.
+
+    Pure: it answers a declaration, so a caller sorts a document with it before
+    building anything.
+    """
+    assert declare.controller_signal_variables(a_pump()) == {
+        "run_signal_out": "run",
+        "alarm_signal_out": "alarm",
+    }
+
+
+def test_a_value_output_is_absent_from_that_mapping():
+    """Both layers call it `{output}_level`, so translating it would invent a
+    disagreement."""
+    published = a_pump(
+        controls_out=[
+            a_publication(
+                "mirror", {"op": "republish", "input": "level", "gain": 2.0}
+            )
+        ]
+    )
+    assert declare.controller_signal_variables(published) == {}
+
+
+@pytest.mark.parametrize("entry", [None, {}, "PUMP"], ids=["none", "empty", "string"])
+def test_anything_that_is_not_a_controller_answers_nothing(entry):
+    """So a caller sweeps a document without sorting it first."""
+    assert declare.controller_signal_variables(entry) == {}
+
+
+def test_a_flow_component_is_not_swept_for_a_signal():
+    """The mapping is keyed on the component KIND, not on a suffix: a flow
+    component holding a variable that happens to end in `_signal_out` is left
+    exactly as the document names it."""
+    assert declare.controller_signal_variables(a_tank()) == {}

@@ -64,6 +64,9 @@ from . import interactive as open_interactive
 from .declare import (
     SystemSpecError,
     build_document,
+    capacity_absent_variables,
+    capacity_content_variables,
+    controller_signal_variables,
     derived_out_states,
     event_automaton,
     event_occurrence_state,
@@ -285,6 +288,57 @@ def _derived_states(components: Any) -> dict[str, set[str]]:
     return found
 
 
+def _per_component(components: Any, read: Any) -> dict[str, dict[str, str]]:
+    """One declaration reader, applied to every component, keyed by name.
+
+    The three readings below differ only in what they read, so the sweep is
+    written once: a component whose reader answers nothing is left out, so a
+    lookup on it falls through to the name the document wrote.
+    """
+    if not isinstance(components, Mapping):
+        return {}
+    found = {}
+    for name, entry in components.items():
+        answer = read(entry)
+        if answer:
+            found[str(entry.get("name") or name)] = answer
+    return found
+
+
+def _controller_signals(components: Any) -> dict[str, dict[str, str]]:
+    """The boolean-output variables the two layers spell apart, by component.
+
+    Read through :func:`pyraichu.declare.controller_signal_variables`, which is
+    where that one disagreement is written down, so an indicator resolves it
+    through the same reading a later caller would.
+    """
+    return _per_component(components, controller_signal_variables)
+
+
+def _capacity_contents(components: Any) -> dict[str, dict[str, str]]:
+    """The held-quantity variables the two layers spell apart, by component.
+
+    Read through :func:`pyraichu.declare.capacity_content_variables`, the
+    companion of the controller's above: muscadet holds what a capacity
+    contains in ``{c}_qty`` and ``{c}_qty_{f}``, this layer in ``{c}_content``
+    and ``{c}_content_{f}``, and the level of a tank is the most ordinary
+    observation a continuous study writes.
+    """
+    return _per_component(components, capacity_content_variables)
+
+
+def _capacity_absences(components: Any) -> dict[str, dict[str, str]]:
+    """The capacity variables muscadet creates and this layer has none of, with
+    what replaces each, by component.
+
+    Kept apart from :func:`_capacity_contents` because they are the opposite
+    answer: one renames an observation, the other refuses it saying what to
+    observe instead. Folding them together would make a refusal look like a
+    translation whose right-hand side happened to be prose.
+    """
+    return _per_component(components, capacity_absent_variables)
+
+
 def _state_indicator(
     spec: Mapping[str, Any],
     events: Mapping[str, tuple[str, set[str]]],
@@ -345,6 +399,9 @@ def _indicator(
     spec: Mapping[str, Any],
     events: Mapping[str, tuple[str, set[str]]],
     derived: Mapping[str, set[str]],
+    signals: Mapping[str, Mapping[str, str]],
+    contents: Mapping[str, Mapping[str, str]],
+    absent: Mapping[str, Mapping[str, str]],
 ) -> dict[str, Any]:
     """One declared indicator, as RAICHU names the same observation."""
     kind = spec.get("kind")
@@ -372,10 +429,32 @@ def _indicator(
             f"indicator {dict(spec)!r}: a declaration names its indicator, its "
             f"component and the variable it observes"
         )
+    # The attributes the two layers name differently: a controller's boolean
+    # signal, and the quantity a capacity holds. Read here rather than at the
+    # declaration, because it is the OBSERVATION that carries the muscadet
+    # spelling: both components are translated whole, and an indicator is the
+    # only thing that names one of their attributes from outside. Both tables
+    # are keyed on the component and on the variable the DECLARATION names, so
+    # a variable that happens to end in `_signal_out` or `_qty` on a component
+    # holding neither is not rewritten.
+    component, subject = str(component), str(subject)
+    unavailable = absent.get(component, {}).get(subject)
+    if unavailable is not None:
+        raise SystemSpecError(
+            f"indicator {name!r} observes {subject!r} of {component!r}, a "
+            f"capacity variable muscadet creates and this layer has no "
+            f"attribute for: {unavailable}"
+        )
+    renamed = signals.get(component, {}).get(subject) or contents.get(
+        component, {}
+    ).get(subject)
     return {
         "name": str(name),
         "target": "attribute",
-        "attr": {"component": str(component), "attribute": str(subject)},
+        "attr": {
+            "component": component,
+            "attribute": renamed or subject,
+        },
     }
 
 
@@ -384,6 +463,9 @@ def _merge_indicators(
     declared: Iterable[Mapping],
     events: Mapping[str, tuple[str, set[str]]],
     derived: Mapping[str, set[str]],
+    signals: Mapping[str, Mapping[str, str]],
+    contents: Mapping[str, Mapping[str, str]],
+    absent: Mapping[str, Mapping[str, str]],
 ) -> None:
     """Add the document's indicators to the generated model, in place.
 
@@ -426,7 +508,10 @@ def _merge_indicators(
     """
     body["indicators"] = merge_indicators(
         list(body.get("indicators") or []),
-        (_indicator(spec, events, derived) for spec in declared or []),
+        (
+            _indicator(spec, events, derived, signals, contents, absent)
+            for spec in declared or []
+        ),
         collision=lambda name, wanted, already: SystemSpecError(
             f"indicator {name!r} is declared on {wanted} while the generated "
             f"model already observes {already} under that name"
@@ -549,6 +634,9 @@ def build_model(
         spec.get("indicators") or [],
         _events(components),
         _derived_states(components),
+        _controller_signals(components),
+        _capacity_contents(components),
+        _capacity_absences(components),
     )
     declared = _targets(components, _target_names(targets))
     if declared:

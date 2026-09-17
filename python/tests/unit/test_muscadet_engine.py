@@ -768,6 +768,331 @@ def test_an_interactive_session_takes_the_same_declaration():
     assert session.time == FAILURE_DATES[0]
 
 
+# --- the one attribute of a CONTROLLER the two layers name apart ---------
+#
+# An indicator is written against the variable muscadet created, and a
+# controller is the one component family where that variable and this layer's
+# attribute part: muscadet holds a boolean output's signal in
+# `{output}_signal_out`, so that a mode's unanchored regular expression has a
+# name of its own to anchor on, while this layer holds it in `{output}` and
+# exports it on `{output}_out`. Untranslated, a model observing its own
+# controller is refused at load as naming an attribute no component has --
+# loud, but refused, which is a model that runs on one engine and not the
+# other.
+
+
+def commanded_declaration():
+    """The smallest document that COMMANDS: one controller, one gate.
+
+    Deliberately without an emission grammar. What is pinned here is the
+    OBSERVATION and nothing else, and an output carrying its default alone is
+    enough to have a variable to name -- a threshold would add a crossing this
+    has no business dating.
+    """
+    return {
+        "version": "1.0.0",
+        "name": "commanded",
+        "components": {
+            "GATE": {
+                "name": "GATE",
+                "cls": "ObjFlow",
+                "flows": [
+                    {
+                        "cls": "FlowIn",
+                        "name": "run",
+                        "var_type": "bool",
+                        "var_fed_default": False,
+                        "component_authorized": [{"class_name_bkd": ".*"}],
+                        "var_in_default": False,
+                        "var_available_in_default": True,
+                        "logic": "and",
+                    }
+                ],
+                "capacities": [],
+                "failure_modes": [],
+            },
+            "OBS": {
+                "name": "OBS",
+                "kind": "controller",
+                "cls": "ObjCtrl",
+                "source_cls": "ObjCtrl",
+                "controls_in": [],
+                "controls_out": [{"name": "run", "kind": "bool", "default": False}],
+            },
+        },
+        "connections": [
+            {
+                "source": "OBS",
+                "source_box": "run_out",
+                "target": "GATE",
+                "target_box": "run_in",
+            }
+        ],
+        "indicators": [
+            {
+                "name": "OBS_run_signal_out",
+                "label": "OBS_run_signal_out",
+                "measure": "value",
+                "stats": ["mean"],
+                "component": "OBS",
+                "operator": "==",
+                "var": "run_signal_out",
+                "kind": "PycVarIndicator",
+            }
+        ],
+    }
+
+
+def indicator_named(spec, name):
+    body = pyraichu.model_body(json.loads(engine.build_model(spec).json))
+    return next(entry for entry in body["indicators"] if entry["name"] == name)
+
+
+def test_an_indicator_on_a_controller_signal_reaches_the_attribute_behind_it():
+    """The translation, and the shape of it: the indicator keeps the name the
+    document declared it under, and only what it POINTS AT is read in this
+    layer's spelling. A second name for one observation is precisely what the
+    merge refuses, so this may not be one."""
+    assert indicator_named(commanded_declaration(), "OBS_run_signal_out") == {
+        "name": "OBS_run_signal_out",
+        "target": "attribute",
+        "attr": {"component": "OBS", "attribute": "run"},
+    }
+
+
+def test_an_indicator_on_a_controller_attribute_both_layers_share_is_untouched():
+    """The translation is a table of one entry, not a suffix rule. The
+    availability endpoint a failure mode clamps is spelled alike on both sides,
+    so it must arrive exactly as the document wrote it."""
+    spec = commanded_declaration()
+    spec["indicators"][0].update(
+        name="OBS_run_signal_available", var="run_signal_available"
+    )
+    assert indicator_named(spec, "OBS_run_signal_available")["attr"] == {
+        "component": "OBS",
+        "attribute": "run_signal_available",
+    }
+
+
+def test_a_flow_component_variable_ending_the_same_way_is_not_rewritten():
+    """Keyed on the component's KIND, never on the suffix: a flow component
+    holding a variable that happens to end in `_signal_out` keeps its name."""
+    spec = commanded_declaration()
+    spec["indicators"][0].update(
+        name="GATE_run_fed_in", component="GATE", var="run_fed_in"
+    )
+    assert indicator_named(spec, "GATE_run_fed_in")["attr"] == {
+        "component": "GATE",
+        "attribute": "run_fed_in",
+    }
+
+
+# --- the one attribute of a CAPACITY the two layers name apart ------------
+#
+# The same seam as the controller's above, on the component family a
+# continuous study is written around. muscadet holds what a volume contains in
+# `{c}_qty` and `{c}_qty_{f}`; this layer holds it in `{c}_content` and
+# `{c}_content_{f}`. An indicator on the level of a tank -- the most ordinary
+# observation of a continuous study -- is therefore refused at load as naming
+# an attribute no component has, and the model runs on one engine and not the
+# other.
+#
+# Three more capacity variables muscadet creates have no attribute of the same
+# name here, and none of them is a spelling disagreement (see
+# `declare.capacity_absent_variables`). Each is refused BY ITS NAME saying what
+# stands in its place, rather than reaching the loader and failing there on a
+# name nobody can trace back to a declaration.
+#
+# `{c}_serve_rate_{f}` is NOT among them, and is pinned below as a name that
+# reaches an attribute: the ceiling is a variable a failure mode clamps, so an
+# observation on it is a reading both engines answer.
+
+
+def stocked_declaration(flows=("q",)):
+    """The smallest document that HOLDS something: one volume, one indicator
+    on what it contains.
+
+    Deliberately without a producer. What is pinned here is the OBSERVATION
+    and nothing else, and a volume that never moves is enough to have a
+    variable to name.
+    """
+    return {
+        "version": "1.0.0",
+        "name": "stocked",
+        "components": {
+            "TANK": {
+                "name": "TANK",
+                "cls": "ObjFlow",
+                "flows": [
+                    {
+                        "cls": "FlowContinuousIn",
+                        "name": flow,
+                        "var_type": "float",
+                        "component_authorized": [{"class_name_bkd": ".*"}],
+                        "var_in_default": 0.0,
+                        "var_demand_default": 0.0,
+                    }
+                    for flow in flows
+                ],
+                "capacities": [
+                    {
+                        "name": "tank",
+                        "flows": list(flows),
+                        "capacity": 100.0,
+                        "content_init": {flow: 1.0 for flow in flows},
+                    }
+                ],
+                "failure_modes": [],
+            },
+        },
+        "connections": [],
+        "indicators": [
+            {
+                "name": "TANK_tank_qty",
+                "label": "TANK_tank_qty",
+                "measure": "value",
+                "stats": ["mean"],
+                "component": "TANK",
+                "operator": "==",
+                "var": "tank_qty",
+                "kind": "PycVarIndicator",
+            }
+        ],
+    }
+
+
+def test_an_indicator_on_a_tank_level_reaches_the_attribute_behind_it():
+    """The translation, and the shape of it: the indicator keeps the name the
+    document declared it under, and only what it POINTS AT is read in this
+    layer's spelling. A second name for one observation is precisely what the
+    merge refuses, so this may not be one."""
+    assert indicator_named(stocked_declaration(), "TANK_tank_qty") == {
+        "name": "TANK_tank_qty",
+        "target": "attribute",
+        "attr": {"component": "TANK", "attribute": "tank_content"},
+    }
+
+
+def test_an_indicator_on_one_constituent_reaches_that_constituent():
+    """The per-flow half of the same disagreement: a mixture is observed term
+    by term, and the sum is not one of its terms."""
+    spec = stocked_declaration(flows=("water", "heat"))
+    spec["indicators"][0].update(name="TANK_tank_qty_heat", var="tank_qty_heat")
+    assert indicator_named(spec, "TANK_tank_qty_heat")["attr"] == {
+        "component": "TANK",
+        "attribute": "tank_content_heat",
+    }
+
+
+@pytest.mark.parametrize(
+    "variable", ["tank_fill", "tank_fill_q"], ids=["total", "constituent"]
+)
+def test_an_indicator_on_a_capacity_attribute_both_layers_share_is_untouched(
+    variable,
+):
+    """The translation is a table of the names that PART, not a sweep of
+    everything a capacity publishes: the weighted fill is spelled alike on both
+    sides, so it must arrive exactly as the document wrote it."""
+    spec = stocked_declaration()
+    spec["indicators"][0].update(name=f"TANK_{variable}", var=variable)
+    assert indicator_named(spec, f"TANK_{variable}")["attr"] == {
+        "component": "TANK",
+        "attribute": variable,
+    }
+
+
+def test_the_ratio_of_a_mixture_is_shared_and_left_alone():
+    """A volume holding several constituents publishes a ratio per constituent
+    HERE TOO, under that very name. Only a volume holding a single constituent
+    publishes none, its share of itself being identically one."""
+    spec = stocked_declaration(flows=("water", "heat"))
+    spec["indicators"][0].update(name="TANK_tank_ratio_heat", var="tank_ratio_heat")
+    assert indicator_named(spec, "TANK_tank_ratio_heat")["attr"] == {
+        "component": "TANK",
+        "attribute": "tank_ratio_heat",
+    }
+
+
+@pytest.mark.parametrize(
+    "component,variable",
+    [("TANK", "stock_qty"), ("PIPE", "tank_qty")],
+    ids=["no-such-volume", "another-component-volume"],
+)
+def test_a_variable_of_no_declared_volume_is_refused_under_its_own_name(
+    component, variable
+):
+    """Keyed on the capacities the component DECLARES, never on the suffix,
+    and never across components.
+
+    Neither name is an attribute of anything, so both are refused either way;
+    what says the rewrite did not fire is WHICH name the refusal carries. A
+    reader going by suffix would report `stock_content` and `tank_content`,
+    names the document never wrote and their author cannot trace back to
+    anything -- and, on a component that did hold an attribute so named, would
+    quietly observe it instead.
+    """
+    spec = stocked_declaration()
+    spec["components"]["PIPE"] = dict(
+        spec["components"]["TANK"], name="PIPE", capacities=[]
+    )
+    spec["indicators"][0].update(
+        name=f"{component}_{variable}", component=component, var=variable
+    )
+    with pytest.raises(pyraichu.ModelError) as refusal:
+        engine.build_model(spec)
+    assert f"{component}.{variable}" in str(refusal.value)
+    assert "_content" not in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    "variable,expected",
+    [
+        ("tank_inflow_q", "q_fed_in"),
+        ("tank_outflow_q", "q_fed_out"),
+        ("tank_ratio_q", "tank_content"),
+    ],
+)
+def test_a_capacity_variable_with_no_counterpart_is_refused_by_its_name(
+    variable, expected
+):
+    """The other half of the inventory. muscadet's two hooks onto its
+    allocation sweeps and the ratio of a single-constituent volume have no
+    attribute here, and each refusal names the variable and what to observe
+    instead -- which is what a loader failing on `unknown attribute` cannot
+    do."""
+    spec = stocked_declaration()
+    spec["indicators"][0].update(name=f"TANK_{variable}", var=variable)
+    with pytest.raises(declare.SystemSpecError) as refusal:
+        engine.build_model(spec)
+    message = str(refusal.value)
+    assert variable in message and expected in message, message
+
+
+@pytest.mark.parametrize(
+    "serve_rate", [None, 5.0], ids=["unbounded", "declared"]
+)
+def test_an_indicator_on_the_service_ceiling_reaches_the_attribute(serve_rate):
+    """The ceiling is observable, under muscadet's own name for it.
+
+    A fourth absence used to refuse this, saying the ceiling was a constant of
+    the declaration that no variable carried. It is a variable now, one per
+    held flow, so the observation falls through untouched: the indicator is
+    NOT translated, both layers spelling it alike, and it points at the very
+    attribute a failure mode clamps to throttle the discharge.
+    """
+    spec = stocked_declaration()
+    if serve_rate is not None:
+        spec["components"]["TANK"]["capacities"][0]["serve_rate"] = serve_rate
+    spec["indicators"][0].update(
+        name="TANK_tank_serve_rate_q", var="tank_serve_rate_q"
+    )
+    assert indicator_named(spec, "TANK_tank_serve_rate_q") == {
+        "name": "TANK_tank_serve_rate_q",
+        "target": "attribute",
+        "attr": {"component": "TANK", "attribute": "tank_serve_rate_q"},
+    }
+
+
 # --- 5. the sequence targets a run declares beside the document --------
 #
 # muscadet spells one run keyword itself, `muscadet.engine.RUN_TARGETS`: the

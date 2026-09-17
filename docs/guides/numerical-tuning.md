@@ -286,6 +286,13 @@ Each entry carries the automaton to act on (`bandless`), the whole cycle
 trusted, and a ready-phrased `message`. The cure is a band on the
 threshold, or reading a quantity the rule does not move.
 
+It reads the compiled tables and not any declaration, so it covers every
+switch the model holds however it was written: a rule set's mode, a
+controller's band, and a volume's discharge command (`serve_cond`) alike.
+A reserve floor -- serve while the level is above a threshold -- is a
+switching loop by construction, the discharge being what moves the level
+it reads, and the band is what gives that cycle a physical period.
+
 ## Choosing a setting
 
 - **Keep the defaults** for correctness-critical work, small models, or

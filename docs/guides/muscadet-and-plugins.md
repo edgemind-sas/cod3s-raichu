@@ -139,7 +139,7 @@ point accepts and the other refuses does not exist.
 |---|---|
 | `flows_continuous_in` | a real-valued input: `var_in_default` (what it reads unconnected), `var_demand_default` (what a pure consumer asks for), a `profile` scaling that demand over time, `publish_rate` to make what it receives observable |
 | `flows_continuous_out` | a real-valued output: `var_fed_default`, a `max_rate` ceiling, a `profile` (a declared function of time), `publish_rate` to make what it delivers observable, and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`) |
-| `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `side`, `hysteresis`. A volume holding more than one flow also publishes each constituent's `ratio`, its fraction of the mixture |
+| `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `transmits`, `serve_rate`, `serve_cond` (the discharge command), `side`, `hysteresis`. A volume holding more than one flow also publishes each constituent's `ratio`, its fraction of the mixture |
 | `measurements_in` | the reading side of a measurement link: a channel observing a published level, carrying no quantity |
 | `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow |
 | `transfers` | a transfer pair: a quantity moved because a gradient drives it, under a `ConductiveTransfer` equation |
@@ -218,6 +218,139 @@ reason.
 It is declared rather than implied, because publishing every rate would
 put a port and an equation on every flow of every model for the few an
 observer reads.
+
+**A capability channel can read `1e30`, and that is the spelling of "no
+ceiling".** A volume serving from its stock with no `serve_rate` puts no
+bound on the rate it is drawn at; muscadet writes that as `math.inf`, and
+a model document is JSON, which has no literal for one. So the quantity
+that crosses is `pyraichu.muscadet.UNBOUNDED_SERVICE`, a magnitude no
+physical model reaches. A controller reading such a channel compares it
+against a threshold like any other number, which is what it would do with
+an infinity too; nothing needs to test for it by name.
+
+#### Whether a volume passes things on: `transmits`
+
+A volume between a producer and a consumer is a **buffer**: what it does
+not hold back it transfers unchanged. A volume with no way in is a
+**reservoir**, and one with no way out an **accumulator**; neither has a
+through-path, whatever it holds.
+
+`side` cannot tell the three apart. muscadet maps a component declaring
+both ports and one declaring only an outlet onto the same `side: "out"`,
+so a buffer and a reservoir reach this reader identical but for the
+presence of an input flow of the same name. Reading the through-path off
+that would be a convention the document never states, which is why it is
+a key of its own:
+
+```json
+{"name": "tank", "flow": "q", "capacity": 100.0,
+ "content_init": {"q": 10.0}, "fill_rate": 0.5,
+ "transmits": true, "serve_rate": null}
+```
+
+`transmits` says **whether** the through-path exists, never how much
+crosses it. That is the division of labour between the three keys a
+volume declares about rates, and it is why this one is a predicate:
+
+| Key | Says | Default |
+|---|---|---|
+| `fill_rate` | what the volume claims for ITSELF, on top of what passes through it, while it has room | `0`, a pure buffer that never stocks up |
+| `serve_rate` | the ceiling on what may LEAVE it, whatever it holds | unbounded (`null`) |
+| `transmits` | whether what it does not hold back is passed on at all | `false`, a store |
+
+Two consequences worth stating, because they are what a volume that
+transits means:
+
+- **the volume is what that output delivers**, where the component
+  declares no production of its own and gives the flow a way in. While
+  it holds something it then serves whatever is asked, capped by
+  `serve_rate` and by nothing else. A `CapacityContinuous` exported from
+  muscadet arrives exactly so, its out-flow rate written as `0.0`
+  because the component makes nothing, and reading that zero as a
+  ceiling is what made such a tank deliver nothing however full it was.
+  An out-flow rate that *says* something stays a ceiling the volume
+  respects, and so does a zero one on a volume that does not transit,
+  which is a shut outlet;
+- **a transiting volume asks upstream for what is asked of it**, so it
+  smooths a shortage rather than swallowing what arrives, and
+  `fill_rate` is what it claims over and above that.
+
+**The default is `false`, where muscadet's own field defaults to `true`,
+and the difference is deliberate.** muscadet's solver never reads the
+field: it takes the through-path from the wiring, so its default moves no
+model of its own. Here the field decides, so a default of `true` would
+reinterpret every volume already written against this engine. Every
+document muscadet exports carries the key explicitly, at both values, so
+nothing is lost by making a volume say it.
+
+A through-path also needs **two ports**: a volume the component gives no
+way in keeps its declared rate whatever it declares, there being no path
+to use.
+
+A volume declaring `transmits: false` keeps its own out-flow rate as its
+ceiling, and once empty delivers nothing rather than passing on what
+crosses. That is the right declaration for a store nothing crosses, and
+for an outlet shut by a declared rate of zero.
+
+#### Commanding the discharge: `serve_cond`
+
+`serve_rate` says how much may leave; `serve_cond` says **whether
+anything leaves at all**. It is a condition on which the volume releases,
+written in the operand vocabulary a rule guard carries -- a flow name, a
+capacity level, a measurement channel, optionally negated or compared --
+and paired with a `control` port on the muscadet side, which declares the
+boolean input the condition then names.
+
+```json
+{"name": "tank", "flow": "q", "capacity": 100.0, "transmits": true,
+ "serve_cond": [[{"name": "discharge", "port": "in"}]]}
+```
+
+Two levels, as a production condition has: `serve_cond_inner_mode` is
+`"or"` by default, which reads the outer list as a conjunction of
+disjunctions, and `"and"` reads it the other way round.
+`serve_cond_negate` and `serve_cond_compare` are the parallel matrices
+muscadet lifts a negation and a comparison out of its operands into; a
+document may spell a threshold either way and declares one condition
+either way.
+
+**The command gates both branches.** A volume standing down holds back
+what it stores AND what merely crosses it, which is what muscadet's
+`Capacity.serve_ceiling` does by answering zero outright. And **what it
+asks upstream is capped by what it can release**: a volume does not fill
+out of a demand it cannot honour, so a commanded volume told to stop
+serving stops drawing for the transit. What it claims for ITSELF is not
+capped, that being what `fill_rate` says, so a tank with a claim goes on
+charging while its discharge stands down.
+
+The condition is compiled into a two-state automaton, `{cap}_serve`, with
+the locations `serving` and `withheld` -- which a rule guard of the same
+component may read like any other automaton. That is also what makes it
+visible to `switching_loops`: a threshold inlined in the served quantity
+would close a cycle among variables alone, which is an algebraic loop and
+is reported by nobody. A command comparing a **rate** its own discharge
+moves is refused outright, for the reason a rule guard doing so is.
+
+A comparison here takes a `release` band exactly as a rule's threshold
+does (below), and that band is a RAICHU extension: muscadet has no field
+for one, a condition of its own being entered and left at one threshold.
+A reserve floor reading the level it is itself draining needs one.
+
+#### A ceiling a failure mode can clamp
+
+`serve_rate` is published as a **variable per held flow**,
+`{cap}_serve_rate_{flow}`, under the name muscadet gives it
+(`Capacity.add_variables`). A failure mode reaches it by that name to
+throttle a discharge:
+
+```json
+{"name": "CAP__throttle", "kind": "two_state_mode", "cls": "ObjFMDelay",
+ "targets": ["CAP"], "failure_effects": {"tank_serve_rate_q": 0.5}}
+```
+
+A volume declaring no ceiling publishes `UNBOUNDED_SERVICE` there, for
+the reason the capability channel reads it: a document is JSON and has no
+literal for an infinity.
 
 #### Three quantities a volume publishes per constituent
 

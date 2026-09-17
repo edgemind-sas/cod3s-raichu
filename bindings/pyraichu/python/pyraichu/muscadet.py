@@ -70,6 +70,27 @@ those flows in a shared volume. Per capacity ``c`` holding flow ``f``:
   whatever capability that flow ended up with, so the buffer is declared
   independently of the flows it holds and composes with a rule set on
   the same flow whichever of the two was declared first;
+- **a volume that TRANSITS is what its output delivers.** Between the two
+  bounds it serves whatever is asked, capped by the declared
+  ``serve_rate`` and by nothing else, which is what makes the stock and
+  not the flow's declared rate the source of what crosses; and it carries
+  the demand of its own consumers upstream, so it smooths a shortage
+  instead of swallowing what arrives, ``fill_rate`` being what it claims
+  over and above that. ``transmits`` is whether the volume has a
+  through-path at all, which ``side`` cannot say: a buffer and a
+  reservoir come out of an exported document with the same one. It is
+  **declared and never inferred, and it is off by default**, so a volume
+  written against this layer is a store until it says otherwise;
+- **the discharge is commandable.** ``serve_cond`` is a condition on
+  which the volume releases anything at all, in the operand vocabulary a
+  rule guard carries, compiled into a two-state automaton ``c_serve``. It
+  gates the CEILING and therefore both bounds, so a volume standing down
+  holds back what it stores and what merely crosses it; and what it asks
+  upstream for the transit is capped by that same ceiling, a volume not
+  filling out of a demand it cannot honour. What it claims for itself is
+  not, so a tank with a ``fill_rate`` goes on charging while it stands
+  down. The ceiling itself is a **variable per held flow**,
+  ``c_serve_rate_f``, which is what a failure mode clamps by name;
 - the level and the fill are published on **read-only** out ports, total
   and per constituent. A reader declares ``add_measurement_in`` and is
   connected with ``System.connect_measurement``: the link carries no
@@ -185,6 +206,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
 from typing import Any, Type
 
 from . import (
@@ -347,6 +369,42 @@ _NEGATED_OPS = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=
 #: match the outflow, makes the capacity oscillate for reasons no width
 #: settles, and is a modelling answer rather than a numerical one.
 DEFAULT_HYSTERESIS = 1e-6
+
+#: What a volume publishes as its serving capability while it holds
+#: something and declares no `serve_rate` of its own: the spelling of
+#: "this volume puts no ceiling on the rate it is drawn at".
+#:
+#: muscadet writes that as ``math.inf`` (`Capacity.serve_ceiling`), and
+#: it is the right physics: a volume limits the TOTAL that can be taken
+#: from it, not the rate, and the empty bound is what stops the draw. A
+#: model document is JSON, which has no literal for an infinity, so the
+#: quantity crossing the document is a magnitude no physical model
+#: reaches instead. It is only ever the ceiling of a ``min`` against a
+#: demand, never a term of a derivative and never compared for equality,
+#: so its exact value is immaterial as long as no demand approaches it
+#: and no coefficient multiplies it into an overflow -- 1e30 leaves 278
+#: decades of headroom under `f64::MAX` for both.
+UNBOUNDED_SERVICE = 1e30
+
+#: Stand-in read where a flow is held by no volume at all, so that the
+#: question "does the volume holding it transit?" has an answer without a
+#: `None` check at every site that asks. Its `transmits` is False on
+#: purpose: a flow no volume holds has no volume to pass anything on.
+_NO_CAPACITY = SimpleNamespace(transmits=False)
+
+#: The two locations of a capacity's discharge gate: the volume releases
+#: in the first and nothing at all in the second. Named rather than
+#: written at the four sites that use them, so a rule guard that reads
+#: the gate (:meth:`ObjFlow._declared_automata` publishes it) and the
+#: capability that branches on it cannot come to disagree.
+SERVE_GATE_STATES = ("serving", "withheld")
+
+#: How a discharge command combines its two levels, and muscadet's own
+#: default (`Capacity.serve_cond_inner_mode`). The same convention a
+#: production condition carries: ``"or"`` is a conjunction of
+#: disjunctions, ``"and"`` a disjunction of conjunctions.
+SERVE_COND_INNER_MODES = ("or", "and")
+SERVE_COND_INNER_MODE_DEFAULT = "or"
 
 
 def _var(component: str, variable: str) -> dict[str, Any]:
@@ -893,7 +951,7 @@ def _weighted_fill(component: str, capacity: _Capacity) -> dict[str, Any]:
     solver and the state it is locating."""
     terms: list[dict[str, Any]] = []
     for entry in capacity.flows:
-        content = _var(component, f"{capacity.name}_content_{entry.name}")
+        content = _var(component, _content_attribute(capacity.name, entry.name))
         terms.append(
             content
             if entry.weight == 1.0
@@ -918,7 +976,7 @@ def _flow_fill(
         "lhs": {
             "op": "mul",
             "args": [
-                _var(component, f"{capacity.name}_content_{entry.name}"),
+                _var(component, _content_attribute(capacity.name, entry.name)),
                 _float(entry.weight),
             ],
         },
@@ -971,6 +1029,33 @@ def _ratio_alias(channel: str, flow: str) -> str:
     return f"{channel}_ratio_{flow}"
 
 
+def _content_attribute(capacity: str, flow: str | None = None) -> str:
+    """The attribute a capacity holds its content in: the raw quantity of
+    the whole volume, or of one constituent of it.
+
+    Written down in one place because it is the one capacity name the
+    reference layer does NOT share: muscadet holds the same quantity in
+    ``{c}_qty`` and ``{c}_qty_{f}`` (``muscadet.capacity``). An indicator
+    is named against the variable muscadet created, so a reader
+    translating one reaches this function
+    (:func:`pyraichu.declare.capacity_content_variables`) rather than
+    restating the spelling and drifting the day it changes."""
+    return f"{capacity}_content" if flow is None else f"{capacity}_content_{flow}"
+
+
+def _publishes_ratios(flows: Any) -> bool:
+    """Whether a volume holding these constituents publishes a ratio per
+    constituent: only one holding MORE THAN ONE.
+
+    A module-level rule and not only a property of the declaration,
+    because the reader that translates an observation has to answer the
+    same question off a document (:func:`pyraichu.declare.
+    capacity_absent_variables`): muscadet publishes ``{c}_ratio_{f}`` on
+    every volume, so on a single-constituent one the name exists there and
+    not here, and what says so is exactly this rule."""
+    return len(flows) > 1
+
+
 @dataclass
 class _CapacityFlow:
     """One flow a capacity holds, and how much volume a unit of it
@@ -996,11 +1081,77 @@ class _Capacity:
     #: producer can deliver", which this layer resolves to the published
     #: capability since a document cannot carry an infinity.
     fill_rate: float = 0.0
+    #: Whether the volume passes on what it does not hold back: whether
+    #: the **through-path exists at all**, which ``side`` cannot say. A
+    #: buffer declares both ports and transits; a reservoir has no way in
+    #: and an accumulator no way out, so neither has a through-path
+    #: whatever it holds, and both come out of an exported document with
+    #: the same ``side``. Not a third rate beside :attr:`fill_rate` and
+    #: :attr:`serve_rate`: those two say HOW MUCH, one claimed and one
+    #: capped, where this one says only WHETHER.
+    #:
+    #: **False by default, where muscadet's own field defaults to True**,
+    #: and the difference is deliberate. muscadet's solver never reads
+    #: this field: it takes the through-path from the wiring, so its
+    #: default moves no model of its own. Here the field DECIDES, so a
+    #: default of True would silently turn every volume ever written
+    #: against this engine into a buffer. Measured on the cross-validation
+    #: corpus, that moved five documents nothing compares, 172 series of
+    #: the plant among them. A volume transits when it says so.
+    transmits: bool = False
+    #: The ceiling on what may leave the volume, whatever it holds.
+    #: ``math.inf`` -- the default, and muscadet's -- is a volume that
+    #: serves whatever is asked of it while it is stocked, which is what
+    #: makes the volume ITSELF the source of what the flow delivers.
+    #:
+    #: Published as a **variable** per held flow rather than folded into
+    #: the capability as a constant, under the name muscadet gives it
+    #: (:meth:`ceiling_of`), so a failure mode has something to clamp.
+    serve_rate: float = float("inf")
+    #: The discharge command, as groups of guard operands: when it does
+    #: not hold, the volume delivers nothing, on the branch that transits
+    #: as on the branch that serves from stock. Empty -- the default --
+    #: is an uncommanded volume, which is every volume that says nothing.
+    serve_cond: list[list[_RuleOperand]] = field(default_factory=list)
+    #: How the two levels of :attr:`serve_cond` combine, exactly as
+    #: muscadet's ``serve_cond_inner_mode``: ``"or"`` -- muscadet's
+    #: default -- is a conjunction of disjunctions, ``"and"`` the other
+    #: way round.
+    serve_cond_inner_mode: str = SERVE_COND_INNER_MODE_DEFAULT
     hysteresis: float = DEFAULT_HYSTERESIS
 
     @property
     def flow_names(self) -> list[str]:
         return [entry.name for entry in self.flows]
+
+    @property
+    def commanded(self) -> bool:
+        """Whether a discharge command gates what this volume releases."""
+        return bool(self.serve_cond)
+
+    @property
+    def gate(self) -> str:
+        """Name of the automaton carrying the discharge command.
+
+        muscadet tags the same states ``{capacity}_serve``, and for the
+        same reason: flows and capacities are two namespaces where the
+        engine's states are one, so ``add_capacity(name=X, flow=X)`` --
+        the most natural spelling there is -- would otherwise collide
+        with the flow's own gate.
+        """
+        return f"{self.name}_serve"
+
+    def ceiling_of(self, flow: str) -> str:
+        """Name of the variable holding this volume's ceiling on `flow`.
+
+        muscadet declares the ceiling **per held flow**
+        (``Capacity.add_variables``), which is what makes a multi-flow
+        volume's total the sum of its constituents' rather than one
+        figure shared between them. The spelling is muscadet's, because
+        the point of publishing it is that a failure mode written against
+        muscadet clamps it by that name.
+        """
+        return f"{self.name}_serve_rate_{flow}"
 
     def content_of(self, flow: str) -> float:
         return float(self.content_init.get(flow, 0.0))
@@ -1032,14 +1183,14 @@ class _Capacity:
         holding a single constituent publishes none, its ratio being
         identically one wherever it holds anything."""
         pairs = [
-            (_level_alias(self.name), f"{self.name}_content"),
+            (_level_alias(self.name), _content_attribute(self.name)),
             (_fill_alias(self.name), f"{self.name}_fill"),
         ]
         for entry in self.flows:
             pairs.append(
                 (
                     _level_alias(self.name, entry.name),
-                    f"{self.name}_content_{entry.name}",
+                    _content_attribute(self.name, entry.name),
                 )
             )
             pairs.append(
@@ -1057,8 +1208,10 @@ class _Capacity:
     @property
     def publishes_ratios(self) -> bool:
         """Whether this volume publishes a ratio per constituent: only a
-        volume holding more than one."""
-        return len(self.flows) > 1
+        volume holding more than one. The rule itself is
+        :func:`_publishes_ratios`, which a reader answering the same
+        question off a DOCUMENT reaches too."""
+        return _publishes_ratios(self.flows)
 
 
 @dataclass
@@ -1672,6 +1825,12 @@ class ObjFlow:
         side: str | None = None,
         content_init: dict[str, float] | None = None,
         fill_rate: float | None = 0.0,
+        transmits: bool = False,
+        serve_rate: float | None = None,
+        serve_cond: Any = None,
+        serve_cond_negate: list | None = None,
+        serve_cond_compare: list | None = None,
+        serve_cond_inner_mode: str | None = None,
         hysteresis: float | None = None,
     ) -> None:
         """Declare a volume this component holds over one or more of its
@@ -1695,16 +1854,104 @@ class ObjFlow:
         the volume the content must move back from a bound before the
         capacity leaves it.
 
+        **A volume on an output is what that output delivers**, in place
+        of the rate the flow was declared with, wherever the component
+        declares no production of its own: while it holds something it
+        then serves whatever is asked of it, capped by `serve_rate` and by
+        nothing else. That is what a volume MEANS on an output, and it is
+        what muscadet's `Capacity.serve_limit` computes; a capacity over a
+        flow whose declared rate is zero -- how every exported muscadet
+        capacity comes out, its component producing nothing -- would
+        otherwise deliver zero however full it was. Declare `serve_rate`
+        to give the volume a rate of its own; it defaults to unbounded, as
+        muscadet's does. An out-flow rate that *says* something stays a
+        ceiling the volume respects.
+
+        **The ceiling is a VARIABLE, one per held flow**, published under
+        the name muscadet gives it, ``{capacity}_serve_rate_{flow}``. A
+        constant folded into the capability would leave a failure mode
+        written to throttle the discharge with nothing to clamp, which is
+        precisely how muscadet's own modes reach it; and muscadet declares
+        it per held flow, so a multi-flow volume releases the SUM of its
+        constituents' ceilings rather than one figure shared between them.
+
+        `serve_cond` is the **discharge command**: a condition on which
+        the volume releases anything at all. It is written in the operand
+        vocabulary a RULE GUARD carries -- ``{name, port, automaton,
+        state, negate, op, value, release}`` -- which is the one that
+        carries the comparisons muscadet's own `serve_cond` documents, and
+        not the flow-name-only vocabulary of a discrete production
+        condition. Two levels, combined as `serve_cond_inner_mode` says:
+        ``"or"``, muscadet's default, reads the outer list as a
+        conjunction of disjunctions, ``"and"`` the other way round.
+        `serve_cond_negate` and `serve_cond_compare` are the parallel
+        matrices muscadet lifts a negation and a comparison OUT of its
+        operands into; they are folded back onto the operand they belong
+        to, so the two spellings declare one condition and a contradiction
+        between them is refused rather than silently resolved.
+
+        **The command gates BOTH branches**, which is what muscadet's
+        `Capacity.serve_ceiling` does by answering zero outright: a
+        commanded volume standing down holds back what it stores AND what
+        merely crosses it. Gating the stored branch alone would leave a
+        buffer at rest passing its inlet through to its outlet.
+
+        `release` on a comparison is a **band**, a RAICHU extension
+        muscadet has no field for: the command is entered at `value` and
+        left at `release`, and between the two it holds whatever it
+        already was. It is what a command reading a level its own
+        discharge moves needs, since without it the two states each
+        produce the condition that justifies the other and the period of
+        the cycle is numerical rather than physical.
+
+        The condition is compiled into a two-state automaton
+        (``{capacity}_serve``, :data:`SERVE_GATE_STATES`) rather than
+        folded into the served quantity, which is how muscadet compiles it
+        too (`Capacity.add_serve_cond_automata`) and what makes it visible
+        to the pre-run loop diagnostic: a threshold inlined in a quantity
+        closes a cycle among variables alone, which reads as an algebraic
+        loop and is reported by nobody.
+
+        `transmits` is whether the volume passes on what it does not hold
+        back: whether the **through-path exists at all**, which `side`
+        cannot say, since a buffer and a reservoir come out of an exported
+        document with the same one. True is a volume with a way in and a
+        way out, which once empty still lets through what currently
+        crosses it, so a shortage is smoothed rather than swallowed, and
+        which carries its consumers' demand upstream on top of its own
+        claim.
+
+        False -- **the default here** -- is a pure store: it serves what it
+        holds and nothing more, it asks upstream only for what its own
+        inlet declares, and its out-flow rate stays its ceiling **even at
+        zero**. A rate of zero on a volume that declares no through-path
+        is a SHUT OUTLET, a model somebody means, where the same zero on
+        one that does is a component producing nothing of its own.
+
+        **muscadet's own field defaults to True, and this one does not.**
+        muscadet's solver never reads it: it takes the through-path from
+        the wiring, so its default moves no model of its own. Here the
+        field decides, so a default of True would reinterpret every volume
+        already written against this layer. Every document muscadet
+        exports carries the key explicitly, at both values, so nothing is
+        lost by making a volume say it.
+
+        A through-path needs **two ports**, so a volume this component
+        gives the flow no way in keeps its declared rate whatever it
+        declares: there is no path for it to use.
+
         The demand a **full** capacity carries upstream is what it can
         still take, which is what currently leaves it, capped by the
         demand already passing through it. That pass-through demand is
-        whatever the flow would ask for without the volume: a rule set's
-        derived demand when one consumes the flow, and the in-flow's
-        declared ``var_demand_in_default`` otherwise. A tank that
-        delivers five, that no rule consumes and that declares no
-        pass-through demand asks for nothing once full, and therefore
-        drains; declare it, and the buffer holds. The two compose in
-        either declaration order: the bound is applied when the model is
+        what its consumers ask of it where the volume transits, and
+        otherwise whatever the flow would ask for without the volume: a
+        rule set's derived demand when one consumes the flow, and the
+        in-flow's declared ``var_demand_in_default`` failing that. A tank
+        that delivers five, that does not transit, that no rule consumes
+        and that declares no pass-through demand asks for nothing once
+        full, and therefore drains; declare either the demand or the
+        transit, and the buffer holds. The two compose in either
+        declaration order: the bound is applied when the model is
         generated, not when the capacity is declared.
 
         `side` places the capacity upstream (``"in"``) or downstream
@@ -1761,6 +2008,42 @@ class ObjFlow:
                 f"rate that is positive, zero, or null for unbounded, got "
                 f"{fill_rate}"
             )
+        # Same spelling as `fill_rate` above and for the same reason: a
+        # document has no literal for an infinity, so the unbounded
+        # ceiling -- the default, and muscadet's -- is written as null.
+        ceiling = float("inf") if serve_rate is None else float(serve_rate)
+        if not ceiling >= 0.0:  # negative or NaN
+            raise ValueError(
+                f"ObjFlow `{self.name}`: capacity `{name}` must declare a serve "
+                f"rate that is positive, zero, or null for unbounded, got "
+                f"{serve_rate}"
+            )
+        if not isinstance(transmits, bool):
+            raise ValueError(
+                f"ObjFlow `{self.name}`: capacity `{name}` must declare "
+                f"`transmits` as a boolean, got {transmits!r}. It says WHETHER "
+                "the volume has a through-path, not how much crosses it; the "
+                "rate is `serve_rate`"
+            )
+        inner_mode = (
+            SERVE_COND_INNER_MODE_DEFAULT
+            if serve_cond_inner_mode is None
+            else serve_cond_inner_mode
+        )
+        if inner_mode not in SERVE_COND_INNER_MODES:
+            raise ValueError(
+                f"ObjFlow `{self.name}`: capacity `{name}` declares "
+                f"`serve_cond_inner_mode`={serve_cond_inner_mode!r}; a "
+                f"discharge command combines its two levels one way or the "
+                f"other, so it is "
+                f"{' or '.join(repr(mode) for mode in SERVE_COND_INNER_MODES)}"
+            )
+        command = self._parse_serve_cond(
+            f"ObjFlow `{self.name}`: capacity `{name}`",
+            serve_cond,
+            serve_cond_negate,
+            serve_cond_compare,
+        )
         width = DEFAULT_HYSTERESIS if hysteresis is None else float(hysteresis)
         if not 0.0 <= width < 1.0:
             raise ValueError(
@@ -1864,9 +2147,298 @@ class ObjFlow:
                 key: float(value) for key, value in (content_init or {}).items()
             },
             fill_rate=rate,
+            transmits=transmits,
+            serve_rate=ceiling,
+            serve_cond=command,
+            serve_cond_inner_mode=inner_mode,
             hysteresis=width,
         )
         self._record(self.capacities, declaration)
+        # The command is resolved once the volume is RECORDED, and the
+        # order is what makes a reserve floor declarable: an operand
+        # naming this capacity's own level reads the contents this
+        # declaration is what creates. A refused command takes the whole
+        # declaration back out, as `_record` does with its own refusal.
+        try:
+            self._resolve_serve_cond(declaration)
+        except ValueError:
+            self.capacities.remove(declaration)
+            raise
+
+    # --- the discharge command ------------------------------------------
+
+    def _parse_serve_cond(
+        self,
+        where: str,
+        declared: Any,
+        negates: list | None,
+        compares: list | None,
+    ) -> list[list[_RuleOperand]]:
+        """A discharge command, as groups of parsed guard operands.
+
+        The shape follows muscadet's: a list of groups, each group a list
+        of operands, and a bare name or mapping is the one-operand
+        one-group short form. A FLAT list is read as one group per
+        element, which is what the layer underneath reads a flat
+        production condition as too, so `["a", "b"]` is two clauses of one
+        operand rather than one clause of two.
+
+        `negates` and `compares` are the parallel matrices muscadet lifts
+        a negation and a comparison out of its operands into. They are
+        folded back onto the operand they belong to rather than carried
+        beside it: one condition has one spelling here, and a matrix cell
+        contradicting what its own operand says is refused instead of one
+        of the two quietly winning.
+        """
+        if not declared:
+            return []
+        if isinstance(declared, (str, dict)):
+            declared = [declared]
+        if not isinstance(declared, (list, tuple)):
+            raise ValueError(
+                f"{where} carries a discharge command that is neither a name, "
+                f"an operand nor a list: {declared!r}"
+            )
+
+        groups: list[list[_RuleOperand]] = []
+        for row, group in enumerate(declared):
+            specs = group if isinstance(group, (list, tuple)) else [group]
+            if not specs:
+                raise ValueError(
+                    f"{where} carries an empty group in its discharge command; "
+                    "a group that reads nothing says nothing about when the "
+                    "volume serves"
+                )
+            operands = []
+            for column, spec in enumerate(specs):
+                operands.append(
+                    self._parse_operand(
+                        f"{where}, discharge command",
+                        self._serve_cond_operand_spec(
+                            where, spec, row, column, negates, compares
+                        ),
+                    )
+                )
+            groups.append(operands)
+        return groups
+
+    @staticmethod
+    def _serve_cond_operand_spec(
+        where: str,
+        spec: Any,
+        row: int,
+        column: int,
+        negates: list | None,
+        compares: list | None,
+    ) -> Any:
+        """One operand's declaration, with its cells of the two parallel
+        matrices folded in, refusing a cell that contradicts it.
+
+        Folded into the DECLARATION rather than onto the parsed operand,
+        so a comparison lifted out into a matrix goes through the same
+        validation an inline one does -- the operator, the value, and the
+        band that widens it -- instead of a second copy of it here.
+
+        muscadet stores a resolved condition as its operands plus the two
+        matrices, so a document written against that model may carry the
+        negation and the comparison there rather than inline. Both
+        spellings declare one thing; a cell saying something else than its
+        own operand would leave which of the two holds to the order they
+        happened to be read in.
+        """
+
+        def cell(matrix: list | None) -> Any:
+            try:
+                return matrix[row][column]  # type: ignore[index]
+            except (IndexError, KeyError, TypeError):
+                return None
+
+        # A negation matrix is SPARSE -- muscadet attaches it only once
+        # some operand is negated -- so a False cell says nothing and
+        # never denies an inline `negate`.
+        negated = bool(cell(negates))
+        compare = cell(compares)
+        if not negated and compare is None:
+            return spec
+
+        merged = {"name": spec} if isinstance(spec, str) else spec
+        if not isinstance(merged, dict):
+            raise ValueError(
+                f"{where} carries a discharge-command operand that is neither "
+                f"a name nor a mapping: {spec!r}"
+            )
+        merged = dict(merged)
+        if negated:
+            merged["negate"] = True
+        if compare is not None:
+            if not isinstance(compare, dict) or "op" not in compare:
+                raise ValueError(
+                    f"{where} carries the discharge-command comparison "
+                    f"{compare!r} at [{row}][{column}]; a cell of "
+                    "`serve_cond_compare` carries `op` and `value`"
+                )
+            declared = merged.get("op")
+            if declared is not None and (
+                declared != compare["op"]
+                or float(merged.get("value")) != float(compare.get("value"))
+            ):
+                raise ValueError(
+                    f"{where} compares `{merged.get('name')}` inline as "
+                    f"`{declared} {merged.get('value')}` and in "
+                    f"`serve_cond_compare` as `{compare['op']} "
+                    f"{compare.get('value')}`; one condition has one "
+                    "comparison, so the two spellings state the same one or "
+                    "only one of them is written"
+                )
+            merged["op"] = compare["op"]
+            merged["value"] = compare.get("value")
+        return merged
+
+    def _resolve_serve_cond(self, capacity: _Capacity) -> None:
+        """Resolve a recorded capacity's discharge command against what
+        this component declares, refusing a misspelling here rather than
+        letting it reach the engine as a dangling read.
+
+        The same two diagnostics a rule guard gets, for the same reasons:
+        an operand naming nothing is refused, and an EQUALITY on a
+        continuously-evolving quantity is refused because the transition
+        carrying it is watched and a crossing is located on an ordering
+        comparison.
+        """
+        where = f"ObjFlow `{self.name}`: capacity `{capacity.name}`"
+        for group in capacity.serve_cond:
+            for operand in group:
+                continuous = self._operand_reads_continuously(where, operand)
+                if (
+                    operand.op in _CMP_OPS
+                    and continuous
+                    and operand.op not in _ORDERING_OPS
+                ):
+                    raise ValueError(
+                        f"{where} commands its discharge on the continuous "
+                        f"quantity `{operand.name}` with `{operand.op}`; the "
+                        "gate transition carrying it is watched, and a "
+                        "crossing is located on an ordering comparison "
+                        f"({', '.join(_ORDERING_OPS)})"
+                    )
+
+    def _serve_cond_reads_continuously(self, capacity: _Capacity) -> bool:
+        """Whether the discharge command compares a continuously-evolving
+        quantity, which is what makes its gate a located crossing rather
+        than a discrete decision."""
+        where = f"ObjFlow `{self.name}`: capacity `{capacity.name}`"
+        return any(
+            operand.op is not None
+            and self._operand_reads_continuously(where, operand)
+            for group in capacity.serve_cond
+            for operand in group
+        )
+
+    def _serve_cond_expr(self, capacity: _Capacity) -> dict[str, Any]:
+        """The discharge command as a boolean expression.
+
+        The two levels are combined as `serve_cond_inner_mode` says, and
+        the nesting is written as it stands rather than normalised: the
+        gate is an automaton guard, which carries an `and` of `or`s
+        directly, where a discrete production condition has to be
+        expanded into a disjunction of flow-name conjunctions because
+        that is all the layer underneath it reads.
+        """
+        outer, inner = (
+            ("and", "or")
+            if capacity.serve_cond_inner_mode == "or"
+            else ("or", "and")
+        )
+        return _bool(
+            outer,
+            [
+                _bool(inner, [self._rule_operand_expr(operand) for operand in group])
+                for group in capacity.serve_cond
+            ],
+        )
+
+    def _serve_cond_negation(self, capacity: _Capacity) -> dict[str, Any]:
+        """The command denied, by De Morgan over both levels and with
+        every comparison **complemented** rather than wrapped in a `not`,
+        for the reason :data:`_NEGATED_OPS` states.
+
+        Denied at the far edge of every band it carries: this is the
+        guard of the transition leaving the state the band holds, so a
+        command entered at `value` is left at `release` and holds
+        between the two.
+        """
+        outer, inner = (
+            ("or", "and")
+            if capacity.serve_cond_inner_mode == "or"
+            else ("and", "or")
+        )
+        return _bool(
+            outer,
+            [
+                _bool(
+                    inner,
+                    [
+                        self._rule_operand_negation(operand, releasing=True)
+                        for operand in group
+                    ],
+                )
+                for group in capacity.serve_cond
+            ],
+        )
+
+    def _serve_gate_automaton(self, capacity: _Capacity) -> dict[str, Any]:
+        """The two-state automaton carrying a capacity's discharge
+        command.
+
+        An automaton rather than a branch inside the served quantity, and
+        for the two reasons a rule set's mode is one: the decision is
+        frozen between crossings, and a transition carrying a continuous
+        threshold is declared **watched**, so the solver stops AT the
+        crossing instead of noticing it at the following step. muscadet
+        compiles the same condition the same way, under the same
+        ``{capacity}_serve`` tag (`Capacity.add_serve_cond_automata`).
+
+        It starts **withheld**, which is not a guess about the command:
+        the guards read quantities the initial fixpoint resolves, so the
+        location that holds at t = 0 is entered there, exactly as a rule
+        set's mode enters its own.
+        """
+        serving, withheld = SERVE_GATE_STATES
+        located = self._serve_cond_reads_continuously(capacity)
+
+        def transition(name: str, source: str, target: str, guard: dict) -> dict:
+            entry: dict[str, Any] = {
+                "name": name,
+                "source": source,
+                "targets": [target],
+                "guard": guard,
+            }
+            if located:
+                entry["distrib"] = "watched"
+            else:
+                entry["distrib"] = "inst"
+                entry["probs"] = []
+            return entry
+
+        return {
+            "name": capacity.gate,
+            "states": [serving, withheld],
+            "init": withheld,
+            "transitions": [
+                transition(
+                    f"{capacity.gate}_opens",
+                    withheld,
+                    serving,
+                    self._serve_cond_expr(capacity),
+                ),
+                transition(
+                    f"{capacity.gate}_shuts",
+                    serving,
+                    withheld,
+                    self._serve_cond_negation(capacity),
+                ),
+            ],
+        }
 
     # --- one flow, one carrier -----------------------------------------
 
@@ -2073,6 +2645,34 @@ class ObjFlow:
                 return capacity
         return None
 
+    def _capacity_ceiling(self, capacity: _Capacity, flow: str) -> dict[str, Any]:
+        """The ceiling on what `flow` may leave `capacity` at, right now:
+        muscadet's `Capacity.serve_ceiling`, term for term.
+
+        **Read from a variable** rather than written in as the declared
+        number: a failure mode may have clamped it by the time this is
+        evaluated, which is what a rate that can be throttled has to be.
+
+        **The command composes with it by BRANCHING**, not by product,
+        and the alternative is not a near miss: an unbounded ceiling
+        crosses this layer as :data:`UNBOUNDED_SERVICE`, and a magnitude
+        times zero is a quantity nobody downstream reads as "closed".
+        A command that does not hold answers zero outright.
+
+        One expression, read by the two sides of the volume: what it
+        serves and what it carries upstream are capped by the same
+        ceiling, as muscadet's `serve_limit` and `demand_claim` are.
+        """
+        ceiling: dict[str, Any] = _var(self.name, capacity.ceiling_of(flow))
+        if not capacity.commanded:
+            return ceiling
+        return {
+            "op": "if",
+            "cond": _state_active(self.name, capacity.gate, SERVE_GATE_STATES[0]),
+            "then": ceiling,
+            "otherwise": _float(0.0),
+        }
+
     def _capacity_bounded_demand(
         self, flow: str, base: dict[str, Any]
     ) -> dict[str, Any]:
@@ -2086,6 +2686,25 @@ class ObjFlow:
         so the decision is the one the located crossing made and never a
         second, unlocated comparison.
 
+        **A volume that transits asks upstream for what is asked of it**,
+        which is the other half of what makes it a buffer: it smooths a
+        shortage rather than swallowing what arrives. That pass-through
+        demand is read from the out side (``{flow}_demand_out``), which
+        the demand band settles before it reaches this component's own
+        inputs, and it is taken as the GREATER of it and whatever the
+        flow would have asked on its own. The declared
+        ``var_demand_in_default`` was the only way to state a
+        pass-through before the out side could be read, so a model that
+        declared one keeps it as a floor rather than losing it, and
+        neither is added to the other: they are two statements of one
+        quantity, and adding them would ask twice for one transit.
+
+        **What it asks for the transit is capped by what it can
+        release**, ceiling and discharge command alike: a volume does not
+        fill out of a demand it cannot honour. What it claims for itself
+        is not, that claim being what a `fill_rate` says and the ceiling
+        having nothing to say about it.
+
         Applied here rather than at declaration, so a rule set and a
         capacity naming one flow compose whichever is declared first:
         the rule derives the pass-through demand, the volume bounds it."""
@@ -2093,11 +2712,26 @@ class ObjFlow:
         if capacity is None:
             return base
         me = self.name
-        outflow = (
-            _var(me, f"{flow}_fed_out")
-            if any(declared.name == flow for declared in self.flows_continuous_out)
-            else _float(0.0)
-        )
+        delivers = any(declared.name == flow for declared in self.flows_continuous_out)
+        outflow = _var(me, f"{flow}_fed_out") if delivers else _float(0.0)
+        if capacity.transmits and delivers and self._conduit_on(flow) is None:
+            # A conduit is excluded because it already REPLACED the
+            # transit: its crossing is `base` here, and asking for the
+            # downstream demand beside it would ask for the same passage
+            # twice.
+            base = {"op": "max", "args": [base, _var(me, f"{flow}_demand_out")]}
+        # **The transit a volume asks for is capped by what it can
+        # release**, which is muscadet's `demand_claim` and the rule R-20
+        # already wrote for the other side: a volume does not fill out of
+        # a demand it cannot honour. Without it a buffer at the
+        # documented `fill_rate=0` -- "it never stocks up" -- becomes an
+        # accumulator the moment a ceiling is declared or a command
+        # stands its discharge down: measured here on a commanded volume,
+        # the two engines agreed on what reached the consumer and parted
+        # on what the volume went on drawing behind it. What the volume
+        # claims for ITSELF is not capped, and rightly: that is the
+        # `fill_rate` below, a claim the ceiling has nothing to say about.
+        base = {"op": "min", "args": [base, self._capacity_ceiling(capacity, flow)]}
         if capacity.fill_rate == float("inf"):
             # "Whatever the producer can deliver", which a document
             # cannot carry as an infinity: the published capability is
@@ -2116,26 +2750,73 @@ class ObjFlow:
         }
 
     def _capacity_bounded_capability(
-        self, flow: str, nominal: dict[str, Any]
+        self, flow: str, nominal: dict[str, Any], *, replaces: bool = False
     ) -> dict[str, Any]:
-        """`nominal`, what a flow could deliver, bounded by the volume
-        holding it: empty, it serves downstream only what currently
-        transits through it. See :meth:`_capacity_bounded_demand`."""
+        """What a flow can deliver once the volume holding it has its say.
+
+        Mirrors muscadet's `Capacity.serve_limit`: while the volume holds
+        something it serves whatever is asked, capped by the declared
+        ``serve_rate`` and by nothing else; once empty it serves only what
+        currently transits through it, and a volume that does not transit
+        serves nothing at all. `transmits` is exactly the EXISTENCE of
+        that empty branch, which is why it is a predicate and not a third
+        rate.
+
+        A declared `serve_cond` gates the ceiling itself, and therefore
+        both branches, exactly as muscadet's `serve_ceiling` does by
+        answering zero before either of them is reached.
+
+        `replaces` says which of the two readings of `nominal` applies,
+        and the call site is what knows:
+
+        - **True** -- `nominal` is the rate the flow was declared with,
+          and the volume REPLACES it. A volume on an output is what that
+          output delivers, so a tank whose component produces nothing of
+          its own still serves from its stock. Reading the declared rate
+          as a second ceiling underneath is what made every exported
+          muscadet capacity deliver zero: the exporting component
+          produces nothing, so it writes ``var_fed_default: 0.0``, and a
+          ceiling of zero leaves zero however full the volume is;
+        - **False** -- `nominal` is a quantity something else already
+          computed and that genuinely crosses the component: a metered
+          conduit's crossing, what taps routed in, an explicitly declared
+          capability. The volume BOUNDS that rather than replacing it,
+          the component having a production of its own to bound.
+
+        Applied here rather than at declaration, for the reason
+        :meth:`_capacity_bounded_demand` gives."""
         capacity = self._capacity_of(flow)
         if capacity is None:
             return nominal
         me = self.name
+        # What currently transits, which is what an empty volume passes
+        # on. `fed_in` and not the published capability: what crosses is
+        # what actually arrived, which is the quantity muscadet's own
+        # `get_inflow` reads. A volume the component gives no way in
+        # transits nothing.
+        #
+        # **Read whatever `transmits` says**, which is not an oversight.
+        # muscadet's own `serve_limit` takes this branch from the WIRING
+        # and not from the field, and the field is never written False on
+        # a volume that has a way in: `ports` `in` and `out` are the only
+        # two it comes from, and neither declares both sides. So gating
+        # this on it would be equivalent on every document muscadet can
+        # write, and would silently move the volumes already written
+        # against this engine, which used to pass on what crossed them
+        # here whatever else they declared.
         inflow = (
             _var(me, f"{flow}_fed_in")
             if any(declared.name == flow for declared in self.flows_continuous_in)
             else _float(0.0)
         )
-        return {
+        ceiling = self._capacity_ceiling(capacity, flow)
+        served = {
             "op": "if",
             "cond": _state_active(me, f"{capacity.name}_bounds", "empty"),
-            "then": {"op": "min", "args": [nominal, inflow]},
-            "otherwise": nominal,
+            "then": {"op": "min", "args": [ceiling, inflow]},
+            "otherwise": ceiling,
         }
+        return served if replaces else {"op": "min", "args": [nominal, served]}
 
     def add_measurement_in(self, name: str, flows: list[str] | None = None) -> None:
         """Declare the reading side of a measurement link (muscadet
@@ -2497,15 +3178,15 @@ class ObjFlow:
         me = self.name
         for capacity in self.capacities:
             contents = [
-                _var(me, f"{capacity.name}_content_{entry.name}")
+                _var(me, _content_attribute(capacity.name, entry.name))
                 for entry in capacity.flows
             ]
-            if name in (capacity.name, f"{capacity.name}_content"):
+            if name in (capacity.name, _content_attribute(capacity.name)):
                 return _sum(contents)
             if name == f"{capacity.name}_fill":
                 return _weighted_fill(me, capacity)
             for entry, content in zip(capacity.flows, contents):
-                if name == f"{capacity.name}_content_{entry.name}":
+                if name == _content_attribute(capacity.name, entry.name):
                     return content
                 if name == f"{capacity.name}_fill_{entry.name}":
                     return _flow_fill(me, capacity, entry)
@@ -2558,6 +3239,8 @@ class ObjFlow:
             automata[mode.name] = ["ok", "nok"]
         for capacity in self.capacities:
             automata[f"{capacity.name}_bounds"] = ["empty", "partial", "full"]
+            if capacity.commanded:
+                automata[capacity.gate] = list(SERVE_GATE_STATES)
         for flow in self.flows_out:
             if flow.tempo is not None:
                 automata[f"{flow.name}_tempo"] = ["disabled", "enabled"]
@@ -4459,6 +5142,7 @@ class ObjFlow:
             )
             factors = self._output_factors(continuous_out)
             conduit = self._conduit_on(flow_name)
+            replaced_by_a_volume = False
             if conduit is not None:
                 # A metered conduit REPLACES what the flow would carry:
                 # the computed quantity is what crosses, bounded by what
@@ -4491,6 +5175,42 @@ class ObjFlow:
                     "op": "mul",
                     "args": factors + [_float(continuous_out.var_fed_default)],
                 }
+                # A volume that TRANSITS and whose component declares no
+                # production of its own is the source of what this output
+                # delivers, so it replaces the rate rather than being
+                # capped by it: the product above is identically zero
+                # whatever the deratings scale it by, and a ceiling of
+                # zero would leave the output delivering nothing however
+                # full the volume was. Every capacity muscadet exports
+                # arrives exactly so.
+                #
+                # THREE conditions, and no two of them would do.
+                #
+                # A rate that says something is a ceiling the volume
+                # respects, transit or not. A zero rate on a volume that
+                # declares no through-path is a SHUT OUTLET, a model
+                # somebody means: `h2_battery_stop` of the cross-
+                # validation corpus is a battery stopped by a rate of
+                # zero that must go on filling and deliver nothing. And a
+                # volume the component gives no way IN has no
+                # through-path to use whatever it declares -- three
+                # documents of that corpus hold one, and reading them as
+                # buffers published an unbounded capability where they
+                # had published none.
+                held = self._capacity_of(flow_name) or _NO_CAPACITY
+                replaced_by_a_volume = (
+                    continuous_out.var_fed_default == 0.0
+                    and held.transmits
+                    and any(
+                        declared.name == flow_name
+                        for declared in self.flows_continuous_in
+                    )
+                )
+            if continuous_out.max_rate is not None:
+                # A declared ceiling is the equipment's, not the
+                # declaration's, so it outlives the volume replacing the
+                # rate underneath it.
+                replaced_by_a_volume = False
             nominal = self._bounded_by_max_rate(continuous_out, nominal)
             if self._has_transfer_delta(flow_name):
                 # The base a two-stream pair sits on, named rather than
@@ -4503,6 +5223,10 @@ class ObjFlow:
                     {"target": base, "kind": "explicit", "expr": nominal}
                 )
                 nominal = self._apply_transfer_delta(flow_name, _var(me, base))
+                # A pair moved a computed quantity onto the stream: what
+                # the flow carries is no longer the bare declared rate,
+                # so the volume bounds it rather than replacing it.
+                replaced_by_a_volume = False
             equations.append(
                 {
                     "target": f"{flow_name}_capability_out",
@@ -4510,7 +5234,9 @@ class ObjFlow:
                     "expr": self._tap_split(
                         flow_name,
                         "capability",
-                        self._capacity_bounded_capability(flow_name, nominal),
+                        self._capacity_bounded_capability(
+                            flow_name, nominal, replaces=replaced_by_a_volume
+                        ),
                         variables,
                         equations,
                     ),
@@ -4681,8 +5407,9 @@ class ObjFlow:
         automata: list[dict],
     ) -> None:
         """Capacities: one integrated content per held flow, the fills and
-        the two totals swept off them, the bounds automaton, and the
-        read-only ports publishing the level.
+        the two totals swept off them, the ceiling on each held flow, the
+        bounds automaton, the discharge gate where one is commanded, and
+        the read-only ports publishing the level.
 
         The bounds are automaton locations entered by watched transitions
         on the total weighted fill, never a branch inside the derivative:
@@ -4697,13 +5424,28 @@ class ObjFlow:
             contents: list[dict[str, Any]] = []
             fills: list[dict[str, Any]] = []
             ratios: list[tuple[str, str]] = []
+            # The declared ceiling, as a VARIABLE per held flow and under
+            # muscadet's own name for it. A constant folded into the
+            # capability leaves a failure mode written to throttle the
+            # discharge with nothing to clamp; and a rate a state of
+            # charge can suspend but a mode cannot reach is not a rate.
+            # No equation defines it: a mode is its only writer, and its
+            # initial value is what the declaration said.
+            capacity_ceiling = (
+                UNBOUNDED_SERVICE
+                if capacity.serve_rate == float("inf")
+                else capacity.serve_rate
+            )
             for entry in capacity.flows:
-                content = f"{capacity.name}_content_{entry.name}"
+                content = _content_attribute(capacity.name, entry.name)
                 fill = f"{capacity.name}_fill_{entry.name}"
                 initial = capacity.content_of(entry.name)
                 variables.append(_float_attribute(content, initial))
                 variables.append(
                     _float_attribute(fill, initial * entry.weight / capacity.volume)
+                )
+                variables.append(
+                    _float_attribute(capacity.ceiling_of(entry.name), capacity_ceiling)
                 )
                 contents.append(_var(me, content))
                 fills.append(_var(me, fill))
@@ -4743,7 +5485,7 @@ class ObjFlow:
             initial_fill = capacity.initial_fill()
             variables.append(
                 _float_attribute(
-                    f"{capacity.name}_content",
+                    _content_attribute(capacity.name),
                     sum(capacity.content_of(e.name) for e in capacity.flows),
                 )
             )
@@ -4753,7 +5495,7 @@ class ObjFlow:
             # integration would drift away from its own constituents.
             equations.append(
                 {
-                    "target": f"{capacity.name}_content",
+                    "target": _content_attribute(capacity.name),
                     "kind": "explicit",
                     "expr": _sum(contents),
                 }
@@ -4779,13 +5521,13 @@ class ObjFlow:
                             "cond": {
                                 "op": "cmp",
                                 "cmp": "gt",
-                                "lhs": _var(me, f"{capacity.name}_content"),
+                                "lhs": _var(me, _content_attribute(capacity.name)),
                                 "rhs": _float(0.0),
                             },
                             "then": {
                                 "op": "div",
                                 "lhs": _var(me, content),
-                                "rhs": _var(me, f"{capacity.name}_content"),
+                                "rhs": _var(me, _content_attribute(capacity.name)),
                             },
                             "otherwise": _float(0.0),
                         },
@@ -4854,6 +5596,14 @@ class ObjFlow:
                     ],
                 }
             )
+
+            # The discharge gate, where the volume declares one. Posted
+            # beside the bounds rather than inside the served quantity so
+            # that the pre-run loop diagnostic can see it: a threshold
+            # inlined in a quantity closes a cycle among variables alone,
+            # which is read as an algebraic loop and reported by nobody.
+            if capacity.commanded:
+                automata.append(self._serve_gate_automaton(capacity))
 
             # The level, published read-only (R7): an out port carrying no
             # channel, so a reader exchanges no quantity and enters no
@@ -5401,7 +6151,7 @@ class System:
                 for entry in capacity.flows:
                     step(name, f"{capacity.name}_fill_{entry.name}")
                 step(name, f"{capacity.name}_fill")
-                step(name, f"{capacity.name}_content")
+                step(name, _content_attribute(capacity.name))
                 # After the total they divide by, and before the
                 # observers below read them.
                 if capacity.publishes_ratios:
@@ -5550,13 +6300,30 @@ class System:
         """The three refusals the rule vocabulary makes sayable, in
         declaration order: a contested output nobody apportions, a loop
         of rate comparisons, and a self-feeding cycle that creates
-        matter."""
-        if not any(obj.rule_sets for obj in self.comp.values()):
+        matter.
+
+        A **commanded capacity** enters here for the second alone: a
+        discharge command compares rates in the same vocabulary a rule
+        guard does, and it drives the flow it releases, so it closes the
+        same loop with no fixpoint. The third stays the rule
+        vocabulary's, and not only because it would answer nothing
+        without one: its search walks the whole flow graph under a budget
+        it REFUSES the model for spending, and a model with no rule has
+        no cycle it could report anyway, every connection carrying its
+        quantity unchanged."""
+        commanded = any(
+            capacity.commanded
+            for obj in self.comp.values()
+            for capacity in obj.capacities
+        )
+        rules = any(obj.rule_sets for obj in self.comp.values())
+        if not rules and not commanded:
             return
         for obj in self.comp.values():
             obj._apportionment_shares()
         self._refuse_rate_comparison_loops(edges)
-        self._refuse_unbounded_rule_cycles(edges)
+        if rules:
+            self._refuse_unbounded_rule_cycles(edges)
 
     def _rule_graph(
         self, edges: list[_ContinuousEdge]
@@ -5647,37 +6414,75 @@ class System:
         an integrated **level** closes no such loop, because the
         integration carries the value across the sweep, which is why the
         two kinds of comparison are told apart rather than counted
-        together."""
+        together.
+
+        **A commanded capacity is a node of the same graph**, and the
+        same reasoning word for word: its discharge command compares
+        rates in the rule guard's vocabulary and it drives what it
+        releases, so a command reading a rate its own discharge moves
+        has no more of a fixpoint than a rule selected on one. muscadet
+        documents that angle as a blind spot of its own loop detectors
+        (#172, "a comparison on a rate is not seen"); here it is the one
+        place a capacity had to be written into.
+
+        The two kinds of node close loops with each other as readily as
+        with their own kind, which is why they share one graph rather
+        than being looked for twice."""
         carried: dict[tuple[str, str, str], list[tuple[str, str, str]]] = {}
         for edge in edges:
             carried.setdefault((edge.producer, edge.flow_out, "out"), []).append(
                 (edge.consumer, edge.flow_in, "in")
             )
-        influence: dict[tuple[str, str], set] = {}
-        reads: dict[tuple[str, str], list] = {}
+
+        # One node per switching decision, keyed by what it is so the
+        # diagnostic can name it: `(component, what, name)`.
+        influence: dict[tuple[str, str, str], set] = {}
+        reads: dict[tuple[str, str, str], list] = {}
+
+        def declare(key, driven_flows, operands, obj, name):
+            # What this decision drives *before another one does*: its
+            # own outputs and the inputs they feed. A rate that travels
+            # further does so through another decision, which is then
+            # the next node of the loop rather than a hop inside this one.
+            driven = {(name, flow, "out") for flow in driven_flows}
+            for seed in list(driven):
+                driven.update(carried.get(seed, ()))
+            influence[key] = driven
+            compared = []
+            for operand in operands:
+                if operand.op is None:
+                    continue
+                _, rate = obj._operand_read(f"ObjFlow `{name}`", operand)
+                if rate is not None:
+                    compared.append((name, rate[0], rate[1]))
+            reads[key] = compared
+
         for name, obj in self.comp.items():
             for rule_set in obj.rule_sets:
-                key = (name, rule_set.name)
-                # What this set drives *before another rule set does*:
-                # its own outputs and the inputs they feed. A rate that
-                # travels further does so through another set, which is
-                # then the next node of the loop rather than a hop
-                # inside this one.
-                driven = {(name, flow, "out") for flow in rule_set.produced()}
-                for seed in list(driven):
-                    driven.update(carried.get(seed, ()))
-                influence[key] = driven
-                compared = []
-                for rule in rule_set.rules:
-                    for operand in rule.cond:
-                        if operand.op is None:
-                            continue
-                        _, rate = obj._operand_read(f"ObjFlow `{name}`", operand)
-                        if rate is not None:
-                            compared.append((name, rate[0], rate[1]))
-                reads[key] = compared
+                declare(
+                    (name, "rule set", rule_set.name),
+                    rule_set.produced(),
+                    [operand for rule in rule_set.rules for operand in rule.cond],
+                    obj,
+                    name,
+                )
+            delivered = {flow.name for flow in obj.flows_continuous_out}
+            for capacity in obj.capacities:
+                if not capacity.commanded:
+                    continue
+                declare(
+                    (name, "capacity", capacity.name),
+                    [flow for flow in capacity.flow_names if flow in delivered],
+                    [
+                        operand
+                        for group in capacity.serve_cond
+                        for operand in group
+                    ],
+                    obj,
+                    name,
+                )
 
-        arcs: dict[tuple[str, str], list[tuple[tuple[str, str], tuple]]] = {}
+        arcs: dict[tuple[str, str, str], list[tuple[tuple[str, str, str], tuple]]] = {}
         for driver, driven_nodes in influence.items():
             for reader, endpoints in reads.items():
                 shared = [node for node in endpoints if node in driven_nodes]
@@ -5688,14 +6493,14 @@ class System:
         if cycle is None:
             return
         rendered = " -> ".join(
-            f"rule set `{node[1]}` of `{node[0]}` (driving the rate "
+            f"{node[1]} `{node[2]}` of `{node[0]}` (driving the rate "
             f"`{endpoint[1]}`)"
             for node, endpoint in cycle
         )
         raise ValueError(
-            f"System `{self.name}`: the rule guards of {rendered} form a loop "
-            "of rate comparisons: each set drives a rate the next one is "
-            "selected on, so the selection has no fixpoint. Compare an integrated "
+            f"System `{self.name}`: the guards of {rendered} form a loop "
+            "of rate comparisons: each drives a rate the next one switches "
+            "on, so the selection has no fixpoint. Compare an integrated "
             "level instead, which the integration carries across the sweep."
         )
 
@@ -5849,10 +6654,10 @@ class System:
                 observable.add(f"{rule_set.name}_scale")
                 observable.add(f"{rule_set.name}_capability_scale")
             for capacity in obj.capacities:
-                observable.add(f"{capacity.name}_content")
+                observable.add(_content_attribute(capacity.name))
                 observable.add(f"{capacity.name}_fill")
                 for entry in capacity.flows:
-                    observable.add(f"{capacity.name}_content_{entry.name}")
+                    observable.add(_content_attribute(capacity.name, entry.name))
                     observable.add(f"{capacity.name}_fill_{entry.name}")
                     if capacity.publishes_ratios:
                         observable.add(f"{capacity.name}_ratio_{entry.name}")
