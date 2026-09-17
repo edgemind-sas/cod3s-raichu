@@ -207,6 +207,18 @@ UNCARRIED_SECTIONS = {
         "a capacity bound, a temporised or triggered output, a guarded rule "
         "set) and declares none of its own"
     ),
+    "mixtures": (
+        "a group of continuous inputs drawn TOGETHER at one volumetric rate "
+        "(muscadet's `add_mixture_in`, R51): a machine displacing a VOLUME of "
+        "whatever the volume it draws from holds, what leaves per constituent "
+        "being fixed by the composition of that volume rather than declared. "
+        "Every rate this layer carries is a rate PER FLOW -- a rule's `cons`, "
+        "a source's `rate` -- so a group of two constituents read here would "
+        "become two independent demands, which is two degrees of freedom "
+        "where the physics has one and is the very model R51 exists to "
+        "refuse. Nothing stands in its place: a model that ventilates belongs "
+        "on the reference engine until this layer carries the group"
+    ),
 }
 
 #: Component-level keys carrying no counterpart, refused as soon as they ask for

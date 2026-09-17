@@ -186,6 +186,79 @@ def test_the_class_a_declaration_was_read_back_from_is_informational():
     assert declare.check_spec(a_heat_pump(source_cls="HeatPump")) == "PUMP"
 
 
+# --- a mixture group: one volumetric rate for several constituents ----
+
+#: A group as muscadet's `add_mixture_in` declares one (R51): the flows
+#: are drawn TOGETHER, and `flow_rate` is one VOLUME per unit of time for
+#: the whole group, not a rate per flow. What leaves per constituent is
+#: not declarable at all -- it is fixed by the composition of the volume
+#: drawn from.
+MIXTURE_GROUP = {"name": "extract", "flows": ["elec"], "flow_rate": 50.0}
+
+
+def test_the_mixture_section_muscadet_writes_on_every_component_is_accepted_empty():
+    """muscadet 5.5.0 writes `mixtures` on EVERY flow component, `[]`
+    included and without pruning. So a reader refusing the key by name
+    refuses every document that muscadet exports, at the first component
+    it meets, whether or not anything in the model ventilates."""
+    assert declare.check_spec(a_heat_pump(mixtures=[])) == "PUMP"
+
+
+def test_a_declared_mixture_group_is_refused_naming_the_section():
+    """The other half, and the reason the acceptance above is not a
+    silence: a group is one rate for several constituents, and every rate
+    this layer carries is a rate per flow. Read as two demands it would
+    give the model two degrees of freedom where the physics has one, and
+    return a trajectory that is wrong rather than absent."""
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.check_spec(a_heat_pump(mixtures=[MIXTURE_GROUP]))
+
+    message = str(raised.value)
+    assert "mixtures" in message
+    assert "PUMP" in message
+    # The mechanism it names in muscadet, so the refusal is traceable to
+    # the declaration that provoked it...
+    assert "add_mixture_in" in message
+    # ...and what the seam does not carry, rather than a bare "unknown".
+    assert "unknown declaration key" not in message
+
+
+def test_a_mixture_group_is_refused_on_the_build_too_and_not_only_on_the_check():
+    """`check_spec` and `build_component` share one expansion, so a
+    refusal reachable from the mapping cannot be validated away by
+    building instead of checking."""
+    system = mu.System(name="ventilated")
+
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.build_component(system, a_heat_pump(mixtures=[MIXTURE_GROUP]))
+
+    assert "mixtures" in str(raised.value)
+
+
+def test_the_empty_mixture_section_builds_the_model_it_built_before_the_key():
+    """What "accepted" has to mean: not that the document loads, but that
+    it loads as the SAME model. The two documents differ by the section
+    muscadet added and by nothing else, so the bodies they build are
+    identical byte for byte -- an acceptance that quietly changed a
+    default would pass a load and fail here."""
+    before = {
+        "version": declare.SYSTEM_SPEC_VERSION,
+        "name": "ventilated",
+        "components": {"PUMP": a_heat_pump()},
+        "connections": [],
+    }
+    after = {
+        "version": declare.SYSTEM_SPEC_VERSION,
+        "name": "ventilated",
+        "components": {"PUMP": a_heat_pump(mixtures=[])},
+        "connections": [],
+    }
+
+    assert json.dumps(declare.build_document(after), sort_keys=True) == json.dumps(
+        declare.build_document(before), sort_keys=True
+    )
+
+
 # --- section and entry shapes -----------------------------------------
 
 

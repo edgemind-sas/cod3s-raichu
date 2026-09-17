@@ -558,6 +558,37 @@ Where an engine does what muscadet defines but does it *otherwise*, the
 statement belongs to muscadet's own conformance registry rather than here:
 `python -m muscadet.conformance raichu`.
 
+## A machine that moves a mixture, and the section it is declared in
+
+muscadet 5.5.0 added `add_mixture_in` (R51), and its read-back writes a
+`mixtures` section on **every** flow component, `[]` included. The key is
+therefore read the way `measurements_out` and `automata` are: **accepted while
+it declares nothing**, refused as soon as it declares something. A reader
+refusing it by name would refuse the whole corpus at the first component it
+meets, ventilated or not, which is what a refusal keyed on the *presence* of a
+key always costs.
+
+A document that declares no group builds exactly the model it built before the
+section existed, and that is pinned rather than intended: the two documents
+build the same body, byte for byte.
+
+A **non-empty** group is refused, by the name of its section, and the refusal
+is not a spelling gap waiting to be closed. A group is one volumetric rate `R`
+for several constituents, the split being fixed by the composition of the
+volume drawn from and by nothing the group declares:
+
+```text
+out_f  =  R . m_f / sum_g ( m_g . w_g )
+```
+
+Every rate this layer carries is a rate **per flow**: a rule's `cons`, a
+source's `rate`. Reading a group of two constituents as two independent
+demands would give the model two degrees of freedom where the physics has one,
+which is the very model R51 exists to refuse, so accepting it in silence would
+return a trajectory and a wrong one. The refusal names the component and the
+section, says what the seam does not carry, and says what stands in its place:
+today, nothing but the reference engine.
+
 ## What replaces `cod3s.ComponentInstance.to_bkd_raichu`
 
 `cod3s` carried a second backend on its component specification: a
