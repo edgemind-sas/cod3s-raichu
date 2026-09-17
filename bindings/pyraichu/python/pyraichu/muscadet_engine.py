@@ -26,6 +26,16 @@ The run parameters arrive BESIDE it, in cod3s's own vocabulary
 describe a system. :func:`simulate` translates them into a RAICHU Monte-Carlo:
 the schedule becomes the sample instants and its last instant the horizon.
 
+Beside them again, and beside the document too, travels the one run keyword
+muscadet spells itself: :data:`RUN_TARGETS`, the feared events this run stops
+at. It is not a run PARAMETER -- ``_run_parameters`` refuses it inside the
+parameters, and says so -- because the same system is run twice, free-cycling
+for its availability figures and first-occurrence for its sequences, and a
+section of the document would make those two runs two different systems.
+muscadet checks the names against the declaration; what is left here is the
+translation into what RAICHU stops at, an automaton and a state, which is the
+half only an engine can spell.
+
 `pyraichu.muscadet` is where the declaration lands
 --------------------------------------------------
 The authoring layer that mirrors muscadet's idioms is no longer a second
@@ -47,7 +57,7 @@ muscadet is the thing doing the calling.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from . import MODEL_ENVELOPE_KEY, Model, load_model, model_body, monte_carlo, seal
 from . import interactive as open_interactive
@@ -56,11 +66,13 @@ from .declare import (
     build_document,
     derived_out_states,
     event_automaton,
+    event_occurrence_state,
 )
 
 __all__ = [
     "ENGINE_DESCRIPTION",
     "ENGINE_NAME",
+    "RUN_TARGETS",
     "build_model",
     "isimu_start",
     "register",
@@ -79,6 +91,19 @@ ENGINE_DESCRIPTION = (
     "RAICHU, a native Rust engine for hybrid (PDMP) simulation, through its "
     "pyraichu binding"
 )
+
+#: The one run keyword muscadet spells itself (``muscadet.engine.RUN_TARGETS``):
+#: the events a run stops at, handed over BESIDE the document because a target
+#: configures a run and does not describe a system. One system is run twice --
+#: free-cycling for its availability figures, first-occurrence for its
+#: sequences -- and a section of the declaration would make those two runs two
+#: different systems.
+#:
+#: Written out rather than imported from muscadet, which importing pyraichu
+#: must not do. The two spellings cannot drift in silence: a keyword muscadet
+#: sent under another name would fall through to :func:`pyraichu.monte_carlo`
+#: and be refused there, by name.
+RUN_TARGETS = "targets"
 
 #: Run-parameter keys that describe HOW the reference engine draws its
 #: replicas, TRACES them or REPORTS them, rather than what is computed, and
@@ -207,6 +232,23 @@ def register() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _event_specs(components: Any) -> dict[str, Mapping[str, Any]]:
+    """The EVENT declarations a document carries, by the name they answer to.
+
+    The one reading of "which of these components is an event", so a state
+    indicator, a condition leaf and a sequence target all resolve through
+    :func:`pyraichu.declare.event_automaton` rather than through three tests
+    that can drift.
+    """
+    if not isinstance(components, Mapping):
+        return {}
+    return {
+        str(entry.get("name") or name): entry
+        for name, entry in components.items()
+        if event_automaton(entry) is not None
+    }
+
+
 def _events(components: Any) -> dict[str, tuple[str, set[str]]]:
     """The EVENTS a document declares, by name: their automaton and its states.
 
@@ -215,14 +257,10 @@ def _events(components: Any) -> dict[str, tuple[str, set[str]]]:
     and a condition leaf watching the same event resolve through one reading
     rather than two that can drift.
     """
-    if not isinstance(components, Mapping):
-        return {}
-    found = {}
-    for name, entry in components.items():
-        automaton = event_automaton(entry)
-        if automaton is not None:
-            found[str(entry.get("name") or name)] = automaton
-    return found
+    return {
+        name: event_automaton(entry)
+        for name, entry in _event_specs(components).items()
+    }
 
 
 def _derived_states(components: Any) -> dict[str, set[str]]:
@@ -404,7 +442,88 @@ def _merge_indicators(
             )
 
 
-def build_model(spec: Mapping[str, Any]) -> Model:
+def _target_names(targets: Any) -> list[str]:
+    """The event names a run declares as its sequence targets, read as a
+    vocabulary and before any document is involved.
+
+    muscadet reads them the same way on its side and hands over what it read
+    (:data:`RUN_TARGETS`), so on the seam this is a re-reading of something
+    already sound. It is not redundant, because :func:`build_model` is a
+    public door of its own: the platform reaches for the MODEL, to give it to
+    a second engine call the seam has no kind for, and a caller coming in that
+    way has crossed no validation at all.
+
+    **A bare string is refused rather than iterated.** ``"PANNE_OND"`` taken
+    as a sequence is nine targets named ``P``, ``A``, ``N``..., so the mistake
+    would come back as nine sentences that never mention it.
+    """
+    if targets is None:
+        return []
+    if isinstance(targets, str):
+        raise SystemSpecError(
+            f"`{RUN_TARGETS}`={targets!r} is one string where a run declares a "
+            f"LIST of event names: pass [{targets!r}], a bare name being read "
+            f"one target per letter"
+        )
+    if not isinstance(targets, (list, tuple)):
+        raise SystemSpecError(
+            f"`{RUN_TARGETS}` is the list of events a run stops at, got "
+            f"{type(targets).__name__}"
+        )
+    names: list[str] = []
+    for entry in targets:
+        if not isinstance(entry, str) or not entry:
+            raise SystemSpecError(
+                f"`{RUN_TARGETS}` names each target by the name of its event, "
+                f"got {entry!r}"
+            )
+        if entry not in names:
+            names.append(entry)
+    return names
+
+
+def _targets(components: Any, names: Iterable[str]) -> list[dict[str, Any]]:
+    """The model's ``targets`` section, from the event names a run declares.
+
+    The translation muscadet leaves to the engine, and the only half of the
+    vocabulary that is RAICHU's: muscadet names the EVENT, this names the
+    automaton and the state whose activation ends and labels a trajectory.
+    Both halves are needed because the two engines spell that state
+    differently, and a name is the one thing they agree on.
+
+    Resolved through :mod:`pyraichu.declare`, where an event's three names are
+    written down: :func:`~pyraichu.declare.event_automaton` for the automaton
+    and :func:`~pyraichu.declare.event_occurrence_state` for the state a
+    trajectory ends at. Nothing about how an event is named is restated here,
+    which is what keeps a renamed one honoured -- a target on a state no
+    automaton holds is a campaign that stops at nothing.
+    """
+    declared = _event_specs(components)
+    known = sorted(declared) or ["<none>"]
+    entries = []
+    for name in names:
+        spec = declared.get(name)
+        if spec is None:
+            raise SystemSpecError(
+                f"the run stops at {name!r}, which this document declares no "
+                f"EVENT under: a sequence target ends a trajectory at a feared "
+                f"event's occurrence, and there is nothing here to reach. The "
+                f"events this document declares are {known}"
+            )
+        entries.append(
+            {
+                "name": name,
+                "component": name,
+                "automaton": event_automaton(spec)[0],
+                "state": event_occurrence_state(spec),
+            }
+        )
+    return entries
+
+
+def build_model(
+    spec: Mapping[str, Any], targets: Sequence[str] | None = None
+) -> Model:
     """The RAICHU model a muscadet system declaration describes.
 
     The whole translation, in one place and reachable without running
@@ -416,15 +535,32 @@ def build_model(spec: Mapping[str, Any]) -> Model:
     modes, and only the first are part of the system's wiring. The second are
     expanded onto the first once they exist, which is the document's scale and
     not the system's.
+
+    ``targets`` is the run's sequence targets (:data:`RUN_TARGETS`), named by
+    their events, and it is taken HERE and not only on :func:`simulate`
+    because the model is a thing a caller legitimately asks for: the platform
+    builds it once and hands it to two engine calls, the Monte-Carlo campaign
+    and :func:`pyraichu.analyse_sequences`, which the seam has no kind for. A
+    door that existed on the run alone would leave that caller writing the
+    ``targets`` section by hand, which is exactly the workaround this replaces.
+
+    The section is written and nothing else: whether the trajectories actually
+    STOP there is the run's business (``stop_at_targets``, see
+    :func:`simulate`), and a model carrying targets is read by the sequence
+    analysis either way.
     """
     document = build_document(dict(spec))
     components = spec.get("components")
+    body = model_body(document)
     _merge_indicators(
-        model_body(document),
+        body,
         spec.get("indicators") or [],
         _events(components),
         _derived_states(components),
     )
+    declared = _targets(components, _target_names(targets))
+    if declared:
+        body["targets"] = list(body.get("targets") or []) + declared
     # Re-sealed rather than returned as it stands: the required-feature list is
     # derived from the body, and the body has just been written to.
     if MODEL_ENVELOPE_KEY in document:
@@ -527,13 +663,28 @@ def simulate(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
     The schedule's instants are the sample instants and its last one the
     horizon, which is what makes the two engines answer at the same dates.
 
+    ``targets`` is :data:`RUN_TARGETS`, muscadet's own run keyword: the events
+    this run stops at, named by their events and translated into the model's
+    ``targets`` section by :func:`build_model`. It is read HERE rather than
+    passed on, because :func:`pyraichu.monte_carlo` has no such argument and
+    would refuse it by name.
+
+    **``stop_at_targets`` is DERIVED from it, and an explicit one still
+    wins.** A target that does not stop the trajectory is not a target: it is
+    what the reference engine does without being asked (PyCATSHOO stops
+    unconditionally on an ``addTarget``), and it is what the caller who
+    declared a feared event means. The two RAICHU knobs stay separable
+    underneath -- the model carries the targets, the run decides whether it
+    latches -- so a study that really wants a free-cycling campaign over a
+    model carrying targets says ``stop_at_targets=False`` and gets it.
+
     ``postpone_post_proc`` is accepted and does nothing: on the reference path
     it defers writing the indicator values back onto the live system, and here
     there is nothing to defer -- the estimates ARE the answer, handed back to
     the caller. Every other keyword travels through to
     :func:`pyraichu.monte_carlo`, so an engine knob (``threads``,
-    ``quantiles``, ``rtol``, ``stop_at_targets``...) reaches the engine that
-    understands it and a misspelling is refused there, by name.
+    ``quantiles``, ``rtol``...) reaches the engine that understands it and a
+    misspelling is refused there, by name.
 
     Returns
     -------
@@ -543,9 +694,11 @@ def simulate(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
         returns nothing, this one returns the estimates.
     """
     kwargs.pop("postpone_post_proc", None)
+    targets = _target_names(kwargs.pop(RUN_TARGETS, None))
     nb_runs, instants, seed = _run_parameters(params)
+    kwargs.setdefault("stop_at_targets", bool(targets))
     return monte_carlo(
-        build_model(spec),
+        build_model(spec, targets),
         nb_runs=nb_runs,
         t_max=instants[-1],
         samples=instants,
@@ -565,6 +718,15 @@ def isimu_start(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
     replicas and no schedule; a horizon is honoured when the schedule declares
     one.
 
+    ``targets`` (:data:`RUN_TARGETS`) is accepted, and muscadet hands it to
+    both kinds of run on purpose: a keyword one entry point takes and the
+    other dies on would make a demonstration and a campaign diverge on the
+    very study they are meant to be two views of. It reaches the same
+    :func:`build_model` as a batch run, so the session is opened over the same
+    model -- and nothing stops the stepping, a session having no
+    ``stop_at_targets`` to set. Whoever drives it decides what reaching a
+    feared event means, which is the point of driving by hand.
+
     Returns
     -------
     pyraichu.Interactive
@@ -573,8 +735,9 @@ def isimu_start(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
         driver of both needs is a session it can step, and the two are stepped
         differently.
     """
+    targets = _target_names(kwargs.pop(RUN_TARGETS, None))
     declared = _as_mapping(params)
     instants = _instants(declared.get("schedule"))
     if instants:
         kwargs.setdefault("t_max", instants[-1])
-    return open_interactive(build_model(spec), **kwargs)
+    return open_interactive(build_model(spec, targets), **kwargs)

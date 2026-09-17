@@ -69,6 +69,76 @@ behaved differently one step at a time than in bulk would be a divergence
 nothing reports. It returns a `pyraichu.Interactive` session, stepped
 RAICHU's way and not cod3s's.
 
+## The feared events a run stops at
+
+A safety study does not only ask how often an undesired event occurs, it asks
+which chains of failures lead there. Both questions are asked of **one**
+system: the availability figures come off a free-cycling campaign, the
+sequences off a campaign where every trajectory stops at the event's first
+occurrence. So the feared events are a parameter of the **run** and not a
+section of the document -- a `targets` section in the declaration would make
+those two campaigns two different systems.
+
+muscadet spells that one run keyword itself, `muscadet.engine.RUN_TARGETS`,
+and it travels beside the document:
+
+<!-- skip -->
+```python
+system.add_component(
+    cls="ObjEvent", name="EVT_LOSS",
+    cond=[[{"attr": "is_ok_fed_in", "obj": "T", "value": False}]])
+
+estimates = system.simulate(params, engine="raichu", targets=["EVT_LOSS"])
+```
+
+A target names the **event**, and nothing but the event. muscadet checks the
+name against the declaration before the engine is reached, so a typo is
+refused rather than run; what reaches RAICHU is a name to translate into what
+it actually stops at, an automaton and a state, which the two engines spell
+differently. The translation is read off the event's own declaration
+(`pyraichu.declare.event_automaton` and `event_occurrence_state`), so an event
+that renamed its automaton or its occurrence state is honoured under the new
+names.
+
+**A target stops the trajectory, and that is derived rather than asked for.**
+`pyraichu.monte_carlo` carries `stop_at_targets` as a knob of its own, and the
+seam sets it from the presence of targets: a target that does not stop the
+trajectory is not a target, and it is what the reference engine does without
+being told (PyCATSHOO stops unconditionally on an `addTarget`). An explicit
+`stop_at_targets=` still wins, so a study that really wants a free-cycling
+campaign over a model carrying targets says so and gets it.
+
+What the keyword is worth is the distance between two runs of one model. A
+block failing at 0.1 and repaired at 0.5 plateaus at its stationary
+unavailability, 0.1 / 0.6 = 0.167, so a free-cycling campaign cannot approach
+1 at any instant, while a first-occurrence campaign latches and climbs
+(2000 replicas, seed 4242, both engines agreeing within Monte-Carlo noise):
+
+| instant | 0 | 5 | 10 | 25 | 50 |
+|---|---|---|---|---|---|
+| free-cycling | 0.000 | 0.154 | 0.162 | 0.174 | 0.169 |
+| with a target | 0.000 | 0.386 | 0.624 | 0.910 | 0.991 |
+
+`pyraichu.muscadet_engine.build_model` takes the same keyword, and not only
+the run does. A study reading sequences needs the **model** twice: once for
+the campaign and once for `pyraichu.analyse_sequences`, which the seam has no
+kind of run for. Building it once is what lets both calls see the same targets:
+
+<!-- skip -->
+```python
+from pyraichu import analyse_sequences
+from pyraichu.muscadet_engine import build_model
+
+model = build_model(muscadet.system_spec(system), targets=["EVT_LOSS"])
+cuts = analyse_sequences(model, nb_runs=2000, t_max=50.0, seed=4242)
+```
+
+An interactive session accepts the keyword too, muscadet passing it to both
+kinds of run: one entry point taking a keyword the other dies on would make a
+demonstration and a campaign disagree about the study they are two views of.
+A session has no `stop_at_targets` to set, so reaching the event stops nothing
+and whoever drives the session decides what it means.
+
 ## Where the declaration lands
 
 `pyraichu.muscadet` used to be a second authoring interface, mirroring
