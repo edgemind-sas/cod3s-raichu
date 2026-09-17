@@ -560,7 +560,7 @@ statement belongs to muscadet's own conformance registry rather than here:
 
 ## A machine that moves a mixture, and the section it is declared in
 
-muscadet 5.5.0 added `add_mixture_in` (R51), and its read-back writes a
+muscadet 5.4.0 added `add_mixture_in` (R51), and its read-back writes a
 `mixtures` section on **every** flow component, `[]` included. The key is
 therefore read the way `measurements_out` and `automata` are: **accepted while
 it declares nothing**, refused as soon as it declares something. A reader

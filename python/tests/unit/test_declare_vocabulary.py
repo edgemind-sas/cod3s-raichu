@@ -197,7 +197,7 @@ MIXTURE_GROUP = {"name": "extract", "flows": ["elec"], "flow_rate": 50.0}
 
 
 def test_the_mixture_section_muscadet_writes_on_every_component_is_accepted_empty():
-    """muscadet 5.5.0 writes `mixtures` on EVERY flow component, `[]`
+    """muscadet 5.4.0 writes `mixtures` on EVERY flow component, `[]`
     included and without pruning. So a reader refusing the key by name
     refuses every document that muscadet exports, at the first component
     it meets, whether or not anything in the model ventilates."""
