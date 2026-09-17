@@ -763,3 +763,431 @@ def test_an_interactive_session_takes_the_same_declaration():
     fired = session.step()
     assert fired is not None
     assert session.time == FAILURE_DATES[0]
+
+
+# --- 5. the sequence targets a run declares beside the document --------
+#
+# muscadet spells one run keyword itself, `muscadet.engine.RUN_TARGETS`: the
+# feared events a run stops at. It names the EVENT and stops there, because
+# what a trajectory stops at -- an automaton and a state -- is spelled
+# differently by the two engines; translating it is this seam's half of the
+# vocabulary. The model below is the running example of that door, and it is
+# the same one muscadet's `tests/test_engine_run_targets_001.py` measures.
+
+#: The feared event: the flow no longer reaches the far end.
+FEARED_EVENT = "EVT_LOSS"
+
+FAILURE_RATE = 0.1
+REPAIR_RATE = 0.5
+
+#: What a FREE-CYCLING campaign of this model plateaus at, and therefore the
+#: ceiling it cannot pass at any instant: the block's stationary
+#: unavailability, 0.1 / 0.6. It is the discriminator of this whole section,
+#: and it is a closed form rather than a tuned threshold -- a curve under it is
+#: a run whose target reached nobody, whatever the seed.
+FREE_CYCLING_CEILING = FAILURE_RATE / (FAILURE_RATE + REPAIR_RATE)
+
+CAMPAIGN_RUNS = 2000
+CAMPAIGN_SCHEDULE = [0.0, 5.0, 10.0, 25.0, 50.0]
+CAMPAIGN_SEED = 4242
+
+
+def campaign_declaration(occ_state_name=None):
+    """The running example, as `muscadet.declare.system_spec` writes it.
+
+    A source, one repairable block, a target that needs it, and an event on
+    the loss of the flow at the far end -- watched by a STATE indicator, an
+    event holding no variable to watch. Written out field for field, like
+    every other document in this module: a test that built it from muscadet
+    would need muscadet installed to say anything at all. Dumped from the real
+    thing on 2026-09-15 and transcribed, so what is exercised here is what
+    actually crosses.
+    """
+    event = {
+        "name": FEARED_EVENT,
+        "kind": "two_state_mode",
+        "cls": "ObjEvent",
+        "cond": [[{"attr": f"{FLOW}_fed_in", "obj": "Tgt", "value": False}]],
+    }
+    if occ_state_name is not None:
+        event["occ_state_name"] = occ_state_name
+    return {
+        "version": "1.0.1",
+        "name": "RunTargetSys",
+        "components": {
+            "Src": _component("Src", "Source", [_flow_out(prod_default=True)]),
+            "Blk": _component(
+                "Blk",
+                "Block",
+                [_flow_in(), _flow_out(prod_cond=[[{"name": FLOW, "port": "in"}]])],
+                [
+                    {
+                        "cls": "exp",
+                        "name": "failure",
+                        "failure_state": "occ",
+                        "failure_cond": True,
+                        "failure_rate": FAILURE_RATE,
+                        "failure_effects": [[FLOW, False]],
+                        "failure_param_name": "lambda",
+                        "repair_state": "rep",
+                        "repair_cond": True,
+                        "repair_rate": REPAIR_RATE,
+                        "repair_effects": [],
+                        "repair_param_name": "mu",
+                    }
+                ],
+            ),
+            "Tgt": _component("Tgt", "Target", [_flow_in(logic="and")]),
+            FEARED_EVENT: event,
+        },
+        "connections": [
+            {
+                "source": source,
+                "source_box": f"{FLOW}_out",
+                "target": target,
+                "target_box": f"{FLOW}_in",
+                "flow": FLOW,
+            }
+            for source, target in (("Src", "Blk"), ("Blk", "Tgt"))
+        ],
+        "indicators": [
+            {
+                "name": f"{FEARED_EVENT}_occ",
+                "label": f"{FEARED_EVENT}_occ",
+                "measure": "value",
+                "stats": ["mean"],
+                "component": FEARED_EVENT,
+                "operator": "==",
+                "value_test": True,
+                "state": occ_state_name or "occ",
+                "kind": "PycSTIndicator",
+            }
+        ],
+    }
+
+
+def campaign_targets(spec, **kwargs):
+    """The occurrence indicator's mean at each instant, for one campaign."""
+    result = engine.simulate(
+        spec,
+        {
+            "nb_runs": CAMPAIGN_RUNS,
+            "schedule": CAMPAIGN_SCHEDULE,
+            "seed": CAMPAIGN_SEED,
+        },
+        **kwargs,
+    )
+    return list(result.indicators[f"{FEARED_EVENT}_occ"].mean)
+
+
+def model_targets(model):
+    return pyraichu.model_body(json.loads(model.json)).get("targets")
+
+
+# --- the vocabulary, before any document is involved -------------------
+
+
+def test_the_keyword_is_the_one_muscadet_spells():
+    """Restated rather than imported from muscadet, which this package must
+    not import. The two cannot drift in silence: a keyword arriving under
+    another name falls through to `monte_carlo` and is refused there, by
+    name."""
+    assert engine.RUN_TARGETS == "targets"
+
+
+def test_a_run_that_declares_nothing_declares_no_target():
+    assert engine._target_names(None) == []
+    assert engine._target_names([]) == []
+    assert engine._target_names(()) == []
+
+
+def test_a_bare_name_is_refused_rather_than_read_letter_by_letter():
+    """A string is iterable, and that is the whole danger: taken as a
+    sequence, `EVT_LOSS` is eight targets named `E`, `V`, `T`..., so the one
+    mistake made would come back as eight sentences that never mention it."""
+    with pytest.raises(declare.SystemSpecError, match="one string"):
+        engine._target_names(FEARED_EVENT)
+
+
+def test_what_is_not_a_list_of_names_is_refused_by_its_type():
+    with pytest.raises(declare.SystemSpecError, match="dict"):
+        engine._target_names({FEARED_EVENT: True})
+    with pytest.raises(declare.SystemSpecError, match="name of its event"):
+        engine._target_names([{"name": FEARED_EVENT}])
+    with pytest.raises(declare.SystemSpecError, match="name of its event"):
+        engine._target_names([""])
+
+
+def test_a_name_declared_twice_is_one_target_and_the_order_is_kept():
+    assert engine._target_names(["B", "A", "B"]) == ["B", "A"]
+
+
+# --- the model's `targets` section -------------------------------------
+
+
+def test_build_model_takes_the_same_vocabulary_and_writes_the_section():
+    """The criterion: one entry per name, resolved through the event's own
+    declaration."""
+    model = engine.build_model(campaign_declaration(), [FEARED_EVENT])
+    assert model_targets(model) == [
+        {
+            "name": FEARED_EVENT,
+            "component": FEARED_EVENT,
+            "automaton": "ev",
+            "state": "occ",
+        }
+    ]
+
+
+def test_a_target_is_resolved_through_the_names_the_event_renamed():
+    """Read through `pyraichu.declare.event_automaton` and the event's own
+    `occ_state_name`, not through the defaults: a modeller who renamed the
+    occurrence state would otherwise get a target on a state no automaton
+    holds, and a campaign that stops at nothing."""
+    spec = campaign_declaration(occ_state_name="reached")
+    spec["components"][FEARED_EVENT]["event_aut_name"] = "alarm"
+    assert model_targets(engine.build_model(spec, [FEARED_EVENT])) == [
+        {
+            "name": FEARED_EVENT,
+            "component": FEARED_EVENT,
+            "automaton": "alarm",
+            "state": "reached",
+        }
+    ]
+
+
+def test_a_run_declaring_no_target_builds_the_model_it_always_built():
+    """The keyword is absent rather than empty when nobody asks, and the
+    document is untouched either way: one system, one declaration, two
+    campaigns."""
+    plain = engine.build_model(campaign_declaration())
+    assert model_targets(plain) == []
+    with_none = engine.build_model(campaign_declaration(), None)
+    assert with_none.json == plain.json
+
+
+def test_a_target_naming_no_event_is_refused_with_the_events_there_are():
+    """`build_model` is a public door of its own -- the platform reaches for
+    the MODEL, to hand it to a second engine call the seam has no kind for --
+    so a caller who crossed none of muscadet's checks is answered here."""
+    with pytest.raises(declare.SystemSpecError) as refused:
+        engine.build_model(campaign_declaration(), ["PANNE_OND"])
+
+    message = str(refused.value)
+    assert "PANNE_OND" in message and "declares no" in message
+    assert FEARED_EVENT in message
+
+
+def test_a_target_naming_a_component_that_is_no_event_is_refused():
+    """A target is reached at an event's occurrence, and a block has none."""
+    with pytest.raises(declare.SystemSpecError, match="Blk"):
+        engine.build_model(campaign_declaration(), ["Blk"])
+
+
+def test_the_state_a_target_ends_at_is_read_where_the_event_names_it():
+    """One reading, not two. `event_automaton` says which two states an event
+    holds, `event_occurrence_state` says which of them it has OCCURRED in, and
+    a target needs the second: a trajectory ends at the occurrence, not at
+    either of the two. Recomputing it here from `occ_state_name` would be a
+    second copy of the convention, and the kind that agrees until the day it
+    does not."""
+    spec = campaign_declaration(occ_state_name="reached")
+    event = spec["components"][FEARED_EVENT]
+    assert declare.event_occurrence_state(event) == "reached"
+    assert declare.event_occurrence_state(spec["components"]["Blk"]) is None
+    assert model_targets(engine.build_model(spec, [FEARED_EVENT]))[0]["state"] == (
+        declare.event_occurrence_state(event)
+    )
+
+
+# --- the run: the keyword, and what it decides -------------------------
+
+
+def test_simulate_accepts_the_keyword_muscadet_hands_it():
+    """The criterion: muscadet passes `targets=("EVT_LOSS",)` beside the
+    document, and the run neither refuses it nor lets it fall through to
+    `monte_carlo`, which has no such argument."""
+    result = engine.simulate(
+        campaign_declaration(),
+        {"nb_runs": 1, "schedule": [0.0, 5.0], "seed": 1},
+        targets=(FEARED_EVENT,),
+    )
+    assert len(list(result.indicators[f"{FEARED_EVENT}_occ"].mean)) == 2
+
+
+def test_the_targets_reach_the_model_the_run_is_given(monkeypatch):
+    """What the run hands the engine, read where it is handed over."""
+    seen = {}
+
+    def spy(model, **kwargs):
+        seen["targets"] = model_targets(model)
+        seen["kwargs"] = kwargs
+        raise SystemExit
+
+    monkeypatch.setattr(engine, "monte_carlo", spy)
+    with pytest.raises(SystemExit):
+        engine.simulate(
+            campaign_declaration(),
+            {"nb_runs": 1, "schedule": [0.0, 5.0]},
+            targets=[FEARED_EVENT],
+        )
+    assert seen["targets"] == [
+        {
+            "name": FEARED_EVENT,
+            "component": FEARED_EVENT,
+            "automaton": "ev",
+            "state": "occ",
+        }
+    ]
+    assert engine.RUN_TARGETS not in seen["kwargs"], "not passed on to the engine"
+
+
+@pytest.mark.parametrize(
+    ("targets", "expected"),
+    [(None, False), ([], False), ([FEARED_EVENT], True)],
+    ids=["silent", "empty", "declared"],
+)
+def test_stop_at_targets_is_derived_from_the_presence_of_targets(
+    monkeypatch, targets, expected
+):
+    """The decision, asserted: a target that does not stop the trajectory is
+    not a target. It is what the reference engine does without being asked --
+    PyCATSHOO stops unconditionally on an `addTarget` -- and what the caller
+    who declared a feared event means."""
+    seen = {}
+    monkeypatch.setattr(
+        engine,
+        "monte_carlo",
+        lambda model, **kwargs: seen.update(kwargs) or SystemExit,
+    )
+    keywords = {} if targets is None else {"targets": targets}
+    engine.simulate(
+        campaign_declaration(), {"nb_runs": 1, "schedule": [0.0, 5.0]}, **keywords
+    )
+    assert seen["stop_at_targets"] is expected
+
+
+def test_an_explicit_stop_at_targets_still_wins():
+    """The two RAICHU knobs stay separable underneath -- the model carries the
+    targets, the run decides whether it latches -- so a study that really
+    wants a free-cycling campaign over a model carrying targets says so and
+    gets it."""
+    means = campaign_targets(
+        campaign_declaration(), targets=[FEARED_EVENT], stop_at_targets=False
+    )
+    assert max(means) < FREE_CYCLING_CEILING + 0.05, (
+        f"asking for no early stop gave {means}, which passes the free-cycling "
+        f"ceiling {FREE_CYCLING_CEILING:.3f}: the explicit knob was overridden"
+    )
+
+
+def test_a_target_inside_the_run_parameters_is_still_refused():
+    """One door, not two. A target is a keyword of the RUN beside the
+    parameters, and the refusal `_run_parameters` already carried says exactly
+    that -- opening a second spelling for one thing is how two vocabularies
+    for one notion start."""
+    with pytest.raises(declare.SystemSpecError) as refused:
+        engine.simulate(
+            campaign_declaration(),
+            {
+                "nb_runs": 1,
+                "schedule": [0.0, 5.0],
+                "targets": [FEARED_EVENT],
+            },
+        )
+    assert "beside the parameters" in str(refused.value)
+
+
+# --- the campaign: the latch, and the sequences it makes readable ------
+
+
+def test_a_campaign_with_a_target_latches_at_the_first_occurrence():
+    """The criterion, and the discriminator is a closed form rather than a
+    tuned threshold.
+
+    The block fails at 0.1 and repairs at 0.5, so a campaign that does NOT
+    stop at the event plateaus at its stationary unavailability, 0.167, and
+    cannot approach 1 at any instant. A curve climbing past that ceiling is a
+    run whose trajectories stopped at the feared event and whose indicator
+    latched from there to the horizon; a curve under it is a run whose target
+    reached nobody.
+    """
+    means = campaign_targets(campaign_declaration(), targets=[FEARED_EVENT])
+    assert means[0] == 0.0, "nothing has occurred at t = 0"
+    assert means == sorted(means), f"a latched indicator never comes back down: {means}"
+    assert means[-1] > 0.95, (
+        f"the campaign ended at {means[-1]:.3f}: over 50 units at a failure "
+        f"rate of 0.1 almost every trajectory meets the event"
+    )
+
+
+def test_the_same_campaign_without_a_target_free_cycles_under_the_ceiling():
+    """The other half of the discriminator, on the same document: what the
+    keyword is worth is the difference between these two runs."""
+    means = campaign_targets(campaign_declaration())
+    assert max(means) < FREE_CYCLING_CEILING + 0.03, (
+        f"a free-cycling campaign cannot pass {FREE_CYCLING_CEILING:.3f} at "
+        f"any instant, and this one reached {max(means):.3f}"
+    )
+
+
+def test_the_sequences_of_the_same_model_are_not_empty():
+    """The second engine call the seam has no kind for, and the reason
+    `build_model` takes the vocabulary: the platform builds the model once and
+    hands it to the campaign and to the sequence analysis. Without a `targets`
+    section this returns the trajectories' worth of nothing -- no end cause,
+    no events -- on a run that exits cleanly."""
+    model = engine.build_model(campaign_declaration(), [FEARED_EVENT])
+    cuts = pyraichu.analyse_sequences(model, nb_runs=200, t_max=50.0, seed=CAMPAIGN_SEED)
+    assert cuts, "a model declaring a target yields sequences"
+    reached = [cut for cut in cuts if cut["end_cause"] == FEARED_EVENT]
+    assert reached, f"no sequence ends at the feared event: {cuts}"
+    assert all(cut["events"] for cut in reached), "a sequence names what led there"
+    # The rest are the trajectories that never met the event before the
+    # horizon, which is a physical answer and not a missing target.
+    assert sum(cut["weight"] for cut in reached) > 0.9 * 200
+
+
+def test_the_same_model_without_a_target_ends_no_trajectory_anywhere():
+    """What the workaround this replaces was written against: the campaign
+    free-cycles, the sequence file comes back with nothing in it, and the run
+    exits 0."""
+    model = engine.build_model(campaign_declaration())
+    cuts = pyraichu.analyse_sequences(model, nb_runs=50, t_max=50.0, seed=CAMPAIGN_SEED)
+    assert all(cut["end_cause"] is None for cut in cuts)
+
+
+# --- the interactive entry point ---------------------------------------
+
+
+def test_an_interactive_session_does_not_die_on_the_keyword():
+    """muscadet passes `targets` to BOTH kinds of run, deliberately: a keyword
+    one entry point takes and the other dies on would make a demonstration and
+    a campaign diverge on the study they are two views of."""
+    session = engine.isimu_start(
+        campaign_declaration(),
+        {"nb_runs": 1, "schedule": [0.0, 50.0]},
+        targets=[FEARED_EVENT],
+    )
+    assert session.time == 0.0
+    assert session.step() is not None
+
+
+def test_reaching_the_feared_event_does_not_end_an_interactive_session():
+    """What RAICHU does with a target step by step, stated rather than left
+    open: the model carries it, and nothing stops the stepping. A session has
+    no `stop_at_targets` to set, and whoever drives one by hand is who decides
+    what reaching a feared event means -- which is the point of driving it by
+    hand."""
+    session = engine.isimu_start(
+        campaign_declaration(),
+        {"nb_runs": 1, "schedule": [0.0, 50.0]},
+        targets=[FEARED_EVENT],
+    )
+    automaton = f"{FEARED_EVENT}.ev"
+    assert session.state(automaton) == "not_occ"
+    while session.state(automaton) != "occ":
+        assert session.step() is not None, "the event never occurred"
+    reached = session.time
+    assert session.step() is not None, "the session steps past its feared event"
+    assert session.time > reached

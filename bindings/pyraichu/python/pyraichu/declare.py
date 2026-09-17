@@ -148,6 +148,7 @@ __all__ = [
     "derived_out_states",
     "entry_call",
     "event_automaton",
+    "event_occurrence_state",
     "mode_object",
     "register_component_class",
 ]
@@ -2156,6 +2157,27 @@ def _mode_targets(spec: dict, vocabulary: _Vocabulary, where: str) -> list[str]:
     return [str(target) for target in targets]
 
 
+#: The three names an EVENT is built with when its declaration renames
+#: nothing: its automaton, the state it is in once it has occurred, and the
+#: state it is in until then. They are ``cod3s.ObjEvent``'s own defaults, and
+#: :func:`pyraichu.plugins.muscadet._expand_objevent` BUILDS under them, which
+#: is what makes the two layers spell an event alike. The builder holds its own
+#: copy -- it is the thing that constructs them, this is the thing that reads a
+#: declaration back -- so what the two share is the convention, not a constant.
+#: Everything that READS an event resolves here.
+_EVENT_AUTOMATON_NAME = "ev"
+_EVENT_OCC_STATE = "occ"
+_EVENT_NOT_OCC_STATE = "not_occ"
+
+
+def _is_event(spec: Any) -> bool:
+    """Whether a component declaration is an EVENT: self-hosted, so it names
+    no target, writes no attribute, and holds one automaton on itself."""
+    declared = spec.get("cls") if isinstance(spec, dict) else None
+    mode_class = MODE_CLASSES.get(declared) if isinstance(declared, str) else None
+    return mode_class is not None and mode_class.self_hosted
+
+
 def event_automaton(spec: Any) -> tuple[str, set[str]] | None:
     """The automaton an EVENT declaration hosts, and the two states it holds.
 
@@ -2173,17 +2195,35 @@ def event_automaton(spec: Any) -> tuple[str, set[str]] | None:
     states IDENTICALLY -- which is exactly what they do not do for a mode,
     whose automaton this layer names itself.
     """
-    declared = spec.get("cls") if isinstance(spec, dict) else None
-    mode_class = MODE_CLASSES.get(declared) if isinstance(declared, str) else None
-    if mode_class is None or not mode_class.self_hosted:
+    if not _is_event(spec):
         return None
     return (
-        str(spec.get("event_aut_name") or "ev"),
+        str(spec.get("event_aut_name") or _EVENT_AUTOMATON_NAME),
         {
-            str(spec.get("occ_state_name") or "occ"),
-            str(spec.get("not_occ_state_name") or "not_occ"),
+            event_occurrence_state(spec),
+            str(spec.get("not_occ_state_name") or _EVENT_NOT_OCC_STATE),
         },
     )
+
+
+def event_occurrence_state(spec: Any) -> str | None:
+    """The state an EVENT is in once it has OCCURRED, and ``None`` for
+    anything that is not an event.
+
+    :func:`event_automaton` says which two states an event holds and stops
+    there, membership being all an indicator or a condition leaf needs. What
+    needs this one is whatever has to reach the occurrence in particular, and
+    a sequence TARGET is that: a trajectory ends at the state the feared event
+    reaches, not at either of the two (:mod:`pyraichu.muscadet_engine`).
+
+    Read off the declaration rather than assumed, ``cod3s``'s own helper
+    hard-coding ``occ``: a modeller who renamed it would otherwise get a
+    target on a state no automaton holds, and a campaign that stops at
+    nothing.
+    """
+    if not _is_event(spec):
+        return None
+    return str(spec.get("occ_state_name") or _EVENT_OCC_STATE)
 
 
 def derived_out_states(spec: Any) -> set[str]:
