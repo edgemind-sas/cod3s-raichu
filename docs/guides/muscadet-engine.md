@@ -510,8 +510,19 @@ What is worth knowing about the shape:
 - **the order runs in three steps.** `build_document` builds the flow graph,
   expands the controllers onto it, then the modes — a mode reaches *into* a
   controller, so a mode expanded first would name an attribute the document
-  does not yet hold. `build_system` answers the flow graph alone and refuses a
-  document carrying controllers rather than dropping them;
+  does not yet hold. A mode may therefore name a controller among its
+  `targets`, which is the cyber scenario the shape exists for: an instrument
+  that is not destroyed but blinded, its `{output}_signal_available` clamped
+  while the reading goes on being right. `build_system` answers the flow graph
+  alone and refuses a document carrying controllers rather than dropping them;
+- **one attribute is spelled differently on the two sides, and only one.**
+  muscadet holds a boolean output's signal in `{output}_signal_out`, so that a
+  mode's unanchored regular expression has a name of its own to anchor on;
+  this layer holds it in `{output}` and exports it on `{output}_out`. An
+  indicator naming the muscadet spelling is **translated** — it keeps the name
+  the document declared it under, and only what it points at is read in this
+  layer's spelling. Everything else a controller exposes is shared, the R44
+  endpoints and a value output's `{output}_level` included;
 - **a controller reading another controller's output is declared after it.**
   The sweep follows declaration order, and a reading swept before the
   publication it mirrors would lag it by one evaluation point;
@@ -558,6 +569,45 @@ Where an engine does what muscadet defines but does it *otherwise*, the
 statement belongs to muscadet's own conformance registry rather than here:
 `python -m muscadet.conformance raichu`.
 
+## A volume, and the name its level is observed under
+
+A capacity is the one other component family whose variables the two layers do
+not spell alike, and the disagreement falls on the very reading a continuous
+study is written around: what the volume **contains**. muscadet holds it in
+`{capacity}_qty` and `{capacity}_qty_{flow}`, this layer in
+`{capacity}_content` and `{capacity}_content_{flow}`.
+
+An indicator naming the muscadet spelling is **translated**, exactly as a
+controller's signal is: it keeps the name the document declared it under, and
+only what it points at is read in this layer's spelling. So
+`add_indicator_var(component="^BAT$", var="^reserve_qty$")` observes
+`BAT.reserve_content` and comes back under `BAT_reserve_qty`. The weighted fill
+is shared outright — `{capacity}_fill` and `{capacity}_fill_{flow}` — and so is
+`{capacity}_ratio_{flow}` on a volume holding more than one constituent.
+
+Three of muscadet's capacity variables have **no attribute here**, and none of
+them is a spelling disagreement. Each is refused by its own name, saying what
+to observe instead, rather than reaching the loader and failing there on a name
+nobody can trace back to a declaration:
+
+| muscadet variable | what this layer offers |
+|---|---|
+| `{c}_inflow_{f}`, `{c}_outflow_{f}` | muscadet writes them from its allocation sweeps; here the content is integrated straight from `{f}_fed_in` minus `{f}_fed_out`, which both layers name alike |
+| `{c}_ratio_{f}` *on a single-constituent volume* | no ratio is published, that share being identically one wherever the volume holds anything: observe `{c}_content`, or `{c}_fill` for how full it is |
+
+`{c}_serve_rate_{f}` is **not** one of them, and was until the ceiling stopped
+being a constant folded into the service expression. It is a variable now, one
+per held flow and under muscadet's own spelling, because that is what a failure
+mode clamps to throttle a discharge, so an observation on it is carried through
+untouched. A volume declaring no ceiling publishes the unbounded sentinel
+there, so the observation answers whether the declaration named a number or
+not.
+
+The translation is keyed on the capacities the component **declares**, never on
+a suffix: a variable ending in `_qty` on a component holding no volume of that
+name, or holding one another component declares, is left exactly as the
+document wrote it.
+
 ## A machine that moves a mixture, and the section it is declared in
 
 muscadet 5.4.0 added `add_mixture_in` (R51), and its read-back writes a
@@ -582,12 +632,13 @@ out_f  =  R . m_f / sum_g ( m_g . w_g )
 ```
 
 Every rate this layer carries is a rate **per flow**: a rule's `cons`, a
-source's `rate`. Reading a group of two constituents as two independent
-demands would give the model two degrees of freedom where the physics has one,
-which is the very model R51 exists to refuse, so accepting it in silence would
-return a trajectory and a wrong one. The refusal names the component and the
-section, says what the seam does not carry, and says what stands in its place:
-today, nothing but the reference engine.
+capacity's `serve_rate`, a source's `rate`. Reading a group of two
+constituents as two independent demands would give the model two degrees of
+freedom where the physics has one, which is the very model R51 exists to
+refuse, so accepting it in silence would return a trajectory and a wrong one.
+The refusal names the component and the section, says what the seam does not
+carry, and says what stands in its place: today, nothing but the reference
+engine.
 
 ## What replaces `cod3s.ComponentInstance.to_bkd_raichu`
 

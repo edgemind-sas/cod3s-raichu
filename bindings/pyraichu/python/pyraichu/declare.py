@@ -136,6 +136,8 @@ __all__ = [
     "MODE_CLASSES",
     "MODE_LOGIC",
     "MODE_OPERATORS",
+    "MUSCADET_QUANTITY_SUFFIX",
+    "MUSCADET_SIGNAL_SUFFIX",
     "PLAIN_SECTIONS",
     "PRODUCTION_SUFFIX",
     "SYSTEM_SPEC_VERSION",
@@ -144,12 +146,15 @@ __all__ = [
     "build_component",
     "build_document",
     "build_system",
+    "capacity_absent_variables",
+    "capacity_content_variables",
     "check_controller_spec",
     "check_mode_spec",
     "check_spec",
     "check_system_spec",
     "component_kind",
     "controller_object",
+    "controller_signal_variables",
     "derived_out_states",
     "entry_call",
     "event_automaton",
@@ -213,11 +218,12 @@ UNCARRIED_SECTIONS = {
         "whatever the volume it draws from holds, what leaves per constituent "
         "being fixed by the composition of that volume rather than declared. "
         "Every rate this layer carries is a rate PER FLOW -- a rule's `cons`, "
-        "a source's `rate` -- so a group of two constituents read here would "
-        "become two independent demands, which is two degrees of freedom "
-        "where the physics has one and is the very model R51 exists to "
-        "refuse. Nothing stands in its place: a model that ventilates belongs "
-        "on the reference engine until this layer carries the group"
+        "a capacity's `serve_rate`, a source's `rate` -- so a group of two "
+        "constituents read here would become two independent demands, which is "
+        "two degrees of freedom where the physics has one and is the very "
+        "model R51 exists to refuse. Nothing stands in its place: a model that "
+        "ventilates belongs on the reference engine until this layer carries "
+        "the group"
     ),
 }
 
@@ -656,6 +662,35 @@ _CAPACITY = _Vocabulary(
         "side": "side",
         "content_init": "content_init",
         "fill_rate": "fill_rate",
+        # Whether the volume has a through-path at all, which `side`
+        # cannot say: `both` and `out` share the side `out`, so a buffer
+        # and a reservoir reach this reader indistinguishable without it.
+        # muscadet writes it on EVERY capacity, at its default too, which
+        # is why it is carried rather than inert: the one key here whose
+        # presence says nothing about whether the model asks for
+        # something.
+        "transmits": "transmits",
+        # The ceiling on what may leave the volume. Omitted at muscadet's
+        # default, which is unbounded, and unbounded is what a volume on
+        # an output means: it serves what is asked of it while it holds
+        # something.
+        "serve_rate": "serve_rate",
+        # The DISCHARGE COMMAND, and the two parallel matrices muscadet
+        # lifts a negation and a comparison out of its operands into. The
+        # three are one declaration: the authoring layer folds the
+        # matrices back onto the operand each cell is aligned with, so a
+        # document spelling a threshold either way declares the same
+        # command. muscadet's own read-back writes the operands alone,
+        # having rebuilt them from the matrices (`_prod_cond_spec`); a
+        # document written against its `Capacity` model carries the
+        # matrices instead, and both arrive here.
+        "serve_cond": "serve_cond",
+        "serve_cond_negate": "serve_cond_negate",
+        "serve_cond_compare": "serve_cond_compare",
+        # How that command reads its two levels. Carried rather than
+        # inert at muscadet's default, because a command declaring the
+        # other one says something and would otherwise be read inverted.
+        "serve_cond_inner_mode": "serve_cond_inner_mode",
         # No muscadet counterpart: the fraction of the volume the content
         # must move back from a bound before the capacity leaves it, which
         # this engine locates rather than steps over.
@@ -3163,6 +3198,240 @@ def controller_object(spec: Any, name: Any = None) -> dict:
     }
 
 
+#: What muscadet names the VARIABLE behind a boolean controller output
+#: (``muscadet.obj_ctrl.CtrlSignalOut.var_name``). The two layers agree on
+#: everything else a controller exposes -- the message box ``{output}_out``,
+#: the R44 endpoints, a value output's ``{output}_level`` -- and part on this
+#: one alone: muscadet holds the signal in ``{output}_signal_out`` so that a
+#: mode's unanchored regular expression has a name of its own to anchor on,
+#: while this layer holds it in ``{output}`` and exports it on ``{output}_out``.
+MUSCADET_SIGNAL_SUFFIX = "_signal_out"
+
+
+def controller_signal_variables(spec: Any) -> dict[str, str]:
+    """A controller's boolean outputs: muscadet's variable name, then this one's.
+
+    The one spelling the two layers do not share on a controller, and the
+    reason it needs naming at all: an indicator is written against the
+    variable muscadet created, so a model observing ``high_signal_out`` is
+    refused here as naming an attribute no component has. The refusal is loud,
+    which is why this is a translation and not a second name -- the indicator
+    keeps the name the document declared it under, and only what it POINTS AT
+    is read in this layer's spelling.
+
+    Derived from the port's own :class:`pyraichu.plugins.controller._ControlOut`
+    rather than restated, so the day the attribute is named otherwise this
+    follows rather than drifts. A value output is absent: both layers call it
+    ``{output}_level``.
+
+    Parameters
+    ----------
+    spec : dict
+        A component declaration. Anything that is not a controller answers an
+        empty mapping, so a caller sweeps a document without sorting it first.
+
+    Returns
+    -------
+    dict
+        ``{muscadet variable: this layer's attribute}``, empty for everything
+        that is not a controller with a boolean output.
+    """
+    from .plugins.controller import CTRL_OUT_BOOL, _ControlOut
+
+    if not isinstance(spec, dict):
+        return {}
+    if spec.get(COMPONENT_KIND_KEY) != COMPONENT_KIND_CONTROLLER:
+        return {}
+
+    found: dict[str, str] = {}
+    for entry in spec.get("controls_out") or []:
+        if not isinstance(entry, dict):
+            continue
+        output = entry.get("name")
+        if not isinstance(output, str) or not output:
+            continue
+        if entry.get("kind", CTRL_OUT_BOOL) != CTRL_OUT_BOOL:
+            continue
+        attribute = _ControlOut(
+            name=output, kind=CTRL_OUT_BOOL, default=False, node=None
+        ).attribute
+        found[f"{output}{MUSCADET_SIGNAL_SUFFIX}"] = attribute
+    return found
+
+
+#: What muscadet names the QUANTITY a capacity holds (``muscadet.capacity``):
+#: ``{c}_qty`` for the whole volume and ``{c}_qty_{f}`` per constituent. This
+#: layer holds the same quantity in ``{c}_content`` and ``{c}_content_{f}``
+#: (:func:`pyraichu.muscadet._content_attribute`), and that is the only name of
+#: a capacity the two spell apart: ``{c}_fill`` and ``{c}_fill_{f}`` are shared,
+#: and so is ``{c}_ratio_{f}`` wherever both layers emit it.
+MUSCADET_QUANTITY_SUFFIX = "_qty"
+
+#: The capacity variables muscadet creates that this layer has NO attribute
+#: for, by the suffix that names them, with what stands in their place. Read
+#: with the constituent's name and the capacity's, which is why the entries are
+#: templates rather than sentences: a refusal that names ``{c}_ratio_{f}`` and
+#: then explains what replaces ``{f}`` is the whole point of refusing by name
+#: rather than letting the load fail on "unknown attribute".
+#:
+#: Each was inventoried against a live pair of engines on 2026-09-15, on a
+#: single-constituent volume and on a two-constituent one, and each is here for
+#: a reason of its own rather than as a leftover:
+#:
+#: - ``inflow`` / ``outflow`` are muscadet's two hooks onto its allocation
+#:   sweeps, written by the sweeps and read by the capacity's own equation.
+#:   This layer integrates the content straight from the fed variables, which
+#:   both layers name alike, so what replaces them is not a renaming but the
+#:   pair the derivative is actually written over;
+#: - ``ratio`` is absent on a SINGLE-constituent volume alone. muscadet emits
+#:   it on every volume; here a volume publishes a ratio per constituent only
+#:   when it holds more than one (:func:`pyraichu.muscadet._publishes_ratios`),
+#:   the share of a volume in itself being identically one wherever it holds
+#:   anything. On a volume holding several the name is SHARED and nothing here
+#:   applies to it.
+#:
+#: ``serve_rate`` was a fourth entry and is one no longer: this layer publishes
+#: the ceiling as a variable per held flow, under muscadet's own name for it
+#: (:meth:`pyraichu.muscadet._Capacity.ceiling_of`), so that a failure mode has
+#: something to clamp. The name is SHARED, an observation on it reaches the
+#: attribute, and refusing it here would refuse a reading both engines answer.
+_CAPACITY_ABSENT_VARIABLES = {
+    "_inflow_": (
+        "muscadet writes it from its allocation sweeps; this layer integrates "
+        "the content from `{flow}_fed_in` minus `{flow}_fed_out`, which both "
+        "layers name alike, so observe `{flow}_fed_in`"
+    ),
+    "_outflow_": (
+        "muscadet writes it from its allocation sweeps; this layer integrates "
+        "the content from `{flow}_fed_in` minus `{flow}_fed_out`, which both "
+        "layers name alike, so observe `{flow}_fed_out`"
+    ),
+    "_ratio_": (
+        "a volume holding a single constituent publishes no ratio here, that "
+        "share being identically one wherever it holds anything; observe "
+        "`{capacity}_content` for what it holds, or `{capacity}_fill` for how "
+        "full it is. A volume holding SEVERAL constituents does publish "
+        "`{capacity}_ratio_{flow}`, under that very name"
+    ),
+}
+
+
+def _capacity_entries(spec: Any) -> list[tuple[str, list[str]]]:
+    """The capacities of one component declaration, as ``(name, flows)``.
+
+    The shared reading of the two functions below, and the reason a variable
+    of a capacity is recognised by the capacity it belongs to rather than by
+    its suffix: a component holding a flow variable that happens to end in
+    ``_qty`` names no capacity and is left exactly as the document wrote it.
+
+    ``flow`` is muscadet's single-flow short form of ``flows``, and a ``flows``
+    entry is a name or a mapping carrying ``name`` and ``weight``
+    (:meth:`pyraichu.muscadet.ObjFlow.add_capacity`). Anything it cannot read
+    is skipped rather than refused: this answers an OBSERVATION, and the
+    declaration itself is checked where it is built.
+    """
+    if not isinstance(spec, dict):
+        return []
+    if spec.get(COMPONENT_KIND_KEY, COMPONENT_KIND_FLOW) != COMPONENT_KIND_FLOW:
+        return []
+
+    found: list[tuple[str, list[str]]] = []
+    for entry in spec.get("capacities") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        declared = entry.get("flows")
+        if declared is None:
+            declared = [] if entry.get("flow") is None else [entry.get("flow")]
+        flows = []
+        for held in declared if isinstance(declared, (list, tuple)) else []:
+            held = held.get("name") if isinstance(held, dict) else held
+            if isinstance(held, str) and held:
+                flows.append(held)
+        found.append((name, flows))
+    return found
+
+
+def capacity_content_variables(spec: Any) -> dict[str, str]:
+    """A capacity's held quantity: muscadet's variable name, then this one's.
+
+    The one spelling the two layers do not share on a capacity, and the
+    observation that needs it most: the level of a tank is what a continuous
+    study is written to watch. An indicator is named against the variable
+    muscadet created, so a model observing ``reserve_qty`` is refused here as
+    naming an attribute no component has -- loud, but refused, which is a model
+    that runs on one engine and not the other.
+
+    Derived from :func:`pyraichu.muscadet._content_attribute`, the function
+    that CREATES the attribute, rather than restated, so the day it is named
+    otherwise this follows rather than drifts. ``{c}_fill`` and ``{c}_fill_{f}``
+    are absent because both layers spell them alike, and translating them would
+    invent a disagreement.
+
+    Parameters
+    ----------
+    spec : dict
+        A component declaration. Anything that declares no capacity answers an
+        empty mapping, so a caller sweeps a document without sorting it first.
+
+    Returns
+    -------
+    dict
+        ``{muscadet variable: this layer's attribute}``, empty for everything
+        holding no volume.
+    """
+    found: dict[str, str] = {}
+    for name, flows in _capacity_entries(spec):
+        found[f"{name}{MUSCADET_QUANTITY_SUFFIX}"] = authoring._content_attribute(name)
+        for flow in flows:
+            found[f"{name}{MUSCADET_QUANTITY_SUFFIX}_{flow}"] = (
+                authoring._content_attribute(name, flow)
+            )
+    return found
+
+
+def capacity_absent_variables(spec: Any) -> dict[str, str]:
+    """The capacity variables muscadet creates and this layer has none of, with
+    what replaces each.
+
+    The other half of :func:`capacity_content_variables`, and the half that
+    exists so a refusal says something. Three of muscadet's capacity variables
+    have no attribute of the same name here, and not one of them is a spelling
+    disagreement: see :data:`_CAPACITY_ABSENT_VARIABLES` for what each is. An
+    observation naming one is refused BY ITS NAME, saying what stands in its
+    place, rather than reaching the engine and failing there on an attribute
+    nobody can trace back to a declaration.
+
+    ``{c}_ratio_{f}`` is conditional and the reason this reads the flows: a
+    volume holding several constituents publishes it under that very name, so
+    listing it there would refuse an observation this layer answers.
+
+    Three and not four: ``{c}_serve_rate_{f}`` was here while the ceiling was
+    inlined into the service expression, and left when it became a variable a
+    failure mode can clamp. It is a SHARED name now, so an observation on it
+    falls through to the attribute of that very name.
+
+    Returns
+    -------
+    dict
+        ``{muscadet variable: what replaces it}``, empty for everything holding
+        no volume.
+    """
+    found: dict[str, str] = {}
+    for name, flows in _capacity_entries(spec):
+        ratios = authoring._publishes_ratios(flows)
+        for suffix, replacement in _CAPACITY_ABSENT_VARIABLES.items():
+            if suffix == "_ratio_" and ratios:
+                continue
+            for flow in flows:
+                found[f"{name}{suffix}{flow}"] = replacement.format(
+                    capacity=name, flow=flow
+                )
+    return found
+
+
 # ---------------------------------------------------------------------------
 # The SYSTEM scale: what a component declaration cannot carry
 # ---------------------------------------------------------------------------
@@ -3780,7 +4049,14 @@ def build_document(
         GENERATED_INDICATORS: built.generated_indicators,
     }
 
-    declared = {**flows, **modes}
+    # Every component a mode may NAME, the controllers included. A controller
+    # is a component of the system like any other, and R44 makes three of its
+    # endpoints -- a threshold, a publication's gain, a boolean output's
+    # availability -- ordinary variables a `cod3s.ObjFM` writes by their exact
+    # name. Left out of this mapping, a mode reaching one was refused as
+    # affecting a component "which the document does not declare", which is
+    # the blinded-instrument scenario refused at the door.
+    declared = {**flows, **controllers, **modes}
     objects = list(built_controllers)
     objects += [
         mode_object(entry, declared, name=name) for name, entry in modes.items()
