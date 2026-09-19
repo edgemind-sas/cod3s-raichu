@@ -267,6 +267,28 @@ NO_TAP = 0.0
 _TRANSFER_CLASS = "ConductiveTransfer"
 _PROFILE_CLASS = "SinusoidalProfile"
 
+#: Every key a declared time profile may carry, as DATA rather than as a
+#: tuple buried in the parser: the vocabulary is confronted with what
+#: muscadet's read-back writes rather than patched key by key after an
+#: export is refused (`test_muscadet_declaration_vocabulary`).
+#:
+#: The six parameters of the clamped sinusoid, and `name`. That last one
+#: is not a parameter of the curve: muscadet serializes a declared object
+#: by its constructor's own parameter names, and `Profile.__init__` takes
+#: a `name` defaulted to the class name, so EVERY exported profile
+#: carries one whether or not a modeller wrote it. A vocabulary that did
+#: not know the key refused the whole document, which is the same shape
+#: of gate `mixtures` was on a component.
+PROFILE_KEYS = (
+    "amplitude",
+    "period",
+    "phase_shift",
+    "offset",
+    "value_min",
+    "value_max",
+    "name",
+)
+
 #: Why a Python function is refused where a declared shape is expected.
 #: It names the mechanism a discontinuous law would need rather than only
 #: the rule it breaks: a guard read from inside the sweeps is evaluated
@@ -677,6 +699,14 @@ class _Profile:
     offset: float = 0.0
     value_min: float = 0.0
     value_max: float | None = None
+    #: The label muscadet carries on the profile object, defaulting to
+    #: the shape's own class name exactly as `Profile.__init__` does.
+    #: Decoration, like a component's `label`: it reaches no generated
+    #: model, and it is kept so a declaration survives the round trip
+    #: rather than losing what a modeller wrote on the curve. What it
+    #: buys on the way is the refusals below, which name the curve at
+    #: fault instead of only the flow carrying it.
+    name: str = _PROFILE_CLASS
 
     def factor(self, time: float) -> float:
         """The factor at `time`, for the initial value of the published
@@ -1413,7 +1443,7 @@ class ObjFlow:
                 name=name,
                 var_demand_in_default=float(var_demand_in_default),
                 var_in_default=float(var_in_default),
-                profile=self._parse_profile(name, profile),
+                profile=self._parse_profile(name, profile, side="in"),
                 publish_rate=self._rate_quantity(name, publish_rate),
             )
         )
@@ -1463,7 +1493,9 @@ class ObjFlow:
         `profile` is a declared **continuous** function of simulation
         time multiplying what this output produces, as the mapping
         ``{"cls": "SinusoidalProfile", ...}`` carrying `amplitude`,
-        `period`, `phase_shift`, `offset`, `value_min` and `value_max`.
+        `period`, `phase_shift`, `offset`, `value_min` and `value_max`,
+        and beside them a `name` labelling the curve, which muscadet
+        writes on every exported profile and this layer carries back.
         A Python callable is refused: continuity is an attestation this
         layer cannot make for the modeller, and it derives no watched
         transition from a function's breakpoints. The profile composes
@@ -1520,7 +1552,9 @@ class ObjFlow:
 
     # --- time profiles --------------------------------------------------
 
-    def _parse_profile(self, flow: str, spec: Any) -> _Profile | None:
+    def _parse_profile(
+        self, flow: str, spec: Any, side: str = "out"
+    ) -> _Profile | None:
         """One declared time profile, normalised, or refused where it was
         written (R8).
 
@@ -1528,8 +1562,13 @@ class ObjFlow:
         bare callable is refused because the continuity flag is the one
         thing this layer cannot work out for itself, and a mapping naming
         the callable shape offers a serialised form that cannot be
-        serialised."""
-        where = f"ObjFlow `{self.name}`: continuous out-flow `{flow}`"
+        serialised.
+
+        `side` is which end of the component declared the curve: a demand
+        that varies with the clock is as ordinary as a production that
+        does, and a refusal naming an out-flow that the component has not
+        got sends a modeller looking for the wrong declaration."""
+        where = f"ObjFlow `{self.name}`: continuous {side}-flow `{flow}`"
         if spec is None or isinstance(spec, _Profile):
             return spec
         if callable(spec):
@@ -1557,32 +1596,43 @@ class ObjFlow:
                 f"declarable shape is `{_PROFILE_CLASS}`, every other profile "
                 f"being a Python function. {_CONTINUITY_MESSAGE}"
             )
-        known = (
-            "amplitude",
-            "period",
-            "phase_shift",
-            "offset",
-            "value_min",
-            "value_max",
-        )
-        unknown = sorted(set(params) - set(known))
+        unknown = sorted(set(params) - set(PROFILE_KEYS))
         if unknown:
             raise ValueError(
                 f"{where} declares a time profile carrying unknown keys "
-                f"{unknown} (expected {list(known)})"
+                f"{unknown} (expected {list(PROFILE_KEYS)})"
             )
+
+        # Read FIRST, so every refusal below can name the curve at fault:
+        # a component declaring one profile per flow is told which of them
+        # it wrote wrong, where naming the flow alone leaves a modeller
+        # counting mappings.
+        label = params.pop("name", None)
+        if label is not None and not isinstance(label, str):
+            raise ValueError(
+                f"{where} declares a time profile named {label!r}; `name` is "
+                "the label muscadet carries on the curve for its own messages, "
+                "so it is a string, or it is left out and the curve is named "
+                "after its shape"
+            )
+        # muscadet's `Profile.__init__` does `name or type(self).__name__`,
+        # and the default it writes out is therefore the class name. Mirror
+        # it rather than carrying `None`: a read-back of what this layer
+        # read says what muscadet's read-back said.
+        label = label or _PROFILE_CLASS
+        named = "" if label == _PROFILE_CLASS else f" `{label}`"
 
         period = float(params.get("period", 2 * math.pi))
         if not period > 0.0:
             raise ValueError(
-                f"{where} declares a time profile of period {period:g}; the "
-                "period is the duration of one cycle and must be strictly "
+                f"{where} declares a time profile{named} of period {period:g}; "
+                "the period is the duration of one cycle and must be strictly "
                 "positive"
             )
         value_min = float(params.get("value_min", 0.0))
         if value_min < 0.0:
             raise ValueError(
-                f"{where} declares a time profile clamped at value_min="
+                f"{where} declares a time profile{named} clamped at value_min="
                 f"{value_min:g}. A profile SCALES production, so a negative "
                 "factor would mean a negative quantity, which no balance here "
                 "models: use value_min=0 to cut the negative half-cycle, or "
@@ -1594,8 +1644,8 @@ class ObjFlow:
         )
         if value_max is not None and value_max < value_min:
             raise ValueError(
-                f"{where} declares a time profile whose clamps are the wrong "
-                f"way round: value_min={value_min:g} exceeds "
+                f"{where} declares a time profile{named} whose clamps are the "
+                f"wrong way round: value_min={value_min:g} exceeds "
                 f"value_max={value_max:g}"
             )
         return _Profile(
@@ -1605,6 +1655,7 @@ class ObjFlow:
             offset=float(params.get("offset", 0.0)),
             value_min=value_min,
             value_max=value_max,
+            name=label,
         )
 
     # --- transfer pairs -------------------------------------------------
