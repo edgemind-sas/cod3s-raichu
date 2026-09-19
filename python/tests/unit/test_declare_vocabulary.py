@@ -441,6 +441,113 @@ def test_a_bare_profile_is_refused_naming_the_shape_that_is_declarable():
     assert "SinusoidalProfile" in str(raised.value)
 
 
+# --- the label a profile carries --------------------------------------
+#
+# muscadet serializes a declared object by its constructor's own parameter
+# names, read off the signature, and `Profile.__init__` takes a `name`
+# defaulted to the class name. EVERY exported profile therefore carries the
+# key, whether or not a modeller wrote it, and a reader with no name for it
+# refused every document declaring a time profile -- the same shape of gate
+# `mixtures` was on a component, one level down.
+
+
+def a_profiled_pump(**profile) -> dict:
+    """The reference declaration whose output declares a time profile."""
+    return a_heat_pump(
+        flows=[
+            {"cls": "FlowContinuousIn", "name": "elec"},
+            {
+                "cls": "FlowContinuousOut",
+                "name": "heat",
+                "profile": {"cls": "SinusoidalProfile", **profile},
+            },
+        ],
+        rules=[],
+    )
+
+
+def test_the_label_muscadet_writes_on_every_profile_is_read():
+    """`{"cls": "SinusoidalProfile", "name": "SinusoidalProfile"}` is what a
+    read-back writes for a profile nobody labelled, and it is the shape a
+    platform export carries."""
+    built = declare.build_component(
+        mu.System("read"), a_profiled_pump(name="SinusoidalProfile", period=24.0)
+    )
+
+    assert built.flows_continuous_out[0].profile.name == "SinusoidalProfile"
+
+
+def test_a_modeller_s_own_label_reaches_the_reader():
+    built = declare.build_component(
+        mu.System("read"), a_profiled_pump(name="solar curve", period=24.0)
+    )
+
+    assert built.flows_continuous_out[0].profile.name == "solar curve"
+
+
+def test_a_profile_with_no_label_is_named_after_its_shape():
+    """muscadet's own default, `name or type(self).__name__`, mirrored: a
+    read-back of what this layer read says what muscadet's read-back said."""
+    built = declare.build_component(mu.System("read"), a_profiled_pump(period=24.0))
+
+    assert built.flows_continuous_out[0].profile.name == "SinusoidalProfile"
+
+
+def test_a_labelled_profile_names_itself_in_a_refusal():
+    """What the label BUYS here: a component declaring a curve per flow says
+    which of them it wrote wrong, where naming the flow alone leaves a
+    modeller counting mappings."""
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.build_component(
+            mu.System("read"), a_profiled_pump(name="solar curve", period=0.0)
+        )
+
+    assert "`solar curve`" in str(raised.value)
+
+
+def test_an_unlabelled_profile_is_refused_without_repeating_its_shape():
+    """The default label is the shape's own name, and a message reading
+    "time profile `SinusoidalProfile` of period 0" would say it twice."""
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.build_component(mu.System("read"), a_profiled_pump(period=0.0))
+
+    message = str(raised.value)
+    assert "of period 0" in message and "`SinusoidalProfile`" not in message
+
+
+def test_a_label_that_is_not_a_string_is_refused_naming_the_key():
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.build_component(mu.System("read"), a_profiled_pump(name=7))
+
+    assert "`name`" in str(raised.value)
+
+
+def test_the_vocabulary_opened_on_ONE_key_and_not_on_whatever_a_mapping_holds():
+    """A closed vocabulary opens by name. The refusal lists what it accepts,
+    the label among them, so the next key muscadet grows is found here rather
+    than by a corpus that stops reading."""
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.build_component(mu.System("read"), a_profiled_pump(colour="amber"))
+
+    message = str(raised.value)
+    assert "['colour']" in message and "name" in message
+
+
+def test_the_label_is_the_last_key_of_the_declared_vocabulary():
+    """Read as DATA so the bench can confront it with what muscadet writes
+    (`test_muscadet_declaration_vocabulary`), rather than restating a tuple
+    buried in the parser."""
+    assert mu.PROFILE_KEYS == (
+        "amplitude",
+        "period",
+        "phase_shift",
+        "offset",
+        "value_min",
+        "value_max",
+        "name",
+    )
+
+
 # --- flow entries -----------------------------------------------------
 
 

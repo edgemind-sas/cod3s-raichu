@@ -228,6 +228,43 @@ physical model reaches. A controller reading such a channel compares it
 against a threshold like any other number, which is what it would do with
 an infinity too; nothing needs to test for it by name.
 
+#### What a time profile carries besides its curve: `name`
+
+A declared profile is the clamped sinusoid and nothing else, so its
+vocabulary is closed: `amplitude`, `period`, `phase_shift`, `offset`,
+`value_min`, `value_max`, and `name`.
+
+That last one is not a parameter of the curve, it is a **label**.
+muscadet serialises a declared object by its constructor's own parameter
+names, read off the signature, and `muscadet.Profile.__init__` takes a
+`name` it defaults to the class name. Every profile a read-back writes
+therefore carries one, whether or not a modeller wrote it:
+
+```json
+{"cls": "SinusoidalProfile", "amplitude": 0.4, "period": 24.0,
+ "phase_shift": 0.0, "offset": 0.6, "value_min": 0.0, "value_max": 1.0,
+ "name": "SinusoidalProfile"}
+```
+
+(`value_max` is muscadet's `math.inf` when the curve is unbounded above,
+and a document has no literal for one: this layer reads it as no upper
+clamp rather than as a number standing in for one.)
+
+It is carried the way a component's `label` is: it reaches no generated
+model, and it is kept so a declaration survives the round trip rather
+than losing what a modeller wrote on the curve. What it buys on the way
+is the refusal: a component declaring a curve per flow says which of
+them was written wrong.
+
+```
+ObjFlow `PLANT`: continuous out-flow `power` declares a time profile
+`solar curve` of period 0; the period is the duration of one cycle and
+must be strictly positive
+```
+
+A profile left unlabelled is named after its shape, exactly as muscadet
+names it, and its refusals say nothing about a label nobody chose.
+
 #### Whether a volume passes things on: `transmits`
 
 A volume between a producer and a consumer is a **buffer**: what it does

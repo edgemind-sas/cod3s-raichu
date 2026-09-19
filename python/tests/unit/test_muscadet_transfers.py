@@ -558,6 +558,50 @@ def test_a_profile_declared_without_a_shape_is_refused():
     assert "SinusoidalProfile" in str(raised.value)
 
 
+def test_a_labelled_profile_runs_the_curve_it_declares():
+    """The label muscadet writes on every exported profile is decoration:
+    it reaches no generated model, so the trajectory under a labelled curve
+    is the trajectory under the same curve unlabelled. Measured rather than
+    reasoned, because "carried and ignored" is exactly what a key silently
+    read as a parameter would NOT be."""
+    curve = {
+        "cls": "SinusoidalProfile",
+        "amplitude": 1.0,
+        "period": 24.0,
+        "value_min": 0.0,
+    }
+    plain = panel_system(curve).simulate(t_max=24.0, samples=[3.0, 6.0, 12.0])
+    labelled = panel_system({**curve, "name": "solar curve"}).simulate(
+        t_max=24.0, samples=[3.0, 6.0, 12.0]
+    )
+
+    for instant in (3.0, 6.0, 12.0):
+        factor = math.sin(2 * math.pi * instant / 24.0)
+        assert abs(
+            sampled(labelled, "P_power_out_profile", instant) - factor
+        ) < CROSSING_TOL, instant
+        assert sampled(labelled, "B_store_content", instant) == sampled(
+            plain, "B_store_content", instant
+        ), instant
+
+
+def test_a_profile_on_an_INPUT_is_refused_naming_the_side_it_was_written_on():
+    """A demand that varies with the clock is as ordinary as a production
+    that does, and a refusal naming an out-flow the component has not got
+    sends a modeller looking for the wrong declaration."""
+
+    class Wrong(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(
+                name="power",
+                profile={"cls": "SinusoidalProfile", "period": 0.0},
+            )
+
+    with pytest.raises(ValueError) as raised:
+        Wrong("C")
+    assert "in-flow `power`" in str(raised.value)
+
+
 def test_a_profile_may_not_go_negative():
     """A profile scales production, so a negative factor would mean a
     negative quantity: the lower clamp is refused below zero."""
