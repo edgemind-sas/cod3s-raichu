@@ -1252,17 +1252,51 @@ def _entries(spec: dict, section: str, name: str) -> list[dict]:
 
 # --- production conditions ---------------------------------------------------
 
+#: What a production-condition operand may carry, and the whole of it. muscadet
+#: writes back exactly these five keys and reads no others
+#: (``muscadet/declare.py``, ``_prod_cond_spec``; ``muscadet/obj.py``,
+#: ``apply_prod_cond``). ``release`` is absent on purpose: muscadet's operand
+#: ignores it, and a band needs a location to hold between its two edges where
+#: the production variable here is rewritten at every evaluation.
+PROD_COND_OPERAND_KEYS = ("name", "port", "negate", "op", "value")
 
-def _prod_cond_operand(where: str, operand: Any, inputs: set[str]) -> str:
-    """One production-condition operand, reduced to the flow name this layer
+#: The comparison operators an operand may carry. The rule-guard vocabulary,
+#: and the same list muscadet reaches from both directions
+#: (``muscadet.rules._COMPARATORS``, read by ``cond_readers``): one comparison
+#: syntax for a controller's guard and for a production condition.
+PROD_COND_COMPARISONS = ("<", "<=", ">", ">=", "==", "!=")
+
+
+def _prod_cond_operand(where: str, operand: Any, inputs: set[str]) -> str | dict:
+    """One production-condition operand, in the form the layer underneath
     reads.
 
-    muscadet's operand vocabulary carries a negation and a threshold beside the
-    name; a discrete production condition here reads flow names and nothing
-    else, so those two are refused rather than dropped. ``port`` is honoured
-    where it agrees with this layer's own resolution, which searches the input
-    side first exactly as muscadet's does, and refused where it would select
-    the other side of a name carried both ways.
+    An operand that says nothing beyond its flow name is reduced **to that
+    name**, which is the historical form: every document this layer built
+    before it read the other three keys still builds, character for character.
+    ``port: "in"`` reduces too, and so does ``port: "out"`` on a name this
+    component carries only on the output side, because both name the side the
+    default resolution -- inputs first, exactly as muscadet's -- picks anyway.
+    That is why a platform export is unmoved by this: muscadet writes ``port``
+    on every flow operand it hands back, and on almost every one of them it
+    states the default.
+
+    What survives as a mapping is what changes the reading:
+
+    - ``negate``, muscadet's ``var_prod_cond_negate`` written inline: the
+      operand's guard is denied;
+    - ``op`` and ``value``, muscadet's ``var_prod_cond_compare``: the operand
+      compares what its name carries against a threshold instead of reading a
+      boolean state;
+    - ``port: "out"`` on a name this component declares as an input **too**.
+      That one is a resolution rule rather than a key: the default resolves the
+      input side first, and this is the single case where honouring the
+      explicit selection and applying the default part company.
+
+    The two that cannot be combined are refused rather than ordered: a
+    comparison already yields a truth value, so it is denied by the opposite
+    operator. muscadet refuses the pair at the same place and for the same
+    reason (``muscadet.rules.check_operand_negation``).
     """
     if isinstance(operand, str):
         return operand
@@ -1272,22 +1306,12 @@ def _prod_cond_operand(where: str, operand: Any, inputs: set[str]) -> str:
             f"operand is a flow name or a mapping carrying `name`"
         )
 
-    for key in ("negate", "op", "value", "release"):
-        if operand.get(key) is not None and operand.get(key) is not False:
-            raise ComponentSpecError(
-                f"{where} declares the production-condition operand key "
-                f"`{key}`, which this layer does not carry: a discrete "
-                f"production condition reads flow names, and a negation, a "
-                f"threshold or its band has no counterpart here"
-            )
-
-    unknown = sorted(
-        set(operand) - {"name", "port", "negate", "op", "value", "release"}
-    )
+    unknown = sorted(set(operand) - set(PROD_COND_OPERAND_KEYS))
     if unknown:
         raise ComponentSpecError(
             f"{where} carries unknown production-condition operand keys "
-            f"{unknown}; an operand carries `name` and `port`"
+            f"{unknown}; an operand carries "
+            f"{', '.join(f'`{key}`' for key in PROD_COND_OPERAND_KEYS)}"
         )
 
     name = operand.get("name")
@@ -1298,19 +1322,67 @@ def _prod_cond_operand(where: str, operand: Any, inputs: set[str]) -> str:
         )
 
     port = operand.get("port")
-    if port == "out" and name in inputs:
-        raise ComponentSpecError(
-            f"{where} resolves the production-condition operand `{name}` to "
-            f"the output side, while this component declares `{name}` as an "
-            f"input too. This layer resolves the input side first and cannot "
-            f"honour the other selection; rename one of the two flows"
-        )
     if port not in (None, "in", "out"):
         raise ComponentSpecError(
             f"{where} declares the production-condition operand `{name}` on "
             f"port {port!r}, expected 'in' or 'out'"
         )
-    return name
+
+    negated = bool(operand.get("negate", False))
+    comparison = operand.get("op")
+    threshold = operand.get("value")
+
+    if comparison is not None:
+        if comparison not in PROD_COND_COMPARISONS:
+            raise ComponentSpecError(
+                f"{where} compares the production-condition operand `{name}` "
+                f"with `{comparison}`, expected one of "
+                f"{', '.join(PROD_COND_COMPARISONS)}"
+            )
+        if threshold is None:
+            raise ComponentSpecError(
+                f"{where} compares the production-condition operand `{name}` "
+                f"with `{comparison}` and no `value` to compare it against"
+            )
+        try:
+            threshold = float(threshold)
+        except (TypeError, ValueError):
+            raise ComponentSpecError(
+                f"{where} compares the production-condition operand `{name}` "
+                f"against `value`={threshold!r}, which is no number"
+            ) from None
+        if negated:
+            raise ComponentSpecError(
+                f"{where} both negates and compares the production-condition "
+                f"operand `{name}`; a comparison already yields a truth value, "
+                f"so it is denied by the opposite operator rather than beside "
+                f"it"
+            )
+    elif threshold is not None:
+        raise ComponentSpecError(
+            f"{where} declares `value`={threshold!r} on the production-"
+            f"condition operand `{name}` and no `op`; a threshold is the "
+            f"right-hand side of a comparison, so it needs the operator "
+            f"reading it"
+        )
+
+    # The one port selection the default resolution would not have made. Every
+    # other one is dropped, so the mapping below carries what it changes and
+    # nothing else -- and so the historical form survives wherever it said the
+    # same thing.
+    ported = port == "out" and name in inputs
+    if not negated and comparison is None and not ported:
+        return name
+
+    reduced: dict[str, Any] = {"name": name}
+    if ported:
+        reduced["port"] = "out"
+    if negated:
+        reduced["negate"] = True
+    if comparison is not None:
+        reduced["op"] = comparison
+        reduced["value"] = threshold
+    return reduced
 
 
 def _prod_cond(
@@ -1318,7 +1390,7 @@ def _prod_cond(
     declared: Any,
     inputs: set[str],
     inner_mode: str = PROD_COND_INNER_MODE_DEFAULT,
-) -> list[list[str]]:
+) -> list[list[str | dict]]:
     """muscadet's production condition, converted to this layer's form.
 
     **The two conventions are not the same one, and reading either as the other
@@ -1367,9 +1439,35 @@ def _prod_cond(
             f"an operand nor a list: {declared!r}"
         )
 
-    clauses: list[list[str]] = []
+    clauses: list[list[str | dict]] = []
     for group in declared:
         operands = group if isinstance(group, (list, tuple)) else [group]
+        # An empty group is the one malformed shape that runs to completion
+        # without a word, and it does so DIFFERENTLY on the two readings. Under
+        # `"and"` it reaches the layer underneath as an empty conjunction,
+        # which holds; under `"or"` the expansion below multiplies it out and a
+        # product over an empty clause is EMPTY, so the condition disappears
+        # entirely -- no writer, the variable left on its declared default,
+        # which is the dormant function and the exact opposite of the empty
+        # disjunction the group states.
+        #
+        # muscadet refuses it too, with the same reasoning and on the family it
+        # had left for later: `FlowContinuousOut.check_prod_cond_shape` says
+        # "under inner mode 'or' the output would never produce, under 'and'
+        # the condition would never bind: neither is a declaration", and scopes
+        # itself to the continuous classes because "the discrete classes are
+        # 1.x surface with the same laxity, and tightening them belongs to its
+        # own change". This is the discrete half of that one refusal, so
+        # relaxing it here would make the two families answer differently to
+        # one malformed export.
+        if not operands:
+            raise ComponentSpecError(
+                f"{where} carries an empty group in its production condition; "
+                f"a group that reads nothing says nothing about when the "
+                f"output produces, and the two readings of "
+                f"`var_prod_cond_inner_mode` do not even agree on what it "
+                f"would mean"
+            )
         clauses.append(
             [_prod_cond_operand(where, operand, inputs) for operand in operands]
         )
