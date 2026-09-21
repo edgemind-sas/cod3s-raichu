@@ -211,6 +211,89 @@ test written on one proves nothing about the reading it got. That is why
 `python/tests/unit/test_prod_cond_inner_mode.py` opposes the two on a
 multi-clause condition, and runs it.
 
+## An operand that says more than a flow name
+
+A production condition is groups of operands, and an operand is either a bare
+flow name or a mapping. muscadet writes the mapping form on **every** flow
+operand it hands back (`muscadet/declare.py`, `_prod_cond_spec`), because the
+condition it stores is resolved and has to be walked back into a declaration;
+this layer reads the five keys that walk-back writes, and no others.
+
+| Key | What it says | How it is read |
+|---|---|---|
+| `name` | the flow, capacity level or measurement channel the operand reads | required |
+| `port` | `"in"` or `"out"`, selecting a side | the default resolves the **input side first**, exactly as muscadet's does. `port` matters where the component carries one name on both sides |
+| `negate` | deny the operand | the guard it reads, inverted |
+| `op`, `value` | compare what `name` carries against a threshold | the rule-guard comparison vocabulary, `<` `<=` `>` `>=` `==` `!=` |
+
+Three of them are read where they were refused before, and the third is not a
+key at all:
+
+- **`negate`** is the `¬` an editor of libraries puts in front of an operand,
+  and muscadet's `var_prod_cond_negate` is where it ends up over there;
+- **`op` and `value`** are muscadet's `var_prod_cond_compare`, and the
+  vocabulary is deliberately the one a controller's rule guard already carries
+  here: one comparison syntax for both directions of the discrete/continuous
+  interoperation;
+- **`port: "out"` on a name the component declares as an input too** was
+  refused by a *resolution rule* rather than by a missing key. The reader
+  resolved the input side first and refused rather than silently read the
+  other. Honouring the selection is what a **transit** component needs, and
+  the shape is the most ordinary there is: a board that feeds on and publishes
+  that it does.
+
+An operand that states the default reduces to the bare flow name, so a
+document built before these keys were read is unchanged, byte for byte:
+`{"name": "elec", "port": "in"}` and `"elec"` build the same model, and so
+does `port: "out"` on a flow the component carries only as an output.
+
+### What is refused, and why it stays refused
+
+- **`negate` beside `op`.** A comparison already yields a truth value, so it
+  is denied by the opposite operator. muscadet refuses the pair at the same
+  place (`muscadet.rules.check_operand_negation`).
+- **`release`**, the band that widens a comparison. A rule guard carries one
+  because its mode is an automaton that holds a location between the two
+  edges; a production condition writes a **variable** rewritten at every
+  evaluation, and there is nothing to hold. muscadet's own operand does not
+  read the key either.
+- **`automaton` / `state`.** A production condition reads what crosses the
+  component, not where its automata sit, and muscadet's operand carries
+  neither.
+- **a boolean operand naming a continuously-evolving quantity.** muscadet
+  reads that as `!= 0` (its R46). Here the verdict is read at discrete epochs,
+  so the crossing has to be **located** to be read at its own date, and `!= 0`
+  has no side to be entered from. Locating it would mean turning it into `> 0`
+  or into `< 0`, that is **supposing the sign of the quantity** in the
+  modeller's place, on a rate that may well take both; reading it as it stands
+  would mean settling the condition at t = 0 and never again. Neither is a
+  reading somebody can be given without being told, so the shape is refused
+  and the refusal names what to write: `{"op": ">", "value": 0}` says the same
+  of a quantity that only rises, and says which side it is entered from. An
+  equality on such a quantity is refused for the same reason, in the same
+  words a capacity's discharge command uses.
+
+### A threshold on a quantity that moves
+
+A comparison against a continuous quantity gets a **two-state threshold
+automaton** whose two transitions are `watched`, and the production condition
+reads that automaton's location rather than the quantity itself. The
+indirection is the mechanism, not a detour:
+
+the condition writes a variable through a sensitive function, and a sensitive
+function is re-run by a *discrete* change. An attribute an ODE moves announces
+nothing of its own, so a condition reading the quantity directly is evaluated
+at t = 0 and never again -- measured, on a volume filling past its threshold
+with the output left unfed for the whole mission. Reading the location
+subscribes the function to the automaton, whose watched transitions fire **at**
+the crossing. muscadet wires the same thing the other way round, hanging a
+sensitive method on the same automaton
+(`muscadet.flow.add_prod_cond_threshold_automata`).
+
+The two readings agree everywhere but at t = 0, where the automaton is still
+in the location it was declared in: the initial fixpoint settles it, as it
+settles a capacity's discharge gate and a rule set's mode.
+
 ## A mode declared beside its target
 
 A component declaration takes **three shapes**, and says which under its `kind`

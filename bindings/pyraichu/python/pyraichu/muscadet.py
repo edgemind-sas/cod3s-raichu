@@ -22,9 +22,10 @@ Semantics generated per flow (mirroring `muscadet/flow.py`):
 
 - flow in  ``f``: bool ``f_fed_in`` := aggregation (``or``/``and``/
   ``k >= n``) of the connected producers' ``f_fed_out``;
-- flow out ``f``: bool ``f_fed_out`` := production condition (AND of
-  the declared ``var_prod_cond`` in-flows, or the ``var_prod_default``
-  constant) AND ``f_fed_available_out`` (driven by failure modes);
+- flow out ``f``: bool ``f_fed_out`` := production condition (the
+  declared ``var_prod_cond`` over the component's own flows, or the
+  ``var_prod_default`` constant) AND ``f_fed_available_out`` (driven by
+  failure modes);
 - failure modes: two-state automaton (``ok``/``nok``) with delay or
   exponential laws; ``nok`` forces ``f_fed_available_out`` to ``False``.
 
@@ -204,6 +205,7 @@ from __future__ import annotations
 import heapq
 import json
 import math
+import operator
 import re
 from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
@@ -309,6 +311,18 @@ _CONTINUITY_MESSAGE = (
 #: Comparison operators a guard operand may carry, as the schema's
 #: ``cmp`` tags.
 _CMP_OPS = {"<": "lt", "<=": "le", ">": "gt", ">=": "ge", "==": "eq", "!=": "ne"}
+
+#: The same operators as Python predicates, for the one thing the schema tag
+#: cannot do: decide a comparison whose left side is a **two-valued** read
+#: before the model is written. See :func:`_boolean_comparison`.
+_CMP_PREDICATES = {
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
 
 #: How many arcs the rule-cycle search may expand before it gives up.
 #: The diagnostic is worth a large but finite walk over the rule graph,
@@ -478,6 +492,37 @@ def _min(terms: list[dict[str, Any]]) -> dict[str, Any]:
     return {"op": "min", "args": terms}
 
 
+def _const_bool(value: bool) -> dict[str, Any]:
+    return {"op": "const", "value": {"kind": "bool", "value": bool(value)}}
+
+
+def _boolean_comparison(read: dict[str, Any], op: str, value: float) -> dict[str, Any]:
+    """A comparison whose left side reads a **two-valued** quantity, settled
+    here instead of at every evaluation.
+
+    muscadet thresholds such an operand on ``float(var_fed.value())``
+    (``muscadet.flow._prod_cond_compare_reader``), so a state that is False or
+    True is compared as 0 or 1. There are only two left-hand sides, so the
+    comparison is one of four expressions -- the read, its negation, or a
+    constant -- and writing it as one is not an optimisation: this engine's
+    ordering comparison is typed and refuses a boolean left side outright
+    (``ordering comparison on booleans``), so the comparison HAS to be resolved
+    on this side to mean what it means over there.
+
+    The constants are the honest answer to a threshold no state can cross:
+    ``ctrl > 3`` never holds and ``ctrl >= 0`` always does. Refusing them
+    instead would refuse a condition muscadet runs."""
+    predicate = _CMP_PREDICATES[op]
+    threshold = float(value)
+    at_false = bool(predicate(0.0, threshold))
+    at_true = bool(predicate(1.0, threshold))
+    if at_false == at_true:
+        return _const_bool(at_true)
+    if at_true:
+        return read
+    return {"op": "bool", "bool_op": "not", "args": [read]}
+
+
 def _bool(bool_op: str, terms: list[dict[str, Any]]) -> dict[str, Any]:
     """`terms` joined by `bool_op`, degrading to the term itself rather
     than emitting a one-argument ``bool``.
@@ -617,8 +662,12 @@ class _FlowOut:
     name: str
     var_prod_default: bool = False
     # Flat list = one AND group; list-of-lists = DNF (outer-OR of
-    # inner-AND groups, the platform-export `prod_cond` form).
-    var_prod_cond: list[str] | list[list[str]] = field(default_factory=list)
+    # inner-AND groups, the platform-export `prod_cond` form). An operand
+    # is a bare flow name or the mapping muscadet writes back, carrying
+    # `PROD_COND_OPERAND_KEYS`: `port` to select a side the default
+    # resolution would not, `negate` to deny the operand, `op`/`value` to
+    # compare what it names against a threshold.
+    var_prod_cond: list[Any] | list[list[Any]] = field(default_factory=list)
     # muscadet `FlowOutTempo`: {"enable_time", "disable_time",
     # "init_enable"}: a disabled↔enabled automaton whose delayed
     # transitions are gated on the production condition (reset on
@@ -871,6 +920,15 @@ RULE_KEYS = frozenset({"name", "cond", "cons", "prod"})
 RULE_OPERAND_KEYS = frozenset(
     {"name", "port", "automaton", "state", "negate", "op", "value", "release"}
 )
+
+#: What one operand of a **production condition** may carry
+#: (:meth:`ObjFlow._parse_prod_cond_operand`). muscadet's own vocabulary there
+#: (``muscadet/obj.py``, ``apply_prod_cond``), which is the guard's minus the
+#: two keys that need a location to sit in: `automaton`/`state` gate on one,
+#: and `release` widens a comparison into a band that has to be held between
+#: its edges. The production variable is rewritten at every evaluation and
+#: holds nothing, so both are refused rather than read past.
+PROD_COND_OPERAND_KEYS = frozenset({"name", "port", "negate", "op", "value"})
 
 
 @dataclass
@@ -1383,13 +1441,22 @@ class ObjFlow:
         self,
         name: str,
         var_prod_default: bool = False,
-        var_prod_cond: list[str] | None = None,
+        var_prod_cond: list[Any] | None = None,
         var_is_active_default: bool | None = None,
         var_fed_available_out_init: bool | None = None,
         var_fed_available_out_reset: bool | None = None,
     ) -> None:
         """Declare an outgoing flow, produced unconditionally
-        (``var_prod_default=True``) or when the named in-flows are fed.
+        (``var_prod_default=True``) or when the declared condition holds.
+
+        `var_prod_cond` is a list of groups, OR-ed, each group's operands
+        AND-ed, and a flat list is one such group. An operand is a bare flow
+        name -- read on the INPUT side first, exactly as muscadet resolves one
+        -- or the mapping carrying :data:`PROD_COND_OPERAND_KEYS`: `port` to
+        select a side the default would not have picked (the transit pattern,
+        where the component carries one name both ways), `negate` to deny the
+        operand, `op` and `value` to compare what it names against a threshold
+        in a rule guard's own comparison vocabulary.
 
         The three dormancy knobs are muscadet's: `var_is_active_default`
         adds a ``var_is_active`` factor to the delivery (the flow stays
@@ -3160,6 +3227,250 @@ class ObjFlow:
                 "`value`"
             )
 
+    # --- production conditions ------------------------------------------
+
+    def _parse_prod_cond(self, where: str, declared: Any) -> list[list[_RuleOperand]]:
+        """A declared production condition, as groups of resolved operands.
+
+        The shape is the one this site has always read: a list of groups,
+        OR-ed, each group's operands AND-ed, and a FLAT list taken as ONE
+        conjunction. The flat reading is not a choice made here -- the layer
+        above converts muscadet's conjunctive form before it arrives, and a
+        flat list means the same conjunction under either convention
+        (``pyraichu.declare._prod_cond``).
+        """
+        groups = (
+            declared
+            if all(isinstance(group, (list, tuple)) for group in declared)
+            else [declared]
+        )
+        parsed: list[list[_RuleOperand]] = []
+        for group in groups:
+            specs = group if isinstance(group, (list, tuple)) else [group]
+            # muscadet refuses this one too, and on the family it had left for
+            # later: `FlowContinuousOut.check_prod_cond_shape` scopes itself to
+            # the continuous classes because "the discrete classes are 1.x
+            # surface with the same laxity, and tightening them belongs to its
+            # own change". This is that change, on this side. The layer above
+            # refuses it before the conversion, where the two readings of the
+            # inner mode do not even agree on what it would mean.
+            if not specs:
+                raise ValueError(
+                    f"{where} carries an empty group; a group that reads "
+                    "nothing says nothing about when the output produces"
+                )
+            parsed.append(
+                [self._parse_prod_cond_operand(where, spec) for spec in specs]
+            )
+        return parsed
+
+    def _parse_prod_cond_operand(self, where: str, spec: Any) -> _RuleOperand:
+        """One production-condition operand, in the form the expression
+        reads it.
+
+        The operand vocabulary is a rule guard's minus the two keys
+        :data:`PROD_COND_OPERAND_KEYS` leaves out, and it is read by the same
+        parser, so a comparison is spelled once for both directions of the
+        discrete/continuous interoperation.
+
+        Two things happen here that a guard does not need.
+
+        **A negated comparison is refused.** A comparison already yields a
+        truth value, so it is denied by the opposite operator rather than
+        beside it; muscadet refuses the pair at the same place
+        (``muscadet.rules.check_operand_negation``).
+
+        **A boolean operand naming a continuously-evolving quantity is
+        refused**, where muscadet reads one as ``!= 0`` (its R46
+        normalisation). The divergence is deliberate and neither half of it is
+        free:
+
+        * read as it stands, the quantity would be looked at whenever the
+          condition happens to be evaluated, which is at DISCRETE epochs only.
+          A quantity an ODE moves announces no change of its own, so the
+          condition would be settled at t = 0 and never again -- measured, on
+          a volume filling past its threshold with the output left unfed for
+          the whole mission;
+        * turned into a located crossing, it would have to become ``> 0`` or
+          ``< 0``, since ``!= 0`` has no side to be entered from. Choosing
+          between them means **supposing the sign of the quantity** in the
+          modeller's place, on a rate that may well take both.
+
+        So the shape is refused and the refusal says what to write: on a
+        quantity that only rises, ``{"op": ">", "value": 0}`` says the same
+        thing AND says which side it is entered from. The comparison it asks
+        for is then watched by the threshold automaton below, which a boolean
+        read never got on either engine.
+        """
+        if isinstance(spec, dict):
+            refused = sorted(set(spec) & (RULE_OPERAND_KEYS - PROD_COND_OPERAND_KEYS))
+            if refused:
+                raise ValueError(
+                    f"{where} carries the production-condition operand key(s) "
+                    f"{refused}; a production condition reads what crosses this "
+                    "component, and `automaton`/`state` gate on a location "
+                    "while `release` needs one to hold a band between its two "
+                    "edges. The production variable is rewritten at every "
+                    "evaluation and holds neither. State the condition through "
+                    "a rule guard, which does"
+                )
+            unknown = sorted(set(spec) - PROD_COND_OPERAND_KEYS)
+            if unknown:
+                raise ValueError(
+                    f"{where} carries a production-condition operand with "
+                    f"unknown keys {unknown}; an operand carries "
+                    f"{sorted(PROD_COND_OPERAND_KEYS)}"
+                )
+
+        operand = self._parse_operand(where, spec)
+        if operand.negate and operand.op is not None:
+            raise ValueError(
+                f"{where} both negates and compares `{operand.name}`; a "
+                "comparison already yields a truth value, so it is denied by "
+                "the opposite operator rather than beside it"
+            )
+        if self._operand_reads_continuously(where, operand):
+            if operand.op is None:
+                raise ValueError(
+                    f"{where} reads `{operand.name}` as a boolean, and what it "
+                    "names is a continuously-evolving quantity. muscadet reads "
+                    "such an operand as `!= 0`; here the condition is read at "
+                    "discrete epochs, so the crossing has to be LOCATED to be "
+                    "read at its own date, and a crossing is located on an "
+                    "ordering comparison. Compare it explicitly: `{'op': '>', "
+                    "'value': 0}` says the same thing of a quantity that only "
+                    "rises, and says which side it is entered from"
+                )
+            if operand.op not in _ORDERING_OPS:
+                raise ValueError(
+                    f"{where} conditions on the continuous quantity "
+                    f"`{operand.name}` with `{operand.op}`; the transition "
+                    "carrying it is watched, and a crossing is located on an "
+                    f"ordering comparison ({', '.join(_ORDERING_OPS)})"
+                )
+        return operand
+
+    @staticmethod
+    def _prod_cond_threshold(flow_name: str, row: int, column: int) -> tuple[str, str, str]:
+        """The automaton one continuous comparison of a production condition
+        is watched by, and its two locations."""
+        base = f"{flow_name}_cond_{row}_{column}"
+        return f"{base}_threshold", f"{base}_below", f"{base}_above"
+
+    def _prod_cond_expr(
+        self, where: str, flow_name: str, groups: list[list[_RuleOperand]]
+    ) -> dict[str, Any]:
+        """A parsed production condition as a boolean expression: the
+        disjunction of its groups, each the conjunction of its operands.
+
+        An operand comparing a **continuously-evolving** quantity reads the
+        LOCATION of its threshold automaton rather than the quantity itself,
+        and that indirection is the whole mechanism rather than a detour. This
+        expression writes a variable through a sensitive function, and a
+        sensitive function is re-run by a *discrete* change: an attribute an
+        ODE moves announces nothing of its own, so a condition reading the
+        quantity directly is evaluated at t = 0 and never again -- measured,
+        on a volume filling past its threshold with the condition left False
+        for the whole mission. Reading the location subscribes the function to
+        the automaton (`state_triggers`), whose watched transitions fire AT the
+        crossing. muscadet wires the same thing the other way round, hanging a
+        sensitive method on the same automaton
+        (`add_prod_cond_threshold_automata`).
+
+        The two agree everywhere but at t = 0, where the automaton is still in
+        the location it was declared in: the initial fixpoint settles it, as it
+        settles a capacity's discharge gate and a rule set's mode.
+        """
+        return _bool(
+            "or",
+            [
+                _bool(
+                    "and",
+                    [
+                        self._prod_cond_operand_expr(
+                            where, flow_name, row, column, operand
+                        )
+                        for column, operand in enumerate(group)
+                    ],
+                )
+                for row, group in enumerate(groups)
+            ],
+        )
+
+    def _prod_cond_operand_expr(
+        self,
+        where: str,
+        flow_name: str,
+        row: int,
+        column: int,
+        operand: _RuleOperand,
+    ) -> dict[str, Any]:
+        """One production-condition operand as a boolean expression."""
+        if operand.op is not None and self._operand_reads_continuously(where, operand):
+            automaton, _, above = self._prod_cond_threshold(flow_name, row, column)
+            return _state_active(self.name, automaton, above)
+        return self._rule_operand_expr(operand)
+
+    def _prod_cond_threshold_automata(
+        self, where: str, flow_name: str, groups: list[list[_RuleOperand]]
+    ) -> list[dict[str, Any]]:
+        """One two-state automaton per comparison a production condition makes
+        against a **continuously-evolving** quantity.
+
+        The automaton is not what the condition reads: the expression above
+        reads the quantity itself, so the two can never disagree on a value.
+        What it contributes is the **date**. A quantity moving inside an
+        integration step announces no change of its own, so nothing would
+        re-evaluate the condition at the crossing and the output would start
+        (or stop) producing at whatever event happened to come next. Declaring
+        the two transitions `watched` makes the solver stop AT the crossing,
+        which is what a rule set's mode buys on the other direction of the
+        interoperation and what muscadet builds here under the same reasoning
+        (``muscadet.flow.add_prod_cond_threshold_automata``).
+
+        A comparison on a DISCRETE read needs none of it: that read changes
+        only at an event, which is already a stop.
+        """
+        automata = []
+        for row, group in enumerate(groups):
+            for column, operand in enumerate(group):
+                if operand.op is None or not self._operand_reads_continuously(
+                    where, operand
+                ):
+                    continue
+                automaton, below, above = self._prod_cond_threshold(
+                    flow_name, row, column
+                )
+                automata.append(
+                    {
+                        "name": automaton,
+                        "states": [below, above],
+                        # The location the comparison designates cannot be
+                        # known here: the initial fixpoint resolves the
+                        # quantity, and the watched transition settles the
+                        # automaton there. Exactly how a capacity's discharge
+                        # gate enters its own.
+                        "init": below,
+                        "transitions": [
+                            {
+                                "name": f"{automaton}_cross_up",
+                                "source": below,
+                                "targets": [above],
+                                "guard": self._rule_operand_expr(operand),
+                                "distrib": "watched",
+                            },
+                            {
+                                "name": f"{automaton}_cross_down",
+                                "source": above,
+                                "targets": [below],
+                                "guard": self._rule_operand_negation(operand),
+                                "distrib": "watched",
+                            },
+                        ],
+                    }
+                )
+        return automata
+
     def _operand_read(
         self, where: str, operand: _RuleOperand
     ) -> tuple[dict[str, Any], tuple[str, str] | None]:
@@ -3303,9 +3614,20 @@ class ObjFlow:
         return automata
 
     def _rule_operand_expr(self, operand: _RuleOperand) -> dict[str, Any]:
-        """One guard operand as a boolean expression."""
-        read, _ = self._operand_read(f"ObjFlow `{self.name}`", operand)
+        """One guard operand as a boolean expression.
+
+        A comparison against a **two-valued** read is settled here rather than
+        emitted (:func:`_boolean_comparison`): this engine's ordering
+        comparison is typed, so `ctrl > 0.5` on a discrete flow would build a
+        model that fails at its first evaluation where muscadet reads it as
+        `float(var_fed) > 0.5`. It is the same vocabulary on both sides of the
+        discrete/continuous interoperation, so it is resolved in one place
+        rather than in the direction that happened to need it first."""
+        where = f"ObjFlow `{self.name}`"
+        read, _ = self._operand_read(where, operand)
         if operand.op is not None:
+            if not self._operand_reads_continuously(where, operand):
+                return _boolean_comparison(read, operand.op, operand.value)
             return {
                 "op": "cmp",
                 "cmp": _CMP_OPS[operand.op],
@@ -4228,7 +4550,7 @@ class ObjFlow:
         disable_time: float = 0.0,
         init_enable: bool = False,
         var_prod_default: bool = False,
-        var_prod_cond: list[str] | None = None,
+        var_prod_cond: list[Any] | None = None,
         var_fed_available_out_init: bool | None = None,
         var_fed_available_out_reset: bool | None = None,
     ) -> None:
@@ -4263,7 +4585,7 @@ class ObjFlow:
         trigger_time_down: float = 0.0,
         trigger_logic: str | int = "or",
         var_prod_default: bool = False,
-        var_prod_cond: list[str] | None = None,
+        var_prod_cond: list[Any] | None = None,
         var_fed_available_out_init: bool | None = None,
         var_fed_available_out_reset: bool | None = None,
     ) -> None:
@@ -4672,30 +4994,21 @@ class ObjFlow:
             # Production condition. `var_prod_cond` is either a flat list
             # (one AND group: the historical form) or a DNF list-of-lists
             # (outer-OR of inner-AND groups: the platform-export
-            # `prod_cond` form). A referenced flow resolves to this
-            # component's `_fed_in` (in-flow) or `_fed_out` (out-flow:
-            # the diagnostic-mirror pattern; the fixpoint handles the
-            # intra-component dependency without a topological sort).
-            in_names = {f.name for f in self.flows_in}
-            out_names = {f.name for f in self.flows_out}
-
-            def prod_ref(cond: str) -> dict:
-                if cond in in_names:
-                    return _var(me, f"{cond}_fed_in")
-                if cond in out_names:
-                    return _var(me, f"{cond}_fed_out")
-                raise ValueError(
-                    f"ObjFlow `{me}`: production condition of "
-                    f"`{flow.name}` references unknown flow `{cond}` "
-                    "(neither an in-flow nor an out-flow of this component)"
-                )
-
+            # `prod_cond` form). An operand is a bare flow name or the
+            # mapping muscadet writes back, and it is read by the very
+            # parser a rule guard's operands go through: the default
+            # resolution searches the INPUT side first, exactly as
+            # muscadet's does, and `port` selects the other one where the
+            # component carries the name both ways (the transit pattern:
+            # a board that feeds on and says so). An in-flow reads
+            # `_fed_in`, an out-flow `_fed_out` -- the diagnostic-mirror
+            # pattern; the fixpoint handles the intra-component
+            # dependency without a topological sort.
             if flow.var_prod_cond:
-                groups = (
-                    flow.var_prod_cond
-                    if all(isinstance(g, list) for g in flow.var_prod_cond)
-                    else [flow.var_prod_cond]
+                where = (
+                    f"ObjFlow `{me}`: production condition of `{flow.name}`"
                 )
+                groups = self._parse_prod_cond(where, flow.var_prod_cond)
                 functions.append(
                     {
                         "name": f"update_{prod_available}",
@@ -4705,19 +5018,15 @@ class ObjFlow:
                                     "component": me,
                                     "attribute": prod_available,
                                 },
-                                "value": _bool(
-                                    "or",
-                                    [
-                                        _bool(
-                                            "and",
-                                            [prod_ref(cond) for cond in group],
-                                        )
-                                        for group in groups
-                                    ],
+                                "value": self._prod_cond_expr(
+                                    where, flow.name, groups
                                 ),
                             }
                         ],
                     }
+                )
+                automata.extend(
+                    self._prod_cond_threshold_automata(where, flow.name, groups)
                 )
             # No production condition, no writer: the variable keeps
             # whatever it holds, which is its declared initial value

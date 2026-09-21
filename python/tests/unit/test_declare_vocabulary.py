@@ -698,17 +698,22 @@ def test_a_flow_key_that_says_nothing_is_accepted():
     assert declare.check_spec(spec) == "PUMP"
 
 
-def test_a_negated_production_condition_operand_is_refused_by_name():
-    """A discrete production condition here reads flow names and nothing
-    else; muscadet's negation and threshold operands have no counterpart
-    and are refused rather than dropped."""
+def test_a_production_condition_operand_key_outside_the_vocabulary_is_refused():
+    """The three keys muscadet reads on such an operand -- `negate`, `op` and
+    `value` -- are carried since 0.32.0 and have their own suite
+    (`test_prod_cond_operands.py`). What is refused is what muscadet's own
+    operand does NOT carry: `release` widens a comparison into a band, and a
+    band has to be held between its two edges where the production variable is
+    rewritten at every evaluation."""
     spec = a_heat_pump(
         flows=[
             {"cls": "FlowIn", "name": "call"},
             {
                 "cls": "FlowOut",
                 "name": "healthy",
-                "var_prod_cond": [[{"name": "call", "negate": True}]],
+                "var_prod_cond": [
+                    [{"name": "call", "op": ">", "value": 0.5, "release": 0.2}]
+                ],
             },
         ],
         rules=[],
@@ -717,7 +722,7 @@ def test_a_negated_production_condition_operand_is_refused_by_name():
     with pytest.raises(declare.ComponentSpecError) as raised:
         declare.check_spec(spec)
 
-    assert "negate" in str(raised.value)
+    assert "release" in str(raised.value)
 
 
 # --- initialisation parameters ----------------------------------------

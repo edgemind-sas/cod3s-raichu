@@ -281,3 +281,34 @@ def test_the_expansion_ceiling_does_not_apply_to_a_disjunctive_condition():
         )
 
     assert "disjunctions" in str(raised.value)
+
+
+@pytest.mark.parametrize("inner_mode", ["and", "or"])
+def test_an_empty_group_is_refused_on_both_readings(inner_mode):
+    """The one malformed shape that used to run to completion without a word,
+    and it did so DIFFERENTLY on the two readings.
+
+    Under ``"and"`` an empty group reaches the layer underneath as an empty
+    conjunction, which holds. Under ``"or"`` the expansion multiplies it out
+    and a product over an empty clause is EMPTY, so the condition disappears
+    entirely: no writer at all, the production variable left on its declared
+    default. That is the DORMANT function, and the exact opposite of the empty
+    disjunction the group states, which is false.
+
+    **muscadet refuses the same group, for the same reason, on the family it
+    left for later.** ``FlowContinuousOut.check_prod_cond_shape`` says "under
+    inner mode 'or' the output would never produce, under 'and' the condition
+    would never bind: neither is a declaration", and scopes itself to the
+    continuous classes because "the discrete classes are 1.x surface with the
+    same laxity, and tightening them belongs to its own change". So this pins
+    the discrete half of ONE refusal, not a stricture of this reader's own.
+    """
+    flows = [_flow_in(name) for name in DETECTIONS]
+    groups = [[{"name": DETECTIONS[0], "port": "in"}], []]
+
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.check_spec(
+            _component("PCC", flows + [_flow_out(ALARM, groups, inner_mode=inner_mode)])
+        )
+
+    assert "empty group" in str(raised.value)
