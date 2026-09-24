@@ -1492,6 +1492,12 @@ def _prod_cond(
 # --- occurrence laws ---------------------------------------------------------
 
 
+#: cod3s class name -> the short law name this layer reads. Only the two laws
+#: a temporised output carries: a random law keeps the name it was declared
+#: under, so its refusal names what the caller wrote.
+_COD3S_LAW_NAMES = {"DelayOccDistribution": "delay", "InstOccDistribution": "inst"}
+
+
 def _delay(where: str, key: str, declared: Any) -> float:
     """A temporisation law, reduced to the delay this layer carries.
 
@@ -1508,7 +1514,18 @@ def _delay(where: str, key: str, declared: Any) -> float:
             f"law: declare {{'cls': 'delay', 'time': t}}"
         )
     law = declared.get("cls", "delay")
+    # muscadet's read-back writes the cod3s object's class name, not the short
+    # name: both spellings are one law.
+    law = _COD3S_LAW_NAMES.get(law, law)
     if law == "inst":
+        # A firing probability below one is a draw, not a delay.
+        probs = declared.get("probs") or [1]
+        if list(probs) != [1]:
+            raise ComponentSpecError(
+                f"{where} declares `{key}` as an instantaneous law with firing "
+                f"probabilities `probs`={probs!r}; a temporised output here "
+                f"fires surely, so only a sure firing is carried"
+            )
         return 0.0
     if law != "delay":
         raise ComponentSpecError(
