@@ -809,6 +809,8 @@ def test_a_system_without_a_rule_set_carries_no_rule_material():
     for component in document["components"]:
         assert component["automata"] == []
         targets = {equation["target"] for equation in component["equations"]}
-        assert not any(
-            target.endswith(("_scale", "_produced_out")) for target in targets
-        )
+        # `_produced_out` is not asserted absent: the relay carries `power`
+        # on both sides and names it in no rule, so it is a pass-through,
+        # which publishes what crossed exactly as a rule publishes what it
+        # made (see `test_muscadet_passthrough.py`).
+        assert not any(target.endswith("_scale") for target in targets)

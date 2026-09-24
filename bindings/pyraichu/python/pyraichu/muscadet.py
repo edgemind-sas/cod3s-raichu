@@ -4292,10 +4292,60 @@ class ObjFlow:
                 return pair
         return None
 
+    def _passes_through(self, flow: str) -> bool:
+        """Whether `flow` crosses this component unchanged, input to output.
+
+        muscadet's identity transfer (`get_identity_transfer_flows`, its
+        R31): a continuous flow declared on BOTH sides and named by no
+        rule set is handed on as it arrives, so a plain pipe needs no
+        ceremonial same-in-same-out rule. Without it the output published
+        its declared rate, zero on such a component, and everything
+        downstream read zero.
+
+        Every other way of saying what the component does with the flow
+        wins, because each one already is that statement: a rule set
+        consuming or producing it, a conduit metering it, a volume holding
+        it (transit or not, which `transmits` decides), a tap routing into
+        it, a declared equation for either side. A stream a two-stream pair
+        sits on is left out as well: its delta would have to be taken on
+        what crossed, which this layer does not yet name."""
+        inflow = next(
+            (
+                declared
+                for declared in self.flows_continuous_in
+                if declared.name == flow
+            ),
+            None,
+        )
+        out = next(
+            (
+                declared
+                for declared in self.flows_continuous_out
+                if declared.name == flow
+            ),
+            None,
+        )
+        if inflow is None or out is None:
+            return False
+        if inflow.demand_expr is not None or out.capability_expr is not None:
+            return False
+        if any(
+            flow in rule_set.consumed() or flow in rule_set.produced()
+            for rule_set in self.rule_sets
+        ):
+            return False
+        return (
+            self._conduit_on(flow) is None
+            and self._capacity_of(flow) is None
+            and not self._tapped_into(flow)
+            and not self._has_transfer_delta(flow)
+        )
+
     def _produced_outputs(self) -> set[str]:
         """The continuous outputs whose delivery is something other than
         their declared rate: what a rule set makes, what a conduit meters
-        across, and what a routed tap hands to a receiving output.
+        across, what a pass-through hands on, and what a routed tap hands
+        to a receiving output.
 
         These are exactly the outputs carrying a ``{flow}_produced_out``,
         what was actually made as opposed to what could have been, and it
@@ -4311,9 +4361,15 @@ class ObjFlow:
         may feed an output that is itself tapped; the walk is monotone,
         so it terminates whether or not the routing graph is acyclic, and
         :meth:`_refuse_ill_formed_taps` is what rules the cycle out."""
-        produced = {
-            flow for rule_set in self.rule_sets for flow in rule_set.produced()
-        } | {pair.source for pair in self.transfers if pair.is_conduit}
+        produced = (
+            {flow for rule_set in self.rule_sets for flow in rule_set.produced()}
+            | {pair.source for pair in self.transfers if pair.is_conduit}
+            | {
+                flow.name
+                for flow in self.flows_continuous_out
+                if self._passes_through(flow.name)
+            }
+        )
         while True:
             grown = produced | {
                 flow.name
@@ -4745,7 +4801,9 @@ class ObjFlow:
         rule_demand, rule_capability, rule_production = self._build_rule_sets(
             connected_out, variables, automata, equations
         )
-        self._build_continuous_in(rule_demand, variables, ports, equations)
+        self._build_continuous_in(
+            rule_demand, connected_out, variables, ports, equations
+        )
         self._build_continuous_out(
             rule_capability, rule_production, variables, ports, equations
         )
@@ -5338,6 +5396,7 @@ class ObjFlow:
     def _build_continuous_in(
         self,
         rule_demand: dict[str, list[dict[str, Any]]],
+        connected_out: set[str] | None,
         variables: list[dict],
         ports: list[dict],
         equations: list[dict],
@@ -5345,13 +5404,13 @@ class ObjFlow:
         """The continuous in-flows: their three channels, their in port,
         and the demand this component carries upstream on each.
 
-        The demand has one source of the four, in this order of
+        The demand has one source of the five, in this order of
         precedence: a conduit metering the flow, the rule sets consuming
-        it, a declared `demand_expr`, and failing all three the declared
-        constant. Whichever it is, a declared time profile scales it and
-        the volume holding the flow bounds it, in that order: the profile
-        says how much is wanted, the volume says how much of that there
-        is room for."""
+        it, a declared `demand_expr`, the output the flow passes through
+        to, and failing all four the declared constant. Whichever it is,
+        a declared time profile scales it and the volume holding the flow
+        bounds it, in that order: the profile says how much is wanted, the
+        volume says how much of that there is room for."""
         for continuous_in in self.flows_continuous_in:
             flow_name = continuous_in.name
             variables.append(
@@ -5421,6 +5480,19 @@ class ObjFlow:
                 base = _sum(rule_demand[flow_name])
             elif continuous_in.demand_expr is not None:
                 base = continuous_in.demand_expr
+            elif self._passes_through(flow_name):
+                # A pass-through asks for what its output is asked for,
+                # and an output nothing reads asks for nothing: carried
+                # as its declared default instead, it would take a share
+                # of a supply a wired rival needs. A ceiling on the output
+                # bounds the ask as well, for the same reason.
+                read = connected_out is None or flow_name in connected_out
+                base = _float(0.0)
+                if read:
+                    base = _var(self.name, f"{flow_name}_demand_out")
+                    ceiling = self._max_rate_on(flow_name)
+                    if ceiling is not None:
+                        base = _min([base, _float(ceiling)])
             else:
                 base = _float(continuous_in.var_demand_in_default)
             if continuous_in.profile is not None:
@@ -5569,6 +5641,14 @@ class ObjFlow:
                     "op": "mul",
                     "args": factors + [_sum(rule_capability[flow_name])],
                 }
+            elif self._passes_through(flow_name):
+                # What could arrive could cross, scaled by the output's
+                # own factors as any output is.
+                nominal = {
+                    "op": "mul",
+                    "args": factors
+                    + [_clamped_at_zero(_var(me, f"{flow_name}_capability_in"))],
+                }
             elif self._tapped_into(flow_name):
                 # An output that receives: what it carries is what the
                 # taps routed into it took off their own streams, and
@@ -5668,6 +5748,36 @@ class ObjFlow:
                                     _clamped_at_zero(_var(me, f"{flow_name}_fed_in")),
                                 ],
                             },
+                        ),
+                    }
+                )
+            elif self._passes_through(flow_name):
+                # What crossed, as opposed to what could: what actually
+                # arrived, scaled by the output's factors. A scarce supply
+                # is handed on as it is, and the allocation distributes
+                # this rather than the capability.
+                variables.append(_float_attribute(f"{flow_name}_produced_out", 0.0))
+                equations.append(
+                    {
+                        "target": f"{flow_name}_produced_out",
+                        "kind": "explicit",
+                        "expr": self._tap_split(
+                            flow_name,
+                            "produced",
+                            self._bounded_by_max_rate(
+                                continuous_out,
+                                {
+                                    "op": "mul",
+                                    "args": factors
+                                    + [
+                                        _clamped_at_zero(
+                                            _var(me, f"{flow_name}_fed_in")
+                                        )
+                                    ],
+                                },
+                            ),
+                            variables,
+                            equations,
                         ),
                     }
                 )

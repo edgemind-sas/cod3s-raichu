@@ -268,6 +268,31 @@ must be strictly positive
 A profile left unlabelled is named after its shape, exactly as muscadet
 names it, and its refusals say nothing about a label nobody chose.
 
+#### A flow carried on both sides: the pass-through
+
+A component declaring the same continuous flow as an input **and** an
+output, with nothing else saying what it does with it, hands on what it
+receives. This is muscadet's identity transfer: a pipe, a valve or a cable
+run needs no same-in-same-out rule.
+
+- the capability crosses forward and the demand crosses back, so the
+  consumer downstream is offered what the supply upstream can give, and
+  that supply is asked for what the consumer wants;
+- what crosses is what **arrived**, scaled by the output's own deratings
+  and time profile as on any output. A scarce supply is handed on as it
+  is, and a derating of 0.5 hands on half of it;
+- an output nothing reads asks for nothing, so a pipe left dangling takes
+  no share of a supply a wired consumer needs. Its input's declared
+  demand is not used, and neither is its output's declared rate.
+
+Anything else that says what the component does with the flow takes
+precedence, because it already is that statement: a rule set consuming or
+producing it, a conduit metering it, a volume holding it (whose own
+through-path `transmits` decides, below), a tap routed into it, or a
+declared equation on either side. A stream a two-stream transfer pair sits
+on is not a pass-through here yet: muscadet transfers it too, and this
+layer keeps the stream's declared rate as the base the pair adjusts.
+
 #### Whether a volume passes things on: `transmits`
 
 A volume between a producer and a consumer is a **buffer**: what it does
