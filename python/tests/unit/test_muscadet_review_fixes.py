@@ -8,7 +8,10 @@ watched an exception be raised would keep passing if the refusal were
 later relaxed for the wrong reason.
 
 - a capacity and a rule set on one flow of one component made matter,
-  the flow crossing once by the rule and once by the volume;
+  the flow crossing once by the rule and once by the volume (a volume
+  standing on ONE side of the rules has since been given its reading,
+  see `test_capacity_rule_sides.py`; what stays refused is the shape
+  where the flow also transits the component);
 - a two-stream transfer on a rule-produced stream made matter, the
   origin's shortfall being clamped away while the target still gained
   the whole moved quantity;
@@ -78,10 +81,12 @@ class Buffer(mu.ObjFlow):
 
 def a_reactor_declaring(order: str) -> mu.ObjFlow:
     """A reactor whose capacity and rule set name the same flow, declared
-    in the given order. Both orders describe the same component, so both
-    must reach the same verdict."""
+    in the given order, the flow also leaving the component under its own
+    name. Both orders describe the same component, so both must reach
+    the same verdict."""
     obj = mu.ObjFlow("R")
     obj.add_flow_continuous_in(name="feed")
+    obj.add_flow_continuous_out(name="feed")
     obj.add_flow_continuous_out(name="prod")
 
     def capacity():
@@ -104,7 +109,9 @@ def a_reactor_declaring(order: str) -> mu.ObjFlow:
 @pytest.mark.parametrize("order", ["capacity first", "rule set first"])
 def test_a_capacity_over_a_rule_carried_flow_is_refused_in_either_order(order):
     """A rule TRANSFORMS what crosses the component and a volume STORES
-    it: on one flow the two double-count, and the component makes matter.
+    it: on a flow the component also passes on, the volume would be both
+    the rule's supply and the transit, the two double-count, and the
+    component makes matter.
 
     Refused whichever half was written first, which is the point: the
     check reads the component, not the declaration it was called from."""
@@ -119,6 +126,7 @@ def test_a_refused_declaration_leaves_the_component_as_it_was():
     component that raised is not left half-declared."""
     obj = mu.ObjFlow("R")
     obj.add_flow_continuous_in(name="feed")
+    obj.add_flow_continuous_out(name="feed")
     obj.add_flow_continuous_out(name="prod")
     obj.add_capacity(name="hopper", flow="feed", capacity=50.0, side="in")
     with pytest.raises(ValueError):
@@ -527,11 +535,12 @@ def test_the_clash_checks_run_again_when_the_document_is_written():
         name="convert", rules=[{"cons": {"feed": 1.0}, "prod": {"prod": 1.0}}]
     )
     # Around the declaration method, as an unwary subclass or a future
-    # loader could.
+    # loader could: a volume "upstream" of the rules on the flow they
+    # produce, which has no rule on its far side.
     obj.capacities.append(
         mu._Capacity(
             name="hopper",
-            flows=[mu._CapacityFlow(name="feed")],
+            flows=[mu._CapacityFlow(name="prod")],
             volume=50.0,
             side="in",
             content_init={},

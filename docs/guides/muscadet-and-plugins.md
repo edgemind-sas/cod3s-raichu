@@ -309,6 +309,40 @@ declared equation on either side. A stream a two-stream transfer pair sits
 on is not a pass-through here yet: muscadet transfers it too, and this
 layer keeps the stream's declared rate as the base the pair adjusts.
 
+#### A volume beside the rules: `side`
+
+One component may hold a volume **and** transform flows, the volume on
+one side of its rules, as muscadet places it. The rules keep their
+declared coefficients; the volume changes only what crosses the
+component's boundary.
+
+| `side` | held flow | what the volume does |
+|---|---|---|
+| `"in"` | one the rules consume | what arrives fills it; the rules draw their whole need while that flow is stocked, and what arrives once it has run out. Upstream it publishes the need, plus its `fill_rate` while there is room |
+| `"out"` | one the rules produce | the consumers' demand plus its `fill_rate` is what the rules are asked to make; what they make fills it; the consumers get their whole request while it is stocked, and what the rules make once it is empty |
+
+A volume holding several such flows judges emptiness per constituent and
+fullness on the shared total, so a membrane whose hydrogen fills the void
+never serves oxygen it does not hold. Left out, `side` resolves to the side
+the held flow is carried on. Two shapes stay refused, because the flow
+would cross twice: a held flow the rules transform that the component also
+declares on the other side (the volume would be the rules' supply and the
+transit at once), and a volume on the side the rules do not face. Two
+rule sets drawing the same flow from one volume upstream are refused as
+well: once the volume is empty each would be allowed the whole of what
+arrives. A volume downstream bounds its rules through its claim even when
+no consumer reads the output yet.
+
+A **recirculation ring** closing on a transiting volume (a fan drawing
+room air and blowing it back) is solved by tearing it at the fan's return
+output, which then no longer bounds the fan: the room absorbs what the two
+ends momentarily disagree on. The tear is taken only for a direct
+recirculation the room provably absorbs: the return feeds the room and
+nothing else, every rule making it draws at least as much room air as it
+blows back, and each such rule has another output that still bounds it
+(the exhaust). Any other ring keeps the engine's cycle refusal, as a ring
+with no volume does.
+
 #### Whether a volume passes things on: `transmits`
 
 A volume between a producer and a consumer is a **buffer**: what it does
