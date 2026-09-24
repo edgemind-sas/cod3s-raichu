@@ -21,7 +21,7 @@
 //! well-formed, initial states exist). The engine only consumes validated
 //! models.
 
-use raichu_expr::{AggOp, Assignment, AttrRef, Expr, PortRef, Value};
+use raichu_expr::{AggOp, Assignment, AttrRef, CmpOp, Expr, PortRef, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use thiserror::Error;
@@ -504,6 +504,33 @@ pub enum IndicatorTarget {
         automaton: String,
         /// The observed state.
         state: String,
+    },
+    /// Observe the **truth of a threshold** on an attribute: `true` while
+    /// `attr cmp value` holds, `false` otherwise.
+    ///
+    /// The difference with [`IndicatorTarget::Attribute`] is the whole
+    /// point of the variant, and it is a difference of *quantity*, not of
+    /// spelling: on a free-valued attribute the sojourn of
+    /// [`IndicatorTarget::Attribute`] is the time-integral of the value
+    /// (an area), while the sojourn here is the **time spent under the
+    /// condition** (a duration, bounded by the horizon). A study that
+    /// asks "how long was there hydrogen in the tank" asks for the
+    /// second, and reading it off the first returns the tank's content
+    /// integrated over time, which is plausible, larger than the horizon,
+    /// and silently the wrong question's answer.
+    ///
+    /// `value` is a constant: this carries the threshold a study
+    /// declares (cod3s's `operator` / `value_test` pair), not a general
+    /// expression. Kinds are checked at build time, so a boolean
+    /// attribute may only be tested for (in)equality and a numeric one
+    /// may not be compared to a boolean.
+    Predicate {
+        /// The compared attribute.
+        attr: AttrRef,
+        /// The comparison operator.
+        cmp: CmpOp,
+        /// The constant the attribute is compared against.
+        value: Value,
     },
 }
 
@@ -1193,6 +1220,20 @@ pub enum ModelError {
         /// The indicator.
         indicator: String,
         /// What failed to resolve.
+        detail: String,
+    },
+    /// An indicator's threshold ([`IndicatorTarget::Predicate`]) compares
+    /// two kinds that have no comparison: a boolean attribute ordered
+    /// against anything, or a numeric attribute tested against a boolean.
+    ///
+    /// Refused at build time rather than answered `false` at every
+    /// instant, because a threshold nobody can evaluate is exactly the
+    /// silence the variant exists to end.
+    #[error("indicator `{indicator}`: {detail}")]
+    IndicatorPredicateKind {
+        /// The indicator.
+        indicator: String,
+        /// Which two kinds, and why they do not compare.
         detail: String,
     },
     /// A channel list was declared on an **in** port. Channels are
@@ -3270,11 +3311,65 @@ impl Model {
                         });
                     }
                 }
+                IndicatorTarget::Predicate { attr, cmp, value } => {
+                    let kind = scopes
+                        .get(attr.component.as_str())
+                        .and_then(|scope| scope.attribute_kind(&attr.attribute))
+                        .ok_or_else(|| ModelError::IndicatorUnresolved {
+                            indicator: indicator.name.clone(),
+                            detail: format!(
+                                "unknown attribute `{}.{}`",
+                                attr.component, attr.attribute
+                            ),
+                        })?;
+                    Self::check_predicate_kinds(&indicator.name, attr, kind, *cmp, value)?;
+                }
             }
         }
         // scopes is only used through the helpers above; keep the
         // signature symmetric with the other passes.
         let _ = scopes;
+        Ok(())
+    }
+
+    /// Refuse an indicator threshold whose two sides do not compare.
+    ///
+    /// The engine's own [`raichu_expr::CmpOp`] semantics are the rule
+    /// being enforced ahead of time: booleans compare for equality only,
+    /// numbers compare across `int`/`float`, and the two families do not
+    /// mix. Doing it here rather than at record time is what lets the
+    /// three recording sites stay infallible, and it is also the more
+    /// useful moment: a threshold that can never be evaluated is a
+    /// modelling mistake, not a run-time event.
+    fn check_predicate_kinds(
+        indicator: &str,
+        attr: &AttrRef,
+        kind: AttrKind,
+        cmp: CmpOp,
+        value: &Value,
+    ) -> Result<(), ModelError> {
+        let numeric_attr = matches!(kind, AttrKind::Int | AttrKind::Float);
+        let numeric_value = matches!(value, Value::Int(_) | Value::Float(_));
+        if numeric_attr != numeric_value {
+            return Err(ModelError::IndicatorPredicateKind {
+                indicator: indicator.to_owned(),
+                detail: format!(
+                    "the threshold compares `{}.{}`, declared {kind:?}, with {value:?}: a \
+                     boolean and a number have no comparison",
+                    attr.component, attr.attribute
+                ),
+            });
+        }
+        if !numeric_attr && !matches!(cmp, CmpOp::Eq | CmpOp::Ne) {
+            return Err(ModelError::IndicatorPredicateKind {
+                indicator: indicator.to_owned(),
+                detail: format!(
+                    "the threshold orders `{}.{}` with {cmp:?}, and it is declared {kind:?}: a \
+                     boolean is tested for equality (`eq`, `ne`) and never ordered",
+                    attr.component, attr.attribute
+                ),
+            });
+        }
         Ok(())
     }
 }

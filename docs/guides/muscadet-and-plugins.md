@@ -203,7 +203,7 @@ measurement can have:
 |---|---|---|
 | `level` | a volume | `{cap}_level`, `{cap}_level_{flow}` |
 | `ratio` | a volume of more than one constituent | `{cap}_ratio_{flow}` |
-| `rate` | a flow declaring `publish_rate`, as what crossed or what could | `{flow}_rate` |
+| `rate` | a flow declaring `publish_rate`, or one a measurement link names | `{flow}_rate` |
 
 One name serves both directions: what an observer wants is the quantity
 crossing the wire, and which side of it the publisher sits on is the
@@ -221,6 +221,22 @@ reason.
 It is declared rather than implied, because publishing every rate would
 put a port and an equation on every flow of every model for the few an
 observer reads.
+
+**A connection naming `{flow}_rate_out` opens the channel on its own**, on
+the delivered quantity. muscadet has no such key and never had one: it
+gives every continuous flow a rate box unconditionally, so a document
+built there records no choice anywhere and would name a port nothing had
+created. What it does carry is the wiring, and a flow whose rate a link
+names is a flow somebody observes — which is the question `publish_rate`
+asks. Delivered, because that is what muscadet's own box exports
+(`var_fed`); `publish_rate` remains the only way to ask for the
+capability, and it wins wherever it is written. Fewer channels than
+muscadet all the same: only the observed ones.
+
+One ambiguity is read rather than assumed. `{flow}_rate_out` is also the
+ordinary output port of a flow literally called `{flow}_rate`, so a
+component declaring one is left alone and its connection stays a plain
+flow connection.
 
 **A capability channel can read `1e30`, and that is the spelling of "no
 ceiling".** A volume serving from its stock with no `serve_rate` puts no

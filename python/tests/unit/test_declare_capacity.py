@@ -231,3 +231,129 @@ def test_what_is_translated_is_never_also_refused(flows):
     translated = set(declare.capacity_content_variables(entry))
     refused = set(declare.capacity_absent_variables(entry))
     assert translated & refused == set()
+
+
+# --- the level a CONDITION watches ----------------------------------------
+#
+# The other consumer of the same two readings, and the one this file was
+# missing. An INDICATOR names the level of a tank from outside and is resolved
+# where the model is assembled; a CONDITION names it from inside a two-state
+# component, and was resolved nowhere -- so a mode armed on a low tank level,
+# which is the most ordinary use a safety study makes of a volume, reached the
+# check that refuses a reference nothing holds and was turned away.
+
+
+def a_watching_event(attr, name="WATCH", obj="TANK"):
+    """An `ObjEvent` whose one condition watches `obj.attr`."""
+    return {
+        "name": name,
+        "kind": "two_state_mode",
+        "cls": "ObjEvent",
+        "cond": [{"obj": obj, "attr": attr, "value": 1.0, "comp": "gt"}],
+    }
+
+
+def a_watching_mode(occ, not_occ, name="TANK__MODE", target="TANK"):
+    """An `ObjMode2S` whose two directions each watch a variable of `target`."""
+    return {
+        "name": name,
+        "kind": "two_state_mode",
+        "cls": "ObjMode2S",
+        "mode_name": name.split("__", 1)[-1],
+        "targets": [target],
+        "target_name": target,
+        "occ_law": {"cls": "delay", "time": 4},
+        "occ_param_name": ["occ_time"],
+        "occ_param": [4],
+        "not_occ_law": {"cls": "delay", "time": 2},
+        "not_occ_param_name": ["not_occ_time"],
+        "not_occ_param": [2],
+        "occ_cond": [{"obj": target, "attr": occ, "value": 1.0, "comp": "lt"}],
+        "not_occ_cond": [{"obj": target, "attr": not_occ, "value": 5.0, "comp": "gt"}],
+    }
+
+
+def a_document(*components):
+    return {
+        "version": "1.0.0",
+        "name": "volume",
+        "components": {entry["name"]: entry for entry in components},
+        "connections": [],
+    }
+
+
+def watched(obj):
+    """Every `(object, attribute)` the conditions of one plugin object name."""
+    return sorted(
+        (leaf["obj"], leaf["attr"])
+        for key in ("cond", "failure_cond", "repair_cond")
+        for group in obj.get(key) or []
+        for leaf in group
+        if "attr" in leaf
+    )
+
+
+@pytest.mark.parametrize(
+    "spelling, carried",
+    [("tank_qty", "tank_content"), ("tank_qty_q", "tank_content_q")],
+    ids=["total", "constituent"],
+)
+def test_an_event_condition_reads_the_level_under_muscadets_spelling(
+    spelling, carried
+):
+    """A feared event armed when a vessel passes a threshold, written the way
+    muscadet writes it, and resolved to the attribute this layer carries."""
+    event = a_watching_event(spelling)
+    obj = declare.mode_object(event, {"TANK": a_tank(), "WATCH": event})
+    assert watched(obj) == [("TANK", carried)]
+
+
+def test_both_directions_of_a_standalone_mode_read_it_too():
+    """`occ_cond` and `not_occ_cond` alike: a mode armed on a low level and
+    released on a high one names the same variable twice, and neither
+    direction is more of a reading than the other."""
+    mode = a_watching_mode("tank_qty_q", "tank_qty")
+    obj = declare.mode_object(mode, {"TANK": a_tank(), mode["name"]: mode})
+    assert watched(obj) == [("TANK", "tank_content"), ("TANK", "tank_content_q")]
+
+
+@pytest.mark.parametrize(
+    "component",
+    [a_watching_event("tank_qty_q"), a_watching_mode("tank_qty_q", "tank_qty")],
+    ids=["event", "mode"],
+)
+def test_the_document_carrying_such_a_condition_builds(component):
+    """End to end, which is what the modeller sees: the same document was
+    refused for naming a variable `TANK` did not carry."""
+    declare.build_document(a_document(a_tank(), component))
+
+
+def test_the_translation_is_the_one_the_indicators_go_through():
+    """Never a second table: what a condition reads is exactly what
+    :func:`capacity_content_variables` answers for that component, so the day
+    the layer names the attribute otherwise both consumers follow at once."""
+    event = a_watching_event("tank_qty_q")
+    obj = declare.mode_object(event, {"TANK": a_tank(), "WATCH": event})
+    assert watched(obj) == [
+        ("TANK", declare.capacity_content_variables(a_tank())["tank_qty_q"])
+    ]
+
+
+def test_a_component_holding_no_volume_keeps_the_spelling_it_was_given():
+    """Keyed on the capacities the component DECLARES, as the indicator
+    reading is: `q_qty_q` on a component that holds no volume is left exactly
+    as the document wrote it, and refused as the unknown attribute it is."""
+    event = a_watching_event("q_qty_q", obj="PIPE")
+    document = a_document(a_flow_component(), event)
+    with pytest.raises(declare.ComponentSpecError, match="`PIPE.q_qty_q`"):
+        declare.build_document(document)
+
+
+def test_a_condition_on_an_absent_capacity_variable_is_refused_by_its_name():
+    """The other half of the reading reaches a condition as well: one of the
+    three muscadet creates and this layer has no attribute for is refused
+    saying WHAT TO WATCH instead, rather than met with "does not carry"."""
+    event = a_watching_event("tank_inflow_q")
+    document = a_document(a_tank(), event)
+    with pytest.raises(declare.ComponentSpecError, match="q_fed_in"):
+        declare.build_document(document)

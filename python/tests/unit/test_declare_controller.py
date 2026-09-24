@@ -835,6 +835,138 @@ def test_a_rate_reaches_the_input_that_reads_one():
     )
 
 
+# --- the rate channel a document opens by WIRING alone ------------------
+#
+# muscadet has no key to write here and never had one: `add_mb` gives EVERY
+# continuous flow its rate observation box, unconditionally, so a modeller
+# wiring a sensor onto `{f}_rate_out` records no choice anywhere. This layer
+# publishes the channel only where it is asked for, which is what keeps a port
+# and an equation off every flow of every model -- and a muscadet document
+# therefore named a port nothing had created, and was refused on `connection
+# endpoint ... does not exist`, which names neither the flow nor the key nor
+# what to declare.
+#
+# The document does carry the answer one level up: it carries the CONNECTION.
+# A flow whose rate a link names is a flow somebody observes, which is the very
+# question `publish_rate` asks.
+
+
+def a_rate_reader(fill_rate="inf", publish=None):
+    """The montage above with the rate link, and nothing declaring the channel.
+
+    `fill_rate` caps what the volume takes in, which is how the delivered
+    quantity is made to differ from the capability: the supply could give
+    `FILL_RATE` and the tank only draws what it can swallow.
+    """
+    source = a_filler()
+    if publish is not None:
+        source["flows"][0]["publish_rate"] = publish
+    tank = a_tank()
+    tank["capacities"][0]["fill_rate"] = fill_rate
+    pump = a_pump(
+        controls_in=[a_channel("flux", kind="rate")],
+        controls_out=[
+            a_signal(
+                "run",
+                {"op": "compare", "input": "flux", "operator": ">=",
+                 "threshold": 0.5},
+            )
+        ],
+    )
+    return a_document(
+        source,
+        tank,
+        a_gate(),
+        pump,
+        connections=[
+            {"source": "FILL", "source_box": "q_out", "target": "TANK",
+             "target_box": "q_in", "flow": "q"},
+            {"source": "FILL", "source_box": "q_rate_out", "target": "PUMP",
+             "target_box": "flux_rate_in"},
+            {"source": "PUMP", "source_box": "run_out", "target": "GATE",
+             "target_box": "run_in"},
+        ],
+    )
+
+
+def reading(document, indicator, t_max=2.0, instants=(1.0, 2.0)):
+    model = pyraichu.load_model(json.dumps(declare.build_document(document)))
+    result = pyraichu.simulate(model, t_max=t_max, samples=list(instants))
+    return [value for _instant, value in result.samples[indicator]]
+
+
+def test_a_rate_link_opens_the_channel_nothing_declared():
+    """The same wiring as above with the `publish_rate` line removed, which is
+    every document muscadet writes: the port exists, the link reaches it, and
+    the controller reads the flow."""
+    document = a_rate_reader()
+    assert [
+        (entry["from"]["port"], entry["to"]["port"])
+        for entry in body_of(document)["connections"]
+        if entry["to"]["component"] == "PUMP"
+    ] == [("q_rate_out", "flux_rate_in")]
+    assert reading(document, "PUMP_flux_rate") == [FILL_RATE, FILL_RATE]
+
+
+def test_the_derived_channel_carries_what_the_flow_DELIVERS():
+    """Which quantity it carries is not cosmetic, and the choice is not this
+    layer's to make: muscadet's own box exports `var_fed`, what the flow
+    delivered, so a channel derived from a muscadet document reads what the
+    reference engine would have published on it.
+
+    The volume draws a quarter of what the supply could give, so the two
+    quantities differ everywhere -- asserted, or the test would pass on a run
+    where the distinction is invisible."""
+    document = a_rate_reader(fill_rate=0.25)
+    assert reading(document, "FILL_q_capability_out") == [FILL_RATE, FILL_RATE]
+    assert reading(document, "FILL_q_fed_out") == [0.25, 0.25]
+    assert reading(document, "PUMP_flux_rate") == [0.25, 0.25]
+
+
+def test_a_declared_quantity_wins_over_the_one_the_wiring_derives():
+    """`publish_rate` stays declarable and is the only way to ask for the
+    CAPABILITY, which is what a regulator wants: reading the delivery instead
+    closes a loop through its own decision. No muscadet document can write the
+    key, and a pyraichu one that does is not overruled by its own wiring."""
+    document = a_rate_reader(fill_rate=0.25, publish="capability")
+    assert reading(document, "PUMP_flux_rate") == [FILL_RATE, FILL_RATE]
+
+
+def test_a_flow_no_link_names_publishes_no_rate_at_all():
+    """The reason the key exists, and what the derivation must not cost: the
+    montage with a LEVEL link and no rate link puts neither port nor equation
+    on the flow. A model that observes nothing pays for nothing, which is where
+    this layer parts from muscadet and means to."""
+    filler = component_of(a_filled_tank(), "FILL")
+    assert "q_rate" not in {entry["name"] for entry in filler["attributes"]}
+    assert not [port for port in filler["ports"] if port["name"] == "q_rate_out"]
+
+
+def test_a_flow_literally_called_rate_keeps_its_ordinary_connection():
+    """The one ambiguity, read rather than assumed: `{f}_rate_out` is also the
+    plain output port of a flow named `{f}_rate`. A component declaring one is
+    left alone, so a document that always meant the plain connection keeps
+    meaning it -- and the two readings really are exclusive, a derived channel
+    on `q` claiming the very port that flow already holds."""
+    source = a_filler()
+    source["flows"].append({**source["flows"][0], "name": "q_rate"})
+    sink = a_tank(name="SINK", flows=("q_rate",))
+    document = a_document(
+        source,
+        sink,
+        connections=[
+            {"source": "FILL", "source_box": "q_rate_out", "target": "SINK",
+             "target_box": "q_rate_in"},
+        ],
+    )
+    filler = component_of(document, "FILL")
+    assert "q_rate" not in {entry["name"] for entry in filler["attributes"]}
+    assert [
+        (entry["from"]["port"], entry["to"]["port"])
+        for entry in body_of(document)["connections"]
+    ] == [("q_rate_out", "q_rate_in")]
+
+
 def test_a_connection_naming_a_box_no_interface_holds_is_refused_by_name():
     document = a_filled_tank()
     document["connections"][1] = a_measurement("TANK", "level", "PUMP", "reading")
