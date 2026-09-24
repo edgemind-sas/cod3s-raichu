@@ -21,7 +21,7 @@ What the generated model must hold, and what these tests pin:
   step;
 - the three build-time refusals the rule vocabulary makes sayable: a
   self-feeding cycle that creates matter, a loop of rate comparisons,
-  and a contested output with no declared apportionment.
+  and a contested output apportioned by some of its producers only.
 """
 
 import pytest
@@ -528,28 +528,132 @@ def test_two_rule_sets_split_a_contested_output_in_the_declared_ratio():
     assert abs(settled(result, "R_b_fed_in") - 2.0) < TOL
 
 
-def test_a_contested_output_without_apportionment_is_refused():
-    """muscadet has no field for it, so the layer adds one and refuses
-    its absence, naming the component and the flow."""
+class Cascaded(mu.ObjFlow):
+    """Two rule sets making the same product and declaring no share of
+    it: the demand cascades through them in declaration order."""
 
-    class Undeclared(mu.ObjFlow):
+    def add_flows(self):
+        self.add_flow_continuous_in(name="a")
+        self.add_flow_continuous_in(name="b")
+        self.add_flow_continuous_out(name="x")
+        self.add_rule_set(name="from_a", rules=[{"cons": {"a": 1}, "prod": {"x": 1}}])
+        self.add_rule_set(name="from_b", rules=[{"cons": {"b": 1}, "prod": {"x": 1}}])
+
+
+def cascade(offered_a: float, offered_b: float, asked: float) -> mu.System:
+    class Asking(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="x", var_demand_in_default=asked)
+
+    system = mu.System("rule_cascade")
+    system.add_component(source("a", offered_a), "A")
+    system.add_component(source("b", offered_b), "B")
+    system.add_component(Cascaded, "R")
+    system.add_component(Asking, "K")
+    system.connect("A", "a", "R", "a")
+    system.connect("B", "b", "R", "b")
+    system.connect("R", "x", "K", "x")
+    return system
+
+
+@pytest.mark.parametrize(
+    "offered_a, offered_b, asked, drawn_a, drawn_b",
+    [
+        # The first set can serve the whole demand: the second makes nothing.
+        (100.0, 100.0, 8.0, 8.0, 0.0),
+        # The first set is short: the second makes exactly the remainder.
+        (3.0, 100.0, 8.0, 3.0, 5.0),
+        # Both are short: the consumer gets what the two could make.
+        (3.0, 2.0, 8.0, 3.0, 2.0),
+    ],
+)
+def test_a_contested_output_without_apportionment_cascades_in_declaration_order(
+    offered_a, offered_b, asked, drawn_a, drawn_b
+):
+    """No set is handed more than what the sets declared before it left
+    unserved, so what the component draws is exactly what it delivers.
+    muscadet hands every set the whole demand instead and drops the
+    surplus; this layer keeps the balance and follows muscadet's own
+    production order, the order the sets were declared in."""
+    result = cascade(offered_a, offered_b, asked).simulate(t_max=1.0)
+    assert abs(settled(result, "R_a_fed_in") - drawn_a) < TOL
+    assert abs(settled(result, "R_b_fed_in") - drawn_b) < TOL
+    assert abs(settled(result, "K_x_fed_in") - (drawn_a + drawn_b)) < TOL
+
+
+def test_the_cascade_serves_a_ventilation_as_the_reference_does_on_the_scarce_flow():
+    """The showcase's ventilation: extracting a trace leak and renewing
+    air both exhaust into one outlet asked for 50. The leak is drawn
+    whole, as the reference draws it, and the air only tops the outlet
+    up to its demand, where the reference draws 50 of it and loses the
+    difference."""
+
+    class Ventilation(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="leak")
+            self.add_flow_continuous_in(name="air")
+            self.add_flow_continuous_out(name="exhaust")
+            self.add_flow_continuous_out(name="air")
+            self.add_rule_set(
+                name="extraction",
+                rules=[{"cons": {"leak": 25}, "prod": {"exhaust": 25}}],
+            )
+            self.add_rule_set(
+                name="renewal",
+                rules=[{"cons": {"air": 25}, "prod": {"exhaust": 25, "air": 25}}],
+            )
+
+    class Outlet(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="exhaust", var_demand_in_default=50.0)
+
+    class Room(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="air", var_demand_in_default=1000.0)
+
+    system = mu.System("rule_cascade_ventilation")
+    system.add_component(source("leak", 0.05), "L")
+    system.add_component(source("air", 1000.0), "A")
+    system.add_component(Ventilation, "V")
+    system.add_component(Outlet, "O")
+    system.add_component(Room, "R")
+    system.connect("L", "leak", "V", "leak")
+    system.connect("A", "air", "V", "air")
+    system.connect("V", "exhaust", "O", "exhaust")
+    system.connect("V", "air", "R", "air")
+    result = system.simulate(t_max=1.0)
+
+    assert abs(settled(result, "V_leak_fed_in") - 0.05) < TOL
+    assert abs(settled(result, "V_air_fed_in") - 49.95) < TOL
+    assert abs(settled(result, "O_exhaust_fed_in") - 50.0) < TOL
+    assert abs(settled(result, "R_air_fed_in") - 49.95) < TOL
+
+
+def test_a_contested_output_apportioned_by_some_sets_only_is_refused():
+    """A share declared by one set and not by the other says neither a
+    ratio nor an order, so it is refused, naming the component, the
+    flow and the silent set."""
+
+    class Partial(mu.ObjFlow):
         def add_flows(self):
             self.add_flow_continuous_in(name="a")
             self.add_flow_continuous_in(name="b")
             self.add_flow_continuous_out(name="x")
             self.add_rule_set(
-                name="from_a", rules=[{"cons": {"a": 1}, "prod": {"x": 1}}]
+                name="from_a",
+                rules=[{"cons": {"a": 1}, "prod": {"x": 1}}],
+                apportionment={"x": 1.0},
             )
             self.add_rule_set(
                 name="from_b", rules=[{"cons": {"b": 1}, "prod": {"x": 1}}]
             )
 
-    system = mu.System("rule_contested_undeclared")
-    system.add_component(Undeclared, "R")
+    system = mu.System("rule_contested_partial")
+    system.add_component(Partial, "R")
     with pytest.raises(ValueError) as raised:
         system.build_dict()
     message = str(raised.value)
-    assert "`R`" in message and "`x`" in message
+    assert "`R`" in message and "`x`" in message and "`from_b`" in message
     assert "apportionment" in message
 
 
