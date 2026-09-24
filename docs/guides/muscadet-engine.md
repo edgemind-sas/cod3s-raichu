@@ -668,6 +668,17 @@ only what it points at is read in this layer's spelling. So
 is shared outright — `{capacity}_fill` and `{capacity}_fill_{flow}` — and so is
 `{capacity}_ratio_{flow}` on a volume holding more than one constituent.
 
+**A declared CONDITION goes through the same translation**, and it is the
+reading that needs it most: a feared event armed when a vessel passes a
+threshold, or a failure mode armed on a low tank level, is the most ordinary
+use a safety study makes of a volume. The `cond` of an `ObjEvent` and the
+`occ_cond` / `not_occ_cond` of an `ObjMode2S` may each name
+`{capacity}_qty_{flow}`, and each is resolved to the attribute this layer
+carries before anything is built. The two consumers share one reading, so the
+day the attribute is named otherwise both follow at once; and the three
+variables below are refused in a condition by the same names they are refused
+in an indicator.
+
 Three of muscadet's capacity variables have **no attribute here**, and none of
 them is a spelling disagreement. Each is refused by its own name, saying what
 to observe instead, rather than reaching the loader and failing there on a name

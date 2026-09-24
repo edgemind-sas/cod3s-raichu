@@ -403,6 +403,10 @@ pub enum CIndicatorTarget {
     Var(VarIdx),
     /// 1.0 while the automaton is in the state, else 0.0.
     State(AutIdx, StateIdx),
+    /// `true` while the attribute satisfies the threshold, else `false`.
+    /// Kind compatibility is settled by model validation, so evaluating
+    /// this cannot fail.
+    Predicate(VarIdx, CmpOp, Value),
 }
 
 /// A validated model resolved to dense tables.
@@ -1345,6 +1349,11 @@ impl CompiledModel {
                         let (aut, st) = resolver.state(component, automaton, state)?;
                         CIndicatorTarget::State(aut, st)
                     }
+                    IndicatorTarget::Predicate { attr, cmp, value } => CIndicatorTarget::Predicate(
+                        resolver.var(&attr.component, &attr.attribute)?,
+                        *cmp,
+                        *value,
+                    ),
                 };
                 Ok(CIndicator {
                     name: indicator.name.clone(),

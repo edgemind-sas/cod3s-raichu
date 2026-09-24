@@ -1077,6 +1077,77 @@ fn eval_agg(
     }
 }
 
+/// What an indicator records at the current instant.
+///
+/// The one reading of a [`CIndicatorTarget`], shared by the three sites
+/// that record one: the change-point series, the dense-sample flush, and
+/// the solver's own sample callback inside a continuous segment. Three
+/// copies of the rule is three chances for a target to be honoured on one
+/// recording path and dropped on another, which is the class of silence
+/// [`CIndicatorTarget::Predicate`] exists to end.
+///
+/// Infallible on purpose: none of the three callers can report an error,
+/// and none has to. Kind compatibility is refused at model build
+/// (`ModelError::IndicatorPredicateKind`), so the only comparison left
+/// without an answer is one against a NaN, settled below the way IEEE
+/// settles it.
+fn indicator_value(target: &CIndicatorTarget, vars: &[Value], states: &[StateIdx]) -> Value {
+    match *target {
+        CIndicatorTarget::Var(idx) => vars[idx],
+        CIndicatorTarget::State(aut, state) => {
+            Value::Float(if states[aut] == state { 1.0 } else { 0.0 })
+        }
+        CIndicatorTarget::Predicate(idx, cmp, bound) => {
+            Value::Bool(predicate_holds(vars[idx], cmp, bound))
+        }
+    }
+}
+
+/// Whether `value cmp bound` holds, as a total function.
+///
+/// The same semantics as [`eval_cmp`], minus the two cases model
+/// validation has already refused, plus a decision that function leaves
+/// to its caller: a comparison involving a NaN has no ordering, and here
+/// it answers IEEE's way -- `ne` holds, everything else does not. An
+/// indicator is an observation, so the run continues and the threshold
+/// simply does not hold while the observed attribute is not a number.
+fn predicate_holds(value: Value, cmp: CmpOp, bound: Value) -> bool {
+    let ordering = match (value, bound) {
+        (Value::Bool(a), Value::Bool(b)) => {
+            return match cmp {
+                CmpOp::Eq => a == b,
+                CmpOp::Ne => a != b,
+                // Ordering a boolean is refused at model build
+                // (`ModelError::IndicatorPredicateKind`), so this is
+                // unreachable through a validated model. Spelled out
+                // rather than folded into `eq`: a threshold answering
+                // the wrong comparison is the defect this whole variant
+                // exists to end, and `false` is at least a condition
+                // that never holds rather than one that quietly holds
+                // half the time.
+                CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge => false,
+            };
+        }
+        (Value::Int(a), Value::Int(b)) => a.partial_cmp(&b),
+        (Value::Float(a), Value::Float(b)) => a.partial_cmp(&b),
+        (Value::Int(a), Value::Float(b)) => (a as f64).partial_cmp(&b),
+        (Value::Float(a), Value::Int(b)) => a.partial_cmp(&(b as f64)),
+        // Refused at model build: a boolean against a number.
+        _ => None,
+    };
+    let Some(ordering) = ordering else {
+        return matches!(cmp, CmpOp::Ne);
+    };
+    match cmp {
+        CmpOp::Eq => ordering.is_eq(),
+        CmpOp::Ne => !ordering.is_eq(),
+        CmpOp::Lt => ordering.is_lt(),
+        CmpOp::Le => ordering.is_le(),
+        CmpOp::Gt => ordering.is_gt(),
+        CmpOp::Ge => ordering.is_ge(),
+    }
+}
+
 fn eval_cmp(time: f64, op: CmpOp, lhs: Value, rhs: Value) -> Result<Value, EngineError> {
     let ordering = match (lhs, rhs) {
         (Value::Bool(a), Value::Bool(b)) => {
@@ -3468,12 +3539,7 @@ impl<'m> Engine<'m> {
                 let values = model
                     .indicators
                     .iter()
-                    .map(|indicator| match indicator.target {
-                        CIndicatorTarget::Var(idx) => vars[idx],
-                        CIndicatorTarget::State(aut, state) => {
-                            Value::Float(if states[aut] == state { 1.0 } else { 0.0 })
-                        }
-                    })
+                    .map(|indicator| indicator_value(&indicator.target, &vars, &states))
                     .collect();
                 recorded.push((t, values));
             };
@@ -3554,8 +3620,47 @@ impl<'m> Engine<'m> {
             // by the flush in the next advance).
             for (t, values) in recorded {
                 if t < t_reached || (fired.is_none() && crossed.is_none()) {
-                    for (series, value) in self.sampled.iter_mut().zip(values) {
-                        series.points.push((t, value));
+                    // A threshold that flipped inside the segment is a
+                    // change point of the observation, and nothing else
+                    // in the segment records one: no transition fired, no
+                    // active set moved. Without this the change-point
+                    // series of a threshold on an integrated attribute
+                    // keeps its value from the last discrete event
+                    // forever, and its `sojourn-time` -- the time the
+                    // condition held -- comes back as the whole elapsed
+                    // time.
+                    //
+                    // **Only a threshold, and the asymmetry is the
+                    // point.** A threshold is piecewise constant BY
+                    // NATURE: between two flips it genuinely does not
+                    // move, so a change point is an exact
+                    // representation of it and refining the schedule
+                    // makes the sojourn converge on the true duration.
+                    // A free-valued attribute is not piecewise constant,
+                    // so pushing its samples in would turn its sojourn
+                    // into a coarse Riemann sum -- closer to the
+                    // integral than what it computes today, but a
+                    // different quantity from the one every recorded
+                    // result was produced with, silently.
+                    //
+                    // What is left, and is NOT closed here: the flip is
+                    // located on the study's own sample grid, not
+                    // bisected like a watched boundary, so the sojourn
+                    // of a threshold crossed between two samples is off
+                    // by at most one sample interval.
+                    for (((indicator, series), sampled), value) in model
+                        .indicators
+                        .iter()
+                        .zip(self.indicator_series.iter_mut())
+                        .zip(self.sampled.iter_mut())
+                        .zip(values)
+                    {
+                        sampled.points.push((t, value));
+                        if matches!(indicator.target, CIndicatorTarget::Predicate(..))
+                            && series.points.last().is_none_or(|(_, last)| *last != value)
+                        {
+                            series.points.push((t, value));
+                        }
                     }
                     self.sample_cursor += 1;
                 }
@@ -4082,12 +4187,7 @@ impl<'m> Engine<'m> {
             .iter()
             .zip(self.indicator_series.iter_mut())
         {
-            let value = match indicator.target {
-                CIndicatorTarget::Var(idx) => self.vars[idx],
-                CIndicatorTarget::State(aut, state) => {
-                    Value::Float(if self.states[aut] == state { 1.0 } else { 0.0 })
-                }
-            };
+            let value = indicator_value(&indicator.target, &self.vars, &self.states);
             let changed = series.points.last().is_none_or(|(_, last)| *last != value);
             if changed {
                 series.points.push((self.time, value));
@@ -4116,12 +4216,7 @@ impl<'m> Engine<'m> {
                 break;
             }
             for (indicator, series) in self.model.indicators.iter().zip(self.sampled.iter_mut()) {
-                let value = match indicator.target {
-                    CIndicatorTarget::Var(idx) => self.vars[idx],
-                    CIndicatorTarget::State(aut, state) => {
-                        Value::Float(if self.states[aut] == state { 1.0 } else { 0.0 })
-                    }
-                };
+                let value = indicator_value(&indicator.target, &self.vars, &self.states);
                 series.points.push((s, value));
             }
             self.sample_cursor += 1;

@@ -579,14 +579,49 @@ in the same release, which is what keeps the one feature name honest.
 
 ## Indicator
 
-`{ "name": string, "target": "attribute"|"state", … }`:
+`{ "name": string, "target": "attribute"|"state"|"predicate", … }`:
 
 - `target: "attribute"` → `"attr": VarRef`
 - `target: "state"` → `"component"`, `"automaton"`, `"state"` (strings)
+- `target: "predicate"` → `"attr": VarRef`, `"cmp"` (one of `eq`, `ne`,
+  `lt`, `le`, `gt`, `ge`), `"value"` (a [Value](#attribute))
 
 Estimators are computed by `monte_carlo`: mean, standard deviation,
 nearest-rank quantiles, and the cumulated **sojourn** (time-integral) of
 the observed value.
+
+### A threshold is a different quantity, not a filter
+
+`predicate` observes the **truth** of `attr cmp value`, so what the
+estimators measure is the condition and not the attribute. The
+difference is at its plainest on the sojourn:
+
+| target | what its sojourn is | unit | bounded by the horizon |
+|---|---|---|---|
+| `attribute` | time-integral of the value | `unit × time` | no |
+| `predicate` | time the condition held | `time` | yes |
+| `state` | time in the state | `time` | yes |
+
+Reading one off the other is plausible and wrong: a 60 h campaign whose
+tank holds 19.985 units throughout answers `1199.10` on the attribute and
+`60.00` on the threshold, and only the second answers "how long was there
+anything in the tank". By the same token the mean of a `predicate` is a
+**probability** and its `nb-occurrences` counts entries into the
+condition, which is why its confidence interval is a binomial one, as for
+a `state`.
+
+Kind compatibility is refused at build time: a `bool` attribute takes
+`eq` / `ne` only, and a number is never compared to a boolean.
+
+**Where the sojourn of a threshold is approximate.** Its change points
+are recorded at discrete events and, inside a continuous segment, at the
+run's own **sample instants**. A threshold crossed between two samples is
+therefore located on the schedule rather than bisected the way a
+[watched](#watched-a-guard-on-continuous-attributes) transition's boundary is, and the duration is
+over-reported by at most one sample interval; refining the schedule makes
+it converge. The sojourn of an `attribute` target has no such refinement:
+its series only moves at discrete events, so on a purely continuous
+trajectory it integrates the value the attribute had at the last one.
 
 ## Expressions
 

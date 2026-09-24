@@ -204,6 +204,39 @@ _STATE_ATTR_NAME_KEY = "attr_name"
 #: module holds no second copy of the convention.
 _STATE_INDICATOR_KIND = "PycSTIndicator"
 
+#: How a declaration spells the comparison of an indicator's THRESHOLD,
+#: and how the model format names the same one.
+#:
+#: The keys are cod3s's, which is Python's own spelling of a comparison;
+#: the values are ``raichu_expr::CmpOp``'s serialized form. The six cover
+#: the whole of what the two sides have in common, and an operator
+#: outside the table is refused by name rather than approximated: a
+#: threshold nobody carries is the whole subject of this table's
+#: existence.
+_INDICATOR_OPERATORS = {
+    "==": "eq",
+    "!=": "ne",
+    "<": "lt",
+    "<=": "le",
+    ">": "gt",
+    ">=": "ge",
+}
+
+#: The pair a declaration writes a threshold with, and which decides
+#: WHETHER there is one.
+#:
+#: **``value_test`` is the discriminator, never ``operator``.** cod3s
+#: gives ``operator`` the default ``"=="`` and ``value_test`` the default
+#: ``None``, and its own registration branches on the second
+#: (``PycAttrIndicator.create_bkd``): ``None`` registers the indicator
+#: without a predicate, so the trajectory is the attribute's value, and
+#: anything else registers it with one, so the trajectory is the truth of
+#: the comparison. A pydantic object writes every field whether or not it
+#: was set, so reading the PRESENCE of ``operator`` would turn every
+#: plain observation of the corpus into a threshold on ``== None``.
+_INDICATOR_OPERATOR_KEY = "operator"
+_INDICATOR_VALUE_KEY = "value_test"
+
 
 def register() -> None:
     """Register RAICHU at muscadet's extension point.
@@ -339,6 +372,68 @@ def _capacity_absences(components: Any) -> dict[str, dict[str, str]]:
     return _per_component(components, capacity_absent_variables)
 
 
+def _threshold(spec: Mapping[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """The THRESHOLD a declared indicator carries, or ``None`` for no
+    threshold at all.
+
+    An indicator carrying one does not observe its attribute: it observes
+    the truth of ``attr <operator> value_test``, and the difference is a
+    difference of QUANTITY rather than of spelling. On the
+    ``sojourn-time`` measure the first is the time-integral of the value
+    (an area) and the second is the time the condition held (a duration,
+    bounded by the horizon). Dropping the threshold therefore does not
+    lose a filter: it answers another question, plausibly, with the
+    declared predicate still printed in the result's own columns.
+
+    Measured 2026-09-19 on the H2 showcase, both engines on one launch
+    package: ``hydrogen_available`` (``lp_tank_qty_H2 > 0``, over a 60 h
+    horizon) came back 60.00 h from the reference engine and 1199.10 h
+    here, which is the tank's 19.985 units integrated over the sixty
+    hours. Twenty times the horizon, and nothing in the run said a word.
+
+    Returns the pair the model format writes, ``(cmp, value)``, both
+    already in its own vocabulary. Refuses, by name, an operator this
+    layer has no comparison for and a tested value of a kind no attribute
+    can hold: the point of reading the pair at all is that it is never
+    silently dropped again, and half-reading it would be the same defect
+    under a new name.
+    """
+    value = spec.get(_INDICATOR_VALUE_KEY)
+    if value is None:
+        return None
+    name = spec.get("name")
+    operator = spec.get(_INDICATOR_OPERATOR_KEY, "==")
+    cmp = _INDICATOR_OPERATORS.get(operator)
+    if cmp is None:
+        raise SystemSpecError(
+            f"indicator {name!r} tests its attribute with "
+            f"`{_INDICATOR_OPERATOR_KEY}` {operator!r}, which this engine has "
+            f"no comparison for (it carries "
+            f"{sorted(_INDICATOR_OPERATORS)}). A threshold it cannot honour "
+            f"is refused rather than dropped: dropped, the indicator would "
+            f"answer on the VALUE of the attribute while its result still "
+            f"carried the operator in its own column"
+        )
+    # `bool` first: it is a subclass of `int` in Python, and a boolean
+    # threshold compared as an integer would make `== True` a comparison
+    # against 1 on an attribute the model declares `bool`, which model
+    # validation then refuses as two kinds that do not compare.
+    if isinstance(value, bool):
+        written: dict[str, Any] = {"kind": "bool", "value": value}
+    elif isinstance(value, int):
+        written = {"kind": "int", "value": value}
+    elif isinstance(value, float):
+        written = {"kind": "float", "value": value}
+    else:
+        raise SystemSpecError(
+            f"indicator {name!r} tests its attribute against "
+            f"{_INDICATOR_VALUE_KEY}={value!r}, which is neither a boolean "
+            f"nor a number: an attribute holds one of those three kinds, so "
+            f"there is nothing here to compare it with"
+        )
+    return cmp, written
+
+
 def _state_indicator(
     spec: Mapping[str, Any],
     events: Mapping[str, tuple[str, set[str]]],
@@ -385,6 +480,32 @@ def _state_indicator(
         raise SystemSpecError(
             f"indicator {name!r} observes the state {state!r} of the event "
             f"{component!r}, which holds {sorted(states)}"
+        )
+    # A STATE indicator always carries a threshold, and cod3s's default is
+    # the identity: `PycSTIndicator` defaults `operator` to `"=="` and
+    # `value_test` to `True`, and registers both unconditionally. `== True`
+    # on a state is the state itself, which is exactly what a `state`
+    # target observes, so the whole corpus falls through here untouched.
+    #
+    # Anything else is refused rather than dropped. There is no negation
+    # of a state target to write it with, and an event holds exactly two
+    # states, so the refusal names the remedy instead of only the wall.
+    threshold = _threshold(spec)
+    if threshold is not None and threshold != ("eq", {"kind": "bool", "value": True}):
+        other = sorted(states - {state})
+        remedy = (
+            f"observe {other[0]!r}, the other state of this event, instead"
+            if other
+            else "this event holds no other state to observe instead"
+        )
+        raise SystemSpecError(
+            f"indicator {name!r} observes the state {state!r} of "
+            f"{component!r} through the threshold "
+            f"{spec.get(_INDICATOR_OPERATOR_KEY, '==')!r} "
+            f"{spec.get(_INDICATOR_VALUE_KEY)!r}. A state indicator observes "
+            f"the state itself, which is the identity `== True`; this engine "
+            f"has no form for another reading of one, and refuses it rather "
+            f"than answering on the identity: {remedy}"
         )
     return {
         "name": str(name),
@@ -448,13 +569,21 @@ def _indicator(
     renamed = signals.get(component, {}).get(subject) or contents.get(
         component, {}
     ).get(subject)
+    attr = {"component": component, "attribute": renamed or subject}
+    # The THRESHOLD, which is what makes this an observation of a
+    # condition rather than of a value. See :func:`_threshold` for why it
+    # is the presence of `value_test` that decides, and for the measured
+    # cost of having dropped it.
+    threshold = _threshold(spec)
+    if threshold is None:
+        return {"name": str(name), "target": "attribute", "attr": attr}
+    cmp, value = threshold
     return {
         "name": str(name),
-        "target": "attribute",
-        "attr": {
-            "component": component,
-            "attribute": renamed or subject,
-        },
+        "target": "predicate",
+        "attr": attr,
+        "cmp": cmp,
+        "value": value,
     }
 
 
@@ -484,6 +613,16 @@ def _merge_indicators(
     -- there the generated entries are merged into the declared ones -- and a
     second copy of the rule is a second chance for the two routes to disagree,
     which is what they did until 2026-09-15.
+
+    **A THRESHOLD makes a name collide that used to merge.** The generated
+    set observes a variable's value; a declaration naming that same variable
+    under the same name AND carrying an ``operator`` / ``value_test`` pair
+    observes the truth of a condition on it, which is a different quantity
+    (see :func:`_threshold`). The two therefore no longer reconcile as one
+    indicator, and the refusal above fires, naming both. That is the intended
+    outcome and the change is the honest half of it: until the pair was read,
+    the two merged in silence and the estimate that came back was the one
+    nobody asked for.
 
     **The estimate comes back under the DECLARED name, and a consumer keyed on
     ``{component}_{attribute}`` will not always find it.** Worth stating here

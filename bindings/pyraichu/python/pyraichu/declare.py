@@ -615,6 +615,12 @@ _INPUT_CLASSES = frozenset(
     {"FlowDiscreteIn", "FlowIn", "FlowContinuousIn"},
 )
 
+#: The flow classes whose entries declare a CONTINUOUS flow, either way round.
+#: They are the ones a rate channel can be opened on, and both directions
+#: qualify: muscadet publishes the quantity crossing the wire and leaves which
+#: side of it the publisher sits on to the publisher.
+_CONTINUOUS_CLASSES = frozenset({"FlowContinuousIn", "FlowContinuousOut"})
+
 #: The flow classes whose entries declare a DISCRETE OUTPUT. A failure mode
 #: reaches one by **gating** it and a continuous one by **derating** it, and
 #: the two are not spelled alike on this side: see :func:`_gate_effects`.
@@ -2471,10 +2477,16 @@ def _mode_automaton(where: str, obj: str, watched: dict) -> str:
     return "fm"
 
 
-def _mode_leaf(where: str, leaf: Any, targets: list[str], modes: dict) -> dict:
+def _mode_leaf(
+    where: str,
+    leaf: Any,
+    targets: list[str],
+    modes: dict,
+    volumes: dict | None = None,
+) -> dict:
     """One condition leaf, as the plugin's condition tree names the same thing.
 
-    Two rewrites, both of them the two layers naming one thing differently:
+    Three rewrites, all of them the two layers naming one thing differently:
 
     - a leaf carrying no ``obj`` reads the mode's own target, which is what
       cod3s resolves it against. A mode over SEVERAL targets resolves it per
@@ -2488,7 +2500,23 @@ def _mode_leaf(where: str, leaf: Any, targets: list[str], modes: dict) -> dict:
       names one of that component's STATES is a state reference. cod3s reaches
       a mode's states through the same ``attr`` key it reaches a variable
       with; here a state and a variable are two different references, and
-      reading the first as the second would compare a state name to a boolean.
+      reading the first as the second would compare a state name to a boolean;
+    - a leaf whose ``attr`` names the QUANTITY A VOLUME HOLDS, which muscadet
+      spells ``{c}_qty`` and ``{c}_qty_{f}`` and this layer ``{c}_content``
+      and ``{c}_content_{f}``. A mode armed on a low tank level is the most
+      ordinary use a safety study makes of a volume, and the disagreement was
+      already written down for the INDICATOR that names the same reading
+      (:func:`capacity_content_variables`): a condition goes through that very
+      function rather than through a second table of its own. Its other half
+      answers here too, the variables muscadet creates and this layer has none
+      of (:func:`capacity_absent_variables`), so a condition naming one is
+      refused BY ITS NAME with what stands in its place.
+
+    `volumes` is ``{component: (translated, absent)}`` for the components that
+    hold a volume, keyed on the name the MODEL carries them under, as
+    :func:`_mode_volumes` reads them off the document. Nothing rewrites on a
+    component declaring no capacity, so a variable that happens to end in
+    ``_qty`` elsewhere is left exactly as the document wrote it.
     """
     if not isinstance(leaf, dict):
         raise ComponentSpecError(
@@ -2513,6 +2541,19 @@ def _mode_leaf(where: str, leaf: Any, targets: list[str], modes: dict) -> dict:
                 f"`obj` the leaf watches"
             )
         leaf["obj"] = targets[0]
+
+    held = (volumes or {}).get(leaf["obj"])
+    if held is not None and isinstance(leaf.get("attr"), str):
+        translated, absent = held
+        unavailable = absent.get(leaf["attr"])
+        if unavailable is not None:
+            raise ComponentSpecError(
+                f"{where} watches `{leaf['obj']}.{leaf['attr']}`, a capacity "
+                f"variable muscadet creates and this layer has no attribute "
+                f"for: {unavailable}"
+            )
+        if leaf["attr"] in translated:
+            leaf["attr"] = translated[leaf["attr"]]
 
     watched = modes.get(leaf["obj"])
     if watched is not None and "attr" in leaf:
@@ -2549,6 +2590,29 @@ def _mode_state_names(spec: dict) -> set[str]:
     }
 
 
+def _mode_volumes(components: dict) -> dict[str, tuple[dict, dict]]:
+    """The volume-holding components of a document, with the two readings a
+    condition needs of each: what to rename, and what to refuse by name.
+
+    Keyed on the name the MODEL carries the component under -- its own
+    ``name``, not the key the document files it by -- because that is the name
+    a condition leaf has to spell for anything downstream to resolve it, and it
+    is what :func:`build_component` builds the component as.
+
+    A component declaring no capacity is left out of the mapping entirely, so
+    a lookup on it falls through and the document's own spelling stands.
+    """
+    volumes: dict[str, tuple[dict, dict]] = {}
+    for name, entry in (components or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        translated = capacity_content_variables(entry)
+        absent = capacity_absent_variables(entry)
+        if translated or absent:
+            volumes[str(entry.get("name") or name)] = (translated, absent)
+    return volumes
+
+
 def _mode_cond(
     where: str,
     key: str,
@@ -2556,6 +2620,7 @@ def _mode_cond(
     targets: list[str],
     modes: dict,
     by_flow: bool,
+    volumes: dict | None = None,
 ) -> Any:
     """A mode's condition, as the plugin's condition tree.
 
@@ -2566,7 +2631,9 @@ def _mode_cond(
 
     ``by_flow`` is the muscadet façade's dict shorthand: ``{"c1": True}``
     requires every named INPUT flow of every target to be fed with that value,
-    which is one conjunction over the targets.
+    which is one conjunction over the targets. It names a flow and never a
+    variable, so no volume is read there: what it builds is a `{flow}_fed_in`
+    reference, which both layers spell alike.
     """
     if declared is None or isinstance(declared, bool):
         return declared
@@ -2596,7 +2663,10 @@ def _mode_cond(
         )
 
     return [
-        [_mode_leaf(f"{where}: `{key}`", leaf, targets, modes) for leaf in group]
+        [
+            _mode_leaf(f"{where}: `{key}`", leaf, targets, modes, volumes)
+            for leaf in group
+        ]
         for group in groups
     ]
 
@@ -2942,7 +3012,11 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
     components : dict, optional
         The document's components, by name. What they answer is what the
         declaration alone cannot: which of the objects a condition watches is
-        another two-state component, and which flows a target holds.
+        another two-state component, which flows a target holds, and which of
+        them holds a VOLUME, whose level the two layers spell apart
+        (:func:`_mode_volumes`). Given none, a condition on a tank level is
+        left in muscadet's spelling and refused downstream, which is what a
+        caller reading a mode out of its document gets.
     """
     from .importers.cod3s_platform import (
         TranslationError,
@@ -2985,10 +3059,11 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
         if key in wire:
             wire[key] = _mode_order_vector(where, key, wire[key])
 
+    volumes = _mode_volumes(components)
     for key in ("failure_cond", "repair_cond", "occ_cond", "not_occ_cond", "cond"):
         if key in wire:
             wire[key] = _mode_cond(
-                where, key, wire[key], targets, modes, mode_class.by_flow
+                where, key, wire[key], targets, modes, mode_class.by_flow, volumes
             )
 
     for key in ("failure_effects", "repair_effects", "occ_effects", "not_occ_effects"):
@@ -4055,6 +4130,137 @@ def build_system(
     return _build_flow_system(flows, spec, system, classes)
 
 
+def _wired_rate_channels(flows: dict, connections: Any) -> dict[str, set[str]]:
+    """The continuous flows a connection asks to publish their rate on.
+
+    **muscadet has no key to write here, and that is the whole reason this
+    reading exists.** Its ``add_mb`` gives EVERY continuous flow a rate
+    observation box, unconditionally, so a modeller wiring a sensor onto
+    ``{f}_rate_out`` writes nothing anywhere -- there was never a choice to
+    record. This layer publishes that channel only where ``publish_rate`` is
+    declared, for the reason the key exists: a port and an equation on every
+    flow of every model would buy the few an observer actually reads. A muscadet
+    document therefore reached the engine naming a port nothing had created,
+    and was refused on `connection endpoint ... does not exist`, which names
+    neither the flow nor the key nor what to declare.
+
+    The document does carry the information, though, one level up: it carries
+    the CONNECTION. A flow whose rate a measurement link names is a flow
+    somebody observes, which is exactly the question ``publish_rate`` asks. So
+    the publication is derived from the wiring rather than guessed from a
+    convention, and RAICHU still publishes fewer channels than muscadet: only
+    the observed ones.
+
+    The observer's end needs nothing derived: ``{name}_rate_in`` is a
+    controller's own declared observation input (``kind="rate"``), and a
+    controller that declares none simply has no such box.
+
+    One ambiguity, and it is read rather than assumed: ``{f}_rate_out`` is also
+    the ORDINARY output port of a flow literally called ``{f}_rate``. A
+    component declaring one is left alone, so a document that always meant the
+    plain connection keeps meaning it.
+
+    Returns
+    -------
+    dict
+        ``{component: {flow, ...}}``, empty for a document wiring no rate.
+    """
+    declared: dict[str, dict[str, set[str]]] = {}
+    for key, entry in (flows or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        held: dict[str, set[str]] = {"continuous": set(), "any": set()}
+        for flow in entry.get("flows") or []:
+            if not isinstance(flow, dict) or not isinstance(flow.get("name"), str):
+                continue
+            held["any"].add(flow["name"])
+            if flow.get("cls") in _CONTINUOUS_CLASSES:
+                held["continuous"].add(flow["name"])
+        declared[str(entry.get("name") or key)] = held
+
+    wired: dict[str, set[str]] = {}
+    for entry in connections or []:
+        if not isinstance(entry, dict):
+            continue
+        source, box = entry.get("source"), entry.get("source_box")
+        if not isinstance(source, str) or not isinstance(box, str):
+            continue
+        if not box.endswith(_RATE_OUT_SUFFIX):
+            continue
+        held = declared.get(source)
+        if held is None:
+            continue
+        flow = box[: -len(_RATE_OUT_SUFFIX)]
+        if flow not in held["continuous"] or f"{flow}_rate" in held["any"]:
+            continue
+        wired.setdefault(source, set()).add(flow)
+    return wired
+
+
+def _publish_wired_rates(declared: dict, wired: dict[str, set[str]]) -> dict:
+    """One component declaration, with the rate channels its wiring asks for.
+
+    What the channel CARRIES is the delivered quantity, never the capability:
+    muscadet's own rate observation box exports ``var_fed``, the total the flow
+    delivers, so a derived channel reads what the reference engine would have
+    published there. ``publish_rate`` stays declarable and WINS when it is
+    declared, which is how a model asks for the capability instead -- the
+    quantity a regulator wants, and the one no document could ask for by
+    wiring alone.
+
+    Both directions are eligible and at most one is published: a component
+    declaring the same name as a continuous input AND a continuous output
+    would put two publishers on one port, so the OUTPUT is taken, being the
+    end a measurement reads a delivery from.
+
+    The declaration is copied rather than written into: it belongs to the
+    caller's document, and a reader that edited it would leave a second build
+    of the same document carrying a key the modeller never wrote.
+    """
+    names = wired.get(str(declared.get("name") or ""))
+    if not names:
+        return declared
+
+    entries = list(declared.get("flows") or [])
+    eligible: dict[str, list[int]] = {}
+    for index, flow in enumerate(entries):
+        if not isinstance(flow, dict) or flow.get("name") not in names:
+            continue
+        if flow.get("cls") in _CONTINUOUS_CLASSES:
+            eligible.setdefault(flow["name"], []).append(index)
+
+    published: set[int] = set()
+    for indexes in eligible.values():
+        # A declared `publish_rate` is the modeller's word and is left alone,
+        # `false` included: it is how a model asks for the capability instead
+        # of the delivery, and how it declines the channel outright. Read over
+        # the whole name, both directions at once: one of the two publishing
+        # already is what the second publisher would collide with.
+        if any(entries[index].get("publish_rate") is not None for index in indexes):
+            continue
+        published.add(
+            next(
+                (
+                    index
+                    for index in indexes
+                    if entries[index].get("cls") == "FlowContinuousOut"
+                ),
+                indexes[0],
+            )
+        )
+    if not published:
+        return declared
+    return {
+        **declared,
+        "flows": [
+            {**flow, "publish_rate": authoring.RATE_DELIVERED}
+            if index in published
+            else flow
+            for index, flow in enumerate(entries)
+        ],
+    }
+
+
 def _build_flow_system(
     flows: dict,
     spec: dict,
@@ -4084,9 +4290,12 @@ def _build_flow_system(
             ),
         )
 
+    wired = _wired_rate_channels(flows, spec.get("connections"))
     for declared in flows.values():
         _refuse_ungated_modes(declared)
-        build_component(system, declared, classes=classes)
+        build_component(
+            system, _publish_wired_rates(declared, wired), classes=classes
+        )
 
     _wire_connections(system, spec.get("connections"), controllers or {})
     return system
