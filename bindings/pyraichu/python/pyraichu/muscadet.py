@@ -443,6 +443,43 @@ SERVE_COND_INNER_MODES = ("or", "and")
 SERVE_COND_INNER_MODE_DEFAULT = "or"
 
 
+#: The laws a temporised output's transition may wait on, and the one
+#: parameter each carries, in the engine's transition form.
+_TEMPO_LAW_PARAMETER = {"delay": "time", "exp": "rate"}
+
+
+def _tempo_law(flow: str, direction: str, time: float, law: dict[str, Any] | None) -> dict[str, Any]:
+    """The law one tempo transition waits on, in the engine's form.
+
+    `time` is the short form of a fixed delay and `law` the general one;
+    both at once for one direction contradict each other unless the time
+    is the default. A negative parameter is refused: a delay that ends
+    before it starts, or a rate that is no rate, is no law.
+    """
+    if law is None:
+        law = {"distrib": "delay", "time": time}
+    elif time:
+        raise ValueError(
+            f"flow {flow!r}: `{direction}_law` and `{direction}_time` both declare the "
+            f"{direction} transition's wait; declare one"
+        )
+    distrib = law.get("distrib")
+    parameter = _TEMPO_LAW_PARAMETER.get(distrib)
+    if parameter is None:
+        raise ValueError(
+            f"flow {flow!r}: the {direction} law {law!r} is neither "
+            f"{' nor '.join(sorted(_TEMPO_LAW_PARAMETER))}"
+        )
+    if set(law) != {"distrib", parameter}:
+        raise ValueError(f"flow {flow!r}: a {distrib} {direction} law carries `distrib` and `{parameter}`, got {law!r}")
+    value = law[parameter]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise ValueError(
+            f"flow {flow!r}: the {direction} law's `{parameter}` must be a finite non-negative number, got {value!r}"
+        )
+    return {"distrib": distrib, parameter: float(value)}
+
+
 def _var(component: str, variable: str) -> dict[str, Any]:
     return {"op": "attr", "attr": {"component": component, "attribute": variable}}
 
@@ -668,10 +705,11 @@ class _FlowOut:
     # resolution would not, `negate` to deny the operand, `op`/`value` to
     # compare what it names against a threshold.
     var_prod_cond: list[Any] | list[list[Any]] = field(default_factory=list)
-    # muscadet `FlowOutTempo`: {"enable_time", "disable_time",
-    # "init_enable"}: a disabled↔enabled automaton whose delayed
-    # transitions are gated on the production condition (reset on
-    # interruption); the flow is fed while `enabled`.
+    # muscadet `FlowOutTempo`: {"enable", "disable", "init_enable"}: a
+    # disabled↔enabled automaton whose two transitions, each on its own
+    # law (a delay or an exponential, in the engine's transition form),
+    # are gated on the production condition (reset on interruption); the
+    # flow is fed while `enabled`.
     tempo: dict[str, Any] | None = None
     # muscadet `FlowOutOnTrigger`: {"time_up", "time_down", "logic"},
     # a down↔up automaton on a dedicated trigger in-port with
@@ -4553,16 +4591,27 @@ class ObjFlow:
         var_prod_cond: list[Any] | None = None,
         var_fed_available_out_init: bool | None = None,
         var_fed_available_out_reset: bool | None = None,
+        enable_law: dict[str, Any] | None = None,
+        disable_law: dict[str, Any] | None = None,
     ) -> None:
         """muscadet `FlowOutTempo`: the flow feeds while a
         disabled↔enabled automaton sits in `enabled`; the enable
-        (resp. disable) transition is a delay of `enable_time`
-        (`disable_time`) guarded on the production condition (resp. its
-        negation), reset on interruption.
+        (resp. disable) transition is guarded on the production
+        condition (resp. its negation), reset on interruption.
+
+        Each transition waits on a law. `enable_time` / `disable_time`
+        are the short form of a fixed delay; `enable_law` /
+        `disable_law` take the law itself, in the engine's transition
+        form: ``{"distrib": "delay", "time": t}`` or
+        ``{"distrib": "exp", "rate": r}``, the latter drawing the
+        switch-on (switch-off) instant. A law and a non-zero time for
+        the same direction contradict each other and are refused.
 
         The availability gate's two knobs are the base class's and are
         read here for the same reason muscadet reads them here: the
         temporised delivery still ANDs ``{name}_fed_available_out``."""
+        enable = _tempo_law(name, "enable", enable_time, enable_law)
+        disable = _tempo_law(name, "disable", disable_time, disable_law)
         self.flows_out.append(
             _FlowOut(
                 name=name,
@@ -4570,11 +4619,7 @@ class ObjFlow:
                 var_prod_cond=list(var_prod_cond or []),
                 var_fed_available_out_init=var_fed_available_out_init,
                 var_fed_available_out_reset=var_fed_available_out_reset,
-                tempo={
-                    "enable_time": enable_time,
-                    "disable_time": disable_time,
-                    "init_enable": init_enable,
-                },
+                tempo={"enable": enable, "disable": disable, "init_enable": init_enable},
             )
         )
 
@@ -5048,33 +5093,36 @@ class ObjFlow:
                 # disable transitions: a lost condition keeps feeding
                 # until the disable delay elapses.
                 aut = f"{flow.name}_tempo"
+                transitions = [
+                    {
+                        "name": f"{flow.name}_enable",
+                        "source": "disabled",
+                        "targets": ["enabled"],
+                        "guard": prod_expr,
+                        **flow.tempo["enable"],
+                    },
+                    {
+                        "name": f"{flow.name}_disable",
+                        "source": "enabled",
+                        "targets": ["disabled"],
+                        "guard": {
+                            "op": "bool",
+                            "bool_op": "not",
+                            "args": [prod_expr],
+                        },
+                        **flow.tempo["disable"],
+                    },
+                ]
                 automata.append(
                     {
                         "name": aut,
                         "states": ["disabled", "enabled"],
                         "init": "enabled" if flow.tempo["init_enable"] else "disabled",
-                        "transitions": [
-                            {
-                                "name": f"{flow.name}_enable",
-                                "source": "disabled",
-                                "targets": ["enabled"],
-                                "guard": prod_expr,
-                                "distrib": "delay",
-                                "time": float(flow.tempo["enable_time"]),
-                            },
-                            {
-                                "name": f"{flow.name}_disable",
-                                "source": "enabled",
-                                "targets": ["disabled"],
-                                "guard": {
-                                    "op": "bool",
-                                    "bool_op": "not",
-                                    "args": [prod_expr],
-                                },
-                                "distrib": "delay",
-                                "time": float(flow.tempo["disable_time"]),
-                            },
-                        ],
+                        # An exponential wait at rate 0 never ends: the
+                        # reference engine reads it as a transition that
+                        # never fires, and the engine takes no zero rate,
+                        # so it is not emitted.
+                        "transitions": [t for t in transitions if t.get("rate") != 0.0],
                     }
                 )
                 gate_terms = [_state_active(me, aut, "enabled")]
