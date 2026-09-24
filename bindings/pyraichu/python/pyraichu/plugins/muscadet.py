@@ -865,6 +865,153 @@ def _objflow_flows_in(obj: authoring.ObjFlow, spec: dict) -> None:
         )
 
 
+def _prod_cond_carried_modes(condition: Any) -> tuple[str, ...]:
+    """Which ``var_prod_cond_inner_mode`` values state the reading this
+    section already has, for the condition written beside them.
+
+    **Keyed on the SPELLING, and it has to be**, because the two layers
+    normalise a FLAT list differently and the matching mode flips with it.
+    Measured on one board, truth tables over both inputs:
+
+    ===========================  ==============================
+    condition                    mode that matches this section
+    ===========================  ==============================
+    ``[["a"], ["b"]]``           ``"and"``
+    ``[["a", "b"]]``             ``"and"``
+    ``["a", "b"]``               ``"or"``
+    ``["a"]``                    either
+    absent, or ``[]``            either
+    ===========================  ==============================
+
+    The flat row is the one a single carried value gets backwards. This
+    section reads a flat list as ONE group, its operands AND-ed
+    (:meth:`~pyraichu.muscadet.ObjFlow.add_flow_out`: "a flat list is one
+    such group"), while the muscadet-facing route splits the same list into
+    one clause per element and so reaches the same answer only under
+    ``"or"``. A guard that accepted ``"and"`` everywhere would therefore
+    bless the inverting value on a flat condition and refuse the agreeing
+    one, which is the very failure it exists to catch.
+
+    Nothing to combine means nothing to disagree about, so an absent or
+    empty condition carries either mode: the seam refuses by value, never by
+    key (the declaration is accepted while it declares nothing), and an
+    exporter that writes gate keys unconditionally must not be refused a
+    model it would compute identically.
+
+    A MIXED list gets both modes back, not because they agree but because
+    this section refuses that shape on its own terms further down. Answering
+    here would replace a refusal naming the shape with one naming the mode,
+    which points the reader at the wrong line.
+    """
+    if not condition or not isinstance(condition, (list, tuple)):
+        return declare.PROD_COND_INNER_MODES
+    groups = sum(1 for element in condition if isinstance(element, (list, tuple)))
+    if groups == len(condition):
+        return ("and",)
+    if groups or len(condition) == 1:
+        return declare.PROD_COND_INNER_MODES
+    return ("or",)
+
+
+#: Keys a ``flows_out`` entry may carry that this section builds nothing from,
+#: each with what to write instead. The muscadet-facing route already gives all
+#: three exactly this treatment (`pyraichu.declare`, ``_DISCRETE_OUT_INERT``):
+#: inert at the value that declares nothing, refused above it. Dropped instead,
+#: each costs the same class of wrong answer the inner mode does, a condition
+#: running unnegated or uncompared, or an output delivering the opposite of what
+#: it says.
+#:
+#: The guidance differs per key and is not interchangeable. The two matrices are
+#: the same negation and comparison the operand carries INLINE, so they have a
+#: spelling here to be redirected to. ``negate`` is not of that family at all:
+#: muscadet defines it as negating the flow OUTPUT itself (`muscadet/flow.py`,
+#: "Indicates if the flow output is negated"), which this layer carries on
+#: neither route, so it is refused with no substitute to offer. Telling its
+#: author to move it onto an operand would send them to a key that means
+#: something else.
+_PROD_COND_UNBUILT_KEYS: tuple[tuple[str, str], ...] = (
+    (
+        "var_prod_cond_negate",
+        "it is the operand negation written as a matrix beside the condition; "
+        "write it on the operand instead, which both routes carry: "
+        "{'name': 'f', 'negate': True}",
+    ),
+    (
+        "var_prod_cond_compare",
+        "it is the operand comparison written as a matrix beside the "
+        "condition; write it on the operand instead, which both routes carry: "
+        "{'name': 'f', 'op': '>', 'value': 0}",
+    ),
+    (
+        "negate",
+        "it negates the flow OUTPUT rather than anything in the condition, and "
+        "this layer carries that on no route, so there is no spelling to move "
+        "it to. Declare the inversion where the value is produced, or state "
+        "the condition that holds when the output should feed",
+    ),
+)
+
+
+def _refuse_a_foreign_prod_cond_convention(
+    obj: authoring.ObjFlow, flow: dict
+) -> None:
+    """Refuse a production-condition key this section will not honour.
+
+    Two shapes of refusal, one rule. ``var_prod_cond_inner_mode`` is accepted
+    while it states the reading this section already has for the condition
+    beside it (:func:`_prod_cond_carried_modes`); the rest of the family is
+    accepted while it declares nothing. Both are the seam's refuse-by-value
+    rule, and neither refuses on the key alone.
+
+    What every one of them costs when dropped instead is a condition that
+    runs as very nearly its own negation, with nothing refused and nothing
+    logged. Measured on a recorded industrial model whose six multi-clause
+    conditions carry no
+    mode and are read as the groups OR-ed: converting those would turn a
+    supply fed by either grid into one needing both.
+    """
+    where = f"ObjFlow `{obj.name}`: `flows_out` entry {flow.get('name')!r}"
+    for key, guidance in _PROD_COND_UNBUILT_KEYS:
+        if not flow.get(key):
+            continue
+        raise ValueError(
+            f"{where} declares `{key}`={flow[key]!r}, which this section "
+            f"builds nothing from. Dropped in silence it would leave the "
+            f"entry computing the opposite of what it declares, so it is "
+            f"refused: {guidance}"
+        )
+    if "var_prod_cond_inner_mode" not in flow:
+        return
+    declared = flow["var_prod_cond_inner_mode"]
+    carried = _prod_cond_carried_modes(flow.get("var_prod_cond"))
+    if declared in carried:
+        return
+    reading = (
+        "reads the condition beside it as one group, its operands AND-ed"
+        if carried == ("or",)
+        else "reads the condition beside it as the groups OR-ed, each "
+        "group's operands AND-ed"
+    )
+    raise ValueError(
+        f"{where} declares `var_prod_cond_inner_mode`={declared!r}. This "
+        f"section {reading}, which muscadet spells "
+        f"{' or '.join(repr(mode) for mode in carried)} for that shape, and "
+        f"that is what it accepts here. muscadet itself carries "
+        f"{' and '.join(repr(mode) for mode in declare.PROD_COND_INNER_MODES)}"
+        f", and the other one reads the same list as very nearly its own "
+        f"negation. Two ways out, and the cheap one is usually right: rewrite "
+        f"the condition in the reading above, which is a change to this entry "
+        f"alone; or declare the component through the muscadet-facing route, "
+        f"which converts the condition but is a DIFFERENT document shape (a "
+        f"`components` entry with a `flows` section, not a "
+        f"`plugins.muscadet.objects` entry with `flows_out`), so it is a "
+        f"re-authoring of the component rather than one more key. Note that a "
+        f"`capacities` entry beside this one is unaffected either way: its "
+        f"`serve_cond_inner_mode` is read on muscadet's own convention, so a "
+        f"serve condition needs no move"
+    )
+
+
 def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
     """The `flows_out` section, in this plugin's own vocabulary: a plain
     output, a temporised one (`tempo`) or a triggered one (`trigger`).
@@ -876,8 +1023,27 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
     :func:`_refuse_a_held_write_on_a_persistent_gate` asks the same
     question of the OTHER writer, a mode object declared beside the
     component, so between them the two routes refuse one shape rather
-    than each half of it."""
+    than each half of it.
+
+    **This section's production condition is read in DISJUNCTIVE form**,
+    groups OR-ed and each group's operands AND-ed, which is this layer's
+    own convention and what :meth:`~pyraichu.muscadet.ObjFlow.add_flow_out`
+    documents. muscadet writes the same list under
+    ``var_prod_cond_inner_mode``, whose default ``"or"`` means the OPPOSITE
+    (``all(any(...))``), and the muscadet-facing route converts it
+    (`pyraichu.declare`, the ``flows`` section). This one does not, so the
+    key is refused above the value that states what this section already
+    does, per the seam's refuse-by-value rule: ``"and"`` says the reading
+    this section has, ``"or"`` asks for a conversion it will not perform,
+    and silently dropping either is how a condition gets read as its own
+    negation with nothing said.
+
+    Refused rather than honoured on purpose. Honouring an explicit ``"or"``
+    while defaulting to the disjunctive reading would make writing the key
+    at its own muscadet default mean the opposite of omitting it, which is
+    a trap dressed as expressivity."""
     for flow in spec.get("flows_out", []):
+        _refuse_a_foreign_prod_cond_convention(obj, flow)
         gate = {
             "var_fed_available_out_init": flow.get("var_fed_available_out_init"),
             "var_fed_available_out_reset": flow.get("var_fed_available_out_reset"),
