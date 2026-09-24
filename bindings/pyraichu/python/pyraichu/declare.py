@@ -105,6 +105,8 @@ Examples
 
 from __future__ import annotations
 
+import math
+
 import copy
 import inspect
 import itertools
@@ -484,8 +486,8 @@ _DYNAMIC_OUT_RUNTIME = frozenset({"state_enable_bkd", "trigger_up"})
 _DISCRETE_OUT_TEMPO = _Vocabulary(
     carried=dict(
         _DISCRETE_OUT_KEYS,
-        occ_enable_flow="enable_time",
-        occ_disable_flow="disable_time",
+        occ_enable_flow="enable_law",
+        occ_disable_flow="disable_law",
         init_enable="init_enable",
     ),
     inert=dict(
@@ -1492,22 +1494,33 @@ def _prod_cond(
 # --- occurrence laws ---------------------------------------------------------
 
 
-#: cod3s class name -> the short law name this layer reads. Only the two laws
-#: a temporised output carries: a random law keeps the name it was declared
-#: under, so its refusal names what the caller wrote.
-_COD3S_LAW_NAMES = {"DelayOccDistribution": "delay", "InstOccDistribution": "inst"}
+#: cod3s class name -> the short law name this layer reads. Only the laws a
+#: temporised output carries: any other keeps the name it was declared under,
+#: so its refusal names what the caller wrote.
+_COD3S_LAW_NAMES = {
+    "DelayOccDistribution": "delay",
+    "InstOccDistribution": "inst",
+    "ExpOccDistribution": "exp",
+}
+
+#: Short law name -> the one parameter it carries beside `cls`.
+_TEMPO_LAW_PARAMETERS = {"delay": "time", "exp": "rate"}
 
 
-def _delay(where: str, key: str, declared: Any) -> float:
-    """A temporisation law, reduced to the delay this layer carries.
+def _tempo_law(where: str, key: str, declared: Any) -> dict[str, Any]:
+    """A temporisation law, in the engine's transition form.
 
-    A temporised output here waits a fixed time; a random one has no
-    counterpart, so it is refused by name rather than reduced to its mean.
+    A fixed delay waits `time`; an exponential law draws the wait at `rate`,
+    which is the reference engine's reading (measured 2026-09-24: the
+    switch-on probability t hours after the condition holds is
+    1 - exp(-rate * t)). An instantaneous law is a zero delay when it surely
+    fires; any other law is refused by name rather than reduced to something
+    it is not.
     """
     if declared is None:
-        return 0.0
+        return {"distrib": "delay", "time": 0.0}
     if isinstance(declared, (int, float)) and not isinstance(declared, bool):
-        return float(declared)
+        return {"distrib": "delay", "time": float(declared)}
     if not isinstance(declared, dict):
         raise ComponentSpecError(
             f"{where} declares `{key}`={declared!r}, which is no occurrence "
@@ -1526,20 +1539,27 @@ def _delay(where: str, key: str, declared: Any) -> float:
                 f"probabilities `probs`={probs!r}; a temporised output here "
                 f"fires surely, so only a sure firing is carried"
             )
-        return 0.0
-    if law != "delay":
+        return {"distrib": "delay", "time": 0.0}
+    parameter = _TEMPO_LAW_PARAMETERS.get(law)
+    if parameter is None:
         raise ComponentSpecError(
             f"{where} declares `{key}` under the occurrence law '{law}'; a "
-            f"temporised output here waits a fixed time, so only 'delay' and "
-            f"'inst' are carried"
+            f"temporised output here waits on 'delay', 'exp' or 'inst'"
         )
-    unknown = sorted(set(declared) - {"cls", "time"})
+    unknown = sorted(set(declared) - {"cls", parameter})
     if unknown:
         raise ComponentSpecError(
             f"{where} declares `{key}` carrying unknown keys {unknown}; a "
-            f"delay law carries `cls` and `time`"
+            f"{law} law carries `cls` and `{parameter}`"
         )
-    return float(declared.get("time", 0.0))
+    if law == "exp" and parameter not in declared:
+        raise ComponentSpecError(f"{where} declares `{key}` as an exponential law with no `rate`")
+    value = declared.get(parameter, 0.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise ComponentSpecError(
+            f"{where} declares `{key}` with `{parameter}`={value!r}; it must be a finite non-negative number"
+        )
+    return {"distrib": law, parameter: float(value)}
 
 
 # --- the declared shapes a mapping can carry --------------------------------
@@ -1677,11 +1697,11 @@ def entry_call(kind: str, entry: dict, *, where: str) -> tuple[str, dict[str, An
     # onto: a refusal that names a key the caller never wrote is a refusal
     # the caller cannot act on.
     for declared, keyword in (
-        ("occ_enable_flow", "enable_time"),
-        ("occ_disable_flow", "disable_time"),
+        ("occ_enable_flow", "enable_law"),
+        ("occ_disable_flow", "disable_law"),
     ):
         if keyword in keywords:
-            keywords[keyword] = _delay(where, declared, keywords[keyword])
+            keywords[keyword] = _tempo_law(where, declared, keywords[keyword])
     if "profile" in keywords:
         _check_declared_shape(where, "profile", keywords["profile"], _PROFILE_CLASS)
     if "equation" in keywords:

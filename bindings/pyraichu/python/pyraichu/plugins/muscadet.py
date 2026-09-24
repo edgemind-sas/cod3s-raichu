@@ -1055,6 +1055,8 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 enable_time=tempo.get("enable_time", 0.0),
                 disable_time=tempo.get("disable_time", 0.0),
                 init_enable=tempo.get("init_enable", False),
+                enable_law=tempo.get("enable_law"),
+                disable_law=tempo.get("disable_law"),
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
                 **gate,
