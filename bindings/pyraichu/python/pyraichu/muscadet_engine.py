@@ -622,7 +622,10 @@ def _merge_indicators(
     indicator, and the refusal above fires, naming both. That is the intended
     outcome and the change is the honest half of it: until the pair was read,
     the two merged in silence and the estimate that came back was the one
-    nobody asked for.
+    nobody asked for. The one threshold that does NOT collide is the
+    identity on a boolean (``== True``), which observes the variable itself
+    and merges with the generated entry: see
+    :func:`pyraichu.indicators.merge_indicators`.
 
     **The estimate comes back under the DECLARED name, and a consumer keyed on
     ``{component}_{attribute}`` will not always find it.** Worth stating here
