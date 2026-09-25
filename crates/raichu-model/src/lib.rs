@@ -452,6 +452,22 @@ pub struct Transition {
     /// out before the feared event. `None` = not part of a cycle pair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cycle_group: Option<String>,
+    /// **Edge effects**: assignments evaluated ONCE, when the transition
+    /// fires, after its state change, in declaration order. Unlike a
+    /// sensitive function's effects (a level, re-evaluated whenever what it
+    /// reads changes), nothing re-applies them and nothing restores the
+    /// value: the attribute keeps what was written until something else
+    /// writes it. That is a one-shot effect, and on an attribute nothing
+    /// else writes, a variable that memorises (a latched detection, an
+    /// alarm). An interrupted transition writes nothing.
+    ///
+    /// Non-baseline construct: a document carrying it must declare
+    /// [`Feature::TransitionEffects`]. An effect on an attribute an equation
+    /// or a sensitive function writes is refused
+    /// ([`ModelError::TransitionEffectOverwritten`]): the next evaluation
+    /// would erase it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<Assignment>,
     /// Occurrence distribution.
     #[serde(flatten)]
     pub distrib: Distrib,
@@ -634,6 +650,11 @@ pub enum Feature {
     /// An engine that ignored the field would integrate that magnitude as
     /// a rate and report a stock of -1e19 without a word.
     UnboundedRate,
+    /// Transition-level [`Transition::effects`]: assignments made once, on
+    /// the firing edge. An engine that ignored the field would never make
+    /// the write, and a latched detection would read its initial value for
+    /// the whole trajectory without a word.
+    TransitionEffects,
 }
 
 impl Feature {
@@ -642,6 +663,7 @@ impl Feature {
         Feature::EvaluationOrder,
         Feature::Allocation,
         Feature::UnboundedRate,
+        Feature::TransitionEffects,
     ];
 
     /// Serialized name of the feature.
@@ -651,6 +673,7 @@ impl Feature {
             Feature::EvaluationOrder => "evaluation_order",
             Feature::Allocation => "allocation",
             Feature::UnboundedRate => "unbounded_rate",
+            Feature::TransitionEffects => "transition_effects",
         }
     }
 
@@ -1465,6 +1488,22 @@ pub enum ModelError {
         /// The declared value.
         value: f64,
     },
+    /// A transition's edge effect writes an attribute that an equation or
+    /// a sensitive function also writes: the next evaluation would erase
+    /// the one-shot write.
+    #[error(
+        "transition `{transition}` writes `{attribute}` on its firing edge, \
+         and {writer} writes it too: the next evaluation would erase the \
+         one-shot write. An edge effect needs an attribute nothing else writes"
+    )]
+    TransitionEffectOverwritten {
+        /// `component.automaton.transition`.
+        transition: String,
+        /// `component.attribute`.
+        attribute: String,
+        /// The other writer.
+        writer: String,
+    },
     /// A distribution operator does not sit on an out port of its
     /// component.
     #[error(
@@ -1769,6 +1808,14 @@ impl Model {
         if self.unbounded_rate.is_some() {
             features.insert(Feature::UnboundedRate);
         }
+        if self.components.iter().any(|component| {
+            component
+                .automata
+                .iter()
+                .any(|automaton| automaton.transitions.iter().any(|t| !t.effects.is_empty()))
+        }) {
+            features.insert(Feature::TransitionEffects);
+        }
         if self
             .components
             .iter()
@@ -1842,6 +1889,7 @@ impl Model {
         self.check_priority_surplus_return(&scopes)?;
         self.check_evaluation_order()?;
         self.check_indicators(&scopes)?;
+        self.check_transition_effects()?;
         if let Some(value) = self.unbounded_rate {
             if !(value.is_finite() && value > 0.0) {
                 return Err(ModelError::UnboundedRateInvalid { value });
@@ -1898,6 +1946,36 @@ impl Model {
                             attribute,
                             writer: format!("distribution operator `{other}`"),
                         });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// An edge effect's target must have no other writer: the equation or
+    /// sensitive function that also writes it would erase the one-shot
+    /// write at the next evaluation.
+    fn check_transition_effects(&self) -> Result<(), ModelError> {
+        let writers = self.attribute_writers();
+        for component in &self.components {
+            for automaton in &component.automata {
+                for transition in &automaton.transitions {
+                    for assignment in &transition.effects {
+                        let key = (
+                            assignment.target.component.as_str(),
+                            assignment.target.attribute.as_str(),
+                        );
+                        if let Some(writer) = writers.get(&key) {
+                            return Err(ModelError::TransitionEffectOverwritten {
+                                transition: format!(
+                                    "{}.{}.{}",
+                                    component.name, automaton.name, transition.name
+                                ),
+                                attribute: format!("{}.{}", key.0, key.1),
+                                writer: writer.clone(),
+                            });
+                        }
                     }
                 }
             }
@@ -2798,6 +2876,14 @@ impl Model {
                             transition.name, component.name, automaton.name
                         );
                         Self::check_expr(scopes, &sources, guard, &context)?;
+                    }
+                    for (index, assignment) in transition.effects.iter().enumerate() {
+                        let context = format!(
+                            "effect #{index} of transition `{}` in `{}.{}`",
+                            transition.name, component.name, automaton.name
+                        );
+                        Self::check_attr_ref(scopes, &assignment.target, &context)?;
+                        Self::check_expr(scopes, &sources, &assignment.value, &context)?;
                     }
                 }
             }

@@ -897,26 +897,15 @@ _FAILURE_MODE_MODE = _Vocabulary(
         repair_state="repair_state",
         repair_cond="repair_cond",
         repair_effects="repair_effects",
+        # One-shot effects, written on the firing edge (a transition's
+        # `effects`), where the two above are held while the state lasts.
+        failure_effects_trans="failure_effects_trans",
+        repair_effects_trans="repair_effects_trans",
         repair_param_name="repair_param_name",
         repair_param="repair_param",
     ),
-    inert=dict(
-        _MODE_SHARED_INERT,
-        failure_effects_trans={},
-        repair_effects_trans={},
-    ),
-    uncarried=dict(
-        _MODE_UNCARRIED,
-        failure_effects_trans=(
-            "a ONE-SHOT effect, applied as the transition fires. RAICHU holds "
-            "an effect while the state lasts and re-evaluates it to a "
-            "fixpoint; it has no transition-scoped write, so a pulse declared "
-            "here would silently never happen"
-        ),
-        repair_effects_trans=(
-            "a one-shot effect on the repair side; see `failure_effects_trans`"
-        ),
-    ),
+    inert=dict(_MODE_SHARED_INERT),
+    uncarried=dict(_MODE_UNCARRIED),
 )
 
 #: ``cod3s.ObjMode2S`` itself, the generic two-state engine the COD3S Platform
@@ -938,14 +927,16 @@ _MODE_2S_MODE = _Vocabulary(
         not_occ_law="not_occ_law",
         not_occ_cond="not_occ_cond",
         not_occ_effects="not_occ_effects",
+        # One-shot effects, written on the firing edge (a transition's
+        # `effects`), where the two above are held while the state lasts.
+        occ_effects_trans="occ_effects_trans",
+        not_occ_effects_trans="not_occ_effects_trans",
         not_occ_param_name="not_occ_param_name",
         not_occ_param="not_occ_param",
     ),
     inert=dict(
         _MODE_SHARED_INERT,
         aut_name=None,
-        occ_effects_trans={},
-        not_occ_effects_trans={},
         not_occ_parked_state=None,
     ),
     uncarried=dict(
@@ -955,15 +946,6 @@ _MODE_2S_MODE = _Vocabulary(
             "cod3s' own name for a mode over targets, so renaming it here "
             "would leave every indicator and sequence that reaches it by name "
             "pointing at nothing"
-        ),
-        occ_effects_trans=(
-            "a ONE-SHOT effect, applied as the transition fires. RAICHU holds "
-            "an effect while the state lasts and re-evaluates it to a "
-            "fixpoint; it has no transition-scoped write, so a pulse declared "
-            "here would silently never happen"
-        ),
-        not_occ_effects_trans=(
-            "a one-shot effect on the return side; see `occ_effects_trans`"
         ),
         not_occ_parked_state=(
             "the micro-state a lost RETURN draw waits in. Only an on-demand "
@@ -3066,7 +3048,16 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
                 where, key, wire[key], targets, modes, mode_class.by_flow, volumes
             )
 
-    for key in ("failure_effects", "repair_effects", "occ_effects", "not_occ_effects"):
+    for key in (
+        "failure_effects",
+        "repair_effects",
+        "occ_effects",
+        "not_occ_effects",
+        "failure_effects_trans",
+        "repair_effects_trans",
+        "occ_effects_trans",
+        "not_occ_effects_trans",
+    ):
         if key in wire:
             wire[key] = _mode_effects(
                 where, key, wire[key], targets, components, mode_class.by_flow
@@ -4413,11 +4404,13 @@ def build_document(
     # may watch a mode the document lists AFTER it, and its automaton does not
     # exist until that one is expanded.
     persistent_gates = _persistent_availability_gates(flows)
+    reinitialized_gates = _availability_gates(flows) - persistent_gates
     for obj in objects:
         if obj["type"] != "ObjCtrl":
             _refuse_unreachable_references(obj, body)
             _refuse_a_latched_production_a_condition_also_writes(obj, body)
             _refuse_a_held_write_on_a_persistent_gate(obj, persistent_gates)
+            _refuse_a_pulse_on_a_reinitialized_gate(obj, reinitialized_gates)
 
     # The two whole-model closures the plugin's own expansion runs, and for
     # reasons that hold here identically: an availability gate the document
@@ -4611,6 +4604,44 @@ def _refuse_a_latched_production_a_condition_also_writes(obj: dict, body: dict) 
                     f"`var_prod_default`; drop the condition, or stop writing "
                     f"`{variable}`"
                 )
+
+
+def _availability_gates(flows: dict) -> set[tuple[str, str]]:
+    """Every availability gate the flow declarations carry, persistent or
+    reinitialized, as ``(component, attribute)`` pairs."""
+    gates = set()
+    for name, spec in flows.items():
+        for entry in spec.get("flows") or []:
+            if not isinstance(entry, dict) or entry.get("cls") not in _DISCRETE_OUT_CLASSES:
+                continue
+            flow = entry.get("name")
+            if isinstance(flow, str):
+                gates.add((str(spec.get("name") or name), flow + AVAILABILITY_SUFFIX))
+    return gates
+
+
+def _refuse_a_pulse_on_a_reinitialized_gate(obj: dict, gates: set[tuple[str, str]]) -> None:
+    """Refuse a one-shot write on a gate the reference RESETS every step.
+
+    The declaration route's half of
+    :func:`~pyraichu.plugins.muscadet._refuse_a_pulse_on_a_reinitialized_gate`.
+    On the reference engine the pulse is undone by the next step's
+    reinitialization, so it is only seen inside one fixpoint; here an edge
+    write stays until something else writes the attribute, so the same
+    declaration would latch where the reference forgets."""
+    for key in ("failure_effects_trans", "repair_effects_trans"):
+        for variable in obj.get(key) or {}:
+            for target in obj.get("targets") or []:
+                if (target, variable) in gates:
+                    raise ComponentSpecError(
+                        f"Failure mode {obj.get('name')} writes `{target}.{variable}` "
+                        f"once (`{key}`), and its flow reinitializes that gate every "
+                        "step (muscadet's `var_fed_available_out_reset=True`): the "
+                        "reference undoes the pulse at the next step, where this "
+                        "engine would keep it. Declare the gate persistent "
+                        "(`var_fed_available_out_reset=False`), which is what a "
+                        "one-shot effect latches"
+                    )
 
 
 def _persistent_availability_gates(flows: dict) -> set[tuple[str, str]]:

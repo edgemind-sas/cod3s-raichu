@@ -59,6 +59,7 @@ fn delay_model() -> Model {
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Delay { time: 5.0 },
                         },
                         Transition {
@@ -69,6 +70,7 @@ fn delay_model() -> Model {
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Delay { time: 10.0 },
                         },
                     ],
@@ -179,6 +181,7 @@ fn tank_model() -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                     Transition {
@@ -195,6 +198,7 @@ fn tank_model() -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                 ],
@@ -323,6 +327,7 @@ fn wide_network(watched: bool) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Delay { time: 61.0 },
                 },
                 Transition {
@@ -333,6 +338,7 @@ fn wide_network(watched: bool) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Delay { time: 13.0 },
                 },
             ],
@@ -380,6 +386,7 @@ fn wide_network(watched: bool) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Delay {
                         time: 7.0 + (i % 29) as f64,
                     },
@@ -392,6 +399,7 @@ fn wide_network(watched: bool) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Delay {
                         time: 3.0 + (i % 17) as f64,
                     },
@@ -419,6 +427,7 @@ fn wide_network(watched: bool) -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                     Transition {
@@ -435,6 +444,7 @@ fn wide_network(watched: bool) -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                 ],

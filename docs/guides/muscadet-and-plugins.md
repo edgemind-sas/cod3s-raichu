@@ -716,6 +716,19 @@ absorbing. Three behaviours:
 - `external_rep_indep`: a trigger model: the mode resets instantly and
   each target latches the failure until it repairs on its own law.
 
+**One-shot effects** (`failure_effects_trans` / `repair_effects_trans`,
+the platform's `occ_effects_trans` / `not_occ_effects_trans`) are written
+once, on the firing edge of the mode's own occurrence and repair
+transitions (a transition's `effects`), where `failure_effects` is held
+while the failure lasts. They latch a gate declared persistent
+(`fed_available_reset: false`): a detection set by a failure mode and
+cleared by the repair of another. The shapes cod3s refuses are refused
+here too, with its reasons: an on-demand law, `external_rep_indep`, a
+common cause, and a variable driven both as a level and as a pulse. A
+one-shot write on a gate that is reinitialized every step is refused as
+well: the reference undoes the pulse at the next step, where an edge
+write would keep it.
+
 Either direction may also carry an **on-demand** law
 (`{"law": "inst", "prob": …}`): one Bernoulli draw per rising edge of
 that direction's condition, its lost branch parking in a micro-state

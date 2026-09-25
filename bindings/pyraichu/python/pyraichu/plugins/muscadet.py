@@ -619,6 +619,51 @@ def _refuse_a_latched_production_a_condition_also_writes(
         )
 
 
+def _reinitialized_availability_gates(specs: list[dict]) -> dict[tuple[str, str], str]:
+    """The availability gates an ``ObjFlow`` leaves REINITIALIZED (muscadet's
+    default, ``var_fed_available_out_reset`` true or unsaid), indexed like
+    :func:`_persistent_availability_gates`."""
+    gates: dict[tuple[str, str], str] = {}
+    for spec in specs:
+        if spec.get("type") != "ObjFlow":
+            continue
+        for flow in spec.get("flows_out") or []:
+            if flow.get("var_fed_available_out_reset") is not False:
+                gates[(spec["name"], f"{flow['name']}_fed_available_out")] = flow["name"]
+    return gates
+
+
+def _refuse_a_pulse_on_a_reinitialized_gate(specs: list[dict]) -> None:
+    """A one-shot write on a gate the reference RESETS every step has no
+    faithful expansion here, so it is refused by name.
+
+    On the reference engine the pulse is written at the firing and undone by
+    the next step's reinitialization, so it is only ever seen inside one
+    fixpoint (cod3s: "a pulse only sticks on a persistent gate"). Here an
+    edge write stays until something else writes the attribute, so the same
+    declaration would latch where the reference forgets. The persistent
+    gate (`fed_available_reset: false`) is what a one-shot effect is for."""
+    gates = _reinitialized_availability_gates(specs)
+    for spec in specs:
+        if spec.get("type") not in ("ObjFM", "ObjFMInst"):
+            continue
+        for key in ("failure_effects_trans", "repair_effects_trans"):
+            for attribute in spec.get(key) or {}:
+                for target in spec.get("targets") or []:
+                    flow = gates.get((target, attribute))
+                    if flow is None:
+                        continue
+                    raise ValueError(
+                        f"muscadet plugin: the failure mode `{spec['name']}` writes "
+                        f"`{target}.{attribute}` once (`{key}`), and flow `{flow}` "
+                        "reinitializes that gate every step (`fed_available_reset: "
+                        "true`): the reference undoes the pulse at the next step, "
+                        "where this engine would keep it. Declare the gate "
+                        "persistent (`fed_available_reset: false`), which is what a "
+                        "one-shot effect latches"
+                    )
+
+
 def _refuse_a_held_write_on_a_persistent_gate(model: dict, specs: list[dict]) -> None:
     """A persistent availability gate written by a failure mode has no
     faithful expansion here, so it is refused by name.
@@ -1205,6 +1250,56 @@ def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], li
     ], [], []
 
 
+def _edge_effects(target: str, effects: dict) -> list[dict]:
+    """A mode's one-shot effects as a transition's edge `effects`: each
+    `{attribute: value}` written once, on the target, when the edge fires."""
+    return [
+        {"target": {"component": target, "attribute": attribute}, "value": _const(value)}
+        for attribute, value in effects.items()
+    ]
+
+
+def _check_one_shot_effects(
+    spec: dict, behaviour: str, failure_laws: list, repair_laws: list
+) -> tuple[dict, dict]:
+    """The one-shot (trans-based) effects of an ObjFM, refused on the shapes
+    cod3s itself refuses (`ObjMode2S._validate_trans_effects`), with its
+    reasons: an on-demand law (a branching draw edge), a behaviour with no
+    symmetric edge pair, a common cause (the both-pulse desynchronises across
+    combinations), and a variable driven both as a level and as a pulse."""
+    name = spec["name"]
+    failure = dict(spec.get("failure_effects_trans") or {})
+    repair = dict(spec.get("repair_effects_trans") or {})
+    if not (failure or repair):
+        return failure, repair
+    if any(_is_inst_law(law) for law in failure_laws + repair_laws if law is not None):
+        raise ValueError(
+            f"ObjFM `{name}`: one-shot effects on an on-demand (inst) law are "
+            "refused, as cod3s refuses them: a pulse on a branching draw edge"
+        )
+    if behaviour not in ("internal", "external"):
+        raise ValueError(
+            f"ObjFM `{name}`: one-shot effects need behaviour `internal` or "
+            f"`external`, not `{behaviour}`, which has no symmetric failure / "
+            "repair edge pair to carry them (as cod3s refuses it)"
+        )
+    if len(spec["targets"]) > 1:
+        raise ValueError(
+            f"ObjFM `{name}`: one-shot effects on a common-cause mode "
+            f"({len(spec['targets'])} targets) are refused, as cod3s refuses "
+            "them: the pulses desynchronise across combinations"
+        )
+    levels = set(spec.get("failure_effects") or {}) | set(spec.get("repair_effects") or {})
+    both = sorted(levels & (set(failure) | set(repair)))
+    if both:
+        raise ValueError(
+            f"ObjFM `{name}`: {both} are driven both as a level (held while "
+            "the state lasts) and as a one-shot write: the level overwrites the "
+            "pulse. Use distinct variables, as cod3s requires"
+        )
+    return failure, repair
+
+
 def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
     """cod3s ObjFM expansion: three behaviours over N targets and every
     *active* common-cause order (`fm__cc_i_j`, states `occ__cc_i_j` /
@@ -1264,6 +1359,12 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
     )
     failure_laws += [None] * (order_max - len(failure_laws))
     repair_laws += [None] * (order_max - len(repair_laws))
+    # One-shot effects: written on the firing edges of the mode's own
+    # automaton, as cod3s wires them (`_wire_transition_effects` on the
+    # occurrence and on the return transition), whatever the behaviour.
+    failure_edge, repair_edge = _check_one_shot_effects(
+        spec, behaviour, failure_laws, repair_laws
+    )
 
     automata = []
     impacting: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
@@ -1371,6 +1472,8 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                         **_law(f_law),
                     }
                 )
+                if failure_edge:
+                    transitions[-1]["effects"] = _edge_effects(targets[0], failure_edge)
             if repair_fields is not None:
                 transitions.append(
                     {
@@ -1383,6 +1486,8 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                         **repair_fields,
                     }
                 )
+                if repair_edge:
+                    transitions[-1]["effects"] = _edge_effects(targets[0], repair_edge)
             elif inst_repair:
                 transitions += _inst_edge(
                     occ,
@@ -1642,6 +1747,12 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
     internal CCF). A single scalar `gamma` with one target is the order-1
     special case (no suffix, automaton `fm`).
     """
+    if spec.get("failure_effects_trans") or spec.get("repair_effects_trans"):
+        raise ValueError(
+            f"ObjFMInst `{spec['name']}`: one-shot effects on an on-demand "
+            "(inst) mode are refused, as cod3s refuses them: a pulse on a "
+            "branching draw edge"
+        )
     import itertools
 
     name = spec["name"]
@@ -2045,6 +2156,7 @@ class MuscadetPlugin:
         for; the key is.
         """
         _refuse_a_held_write_on_a_persistent_gate(model, specs)
+        _refuse_a_pulse_on_a_reinitialized_gate(specs)
         _refuse_a_latched_production_a_condition_also_writes(model, specs)
         _merge_reinit_writers(model, specs)
 

@@ -54,6 +54,7 @@ fn branch(index: usize, delay: f64, reads: (&str, &str), driven: bool) -> Compon
             on_interruption: Default::default(),
             monitored: false,
             cycle_group: None,
+            effects: vec![],
             distrib: Distrib::Watched,
         }],
     }];
@@ -71,6 +72,7 @@ fn branch(index: usize, delay: f64, reads: (&str, &str), driven: bool) -> Compon
                 on_interruption: Default::default(),
                 monitored: false,
                 cycle_group: None,
+                effects: vec![],
                 distrib: Distrib::Delay { time: delay },
             }],
         });
@@ -166,6 +168,7 @@ fn shared_boundary(n: usize) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Delay { time: 4.0 },
                 }],
             }],

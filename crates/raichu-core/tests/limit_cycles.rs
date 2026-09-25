@@ -64,6 +64,7 @@ fn sawtooth() -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                     Transition {
@@ -80,6 +81,7 @@ fn sawtooth() -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                 ],
