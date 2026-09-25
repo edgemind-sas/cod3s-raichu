@@ -210,17 +210,48 @@ def test_a_pipe_fed_by_a_supplier_of_a_releasing_input_passes_on_what_it_gets():
 def _forward_reads(document: dict) -> list:
     """Every explicit equation reading an attribute the evaluation order
     sweeps AFTER it: a read of the previous evaluation's value where the
-    sweep promises the current one."""
+    sweep promises the current one. Reads through a port count: an input
+    summing its suppliers reads each one's channel."""
     model = document["model"]
     position = {
         (step["component"], step["attribute"]): index
         for index, step in enumerate(model["evaluation_order"])
     }
 
+    # A port aggregation reads, through each connection into the port,
+    # the channel the supplier materialises for that connection, or the
+    # allocation writing it, or the supplier port's own attribute.
+    components = {component["name"]: component for component in model["components"]}
+    feeding: dict = {}
+    for connection in model["connections"]:
+        destination = connection["to"]
+        edge = connection.get("name") or f"{destination['component']}__{destination['port']}"
+        feeding.setdefault((destination["component"], destination["port"]), []).append(
+            (connection["from"]["component"], connection["from"]["port"], edge)
+        )
+
+    def aggregated(port, channel):
+        for supplier, supplier_port, edge in feeding.get(
+            (port["component"], port["port"]), []
+        ):
+            if channel is None:
+                for declared in components[supplier]["ports"]:
+                    if declared["name"] == supplier_port and declared.get("attr"):
+                        yield supplier, declared["attr"]
+                continue
+            materialised = (supplier, f"{supplier_port}__{channel}__{edge}")
+            if materialised in position:
+                yield materialised
+            for allocation in components[supplier].get("allocations", []):
+                if allocation["port"] == supplier_port and allocation["allocated"] == channel:
+                    yield supplier, allocation["name"]
+
     def reads(expr, found):
         if isinstance(expr, dict):
             if expr.get("op") == "attr":
                 found.add((expr["attr"]["component"], expr["attr"]["attribute"]))
+            if expr.get("op") == "port_agg":
+                found.update(aggregated(expr["port"], expr.get("channel")))
             for value in expr.values():
                 reads(value, found)
         elif isinstance(expr, list):

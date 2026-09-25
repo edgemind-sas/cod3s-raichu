@@ -626,6 +626,53 @@ def _renamed_reads(
     return {key: _renamed_reads(value, component, renames) for key, value in expr.items()}
 
 
+def _strongly_connected(graph: list[list[int]]) -> tuple[list[int], list[list[int]]]:
+    """The strongly connected components of a graph given as adjacency
+    lists (Tarjan, iterative): the component number of each node, and
+    each component's members in increasing index. A node on no cycle is
+    a component of its own."""
+    component_of = [-1] * len(graph)
+    members: list[list[int]] = []
+    index_of = [-1] * len(graph)
+    low = [0] * len(graph)
+    on_stack = [False] * len(graph)
+    stack: list[int] = []
+    counter = 0
+    for root in range(len(graph)):
+        if index_of[root] != -1:
+            continue
+        work = [(root, 0)]
+        while work:
+            node, edge = work.pop()
+            if edge == 0:
+                index_of[node] = low[node] = counter
+                counter += 1
+                stack.append(node)
+                on_stack[node] = True
+            if edge < len(graph[node]):
+                work.append((node, edge + 1))
+                child = graph[node][edge]
+                if index_of[child] == -1:
+                    work.append((child, 0))
+                elif on_stack[child]:
+                    low[node] = min(low[node], index_of[child])
+                continue
+            for child in graph[node]:
+                if on_stack[child] and component_of[child] == -1:
+                    low[node] = min(low[node], low[child])
+            if low[node] == index_of[node]:
+                block = []
+                while True:
+                    member = stack.pop()
+                    on_stack[member] = False
+                    component_of[member] = len(members)
+                    block.append(member)
+                    if member == node:
+                        break
+                members.append(sorted(block))
+    return component_of, members
+
+
 def _channel_attr(port: str, channel: str, edge: str) -> str:
     """The attribute the compiler materialises for one (connection,
     channel) pair, per the schema's naming rule."""
@@ -7628,14 +7675,15 @@ class System:
         expected and legal: the nodes it holds back are released in
         declaration order rather than refused.
 
-        Kahn's algorithm over two heaps of **declaration indices**, which
-        is what makes both tie-breaks one statement rather than two: take
-        the lowest index whose producers are all placed, and when a cycle
-        leaves none of them, the lowest index still unplaced. Lowest
-        index *is* declared first, so neither tie-break has to be
-        expressed a second time. Placed nodes are left in the heaps and
-        skipped on the way out, which costs one comparison rather than a
-        removal."""
+        Kahn's algorithm over a heap of **declaration indices**: take the
+        lowest index whose producers are all placed, and when a cycle
+        leaves none of them, the lowest index **on a cycle** whose
+        producers off that cycle are all placed. Lowest index *is*
+        declared first, so the tie-break is never expressed a second
+        time. The break releases a member of the ring and never a
+        component merely downstream of it: released early, that one
+        would be visited before one of its own suppliers, and every
+        input it sums would read that supplier a sweep late."""
         names = list(self.comp)
         position = {name: index for index, name in enumerate(names)}
         successors: list[list[int]] = [[] for _ in names]
@@ -7647,11 +7695,18 @@ class System:
                 successors[position[edge.producer]].append(position[edge.consumer])
                 indegree[position[edge.consumer]] += 1
 
+        ring_of, _ = _strongly_connected(successors)
+        # What each node still waits for from OUTSIDE its own ring: at a
+        # stall, the source rings of what is left have none, and a
+        # singleton at zero would have been ready.
+        from_outside = [0] * len(names)
+        for producer, targets in enumerate(successors):
+            for consumer in targets:
+                if ring_of[producer] != ring_of[consumer]:
+                    from_outside[consumer] += 1
+
         ready = [index for index in range(len(names)) if indegree[index] == 0]
         heapq.heapify(ready)
-        # Every node, in declaration order, which is already a valid
-        # heap: the source the cycle fallback draws from.
-        unplaced = list(range(len(names)))
         placed = [False] * len(names)
         order: list[str] = []
         while len(order) < len(names):
@@ -7660,15 +7715,19 @@ class System:
             if ready:
                 chosen = heapq.heappop(ready)
             else:
-                while placed[unplaced[0]]:
-                    heapq.heappop(unplaced)
-                chosen = heapq.heappop(unplaced)
+                chosen = next(
+                    index
+                    for index in range(len(names))
+                    if not placed[index] and from_outside[index] == 0
+                )
             placed[chosen] = True
             order.append(names[chosen])
             # A node released by a cycle break still frees its
             # successors, exactly as one taken in order does.
             for successor in successors[chosen]:
                 indegree[successor] -= 1
+                if ring_of[chosen] != ring_of[successor]:
+                    from_outside[successor] -= 1
                 if indegree[successor] == 0 and not placed[successor]:
                     heapq.heappush(ready, successor)
         return order
@@ -7696,6 +7755,33 @@ class System:
                 order.append({"component": component, "attribute": attribute})
 
         topological = self._flow_order(out_edges)
+
+        def after_last_supplier(publish, skip=frozenset()):
+            """An input sums what ALL its suppliers publish, so it is
+            swept once the last of them is, not at the first: a later
+            supplier would otherwise be read at the previous evaluation's
+            value, which the discrete fixpoint hides and a varying source
+            exposes. In a ring the last supplier comes after the consumer,
+            and the input is still swept after it: summed at the
+            consumer's own visit, the input would read the ring one
+            evaluation late in the balance it integrates, where only the
+            pooled draw reads it late now (`_transit`)."""
+            awaiting = {
+                key: len(edges) for key, edges in in_edges.items() if key not in skip
+            }
+
+            def supplied(edge: _ContinuousEdge) -> None:
+                key = (edge.consumer, edge.flow_in)
+                if key in awaiting:
+                    awaiting[key] -= 1
+                    if awaiting[key] == 0:
+                        publish(*key)
+
+            return supplied
+
+        capability_supplied = after_last_supplier(
+            lambda consumer, flow_in: step(consumer, f"{flow_in}_capability_in")
+        )
 
         def unconnected_inputs(suffix: str) -> None:
             """An input no producer feeds appears in no producer's band,
@@ -7788,7 +7874,7 @@ class System:
                 for edge in served:
                     step(producer, _channel_attr(port, "capability", edge.name))
                 for edge in served:
-                    step(edge.consumer, f"{edge.flow_in}_capability_in")
+                    capability_supplied(edge)
 
         # 2. Demand, back against the flow.
         for producer in reversed(topological):
@@ -7819,16 +7905,18 @@ class System:
         # the end of the band. Nothing else in the band reads them.
         deferred: list[tuple[str, dict[str, Any], list[_ContinuousEdge]]] = []
 
-        def fed(edge: _ContinuousEdge) -> None:
+        def publish_fed(consumer: str, flow_in: str) -> None:
             """What one consumer was fed, with its published rate when
             declared."""
-            step(edge.consumer, f"{edge.flow_in}_fed_in")
+            step(consumer, f"{flow_in}_fed_in")
             if any(
-                declared.name == edge.flow_in
-                and declared.publish_rate == RATE_DELIVERED
-                for declared in self.comp[edge.consumer].flows_continuous_in
+                declared.name == flow_in and declared.publish_rate == RATE_DELIVERED
+                for declared in self.comp[consumer].flows_continuous_in
             ):
-                step(edge.consumer, _rate_alias(edge.flow_in))
+                step(consumer, _rate_alias(flow_in))
+
+        # A releasing input is swept at the end of the band, below.
+        fed = after_last_supplier(publish_fed, skip=releasing)
 
         def delivery(producer: str, flow, served: list[_ContinuousEdge]) -> None:
             """What an output delivered, then what each consumer it
@@ -7936,7 +8024,8 @@ class System:
                     step(producer, f"{pair.name}_moved")
         for producer, flow, served in deferred:
             for edge in served:
-                fed(edge)
+                if (edge.consumer, edge.flow_in) in releasing:
+                    publish_fed(edge.consumer, edge.flow_in)
         unconnected_inputs("fed_in")
 
         # The order must cover the declared steps exactly, and the
@@ -8027,52 +8116,14 @@ class System:
         # first. A real cycle is refused by the engine anyway; what this
         # keeps is an order that stays complete and never places an
         # equation before one it reads that is not on its cycle.
-        component_of = [-1] * len(keys)
-        members: list[list[int]] = []
-        index_of = [-1] * len(keys)
-        low = [0] * len(keys)
-        on_stack = [False] * len(keys)
-        stack: list[int] = []
-        counter = 0
         # `readers` points from a read equation to its readers; Tarjan
-        # walks the reversed edges (reader -> what it reads) so that a
-        # component's members are those that read each other.
+        # walks the reversed edges (reader -> what it reads), which keeps
+        # the numbering the order has always had.
         reads_of: list[list[int]] = [[] for _ in keys]
         for source, targets in enumerate(readers):
             for reader in targets:
                 reads_of[reader].append(source)
-        for root in range(len(keys)):
-            if index_of[root] != -1:
-                continue
-            work = [(root, 0)]
-            while work:
-                node, edge = work.pop()
-                if edge == 0:
-                    index_of[node] = low[node] = counter
-                    counter += 1
-                    stack.append(node)
-                    on_stack[node] = True
-                if edge < len(reads_of[node]):
-                    work.append((node, edge + 1))
-                    child = reads_of[node][edge]
-                    if index_of[child] == -1:
-                        work.append((child, 0))
-                    elif on_stack[child]:
-                        low[node] = min(low[node], index_of[child])
-                    continue
-                for child in reads_of[node]:
-                    if on_stack[child] and component_of[child] == -1:
-                        low[node] = min(low[node], low[child])
-                if low[node] == index_of[node]:
-                    block = []
-                    while True:
-                        member = stack.pop()
-                        on_stack[member] = False
-                        component_of[member] = len(members)
-                        block.append(member)
-                        if member == node:
-                            break
-                    members.append(sorted(block))
+        component_of, members = _strongly_connected(reads_of)
         needs = [0] * len(members)
         followers: list[set[int]] = [set() for _ in members]
         for source, targets in enumerate(readers):

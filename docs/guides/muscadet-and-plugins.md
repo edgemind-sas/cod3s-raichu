@@ -669,6 +669,18 @@ declares continuous flows and asserts an `evaluation_order` of its own
 has two authorities on one sweep, and is refused rather than silently
 overridden.
 
+An input fed by several suppliers is swept once **the last of them** has
+published, in the capability band and in the delivery band alike. Summed
+at the first supplier's visit, it would read the others at the previous
+evaluation's value: invisible while the suppliers hold steady, since the
+discrete fixpoint settles it, but a bus fed by two sources that follow
+the day read the first one alone (9.0 where both give 9.81), and a
+battery on that bus drifted from its closed form by the lag. In a ring
+the last supplier comes after the consumer, and the input still waits
+for it: only the pooled draw of a mixed volume reads the ring's return
+one evaluation late, deliberately, which matches the reference, itself
+reading its ring edge one integration stage late.
+
 ### The other object families
 
 Beyond `ObjFlow`, the plugin system provides five object families, each
