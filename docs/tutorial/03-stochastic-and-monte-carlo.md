@@ -120,7 +120,10 @@ see [Numerical tuning](../guides/numerical-tuning.md).
 - **`reached_mean` / `reached_std`**: the probability the indicator has
   been active at least once by each instant. Unlike `mean`, it never
   comes back down: a component repaired after its first failure still
-  counts as having failed.
+  counts as having failed;
+- **`extremes` / `sojourn_extremes` / `nb_occurrences_extremes` /
+  `reached_extremes`**: the smallest and the largest value each measure
+  took across the replicas at each instant (`.min`, `.max`).
 
 ```python
 est = pyraichu.monte_carlo(

@@ -34,6 +34,7 @@ from .journal import Cascade, JournalQuery, TransitionHistory, AttributeChange
 __all__ = [
     "Cascade",
     "Event",
+    "Extremes",
     "Fireable",
     "FlowConfig",
     "IndicatorEstimate",
@@ -212,6 +213,15 @@ def _series_dict(raw_series: list[dict[str, Any]]) -> dict[str, list[tuple[float
 
 
 @dataclass(frozen=True)
+class Extremes:
+    """The smallest and the largest value a measure took across the
+    replicas, at each schedule instant (the ``min`` and ``max`` statistics)."""
+
+    min: list[float]
+    max: list[float]
+
+
+@dataclass(frozen=True)
 class IndicatorEstimate:
     """Monte-Carlo estimates of one indicator over the schedule."""
 
@@ -228,6 +238,10 @@ class IndicatorEstimate:
     #: at 1 on a trajectory after the indicator falls back.
     reached_mean: list[float]
     reached_std: list[float]
+    extremes: Extremes
+    sojourn_extremes: Extremes
+    nb_occurrences_extremes: Extremes
+    reached_extremes: Extremes
     quantiles: dict[float, list[float]]
     sojourn_quantiles: dict[float, list[float]]
 
@@ -315,6 +329,10 @@ def monte_carlo(
             nb_occurrences_std=e["nb_occurrences_std"],
             reached_mean=e["reached_mean"],
             reached_std=e["reached_std"],
+            extremes=Extremes(**e["extremes"]),
+            sojourn_extremes=Extremes(**e["sojourn_extremes"]),
+            nb_occurrences_extremes=Extremes(**e["nb_occurrences_extremes"]),
+            reached_extremes=Extremes(**e["reached_extremes"]),
             quantiles={s["q"]: s["values"] for s in e["quantiles"]},
             sojourn_quantiles={s["q"]: s["values"] for s in e["sojourn_quantiles"]},
         )

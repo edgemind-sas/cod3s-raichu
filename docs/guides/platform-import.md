@@ -104,6 +104,11 @@ each indicator carries:
   trajectory it stays at 1 after the indicator falls back, as the
   reference engine's `realized` computation does.
 
+The `min` and `max` statistics of any measure read the matching
+`*_extremes` field (`extremes`, `sojourn_extremes`,
+`nb_occurrences_extremes`, `reached_extremes`): the smallest and the
+largest value that measure took across the replicas at each instant.
+
 ## Converting the outputs
 
 RAICHU's results map line-for-line onto the platform's artefacts. The
