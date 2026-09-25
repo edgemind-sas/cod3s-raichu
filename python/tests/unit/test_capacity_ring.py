@@ -34,7 +34,9 @@ VENT_RATE = 50.0
 LEAK = 0.05
 
 
-def ventilated_room(held: tuple[str, ...] = ("H2_leak", "AIR"), fill_rate=math.inf):
+def ventilated_room(
+    held: tuple[str, ...] = ("H2_leak", "AIR"), fill_rate=math.inf, hydrogen: float = 0.0
+):
     """LEAK -> LOCAL (a transiting volume) <-> VENTILATION -> ATMOSPHERE."""
 
     class Leak(mu.ObjFlow):
@@ -50,7 +52,7 @@ def ventilated_room(held: tuple[str, ...] = ("H2_leak", "AIR"), fill_rate=math.i
                 name="room",
                 flows=[{"name": flow, "weight": 1.0} for flow in held],
                 capacity=100.0,
-                content_init={flow: 90.0 if flow == "AIR" else 0.0 for flow in held},
+                content_init={flow: 90.0 if flow == "AIR" else hydrogen for flow in held},
                 fill_rate=fill_rate,
                 transmits=True,
                 side="out",
@@ -234,3 +236,29 @@ def test_a_ring_the_tear_cannot_conserve_is_still_refused(
     with pytest.raises((ValueError, pyraichu.ModelError)) as raised:
         system.build_model()
     assert "cycle" in str(raised.value), shape
+
+
+def test_a_ventilated_room_clears_its_hydrogen_as_a_mixture():
+    """The room holds 5 of hydrogen in 90 of air. The fan draws the room's
+    atmosphere as a MIXTURE: what the leak brings passes first, and the
+    rest of the 50 it asks is taken pro rata of the room's content, so the
+    hydrogen decays as h - h1 + a ln(h/h1) = -(R - q)(t - 1), a time
+    constant of a/(R - q), about 1.8 h, where it used to be drawn alone
+    and gone within seconds. The exhaust stays at the atmosphere's 50: the
+    air renewal is asked what the hydrogen extraction will actually make,
+    not what it asked for (measured on the reference, h0 = 5)."""
+    result = ventilated_room(hydrogen=5.0).simulate(
+        t_max=5.0, samples=[1.0, 2.0, 3.0, 5.0]
+    )
+    rate = VENT_RATE - LEAK
+    h1 = sampled(result, "LOCAL_room_content_H2_leak", 1.0)
+    air = sampled(result, "LOCAL_room_content_AIR", 1.0)
+    for instant in (2.0, 3.0, 5.0):
+        h = sampled(result, "LOCAL_room_content_H2_leak", instant)
+        assert abs(sampled(result, "LOCAL_room_content_AIR", instant) - air) < 1e-6
+        # Both sides are of the order of 100: 5e-3 is a relative 5e-5,
+        # the integrator's own tolerance on a logarithmic decay.
+        assert abs((h - h1 + air * math.log(h / h1)) + rate * (instant - 1.0)) < 5e-3
+        assert abs(sampled(result, "ATMOSPHERE_exhaust_fed_in", instant) - VENT_RATE) < 1e-6
+    # The hydrogen clears on the hour scale, as a mixture does.
+    assert 0.2 < sampled(result, "LOCAL_room_content_H2_leak", 5.0) < 0.5

@@ -208,8 +208,9 @@ import math
 import operator
 import re
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from types import SimpleNamespace
-from typing import Any, Type
+from typing import Any, Mapping, NamedTuple, Type
 
 from . import (
     Model,
@@ -1462,9 +1463,28 @@ class _FailureMode:
     repair: _Effects = field(default_factory=_Effects)
 
 
+class _MixtureSource(NamedTuple):
+    """Where a mixture-fed input comes from: the supplier, its output, the
+    mixed volume serving it, and whether that volume has a way in for the
+    flow (a held constituent may be stored and never fed)."""
+
+    supplier: str
+    flow_out: str
+    volume: str
+    has_inlet: bool
+
+
 class ObjFlow:
     """A muscadet-style smart flow component. Subclass and override
     :meth:`add_flows`."""
+
+    #: The continuous inputs a connection feeds from an output another
+    #: component serves as a mixture (:meth:`_mixed_volume`), each with
+    #: ``(supplier, its output, the mixed volume)``: what the cascade reads
+    #: to expect how much of it will actually arrive. Only the system knows
+    #: it: set by :meth:`_build`, read afterwards by the system's sweep
+    #: order and release as well, and empty on a component never built.
+    _mixture_sources: Mapping[str, _MixtureSource] = MappingProxyType({})
 
     def __init__(self, name: str):
         self.name = name
@@ -2943,6 +2963,131 @@ class ObjFlow:
             return None
         return capacity
 
+    def _mixed_volume(self, flow: str) -> _Capacity | None:
+        """The volume serving output `flow` as a MIXTURE, or ``None``.
+
+        muscadet's `draw_from_capacity` (measured on 5.6.0) does not
+        serve each output of a volume holding several flows from its own
+        stock. It pools what the consumers ask beyond what transits and
+        hands each held flow a share of that excess in proportion to its
+        raw content (:meth:`_pooled_serve`). That is the reading of a
+        volume **downstream of the transfer** (``side="out"``) holding
+        more than one flow, and of no other: a single-flow volume has
+        nothing to mix, one upstream of the transfer serves each flow
+        from its own stock, and a volume beside this component's rules
+        is served by the rules (:meth:`_beside_rules`), none of whose
+        held flows may be carried by a rule here for the pooled draw to
+        apply. An output whose delivery something else computes (a rule,
+        a conduit, a pass-through, a routed tap) is not the volume's to
+        pool either."""
+        capacity = self._capacity_of(flow)
+        if capacity is None or len(capacity.flows) < 2 or capacity.side != "out":
+            return None
+        if not any(declared.name == flow for declared in self.flows_continuous_out):
+            return None
+        if any(
+            held in rule_set.consumed() or held in rule_set.produced()
+            for rule_set in self.rule_sets
+            for held in capacity.flow_names
+        ):
+            return None
+        if flow in self._produced_outputs():
+            return None
+        return capacity
+
+    def _mixed_outputs(self) -> dict[str, _Capacity]:
+        """Per output served as a mixture, the volume serving it."""
+        return {
+            flow.name: capacity
+            for flow in self.flows_continuous_out
+            for capacity in [self._mixed_volume(flow.name)]
+            if capacity is not None
+        }
+
+    def _beyond_attribute(self, capacity: _Capacity) -> str:
+        """Name of the variable holding what the consumers of a mixed
+        volume ask beyond what transits it (:meth:`_pooled_serve`)."""
+        return f"{capacity.name}_beyond"
+
+    def _transit(self, flow: str) -> dict[str, Any]:
+        """What currently arrives on `flow`, zero where the component
+        declares no way in for it.
+
+        On a recirculation ring (a ventilated room whose fan blows the air
+        back) the returning flow is settled AFTER this volume's visit, so
+        the pooled draw reads it one evaluation late. That is deliberate
+        and measured: the reference reads the same edge one evaluation
+        late (its ring cut), and reading it forward instead moved the H2
+        showcase's room away from the reference for no physical gain; with
+        this read the room agrees to within 0.009 at every instant."""
+        if any(declared.name == flow for declared in self.flows_continuous_in):
+            return _var(self.name, f"{flow}_fed_in")
+        return _float(0.0)
+
+    def _pooled_excess(self, capacity: _Capacity) -> dict[str, Any]:
+        """``beyond``: what the consumers of `capacity` ask of it over and
+        above what transits it, summed over every held output,
+        ``sum_g max(req_g - transit_g, 0)``.
+
+        ``req_g`` is the demand published on output ``g``, uncapped by
+        the stock, exactly as muscadet publishes it: the capability band
+        is left as it was (a stocked flow still offers its ceiling), so
+        the consumers size their demand on it and the pooled draw only
+        decides what is handed out."""
+        mixed = self._mixed_outputs()
+        return _sum(
+            [
+                _clamped_at_zero(
+                    {
+                        "op": "sub",
+                        "lhs": _var(self.name, f"{flow}_demand_out"),
+                        "rhs": self._transit(flow),
+                    }
+                )
+                for flow in capacity.flow_names
+                if mixed.get(flow) is capacity
+            ]
+        )
+
+    def _pooled_serve(self, capacity: _Capacity, flow: str) -> dict[str, Any]:
+        """What a mixed volume hands the consumers of `flow`: muscadet
+        5.6.0 `draw_from_capacity`, the branch without a declared
+        mixture, measured term for term.
+
+        While `flow` is stocked, what transits it plus its share of the
+        pooled excess, the share being its RAW content over the raw total
+        (``{capacity}_ratio_{flow}``: the weights change the fill and not
+        the split, measured identical with a hydrogen weight of 2), and
+        never more than the capability, which carries the ceiling, the
+        discharge command and the output's own factors. The allocation
+        caps it by what was asked, which is the ``min(req_f, ...)`` of
+        the reference. Once `flow` has run out, the capability itself,
+        unchanged: an empty constituent passes on what arrives, as it
+        did before the mixture was read.
+
+        Consequence worth stating: hydrogen asked alone out of a room
+        of air leaves at ``req * h / (h + a)`` rather than at ``req``,
+        so it is never exhausted in finite time (``h - h0 + a ln(h/h0)
+        = -req t`` for a constant ``a``)."""
+        me = self.name
+        capability = _var(me, f"{flow}_capability_out")
+        share = {
+            "op": "mul",
+            "args": [
+                _var(me, self._beyond_attribute(capacity)),
+                _var(me, f"{capacity.name}_ratio_{flow}"),
+            ],
+        }
+        stocked = _min(
+            [capability, {"op": "add", "args": [self._transit(flow), share]}]
+        )
+        return {
+            "op": "if",
+            "cond": self._held_empty(capacity, flow),
+            "then": capability,
+            "otherwise": stocked,
+        }
+
     def _stock_automaton(self, capacity: _Capacity, flow: str) -> str:
         """Name of the automaton judging whether `flow` alone is stocked
         in a volume holding several constituents."""
@@ -4240,7 +4385,7 @@ class ObjFlow:
                             "op": "mul",
                             "args": [
                                 self._rule_coefficient(before, flow, "prod"),
-                                _var(self.name, f"{before.name}_scale"),
+                                self._expected_scale(before),
                             ],
                         }
                         for before in earlier
@@ -4249,6 +4394,73 @@ class ObjFlow:
                 demand = _clamped_at_zero({"op": "sub", "lhs": demand, "rhs": served})
             terms.append({"op": "div", "lhs": demand, "rhs": _float(coefficient)})
         return _min(terms)
+
+    def _expected_scale(self, rule_set: _RuleSet) -> dict[str, Any]:
+        """The scale `rule_set` can be EXPECTED to run at, from the demand
+        band: its scale, bounded by what a mixed volume feeding one of its
+        inputs will hand it.
+
+        A mixed volume (:meth:`_mixed_volume`) passes what transits and a
+        share of the excess pro rata of its content, so a set asking it
+        for 50 of a trace constituent receives about half a unit, and
+        runs at that draw. The declaration-order cascade that follows
+        must subtract what the set will MAKE, not what it asked for:
+        subtracting the request left the next set asked for nothing, and
+        the ventilation exhausted 0.39 where it exhausts 50. The expected
+        delivery is taken from that input's own excess only,
+        ``transit + max(need - transit, 0) x ratio``, which is the pooled
+        delivery exactly when the volume's other held flows are covered
+        by what transits them (a ventilated room, whose returned air
+        covers the air asked); otherwise it under-states it, and the next
+        set is asked a little more, never less. The transit is read from
+        the capability band, what could arrive, so this reads nothing the
+        production band has yet to settle."""
+        scale = _var(self.name, f"{rule_set.name}_scale")
+        bounds = [scale]
+        for flow in rule_set.consumed():
+            source = self._mixture_sources.get(flow)
+            if source is None or not self._fed_by_a_mixture(flow):
+                continue
+            coefficient = self._rule_coefficient(rule_set, flow, "cons")
+            need = {"op": "mul", "args": [coefficient, scale]}
+            # A constituent the volume holds but is never fed transits
+            # nothing, as `_transit` reads it on the volume's side.
+            transit = (
+                _var(source.supplier, f"{source.flow_out}_capability_in")
+                if source.has_inlet
+                else _float(0.0)
+            )
+            excess = _clamped_at_zero({"op": "sub", "lhs": need, "rhs": transit})
+            expected = _min(
+                [
+                    need,
+                    {
+                        "op": "add",
+                        "args": [
+                            transit,
+                            {
+                                "op": "mul",
+                                "args": [
+                                    excess,
+                                    _var(
+                                        source.supplier,
+                                        f"{source.volume}_ratio_{source.flow_out}",
+                                    ),
+                                ],
+                            },
+                        ],
+                    },
+                ]
+            )
+            bounds.append(
+                {
+                    "op": "if",
+                    "cond": {"op": "cmp", "cmp": "gt", "lhs": coefficient, "rhs": _float(0.0)},
+                    "then": {"op": "div", "lhs": expected, "rhs": coefficient},
+                    "otherwise": scale,
+                }
+            )
+        return _min(bounds)
 
     def _reject_flow_clash(self, name: str, direction: str) -> None:
         """A boolean and a continuous flow of the same name and
@@ -5042,6 +5254,7 @@ class ObjFlow:
         connected_out: set[str] | None = None,
         connected_in: set[str] | None = None,
         ring_torn_out: set[str] | None = None,
+        mixture_fed_in: dict[str, _MixtureSource] | None = None,
     ) -> dict[str, Any]:
         """The native component this declaration generates.
 
@@ -5057,6 +5270,14 @@ class ObjFlow:
         other end absorbs what the two ends momentarily disagree on, and
         that is what makes the ring solvable at all. Left out, nothing is
         torn.
+
+        `mixture_fed_in` names the continuous inputs a connection feeds
+        from an output another component serves as a mixture
+        (:meth:`_mixed_volume`), which only the system knows too. A rule
+        consuming one runs at the draw what arrived allows
+        (:meth:`_rule_draw_scale`). Kept on the component, since the
+        system's sweep order and release read it after the build. Left
+        out, no input is.
 
         `connected_in` names the in-ports at least one connection feeds,
         the same kind of knowledge at the other end of the wire, and it
@@ -5082,6 +5303,7 @@ class ObjFlow:
         # Not re-run but run once, and only here: a tap names an output
         # that may legitimately be declared after the mode taking it.
         self._refuse_ill_formed_taps()
+        self._mixture_sources = dict(mixture_fed_in or {})
 
         variables: list[dict] = []
         ports: list[dict] = []
@@ -5733,6 +5955,38 @@ class ObjFlow:
                     {"op": "mul", "args": [coefficient, _var(me, made)]}
                 )
 
+        # What the rules actually consume of each input served as a
+        # mixture, at their draw: the need the release measures the
+        # offers against, so the supplier keeps what was not consumed.
+        for flow in sorted(
+            {
+                flow
+                for rule_set in self.rule_sets
+                for flow in rule_set.consumed()
+                if self._fed_by_a_mixture(flow)
+            }
+        ):
+            variables.append(_float_attribute(f"{flow}_consumed_in", 0.0))
+            equations.append(
+                {
+                    "target": f"{flow}_consumed_in",
+                    "kind": "explicit",
+                    "expr": _sum(
+                        [
+                            {
+                                "op": "mul",
+                                "args": [
+                                    self._rule_coefficient(rule_set, flow, "cons"),
+                                    _var(me, f"{rule_set.name}_draw_scale"),
+                                ],
+                            }
+                            for rule_set in self.rule_sets
+                            if flow in rule_set.consumed()
+                        ]
+                    ),
+                }
+            )
+
         # The claims the scales above read, one per output held in a
         # volume downstream of the rules. Written after the loop because
         # an unbounded fill claims what the rules could make, which is
@@ -5764,10 +6018,57 @@ class ObjFlow:
 
     def _draws_from_a_volume(self, rule_set: _RuleSet) -> bool:
         """Whether `rule_set` consumes a flow held in a volume upstream
-        of the rules, and so runs at a draw scale of its own."""
+        of the rules, or one another component serves as a mixture, and
+        so runs at a draw scale of its own."""
         return any(
-            self._beside_rules(flow, "in") is not None for flow in rule_set.consumed()
+            self._beside_rules(flow, "in") is not None or self._fed_by_a_mixture(flow)
+            for flow in rule_set.consumed()
         )
+
+    def _fed_by_a_mixture(self, flow: str) -> bool:
+        """Whether the rules here consume `flow` as another component's
+        mixed volume serves it (:meth:`_mixed_volume`).
+
+        Such an input may receive LESS than the rules asked while its
+        supplier is still stocked: the volume hands out a share of the
+        pooled excess, not the request. A rule producing at its scale
+        regardless would make what it never received, which is what the
+        draw below prevents. A flow this component holds in a volume of
+        its own is not concerned: that volume is what the rules draw
+        from, and it absorbs the difference."""
+        return (
+            flow in self._mixture_sources
+            and self._capacity_of(flow) is None
+            and any(flow in rule_set.consumed() for rule_set in self.rule_sets)
+        )
+
+    def _rule_need(self, flow: str) -> dict[str, Any]:
+        """What the rule sets ask of `flow`, each at the scale the demand
+        band settled: the need the draw below measures an arrival
+        against."""
+        return _sum(
+            [
+                {
+                    "op": "mul",
+                    "args": [
+                        self._rule_coefficient(rule_set, flow, "cons"),
+                        _var(self.name, f"{rule_set.name}_scale"),
+                    ],
+                }
+                for rule_set in self.rule_sets
+                if flow in rule_set.consumed()
+            ]
+        )
+
+    def _mixture_offered(self, flow: str) -> dict[str, Any]:
+        """What the suppliers of `flow` hand this input, before any of it
+        is handed back: the sum of their allocations on it."""
+        return {
+            "op": "port_agg",
+            "port": {"component": self.name, "port": f"{flow}_in"},
+            "agg": "sum",
+            "channel": "alloc",
+        }
 
     def _rule_draw_scale(
         self, rule: _Rule, scale: dict[str, Any]
@@ -5780,9 +6081,36 @@ class ObjFlow:
         production band, where the delivery is settled, and an empty
         volume hands on what reached it and no more. A volume still
         stocked lets the rule take its whole need, so the draw is the
-        scale itself until the flow runs out."""
+        scale itself until the flow runs out.
+
+        An input another component serves as a mixture bounds the draw
+        by what ARRIVED of it, muscadet's reading of a rule fed by
+        `draw_from_capacity`: the rule runs at the scale its scarcest
+        arrival allows and hands back what it does not consume of the
+        others (:meth:`System._releasing_inputs`). Written as the scale
+        times the fraction of the need that arrived, rather than as the
+        arrival over the coefficient: the two are the same number for a
+        single set, and with several sets on one input the fraction is
+        what keeps their draws inside what arrived, each taking its
+        share of the shortfall instead of each taking the whole of it."""
         terms = [scale]
         for flow, coefficient in rule.cons.items():
+            if coefficient > 0 and self._fed_by_a_mixture(flow):
+                need = self._rule_need(flow)
+                offered = self._mixture_offered(flow)
+                terms.append(
+                    {
+                        "op": "if",
+                        "cond": {"op": "cmp", "cmp": "gt", "lhs": need, "rhs": offered},
+                        "then": {
+                            "op": "div",
+                            "lhs": {"op": "mul", "args": [scale, offered]},
+                            "rhs": need,
+                        },
+                        "otherwise": scale,
+                    }
+                )
+                continue
             capacity = self._beside_rules(flow, "in")
             if capacity is None or coefficient <= 0:
                 continue
@@ -6620,6 +6948,36 @@ class ObjFlow:
                         }
                     )
 
+            # A volume serving its outputs as a mixture: the pooled
+            # excess, then what each held output hands out
+            # (:meth:`_pooled_serve`). Both belong to the production band,
+            # swept at this component's visit once what arrives is
+            # settled and before the allocations distribute them.
+            pooled = [
+                flow
+                for flow, held in self._mixed_outputs().items()
+                if held is capacity
+            ]
+            if pooled:
+                beyond = self._beyond_attribute(capacity)
+                variables.append(_float_attribute(beyond, 0.0))
+                equations.append(
+                    {
+                        "target": beyond,
+                        "kind": "explicit",
+                        "expr": self._pooled_excess(capacity),
+                    }
+                )
+                for flow in pooled:
+                    variables.append(_float_attribute(f"{flow}_pooled_out", 0.0))
+                    equations.append(
+                        {
+                            "target": f"{flow}_pooled_out",
+                            "kind": "explicit",
+                            "expr": self._pooled_serve(capacity, flow),
+                        }
+                    )
+
             # The discharge gate, where the volume declares one. Posted
             # beside the bounds rather than inside the served quantity so
             # that the pre-run loop diagnostic can see it: a threshold
@@ -6936,10 +7294,21 @@ class System:
         electrolyser consumed. Only an input fed by two suppliers or more
         can be offered too much; one a volume upstream of the rules holds
         is filled by what arrives instead, and one no rule consumes keeps
-        what it is offered, as muscadet's does."""
+        what it is offered, as muscadet's does.
+
+        **An input fed by a mixed volume releases with a single supplier
+        too**, and against a different need: the rule runs at the draw
+        its scarcest arrival allows (:meth:`ObjFlow._rule_draw_scale`),
+        so it may consume less of this input than it asked for, and the
+        rest goes back to the volume rather than draining it for nothing.
+        Its need is then what the rules consume at their draw,
+        ``{flow}_consumed_in``, not the demand they published."""
         releasing: set[tuple[str, str]] = set()
         for (name, flow), feeding in in_edges.items():
             obj = self.comp.get(name)
+            if obj is not None and obj._fed_by_a_mixture(flow):
+                releasing.add((name, flow))
+                continue
             if obj is None or len(feeding) < 2:
                 continue
             if not any(flow in rule_set.consumed() for rule_set in obj.rule_sets):
@@ -7008,6 +7377,7 @@ class System:
         for name, obj in self.comp.items():
             component = by_name[name]
             produced_by_rules = obj._produced_outputs()
+            mixed = obj._mixed_outputs()
             for flow in obj.flows_continuous_out:
                 port = f"{flow.name}_out"
                 served = out_edges.get((name, flow.name), [])
@@ -7114,11 +7484,14 @@ class System:
                     "name": f"{flow.name}_alloc",
                     "port": port,
                     # What is there to distribute: the capability of a
-                    # flow nothing transforms, and what the rule
-                    # actually made when one does.
+                    # flow nothing transforms, what the rule actually
+                    # made when one does, and a mixed volume's pooled
+                    # draw (:meth:`ObjFlow._pooled_serve`).
                     "available": (
                         _var(name, f"{flow.name}_produced_out")
                         if flow.name in produced_by_rules
+                        else _var(name, f"{flow.name}_pooled_out")
+                        if flow.name in mixed
                         else capability
                     ),
                     "demand": "demand",
@@ -7156,13 +7529,13 @@ class System:
                     # same dynamic, hidden by its fixed step. Passing on
                     # what arrives is that sliding motion's own average,
                     # the content held at zero.
-                    offered = {
-                        "op": "port_agg",
-                        "port": port_ref,
-                        "agg": "sum",
-                        "channel": "alloc",
-                    }
-                    need = _var(name, f"{flow.name}_demand_in")
+                    offered = obj._mixture_offered(flow.name)
+                    need = _var(
+                        name,
+                        f"{flow.name}_consumed_in"
+                        if obj._fed_by_a_mixture(flow.name)
+                        else f"{flow.name}_demand_in",
+                    )
                     held = [
                         {
                             "op": "if",
@@ -7473,8 +7846,30 @@ class System:
             for rule_set in self.comp[producer].rule_sets:
                 if self.comp[producer]._draws_from_a_volume(rule_set):
                     step(producer, f"{rule_set.name}_draw_scale")
+            # What the rules consume of an input served as a mixture, at
+            # the draw just swept: the release at the end of the band
+            # measures the offers against it.
+            for flow in self.comp[producer].flows_continuous_in:
+                if self.comp[producer]._fed_by_a_mixture(flow.name):
+                    step(producer, f"{flow.name}_consumed_in")
             for flow_name in self.comp[producer]._claimed_outputs():
                 step(producer, f"{flow_name}_made_out")
+            # A mixed volume's pooled excess reads what arrived, settled
+            # by the suppliers visited before this component, and the
+            # demands of the band before; what each output hands out
+            # reads the excess, and the allocations below read that.
+            mixed = self.comp[producer]._mixed_outputs()
+            # An input nobody feeds transits its declared constant, and
+            # is otherwise swept only at the end of the band: taken now,
+            # the excess never reads it a sweep late.
+            for flow in self.comp[producer].flows_continuous_in:
+                if flow.name in mixed and not in_edges.get((producer, flow.name)):
+                    step(producer, f"{flow.name}_fed_in")
+            for capacity in self.comp[producer].capacities:
+                if any(held is capacity for held in mixed.values()):
+                    step(producer, self.comp[producer]._beyond_attribute(capacity))
+            for flow_name in mixed:
+                step(producer, f"{flow_name}_pooled_out")
             produced_by_rules = self.comp[producer]._produced_outputs()
             for flow_name in self.comp[producer]._tap_ordered_outputs():
                 if (
@@ -8174,11 +8569,28 @@ class System:
         for edge in edges:
             reading.setdefault(edge.producer, set()).add(edge.flow_out)
         torn = self._ring_torn_outputs(edges)
+        # The inputs fed from an output served as a mixture: a rule
+        # consuming one runs at the draw what arrived allows.
+        mixture_fed: dict[str, dict[str, _MixtureSource]] = {}
+        for edge in edges:
+            supplier = self.comp[edge.producer]
+            volume = supplier._mixed_volume(edge.flow_out)
+            if volume is not None:
+                mixture_fed.setdefault(edge.consumer, {})[edge.flow_in] = _MixtureSource(
+                    edge.producer,
+                    edge.flow_out,
+                    volume.name,
+                    any(
+                        declared.name == edge.flow_out
+                        for declared in supplier.flows_continuous_in
+                    ),
+                )
         components = [
             obj._build(
                 reading.get(name, set()),
                 connected_in_flows(self._connections, name),
                 torn.get(name, set()),
+                mixture_fed.get(name, {}),
             )
             for name, obj in self.comp.items()
         ]
@@ -8206,6 +8618,15 @@ class System:
             for flow_name, claimed in obj._claimed_outputs().items():
                 observable.add(claimed)
                 observable.add(f"{flow_name}_made_out")
+            # A mixed volume's pooled excess and what each output hands
+            # out, and what a rule fed by one consumes at its draw.
+            mixed = obj._mixed_outputs()
+            for flow_name, capacity in mixed.items():
+                observable.add(obj._beyond_attribute(capacity))
+                observable.add(f"{flow_name}_pooled_out")
+            for flow in obj.flows_continuous_in:
+                if obj._fed_by_a_mixture(flow.name):
+                    observable.add(f"{flow.name}_consumed_in")
             for capacity in obj.capacities:
                 observable.add(_content_attribute(capacity.name))
                 observable.add(f"{capacity.name}_fill")
