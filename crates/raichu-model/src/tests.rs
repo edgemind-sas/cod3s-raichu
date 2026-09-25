@@ -43,6 +43,7 @@ fn sample_model() -> Model {
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Delay { time: 5.0 },
                         },
                         Transition {
@@ -53,6 +54,7 @@ fn sample_model() -> Model {
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Delay { time: 10.0 },
                         },
                         Transition {
@@ -63,6 +65,7 @@ fn sample_model() -> Model {
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Inst { probs: vec![1.0] },
                         },
                     ],

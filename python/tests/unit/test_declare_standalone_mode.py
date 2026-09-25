@@ -374,13 +374,52 @@ def test_a_self_hosted_mode_is_refused_by_what_it_is():
         declare.check_mode_spec(a_mode_2s(targets=None))
 
 
-def test_a_one_shot_effect_is_refused_with_its_own_reason():
-    """RAICHU holds an effect while the state lasts; it has no
-    transition-scoped write, so a pulse declared here never happens."""
-    with pytest.raises(declare.ComponentSpecError, match="ONE-SHOT"):
-        declare.check_mode_spec(
-            a_delay_mode(failure_effects_trans={GATE: False})
-        )
+def a_latching_block(name="B"):
+    """`a_block` whose output gate is PERSISTENT: what a one-shot effect
+    latches (muscadet `fed_available_reset: false`)."""
+    block = a_block(name)
+    block["flows"][1]["var_fed_available_out_reset"] = False
+    return block
+
+
+def _transitions(document):
+    built = declare.build_document(document)
+    body = built.get("model", built)
+    return {
+        (component["name"], automaton["name"], transition["name"]): transition
+        for component in body["components"]
+        for automaton in component.get("automata", [])
+        for transition in automaton["transitions"]
+    }
+
+
+def test_a_one_shot_effect_is_written_on_the_firing_edge():
+    """A one-shot effect is written ONCE, on the edge that fires: the mode's
+    failure transition carries it, and the repair transition, which declares
+    none, writes nothing back, so the persistent gate stays down."""
+    mode = a_delay_mode(failure_effects={}, failure_effects_trans={GATE: False})
+    transitions = _transitions(a_document(a_source(), a_latching_block(), mode))
+    failure = next(t for (_, _, name), t in transitions.items() if name == "failure")
+    repair = next(t for (_, _, name), t in transitions.items() if name == "repair")
+    assert failure["effects"] == [
+        {"target": {"component": "B", "attribute": GATE},
+         "value": {"op": "const", "value": {"kind": "bool", "value": False}}}
+    ]
+    assert "effects" not in repair
+
+
+def test_a_one_shot_effect_on_a_gate_reset_every_step_is_refused():
+    """The reference undoes the pulse at the next step; here it would stick."""
+    mode = a_delay_mode(failure_effects={}, failure_effects_trans={GATE: False})
+    with pytest.raises(Exception, match="reinitializes that gate"):
+        declare.build_document(a_document(a_source(), a_block(), mode))
+
+
+def test_a_variable_driven_both_ways_is_refused():
+    """A level and a pulse on one variable: the level overwrites the pulse."""
+    mode = a_delay_mode(failure_effects_trans={GATE: False})
+    with pytest.raises(Exception, match="driven both as a level"):
+        declare.build_document(a_document(a_source(), a_latching_block(), mode))
 
 
 def test_a_renamed_common_cause_automaton_is_refused():

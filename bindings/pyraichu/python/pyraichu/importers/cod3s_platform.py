@@ -416,21 +416,17 @@ _OCC_PARAM_NAMES = {"exp": "lambda", "delay": "ttf", "inst": "gamma"}
 _REP_PARAM_NAMES = {"exp": "mu", "delay": "ttr", "inst": "repair_gamma"}
 
 
-def _one_shot_effects_refused(fm: dict, where: str) -> None:
-    """One-shot (trans-based) effects have no RAICHU construct yet: the
-    engine's effects are held (re-evaluated to a fixpoint), never pulsed at
-    a transition. Losing one silently would build a model whose pulse is
-    gone, so they are refused, naming the mode and the attribute."""
-    for key in ("occ_effects_trans", "not_occ_effects_trans"):
-        bucket = fm.get(key)
-        if bucket:
-            raise TranslationError(
-                f"{where}: one-shot (trans-based) effects are not supported: "
-                f"`{key}` carries {sorted(bucket)} and RAICHU has no "
-                "transition-scoped effect yet (its effects are held while "
-                "the state lasts). Drop the one-shot effects from the mode "
-                "or keep the study on the platform engine"
-            )
+def _one_shot_effects(fm: dict, spec: dict, pairs: tuple[tuple[str, str], ...]) -> None:
+    """Carry a mode's one-shot (trans-based) effects into the plugin spec.
+
+    They are written ONCE, on the firing edge of the occurrence or of the
+    return (a transition's `effects`), where the state effects are held
+    while the state lasts. The plugin's expansion checks the shapes cod3s
+    itself refuses (common cause, an on-demand law, a behaviour with no
+    symmetric edge pair, a variable driven both ways)."""
+    for source, target in pairs:
+        if fm.get(source):
+            spec[target] = dict(fm[source])
 
 
 def _order_law(kind: str, raw: Any, where: str) -> dict | None:
@@ -586,7 +582,6 @@ def failure_mode_object(fm: dict) -> dict:
 def _translate_failure_mode(fm: dict) -> dict:
     cls = fm.get("cls", "ObjFMExp")
     where = f"failure mode `{fm.get('fm_name', '<unnamed>')}`"
-    _one_shot_effects_refused(fm, where)
     if cls in _FM_LAWS:
         return _translate_legacy_fm(fm, cls)
     if cls == "ObjMode2S":
@@ -622,6 +617,14 @@ def _translate_legacy_fm(fm: dict, cls: str) -> dict:
     }
     if fm.get("repair_effects"):
         spec["repair_effects"] = dict(fm["repair_effects"])
+    _one_shot_effects(
+        fm,
+        spec,
+        (
+            ("failure_effects_trans", "failure_effects_trans"),
+            ("repair_effects_trans", "repair_effects_trans"),
+        ),
+    )
     for cond in ("failure_cond", "repair_cond"):
         if cond in fm:
             spec[cond] = fm[cond]
@@ -634,8 +637,8 @@ def _translate_legacy_fm(fm: dict, cls: str) -> dict:
 def _translate_objmode2s(fm: dict) -> dict:
     """Native `cls: ObjMode2S` wire → the plugin `ObjFM` / `ObjFMInst`
     spec: a normalisation, not a second expansion path. Everything the
-    production translator emits has a reader here; what it emits and what
-    the engine cannot express yet (`*_effects_trans`) is refused."""
+    production translator emits has a reader here, the one-shot
+    `*_effects_trans` included (written on the firing edge)."""
     where = f"failure mode `{fm.get('fm_name', '<unnamed>')}`"
     targets = list(_require(fm, "targets", where=where))
     n = len(targets)
@@ -659,6 +662,14 @@ def _translate_objmode2s(fm: dict) -> dict:
     }
     if fm.get("not_occ_effects"):
         spec["repair_effects"] = dict(fm["not_occ_effects"])
+    _one_shot_effects(
+        fm,
+        spec,
+        (
+            ("occ_effects_trans", "failure_effects_trans"),
+            ("not_occ_effects_trans", "repair_effects_trans"),
+        ),
+    )
 
     # Conditions: `failure_cond` is the wire alias of `occ_cond`, and the
     # repair face is `not_occ_cond` (`repair_cond` being its legacy
@@ -751,6 +762,13 @@ def _translate_objfminst(fm: dict) -> dict:
     """Legacy on-demand dialect (`cls: ObjFMInst`): the same 3-state
     Bernoulli expansion as the native inst cell, under the historical
     failure/repair vocabulary and scalar per-order gammas."""
+    for key in ("failure_effects_trans", "repair_effects_trans", "occ_effects_trans", "not_occ_effects_trans"):
+        if fm.get(key):
+            raise TranslationError(
+                f"failure mode `{fm.get('fm_name', '<unnamed>')}`: `{key}` on an on-demand "
+                "(inst) mode: a one-shot effect on a branching draw edge is refused, "
+                "as cod3s refuses it (`_validate_trans_effects`)"
+            )
     where = f"failure mode `{fm.get('fm_name', '<unnamed>')}`"
     behaviour = fm.get("behaviour", "internal")
     expander = _on_demand_expander(True, behaviour)

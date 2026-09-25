@@ -2799,9 +2799,14 @@ impl<'m> Engine<'m> {
             });
         }
 
+        // The firing edge's own writes, once, after the state change and
+        // before anything propagates: what they write is read by the
+        // fixpoint below like any change.
+        self.apply_transition_effects(trans_idx)?;
+
         // Discrete evolution: functions sensitive to this automaton.
         self.worklist.extend(
-            self.model.state_triggers[transition.automaton]
+            self.model.state_triggers[self.model.transitions[trans_idx].automaton]
                 .iter()
                 .copied(),
         );
@@ -3912,6 +3917,34 @@ impl<'m> Engine<'m> {
 
     /// Apply one function's effects; when `trigger` is set, attribute
     /// changes enqueue their dependent functions.
+    /// A transition's edge effects (`evolT`'s own writes): evaluated once,
+    /// in declaration order, on the state the firing left, and never
+    /// re-applied. Each change triggers what reads it, exactly as a
+    /// sensitive function's does.
+    fn apply_transition_effects(&mut self, trans_idx: TransIdx) -> Result<(), EngineError> {
+        let transition = &self.model.transitions[trans_idx];
+        for (target, value_expr) in &transition.effects {
+            let new = eval_expr(self.model, &self.vars, &self.states, self.time, value_expr)?;
+            let old = self.vars[*target];
+            if old != new {
+                self.vars[*target] = new;
+                self.note_var_change(*target);
+                if self.config.journal {
+                    self.journal.push(JournalRecord::AttributeChanged {
+                        time: self.time,
+                        attribute: self.model.var_names[*target].clone(),
+                        old,
+                        new,
+                        cause: transition.name.clone(),
+                    });
+                }
+                self.worklist
+                    .extend(self.model.var_triggers[*target].iter().copied());
+            }
+        }
+        Ok(())
+    }
+
     fn apply_function(&mut self, fn_idx: FnIdx, trigger: bool) -> Result<(), EngineError> {
         let function = &self.model.functions[fn_idx];
         for (target, value_expr) in &function.effects {

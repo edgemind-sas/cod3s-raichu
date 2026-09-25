@@ -150,7 +150,25 @@ automaton**. `init` must be one of `states`.
 | `on_interruption` | `"reset"` \| `"resume"` \| `"continue"` | optional (default `reset`); see [below](#interruption-policy) |
 | `monitored` | bool | optional (default `false`); firing is recorded in the trajectory's [sequence](../guides/sequence-analysis.md) |
 | `cycle_group` | string | optional; failure/repair partners share it so transient cycles cancel in the sequence pipeline (paired per component) |
+| `effects` | array of Assignment | optional; written ONCE when the transition fires, see [Edge effects](#edge-effects) |
 | `distrib` + params | - | the occurrence distribution, flattened onto the transition (see [Distributions](#distributions)) |
+
+#### Edge effects
+
+`effects` lists assignments (`{"target": VarRef, "value": Expr}`, the
+shape a sensitive function's effects take) that the transition makes
+**once**, when it fires, after its state change and before anything
+propagates, in declaration order. A sensitive function's effects are a
+level, re-evaluated whenever what they read changes; an edge effect is
+never re-applied and nothing restores what it wrote, so the attribute
+keeps the value until something else writes it. That is a one-shot
+effect, and on an attribute nothing else writes, a variable that
+memorises: a detection latched by a failure and cleared by its repair.
+An interrupted transition writes nothing.
+
+An edge effect on an attribute an equation or a sensitive function also
+writes is refused: the next evaluation would erase it. A document
+carrying the field declares the `transition_effects` feature.
 
 ### Target
 
@@ -599,6 +617,7 @@ sealed document without ever writing the list by hand.
 | `evaluation_order` | model-level [evaluation order](#evaluation-order) |
 | `allocation` | component-level [allocations](#allocation) |
 | `unbounded_rate` | model-level [unbounded rate](#unbounded-rate) |
+| `transition_effects` | transition-level [edge effects](#edge-effects) |
 
 The registry names **serialized constructs**, not engine behaviour, so a
 change in how an existing construct is *interpreted* does not add a

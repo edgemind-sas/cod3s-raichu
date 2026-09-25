@@ -48,6 +48,7 @@ fn delay_model() -> Model {
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Delay { time: 5.0 },
                         },
                         Transition {
@@ -58,6 +59,7 @@ fn delay_model() -> Model {
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Delay { time: 10.0 },
                         },
                     ],
@@ -522,6 +524,7 @@ fn inst_transition_fires_immediately_on_certain_branch() {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Delay { time: 3.0 },
                     },
                     Transition {
@@ -533,6 +536,7 @@ fn inst_transition_fires_immediately_on_certain_branch() {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Inst { probs: vec![] },
                     },
                 ],
@@ -605,6 +609,7 @@ fn tank_model() -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                     Transition {
@@ -621,6 +626,7 @@ fn tank_model() -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                 ],
@@ -800,6 +806,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Delay { time: 4.0 },
                         },
                         Transition {
@@ -810,6 +817,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                             on_interruption: Default::default(),
                             monitored: false,
                             cycle_group: None,
+                            effects: vec![],
                             distrib: Distrib::Delay { time: 3.0 },
                         },
                     ],
@@ -862,6 +870,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                         on_interruption,
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Delay { time: 6.0 },
                     }],
                 }],
@@ -947,6 +956,7 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Delay { time: 5.0 },
                     }],
                 },
@@ -962,6 +972,7 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Exp {
                             rate: None,
                             rate_expr: Some(Expr::If {

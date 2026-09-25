@@ -53,6 +53,7 @@ fn pump(start: f64, release: f64) -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                     Transition {
@@ -69,6 +70,7 @@ fn pump(start: f64, release: f64) -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        effects: vec![],
                         distrib: Distrib::Watched,
                     },
                 ],

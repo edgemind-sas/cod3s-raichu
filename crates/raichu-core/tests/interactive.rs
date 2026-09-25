@@ -46,6 +46,7 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Delay { time: ttf },
                 },
                 Transition {
@@ -56,6 +57,7 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Delay { time: ttr },
                 },
             ],
@@ -282,6 +284,7 @@ fn demand_model(ok_prob: f64) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Inst {
                         probs: vec![ok_prob],
                     },

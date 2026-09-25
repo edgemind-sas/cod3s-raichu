@@ -213,6 +213,9 @@ pub struct CTransition {
     pub monitored: bool,
     /// Cycle-pair group id (occ/rep partners share it; sequence analysis).
     pub cycle_group: Option<String>,
+    /// Edge effects `target := value`, applied once when the transition
+    /// fires, after its state change ([`raichu_model::Transition::effects`]).
+    pub effects: Vec<(VarIdx, CExpr)>,
     /// Occurrence distribution.
     pub distrib: CLaw,
 }
@@ -1111,6 +1114,16 @@ impl CompiledModel {
                             CLaw::Watched { margin }
                         }
                     };
+                    let effects = transition
+                        .effects
+                        .iter()
+                        .map(|assignment| {
+                            let target = resolver
+                                .var(&assignment.target.component, &assignment.target.attribute)?;
+                            let value = resolver.compile_expr(&assignment.value)?;
+                            Ok((target, value))
+                        })
+                        .collect::<Result<Vec<_>, CompileError>>()?;
                     let trans_idx = transitions.len();
                     automata[aut_idx].transitions.push(trans_idx);
                     transitions.push(CTransition {
@@ -1123,6 +1136,7 @@ impl CompiledModel {
                         on_interruption: transition.on_interruption,
                         monitored: transition.monitored,
                         cycle_group: transition.cycle_group.clone(),
+                        effects,
                         distrib: distribution,
                     });
                 }

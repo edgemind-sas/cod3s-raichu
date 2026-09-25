@@ -30,6 +30,7 @@ fn exp_ok_nok(rate: f64) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    effects: vec![],
                     distrib: Distrib::Exp {
                         rate: Some(rate),
                         rate_expr: None,
@@ -121,6 +122,7 @@ fn nb_occurrences_counts_repeated_entries_exactly() {
         on_interruption: Default::default(),
         monitored: false,
         cycle_group: None,
+        effects: vec![],
         distrib: Distrib::Delay { time: 2.0 },
     });
     let compiled = CompiledModel::compile(&model).unwrap();
@@ -159,6 +161,7 @@ fn stop_at_targets_latches_the_measures() {
         on_interruption: Default::default(),
         monitored: false,
         cycle_group: None,
+        effects: vec![],
         distrib: Distrib::Delay { time: 2.0 },
     });
     model.targets = vec![Target {
