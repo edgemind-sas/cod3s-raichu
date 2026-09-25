@@ -436,28 +436,25 @@ fn a_threshold_flipping_inside_a_continuous_segment_stops_accumulating() {
 }
 
 #[test]
-fn a_threshold_crossed_between_two_samples_is_located_on_the_schedule() {
-    // Where the honesty of the measure stops, pinned rather than left to
-    // be discovered. The flip is detected at the first sample that sees
-    // it, never bisected the way a watched transition's boundary is, so
-    // the duration is over-reported by at most one sample interval --
-    // and refining the schedule makes it converge, which is the property
-    // that distinguishes a RESOLUTION from the freeze it replaced.
+fn a_threshold_crossed_between_two_samples_is_located_at_its_crossing() {
+    // The flip used to be detected at the first sample that saw it, so a
+    // 22-hour condition read 25 hours on a five-hour grid and only the
+    // fine grid got it right. It is now located as an event of the
+    // segment, bisected like a watched boundary: the grid no longer
+    // decides the duration.
     let coarse = campaign_on(
         &draining(22.0),
         (0..=12).map(|k| f64::from(k) * 5.0).collect(),
     );
     let fine = campaign_on(&draining(22.0), (0..=60).map(f64::from).collect());
     let at_end = |e: &raichu_montecarlo::McEstimates| *e.indicators[0].sojourn_mean.last().unwrap();
-    // True duration 22 h; the coarse grid can only see the flip at 25.
-    assert!(
-        (at_end(&coarse) - 25.0).abs() < 1e-9,
-        "got {}",
-        at_end(&coarse)
-    );
-    assert!((at_end(&fine) - 22.0).abs() < 1e-9, "got {}", at_end(&fine));
-    // Never under-reported, and never beyond one interval.
-    assert!(at_end(&coarse) >= 22.0 && at_end(&coarse) <= 22.0 + 5.0);
+    for (grid, estimates) in [("coarse", &coarse), ("fine", &fine)] {
+        assert!(
+            (at_end(estimates) - 22.0).abs() < 1e-6,
+            "{grid} grid: got {}",
+            at_end(estimates)
+        );
+    }
 }
 
 #[test]

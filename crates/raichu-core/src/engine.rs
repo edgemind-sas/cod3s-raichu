@@ -1757,6 +1757,13 @@ struct ContinuousSystem<'m> {
     /// alongside the watched ones, so the instant the frozen pattern
     /// stops holding is *located*, not noticed at the next discrete date.
     flows: Vec<FrozenFlow<'m>>,
+    /// The threshold indicators whose flips this segment locates, as
+    /// observations of the solver: an ordering on a number, which a
+    /// continuum can cross. Indices into the model's indicators.
+    observed: Vec<usize>,
+    /// The flips the solver located, `(date, indicator, verdict after)`,
+    /// in time order.
+    flips: Vec<(f64, usize, bool)>,
     error: Option<EngineError>,
     /// Work done inside the solver callbacks, merged back into the
     /// engine's counters when the segment returns.
@@ -1864,6 +1871,28 @@ impl OdeSystem for ContinuousSystem<'_> {
         self.margins.len()
             + self.hazards.len()
             + self.flows.iter().map(|f| f.classes.len()).sum::<usize>()
+    }
+
+    fn n_observations(&self) -> usize {
+        self.observed.len()
+    }
+
+    fn observations(&mut self, t: f64, y: &[f64], out: &mut [bool]) {
+        self.load(t, y);
+        for (slot, &indicator) in self.observed.iter().enumerate() {
+            out[slot] = matches!(
+                indicator_value(
+                    &self.model.indicators[indicator].target,
+                    &self.vars,
+                    &self.states
+                ),
+                Value::Bool(true)
+            );
+        }
+    }
+
+    fn observed(&mut self, index: usize, t: f64, now: bool) {
+        self.flips.push((t, self.observed[index], now));
     }
 
     fn events(&mut self, t: f64, y: &[f64], out: &mut [f64]) {
@@ -3516,6 +3545,24 @@ impl<'m> Engine<'m> {
             }
         }
 
+        // Threshold indicators located rather than sampled: an ordering on
+        // a number. An equality cannot be crossed on a continuum, and keeps
+        // its flips at the samples and events.
+        let observed: Vec<usize> = self
+            .model
+            .indicators
+            .iter()
+            .enumerate()
+            .filter(|(_, indicator)| match indicator.target {
+                CIndicatorTarget::Predicate(var, cmp, _) => {
+                    !matches!(cmp, CmpOp::Eq | CmpOp::Ne)
+                        && matches!(self.vars[var], Value::Float(_))
+                }
+                _ => false,
+            })
+            .map(|(index, _)| index)
+            .collect();
+
         let mut system = ContinuousSystem {
             model: self.model,
             vars: self.vars.clone(),
@@ -3523,6 +3570,8 @@ impl<'m> Engine<'m> {
             margins,
             hazards: hazard_monitors,
             flows,
+            observed,
+            flips: Vec::new(),
             error: None,
             work: WorkCounters::default(),
             scratch: FlowScratch::default(),
@@ -3653,10 +3702,29 @@ impl<'m> Engine<'m> {
             }
             self.resolve_flows()?;
 
-            // Commit dense samples (strictly before the reached time:
-            // a sample at exactly an event date is recorded post-event
-            // by the flush in the next advance).
+            // Commit the located flips and the dense samples in time
+            // order (samples strictly before the reached time: a sample at
+            // exactly an event date is recorded post-event by the flush in
+            // the next advance). A flip is a change point at its located
+            // date; a sample after it then reads the same verdict and adds
+            // none. Interleaved, because a sample read before a LATER flip
+            // must not be pushed after it.
+            let mut flips = std::mem::take(&mut system.flips).into_iter().peekable();
+            let mut commit_flips_through = |until: f64, series: &mut Vec<IndicatorSeries>| {
+                while let Some(&(t, indicator, now)) = flips.peek() {
+                    if t > until {
+                        break;
+                    }
+                    flips.next();
+                    let points = &mut series[indicator].points;
+                    let value = Value::Bool(now);
+                    if points.last().is_none_or(|(_, last)| *last != value) {
+                        points.push((t, value));
+                    }
+                }
+            };
             for (t, values) in recorded {
+                commit_flips_through(t, &mut self.indicator_series);
                 if t < t_reached || (fired.is_none() && crossed.is_none()) {
                     // A threshold that flipped inside the segment is a
                     // change point of the observation, and nothing else
@@ -3681,11 +3749,12 @@ impl<'m> Engine<'m> {
                     // different quantity from the one every recorded
                     // result was produced with, silently.
                     //
-                    // What is left, and is NOT closed here: the flip is
-                    // located on the study's own sample grid, not
-                    // bisected like a watched boundary, so the sojourn
-                    // of a threshold crossed between two samples is off
-                    // by at most one sample interval.
+                    // An ordering threshold is located by the solver as an
+                    // observation (`ContinuousSystem::observations`), so its
+                    // change point is already there at the date it was
+                    // crossed, and the sample below adds none. What a
+                    // sample still records is a flip nothing located: an
+                    // equality threshold.
                     for (((indicator, series), sampled), value) in model
                         .indicators
                         .iter()
@@ -3703,6 +3772,7 @@ impl<'m> Engine<'m> {
                     self.sample_cursor += 1;
                 }
             }
+            commit_flips_through(t_reached, &mut self.indicator_series);
             match crossed {
                 None => Ok(fired.map_or(Segment::Reached, Segment::Watched)),
                 Some(index) => {

@@ -645,13 +645,18 @@ a `state`.
 Kind compatibility is refused at build time: a `bool` attribute takes
 `eq` / `ne` only, and a number is never compared to a boolean.
 
-**Where the sojourn of a threshold is approximate.** Its change points
-are recorded at discrete events and, inside a continuous segment, at the
-run's own **sample instants**. A threshold crossed between two samples is
-therefore located on the schedule rather than bisected the way a
-[watched](#watched-a-guard-on-continuous-attributes) transition's boundary is, and the duration is
-over-reported by at most one sample interval; refining the schedule makes
-it converge. The sojourn of an `attribute` target has no such refinement:
+**Where a threshold flips.** An ordering threshold (`lt`, `le`, `gt`,
+`ge`) on a number is located inside a continuous segment the way a
+[watched](#watched-a-guard-on-continuous-attributes) transition's boundary is, bisected to the
+event tolerance on the solver's dense output and recorded at that date.
+It is an **observation**, not an event: the solver takes exactly the
+steps it would take without it, so declaring a threshold never moves the
+trajectory it reads. Its sojourn and its occurrences therefore do not
+depend on the schedule: a condition entered and left between two samples
+is counted, and a ramp crossing its bound at 1.5 is above it for 0.5 by
+2 whatever the samples. An equality threshold cannot be crossed on a
+continuum and keeps its flips at the samples and events. The sojourn of
+an `attribute` target has no such refinement:
 its series only moves at discrete events, so on a purely continuous
 trajectory it integrates the value the attribute had at the last one.
 
