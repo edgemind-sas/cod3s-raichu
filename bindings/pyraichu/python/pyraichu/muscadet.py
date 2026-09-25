@@ -7548,13 +7548,155 @@ class System:
         # engine refuses an omission rather than completing it: close it
         # over what the components actually declare, so a step this
         # layer gains later cannot fall out of the sweep silently.
+        #
+        # What the closure adds is swept in DEPENDENCY order, not in
+        # declaration order: a controller declared before the sensor it
+        # reads would otherwise compare the reading the previous sweep
+        # left behind, and a crossing it watches would be located at the
+        # first scan point past the true date (4/3 h fired at 1.30625 h
+        # on the H2 plant) or loop on the boundary.
+        for name, target in self._dependency_ordered(
+            [
+                (component["name"], equation)
+                for component in components
+                for equation in component["equations"]
+                if equation["kind"] == "explicit"
+                and (component["name"], equation["target"]) not in listed
+            ],
+            components,
+        ):
+            step(name, target)
         for component in components:
-            for equation in component["equations"]:
-                if equation["kind"] == "explicit":
-                    step(component["name"], equation["target"])
             for allocation in component.get("allocations", []):
                 step(component["name"], allocation["name"])
         return order
+
+    def _dependency_ordered(
+        self,
+        pending: list[tuple[str, dict[str, Any]]],
+        components: list[dict[str, Any]],
+    ) -> list[tuple[str, str]]:
+        """`pending` explicit equations as ``(component, target)``, each
+        after every other pending one it reads, ties and cycles kept in
+        the order given.
+
+        A read is an attribute the expression names, or the attribute an
+        out-port publishes into an in-port the expression aggregates
+        (``port_agg`` with no channel), resolved through the connections.
+        A per-connection channel is a quantity of the flow network, swept
+        by its own band, and is not followed here."""
+        published = {
+            (component["name"], port["name"]): port.get("attr")
+            for component in components
+            for port in component.get("ports", [])
+            if port.get("dir") == "out"
+        }
+        feeding: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for connection in self._connections:
+            source, destination = connection["from"], connection["to"]
+            attribute = published.get((source["component"], source["port"]))
+            if attribute is not None:
+                feeding.setdefault(
+                    (destination["component"], destination["port"]), []
+                ).append((source["component"], attribute))
+
+        def reads(expr: Any, found: set[tuple[str, str]]) -> None:
+            if isinstance(expr, dict):
+                if expr.get("op") == "attr":
+                    found.add((expr["attr"]["component"], expr["attr"]["attribute"]))
+                elif expr.get("op") == "port_agg" and not expr.get("channel"):
+                    port = expr["port"]
+                    found.update(feeding.get((port["component"], port["port"]), []))
+                for value in expr.values():
+                    reads(value, found)
+            elif isinstance(expr, list):
+                for value in expr:
+                    reads(value, found)
+
+        keys = [(name, equation["target"]) for name, equation in pending]
+        position = {key: index for index, key in enumerate(keys)}
+        readers: list[list[int]] = [[] for _ in keys]
+        missing = [0] * len(keys)
+        for index, (_, equation) in enumerate(pending):
+            found: set[tuple[str, str]] = set()
+            reads(equation["expr"], found)
+            for read in found:
+                source = position.get(read)
+                if source is not None and source != index:
+                    readers[source].append(index)
+                    missing[index] += 1
+        # A cycle among these equations is released as a block, in
+        # declaration order, and only once everything it reads from
+        # outside the block is placed: its strongly connected components
+        # (Tarjan) are ordered by Kahn's algorithm, lowest declaration
+        # first. A real cycle is refused by the engine anyway; what this
+        # keeps is an order that stays complete and never places an
+        # equation before one it reads that is not on its cycle.
+        component_of = [-1] * len(keys)
+        members: list[list[int]] = []
+        index_of = [-1] * len(keys)
+        low = [0] * len(keys)
+        on_stack = [False] * len(keys)
+        stack: list[int] = []
+        counter = 0
+        # `readers` points from a read equation to its readers; Tarjan
+        # walks the reversed edges (reader -> what it reads) so that a
+        # component's members are those that read each other.
+        reads_of: list[list[int]] = [[] for _ in keys]
+        for source, targets in enumerate(readers):
+            for reader in targets:
+                reads_of[reader].append(source)
+        for root in range(len(keys)):
+            if index_of[root] != -1:
+                continue
+            work = [(root, 0)]
+            while work:
+                node, edge = work.pop()
+                if edge == 0:
+                    index_of[node] = low[node] = counter
+                    counter += 1
+                    stack.append(node)
+                    on_stack[node] = True
+                if edge < len(reads_of[node]):
+                    work.append((node, edge + 1))
+                    child = reads_of[node][edge]
+                    if index_of[child] == -1:
+                        work.append((child, 0))
+                    elif on_stack[child]:
+                        low[node] = min(low[node], index_of[child])
+                    continue
+                for child in reads_of[node]:
+                    if on_stack[child] and component_of[child] == -1:
+                        low[node] = min(low[node], low[child])
+                if low[node] == index_of[node]:
+                    block = []
+                    while True:
+                        member = stack.pop()
+                        on_stack[member] = False
+                        component_of[member] = len(members)
+                        block.append(member)
+                        if member == node:
+                            break
+                    members.append(sorted(block))
+        needs = [0] * len(members)
+        followers: list[set[int]] = [set() for _ in members]
+        for source, targets in enumerate(readers):
+            for reader in targets:
+                a, b = component_of[source], component_of[reader]
+                if a != b and b not in followers[a]:
+                    followers[a].add(b)
+                    needs[b] += 1
+        ready = [(block[0], number) for number, block in enumerate(members) if needs[number] == 0]
+        heapq.heapify(ready)
+        ordered: list[tuple[str, str]] = []
+        while ready:
+            _, number = heapq.heappop(ready)
+            ordered.extend(keys[member] for member in members[number])
+            for follower in followers[number]:
+                needs[follower] -= 1
+                if needs[follower] == 0:
+                    heapq.heappush(ready, (members[follower][0], follower))
+        return ordered
 
     # --- rule diagnostics ---------------------------------------------
 

@@ -1362,3 +1362,82 @@ def test_a_flow_component_is_not_swept_for_a_signal():
     component holding a variable that happens to end in `_signal_out` is left
     exactly as the document names it."""
     assert declare.controller_signal_variables(a_tank()) == {}
+
+
+# --- a reading relayed by a sensor controller --------------------------
+
+
+def a_sensor(name="SENSOR"):
+    """A sensor controller: it reads the tank and republishes the level
+    through a port of its own, which is how every instrumented threshold of
+    a platform model reaches its commander."""
+    return {
+        "name": name,
+        "kind": "controller",
+        "cls": "ObjCtrl",
+        "source_cls": "ObjCtrl",
+        "controls_in": [a_channel("tank")],
+        "controls_out": [
+            a_publication(
+                "reading", {"op": "republish", "input": "tank", "gain": 1.0}
+            )
+        ],
+        "metadata": {"controller": True},
+    }
+
+
+@pytest.mark.parametrize("commander_first", [True, False])
+def test_a_threshold_read_through_a_sensor_fires_at_its_true_crossing(
+    commander_first,
+):
+    """The commander compares the SENSOR's reading, not the tank, so the
+    level reaches its guard through a port. Declared before the sensor it
+    reads, the commander used to be swept first and compared the reading
+    the previous sweep left behind: its crossing fired at the first scan
+    point after the true date instead of at it (4/3 h located at 1.30625 h
+    on the H2 plant, the battery's whole 0.55 offset). On a unit ramp the
+    comparison's 2 is crossed at t = 2 whichever is declared first."""
+    commander = a_pump()
+    ordered = (commander, a_sensor()) if commander_first else (a_sensor(), commander)
+    document = a_document(
+        a_filler(),
+        a_tank(),
+        a_gate(),
+        *ordered,
+        connections=[
+            {"source": "FILL", "source_box": "q_out", "target": "TANK",
+             "target_box": "q_in", "flow": "q"},
+            a_measurement("TANK", "level", "SENSOR", "tank"),
+            {"source": "SENSOR", "source_box": "reading_level_out",
+             "target": "PUMP", "target_box": "level_level_in"},
+            {"source": "PUMP", "source_box": "run_out",
+             "target": "GATE", "target_box": "run_in"},
+        ],
+    )
+    fired = crossings(document, "run_compare_up")
+    assert fired, trajectory(document)
+    assert abs(fired[0] - START) < CROSSING_TOL, fired
+
+
+def test_a_cycle_the_closure_cannot_order_keeps_declaration_order_and_stays_complete():
+    """Two equations reading each other have no dependency order: the sort
+    releases the first one declared, then carries on, so the sweep stays
+    complete and a third equation reading the cycle still comes after it."""
+    import pyraichu.muscadet as mu
+
+    def reading(*names):
+        return {"op": "add", "args": [
+            {"op": "attr", "attr": {"component": "X", "attribute": name}} for name in names
+        ]}
+
+    pending = [
+        ("X", {"target": "c", "kind": "explicit", "expr": reading("a")}),
+        ("X", {"target": "a", "kind": "explicit", "expr": reading("b")}),
+        ("X", {"target": "b", "kind": "explicit", "expr": reading("a")}),
+    ]
+    ordered = mu.System("closure_cycle")._dependency_ordered(
+        pending, [{"name": "X", "ports": []}]
+    )
+    assert sorted(ordered) == [("X", "a"), ("X", "b"), ("X", "c")]
+    assert ordered.index(("X", "a")) < ordered.index(("X", "c"))
+    assert ordered.index(("X", "a")) < ordered.index(("X", "b"))
