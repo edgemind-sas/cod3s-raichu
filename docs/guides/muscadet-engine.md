@@ -418,9 +418,9 @@ operand changes, the mode's effect when the mode does, last one standing),
 and this engine has no such ordering: the held effect wins at every evaluation
 and the condition never shows. Measured against PyCATSHOO on a source-fed
 flow, the reference produces from t = 0 and this engine would produce only
-from the mode's date. It is refused by name, for the reason a persistent
-availability gate written by a mode is: a divergence a study cannot see is
-worse than a model it cannot run.
+from the mode's date. It is refused by name, for the reason two modes
+holding one persistent availability gate are: a divergence a study cannot
+see is worse than a model it cannot run.
 
 ## An event, which affects nothing
 

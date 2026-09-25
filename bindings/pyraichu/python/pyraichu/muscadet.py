@@ -5644,11 +5644,13 @@ class ObjFlow:
                 # whatever it was last written to, and the writer below
                 # recomputes it from the mode states at every pass, so
                 # the gate would come back up on repair instead of
-                # latching. Refused by name for the reason the plugin
-                # route refuses the same shape (`pyraichu.plugins.
-                # muscadet._refuse_a_held_write_on_a_persistent_gate`):
-                # a divergence a study has no way of noticing is worse
-                # than a model it cannot run.
+                # latching. Refused by name: a divergence a study has no
+                # way of noticing is worse than a model it cannot run. A
+                # mode declared BESIDE the component is latched instead
+                # (`pyraichu.plugins.muscadet.
+                # _latch_held_writes_on_persistent_gates`), writing the
+                # gate on its own edges; a mode declared inside it has no
+                # automaton of its own to carry them.
                 raise ValueError(
                     f"ObjFlow `{me}`: the availability gate "
                     f"`{available}` is declared persistent "

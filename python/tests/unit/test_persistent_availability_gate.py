@@ -1,5 +1,5 @@
 """A persistent availability gate: honoured when nothing writes it,
-refused when a failure mode does.
+LATCHED when a single failure mode holds it.
 
 `fed_available_reset` is muscadet's ``FlowOut.var_fed_available_out_reset``,
 which switches off the per-step reinitialization of
@@ -13,9 +13,14 @@ The control travels on **every** output port of a library that declares
 it, while only a handful of ports are ever written by a mode. So the
 question this suite pins is not "is the persistent gate implemented" but
 "is the model that carries the control the same model on both engines":
-untouched, it is, and the port must build; written, it is not, and the
-model must be refused rather than silently built with a gate that comes
-back up on repair.
+untouched, it is, and the port must build. Written by ONE mode's held
+effect, it is too since pyraichu 0.43.0: measured on PyCATSHOO (muscadet
+5.6.0, 2026-09-26), a held effect on a gate that is never reinitialized
+writes its value when the mode ENTERS the state it is held in and nothing
+restores it afterwards, which is an edge write. The expansion emits exactly
+that (`effects` on the mode's transitions) instead of the level that would
+bring the gate back up on repair. Written by two modes, the reference has
+no fixpoint (muscadet documents the hang) and the model is refused.
 
 **Two routes, one question.** The platform's flatter vocabulary reaches
 the engine through `pyraichu.plugins`, a muscadet DECLARATION through
@@ -26,6 +31,8 @@ questions, and adds the writer only a declaration has: a failure mode
 declared INSIDE the component, whose availability this engine DERIVES.
 """
 
+import json
+
 import pytest
 
 import pyraichu
@@ -33,6 +40,9 @@ import pyraichu.declare as declare
 from pyraichu.plugins import expand_model
 
 RATE = 1e-3
+
+#: The persistent gate every test below is about.
+GATE = "power_fed_available_out"
 
 
 def _objflow(reset):
@@ -110,38 +120,164 @@ class TestAPersistentGateNoModeWritesIsBuilt:
         assert with_control == without
 
 
-class TestAPersistentGateAModeWritesIsRefused:
-    """A held effect on a gate that is never reinitialized has no
-    faithful expansion: the engine restores the rest state the mode
-    declares, so the gate would come back up on repair instead of
-    latching."""
+#: Where the trajectories below are read: clear of the transition dates of
+#: `_delay_mode` (failure at 1, repair at 2, failure at 3, repair at 4).
+SAMPLES = [0.5, 1.5, 2.5, 3.5, 4.5]
 
-    def test_it_names_the_gate_the_flow_and_the_mode(self):
-        model = _model([_objflow(False), _mode({"power_fed_available_out": False})])
+
+def _delay_mode(failure_effects, repair_effects=None, name="M", targets=("SRC",)):
+    """An internal mode on delays: failure at 1, repair at 2, and again."""
+    mode = {
+        "type": "ObjFM",
+        "name": name,
+        "targets": list(targets),
+        "failure": [{"law": "delay", "time": 1.0}] * len(targets),
+        "repair": [{"law": "delay", "time": 1.0}] * len(targets),
+        "failure_effects": dict(failure_effects),
+    }
+    if repair_effects:
+        mode["repair_effects"] = dict(repair_effects)
+    return mode
+
+
+def _objflow_seeded(reset, init):
+    spec = _objflow(reset)
+    spec["flows_out"][0]["var_fed_available_out_init"] = init
+    return spec
+
+
+def _gate_trajectory(body):
+    body = dict(body)
+    body["indicators"] = [
+        {"name": "gate", "target": "attribute", "attr": {"component": "SRC", "attribute": GATE}}
+    ]
+    trajectory = pyraichu.simulate(pyraichu.load_model(body), t_max=SAMPLES[-1], samples=SAMPLES)
+    return [bool(value) for _, value in trajectory.samples["gate"]]
+
+
+class TestAHeldWriteOnAPersistentGateLatches:
+    """A held effect on a gate that is never reinitialized is an EDGE write.
+
+    Every expected trajectory below is the one PyCATSHOO returns for the same
+    muscadet system (5.6.0, `ObjFMDelay` failing at 1 and repairing at 2, and
+    so on; gate read at 0.5, 1.5, ...), measured 2026-09-26.
+    """
+
+    def test_a_failure_effect_latches_at_the_failure_and_survives_the_repair(self):
+        body = expand_model(_model([_objflow(False), _delay_mode({GATE: False})]))
+        assert _gate_trajectory(body) == [True, False, False, False, False]
+
+    def test_a_repair_effect_writes_the_other_polarity_on_the_repair_edge(self):
+        body = expand_model(
+            _model([_objflow(False), _delay_mode({GATE: False}, {GATE: True})])
+        )
+        assert _gate_trajectory(body) == [True, False, True, False, True]
+
+    def test_a_repair_effect_holds_from_the_start_on_a_gate_seeded_down(self):
+        """The mode starts in the state its repair effect is held in, so the
+        reference writes the repair value from t = 0: a gate seeded False
+        reads True before anything fires."""
+        body = expand_model(
+            _model([_objflow_seeded(False, False), _delay_mode({GATE: False}, {GATE: True})])
+        )
+        assert _gate_trajectory(body) == [True, False, True, False, True]
+
+    def test_the_seeded_gate_survives_the_continuous_rebuild(self):
+        """A model with a continuous construct is rebuilt from its
+        declarations after the expansion, carrying over what other objects
+        changed. The gate's moved initial value is a MODIFICATION of an
+        attribute the declaration also builds: carried over as a graft, it
+        came back twice and the engine refused the duplicate."""
+        well = {"type": "ObjFlow", "name": "WELL", "flows_continuous_out": [{"name": "water", "var_fed_default": 5.0}]}
+        tank = {
+            "type": "ObjFlow",
+            "name": "TANK",
+            "flows_continuous_in": [{"name": "water", "var_in_default": 0.0}],
+            "capacities": [
+                {"name": "vol", "flow": "water", "capacity": 100.0, "fill_rate": 1.0, "content_init": {"water": 40.0}}
+            ],
+        }
+        document = _model(
+            [_objflow_seeded(False, False), well, tank, _delay_mode({GATE: False}, {GATE: True})]
+        )
+        document["connections"] = [
+            {"from": {"component": "WELL", "port": "water_out"}, "to": {"component": "TANK", "port": "water_in"}}
+        ]
+        body = expand_model(document)
+        assert [a["name"] for a in _src(body)["attributes"]].count(GATE) == 1
+        assert _gate_trajectory(body) == [True, False, True, False, True]
+
+    def test_the_held_level_is_gone_from_the_expansion(self):
+        """Nothing re-derives the gate any more: a level beside the edge
+        writes would be refused by the engine, and would restore on repair."""
+        body = expand_model(_model([_objflow(False), _delay_mode({GATE: False})]))
+        writers = [
+            effect
+            for component in body["components"]
+            for function in component.get("sensitive_functions") or []
+            for effect in function.get("effects") or []
+            if effect["target"] == {"component": "SRC", "attribute": GATE}
+        ]
+        assert writers == []
+
+    def test_two_modes_holding_one_gate_are_refused_by_name(self):
+        """The reference has no fixpoint for two held writers of one gate
+        that is never reinitialized (muscadet's own write-safety note), so
+        the model is refused rather than answered."""
+        model = _model(
+            [
+                _objflow(False),
+                _delay_mode({GATE: False}, name="M1"),
+                _delay_mode({GATE: False}, name="M2"),
+            ]
+        )
         with pytest.raises(ValueError) as refusal:
             expand_model(model)
         message = str(refusal.value)
-        assert "SRC.power_fed_available_out" in message
-        assert "fed_available_reset" in message
-        assert "'M'" in message
+        assert f"SRC.{GATE}" in message
+        assert "'M1'" in message and "'M2'" in message
 
-    def test_a_reinitialized_gate_the_same_mode_writes_still_builds(self):
-        """The counter-case that says the refusal is the control's and
-        not the effect's: the very same mode on a `true` gate is the
-        ordinary model, and it must keep building."""
+    def test_a_held_write_beside_another_modes_pulse_is_refused(self):
+        """Two kinds of writer on one memorised gate: the reference resolves
+        them through its clamp, which nothing measured, so the model is
+        refused rather than answered."""
+        pulse = _delay_mode({}, name="P")
+        pulse["failure_effects_trans"] = {GATE: True}
+        model = _model([_objflow(False), _delay_mode({GATE: False}, name="M"), pulse])
+        with pytest.raises(ValueError) as refusal:
+            expand_model(model)
+        message = str(refusal.value)
+        assert f"SRC.{GATE}" in message and "'M'" in message and "once" in message
+
+    def test_an_external_common_cause_latches_on_each_target(self):
+        """An `external` mode's control is already the OR of its
+        combinations, and each target's mirror automaton carries the edges:
+        nothing to refuse there."""
+        second = _objflow(False)
+        second["name"] = "SRC2"
+        mode = _delay_mode({GATE: False}, targets=("SRC", "SRC2"))
+        mode["behaviour"] = "external"
+        body = expand_model(_model([_objflow(False), second, mode]))
+        assert _gate_trajectory(body) == [True, False, False, False, False]
+
+    def test_an_internal_common_cause_mode_holding_it_is_refused(self):
+        """An `internal` common-cause mode holds the gate while ANY
+        combination is failed: several automata, no single edge to write on."""
+        second = {"type": "ObjFlow", "name": "SRC2", "flows_out": [{"name": "power", "var_prod_cond": []}]}
+        model = _model(
+            [_objflow(False), second, _delay_mode({GATE: False}, targets=("SRC", "SRC2"))]
+        )
+        with pytest.raises(ValueError) as refusal:
+            expand_model(model)
+        assert "common cause" in str(refusal.value) or "combination" in str(refusal.value)
+
+    def test_a_reinitialized_gate_the_same_mode_writes_still_holds_a_level(self):
+        """The counter-case that says the latch is the control's and not the
+        effect's: the very same mode on a `true` gate keeps its held level,
+        which comes back up on repair."""
         for reset in (True, None):
-            model = expand_model(
-                _model([_objflow(reset), _mode({"power_fed_available_out": False})])
-            )
-            writer = next(
-                f
-                for c in model["components"]
-                if c["name"] == "M"
-                for f in c["sensitive_functions"]
-                if f["name"] == "apply_effects"
-            )
-            target = writer["effects"][0]["target"]
-            assert target == {"component": "SRC", "attribute": "power_fed_available_out"}
+            body = expand_model(_model([_objflow(reset), _delay_mode({GATE: False})]))
+            assert _gate_trajectory(body) == [True, False, True, False, True]
 
 
 class TestAGateTheComponentsOwnModeDerivesIsRefused:
@@ -183,6 +319,23 @@ class TestAGateTheComponentsOwnModeDerivesIsRefused:
             )
 
 
+def test_the_rebuild_refuses_an_attribute_changed_on_both_sides():
+    """Carrying a changed attribute over a rebuild that changed it too would
+    drop one of the two changes without a word."""
+    from pyraichu.plugins.muscadet import _carry_grafts
+
+    declared = {"name": "g", "kind": "bool", "init": {"kind": "bool", "value": True}}
+    placeholder = {"name": "C", "attributes": [dict(declared, init={"kind": "bool", "value": False})]}
+    pristine = {"name": "C", "attributes": [dict(declared)]}
+    rebuilt = {"name": "C", "attributes": [dict(declared, kind="float")]}
+    with pytest.raises(ValueError, match="changed both"):
+        _carry_grafts(placeholder, pristine, rebuilt)
+
+    rebuilt = {"name": "C", "attributes": [dict(declared)]}
+    _carry_grafts(placeholder, pristine, rebuilt)
+    assert rebuilt["attributes"] == placeholder["attributes"]
+
+
 # --- the same three questions, asked of a muscadet DECLARATION ---------
 #
 # Written as `muscadet.declare.system_spec` writes it, field for field,
@@ -190,8 +343,6 @@ class TestAGateTheComponentsOwnModeDerivesIsRefused:
 # writes `var_fed_available_out_init: false` beside the reset control on
 # every output of a standby channel, so the pair is declared together
 # here too.
-
-GATE = "power_fed_available_out"
 
 
 def _declared_flow_out(init, reset, prod_default=True):
@@ -285,19 +436,50 @@ class TestTheDormantServiceFunctionIsDeclarable:
         assert documents[1:] == documents[:-1]
 
 
-class TestADeclarationWritingAPersistentGateIsRefused:
-    """The two writers a declaration has, each refused where it meets a
-    gate that is never reinitialized."""
+class TestADeclarationWritingAPersistentGate:
+    """The two writers a declaration has. The standalone mode LATCHES the
+    gate, as on the reference; the mode declared inside the component, whose
+    availability this engine derives, is still refused."""
 
-    def test_a_standalone_mode_writing_it_is_refused_by_name(self):
-        spec = _declaration(modes=[_standalone_mode({GATE: False})])
-        with pytest.raises(declare.ComponentSpecError) as refusal:
+    #: Clear of the standalone mode's dates: failure at 4, repair at 6,
+    #: failure at 10, repair at 12.
+    DECLARED_SAMPLES = (2.0, 5.0, 7.0, 11.0, 13.0)
+
+    def _trajectory(self, spec):
+        document = declare.build_document(spec)
+        body = pyraichu.model_body(document)
+        body["indicators"] = [
+            {"name": "gate", "target": "attribute", "attr": {"component": "SRC", "attribute": GATE}}
+        ]
+        trajectory = pyraichu.simulate(
+            pyraichu.load_model(json.dumps(document)),
+            t_max=self.DECLARED_SAMPLES[-1],
+            samples=list(self.DECLARED_SAMPLES),
+        )
+        return [bool(value) for _, value in trajectory.samples["gate"]]
+
+    def test_a_standalone_mode_holding_it_latches(self):
+        spec = _declaration(init=True, modes=[_standalone_mode({GATE: False})])
+        assert self._trajectory(spec) == [True, False, False, False, False]
+
+    def test_a_standalone_mode_with_both_faces_alternates(self):
+        mode = _standalone_mode({GATE: False})
+        mode["repair_effects"] = {GATE: True}
+        spec = _declaration(init=False, modes=[mode])
+        assert self._trajectory(spec) == [True, False, True, False, True]
+
+    def test_two_standalone_modes_holding_it_are_refused_by_name(self):
+        spec = _declaration(
+            modes=[
+                _standalone_mode({GATE: False}, name="SRC__outage"),
+                _standalone_mode({GATE: False}, name="SRC__trip"),
+            ]
+        )
+        with pytest.raises((declare.ComponentSpecError, ValueError)) as refusal:
             declare.build_document(spec)
-
         message = str(refusal.value)
         assert f"SRC.{GATE}" in message
-        assert "var_fed_available_out_reset" in message
-        assert "SRC__outage" in message
+        assert "SRC__outage" in message and "SRC__trip" in message
 
     def test_the_same_mode_on_a_reinitialized_gate_still_builds(self):
         """The counter-case that says the refusal is the control's and
