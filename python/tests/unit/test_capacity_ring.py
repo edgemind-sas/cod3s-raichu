@@ -35,9 +35,16 @@ LEAK = 0.05
 
 
 def ventilated_room(
-    held: tuple[str, ...] = ("H2_leak", "AIR"), fill_rate=math.inf, hydrogen: float = 0.0
+    held: tuple[str, ...] = ("H2_leak", "AIR"),
+    fill_rate=math.inf,
+    hydrogen: float = 0.0,
+    exhaust_pipe: bool = False,
 ):
-    """LEAK -> LOCAL (a transiting volume) <-> VENTILATION -> ATMOSPHERE."""
+    """LEAK -> LOCAL (a transiting volume) <-> VENTILATION -> ATMOSPHERE.
+
+    With `exhaust_pipe`, the exhaust reaches the atmosphere through a
+    pipe DECLARED FIRST, which a varying source feeds too: downstream of
+    the ring, never on it."""
 
     class Leak(mu.ObjFlow):
         def add_flows(self):
@@ -87,7 +94,27 @@ def ventilated_room(
         def add_flows(self):
             self.add_flow_continuous_in(name="exhaust", var_demand_in_default=VENT_RATE)
 
+    class Pipe(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="exhaust")
+            self.add_flow_continuous_out(name="exhaust")
+
+    class Daylight(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_out(
+                name="exhaust",
+                var_fed_default=4.0,
+                profile={
+                    "cls": "SinusoidalProfile", "amplitude": 0.5, "period": 24.0,
+                    "phase_shift": 6.0, "offset": 0.5, "value_min": 0.0,
+                    "value_max": math.inf, "name": "day",
+                },
+            )
+
     system = mu.System("capacity_ring")
+    if exhaust_pipe:
+        system.add_component(Pipe, "PIPE")
+        system.add_component(Daylight, "DAYLIGHT")
     system.add_component(Leak, "LEAK")
     system.add_component(Local, "LOCAL")
     system.add_component(Ventilation, "VENTILATION")
@@ -96,7 +123,12 @@ def ventilated_room(
     system.connect("LOCAL", "H2_leak", "VENTILATION", "H2_leak")
     system.connect("LOCAL", "AIR", "VENTILATION", "AIR")
     system.connect("VENTILATION", "AIR", "LOCAL", "AIR")
-    system.connect("VENTILATION", "exhaust", "ATMOSPHERE", "exhaust")
+    if exhaust_pipe:
+        system.connect("DAYLIGHT", "exhaust", "PIPE", "exhaust")
+        system.connect("VENTILATION", "exhaust", "PIPE", "exhaust")
+        system.connect("PIPE", "exhaust", "ATMOSPHERE", "exhaust")
+    else:
+        system.connect("VENTILATION", "exhaust", "ATMOSPHERE", "exhaust")
     return system
 
 
@@ -262,3 +294,22 @@ def test_a_ventilated_room_clears_its_hydrogen_as_a_mixture():
         assert abs(sampled(result, "ATMOSPHERE_exhaust_fed_in", instant) - VENT_RATE) < 1e-6
     # The hydrogen clears on the hour scale, as a mixture does.
     assert 0.2 < sampled(result, "LOCAL_room_content_H2_leak", 5.0) < 0.5
+
+
+def test_the_ring_break_never_releases_a_component_downstream_of_the_ring():
+    """The ring holds the flow order back until one of its members is
+    released. Released instead because it was declared first, the pipe
+    downstream of the ring would be visited before the ventilation that
+    feeds it, and every input it sums (the daylight source's share
+    included) would be swept after its own outputs, one evaluation late."""
+    order = [
+        (step["component"], step["attribute"])
+        for step in ventilated_room(exhaust_pipe=True).build_dict()["model"][
+            "evaluation_order"
+        ]
+    ]
+    for inflow, outflow in (
+        ("exhaust_capability_in", "exhaust_capability_out"),
+        ("exhaust_fed_in", "exhaust_fed_out"),
+    ):
+        assert order.index(("PIPE", inflow)) < order.index(("PIPE", outflow))

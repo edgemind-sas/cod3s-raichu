@@ -26,6 +26,7 @@ showcase lost its whole water chain to it. What is pinned here:
 
 import pyraichu
 import pyraichu.muscadet as mu
+import pytest
 from conftest import TOL, at_zero, sampled
 
 PLENTY = 10.0
@@ -199,3 +200,62 @@ def test_a_capped_pipe_asks_for_no_more_than_it_can_hand_on():
     assert abs(at_zero(result, "PIPE_feed_demand_in") - 1.0) < TOL
     assert abs(at_zero(result, "CON_feed_fed_in") - 1.0) < TOL
     assert abs(at_zero(result, "RIVAL_feed_fed_in") - 2.0) < TOL
+
+
+def _sinusoid(amplitude, offset):
+    return {
+        "cls": "SinusoidalProfile", "amplitude": amplitude, "period": 24.0,
+        "phase_shift": 6.0, "offset": offset, "value_min": 0.0,
+        "value_max": float("inf"), "name": "day",
+    }
+
+
+def two_varying_suppliers(first_varies: bool = True):
+    """A pipe fed by two sources whose rates follow the day, and a
+    consumer asking more than both: the H2 plant's electrical bus."""
+
+    def supply(rate, profile):
+        class Source(mu.ObjFlow):
+            def add_flows(self):
+                self.add_flow_continuous_out(name="feed", var_fed_default=rate, profile=profile)
+
+        return Source
+
+    class Pipe(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="feed")
+            self.add_flow_continuous_out(name="feed")
+
+    class Consumer(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="feed", var_demand_in_default=100.0)
+
+    system = mu.System("passthrough_two_varying")
+    system.add_component(supply(3.0, _sinusoid(0.5, 0.5) if first_varies else None), "S1")
+    system.add_component(supply(5.0, _sinusoid(0.75, 0.25)), "S2")
+    system.add_component(Pipe, "PIPE")
+    system.add_component(Consumer, "CON")
+    system.connect("S1", "feed", "PIPE", "feed")
+    system.connect("S2", "feed", "PIPE", "feed")
+    system.connect("PIPE", "feed", "CON", "feed")
+    return system
+
+
+@pytest.mark.parametrize("first_varies", [True, False])
+def test_a_pipe_sums_every_supplier_while_they_vary(first_varies):
+    """An input sums its suppliers only once every one of them has
+    published: summed at the FIRST supplier's visit, the later ones were
+    read at the previous evaluation's value, which the discrete fixpoint
+    hides and a continuously varying source exposes (the H2 plant's bus
+    read the PV alone, 9.0 where the reference reads 9.81). Each source
+    publishes its own rate correctly, so the pipe must carry their sum."""
+    from test_rule_input_surplus import _forward_reads
+
+    system = two_varying_suppliers(first_varies)
+    assert _forward_reads(system.build_dict()) == []
+    result = system.simulate(t_max=12.0, samples=[3.0, 6.0])
+    for instant in (3.0, 6.0):
+        total = sampled(result, "S1_feed_fed_out", instant) + sampled(result, "S2_feed_fed_out", instant)
+        assert abs(sampled(result, "PIPE_feed_fed_in", instant) - total) < 1e-9
+        assert abs(sampled(result, "PIPE_feed_capability_in", instant) - total) < 1e-9
+        assert abs(sampled(result, "CON_feed_fed_in", instant) - total) < 1e-9
