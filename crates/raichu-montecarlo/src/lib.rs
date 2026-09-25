@@ -94,6 +94,14 @@ pub struct IndicatorEstimate {
     pub nb_occurrences_mean: Vec<f64>,
     /// Sample standard deviation of the occurrence count.
     pub nb_occurrences_std: Vec<f64>,
+    /// Probability that the indicator has been active at least once by each
+    /// instant: the RAMS `had-value` measure. Per trajectory it is 1 from
+    /// the first occurrence on (an active initial value included) and stays
+    /// 1 after the indicator falls back, so it is the first-entry
+    /// distribution, not the value's mean.
+    pub reached_mean: Vec<f64>,
+    /// Sample standard deviation of the reached indicator.
+    pub reached_std: Vec<f64>,
     /// Requested quantiles of the sampled value.
     pub quantiles: Vec<QuantileSeries>,
     /// Requested quantiles of the cumulated sojourn.
@@ -241,10 +249,14 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
         let mut sojourn_std = vec![0.0; n_instants];
         let mut nb_occurrences_mean = vec![0.0; n_instants];
         let mut nb_occurrences_std = vec![0.0; n_instants];
+        let mut reached_mean = vec![0.0; n_instants];
+        let mut reached_std = vec![0.0; n_instants];
         for k in 0..n_instants {
             // Serial, replica-ordered accumulation (determinism).
             let (mut sum, mut sum_sq, mut sj_sum, mut sj_sum_sq) = (0.0, 0.0, 0.0, 0.0);
             let (mut oc_sum, mut oc_sum_sq) = (0.0, 0.0);
+            // A 0/1 draw, so its sum is also the sum of its squares.
+            let mut reached_sum = 0.0;
             for replica in &replicas {
                 let (value, sojourn, nb_occ) = replica[idx][k];
                 sum += value;
@@ -253,10 +265,17 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
                 sj_sum_sq += sojourn * sojourn;
                 oc_sum += nb_occ;
                 oc_sum_sq += nb_occ * nb_occ;
+                // Reached by `instant` exactly when it occurred by then: the
+                // occurrence count takes an active initial value as its first
+                // entry, and its bound is the sample's own.
+                if nb_occ > 0.0 {
+                    reached_sum += 1.0;
+                }
             }
             mean[k] = sum / n;
             sojourn_mean[k] = sj_sum / n;
             nb_occurrences_mean[k] = oc_sum / n;
+            reached_mean[k] = reached_sum / n;
             if config.nb_runs > 1 {
                 std[k] = ((sum_sq - n * mean[k] * mean[k]) / (n - 1.0))
                     .max(0.0)
@@ -268,6 +287,10 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
                     ((oc_sum_sq - n * nb_occurrences_mean[k] * nb_occurrences_mean[k]) / (n - 1.0))
                         .max(0.0)
                         .sqrt();
+                reached_std[k] = ((reached_sum - n * reached_mean[k] * reached_mean[k])
+                    / (n - 1.0))
+                    .max(0.0)
+                    .sqrt();
             }
         }
         // Nearest-rank quantiles (deterministic: total_cmp sort over the
@@ -308,6 +331,8 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
             sojourn_std,
             nb_occurrences_mean,
             nb_occurrences_std,
+            reached_mean,
+            reached_std,
             quantiles,
             sojourn_quantiles,
         });

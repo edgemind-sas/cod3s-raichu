@@ -116,7 +116,11 @@ see [Numerical tuning](../guides/numerical-tuning.md).
 - **`sojourn_mean` / `sojourn_std` / `sojourn_quantiles`**: the
   time-integral of the indicator up to each instant. For a 0/1 state
   indicator, that is the **cumulated time spent in the state**: e.g.
-  total downtime.
+  total downtime;
+- **`reached_mean` / `reached_std`**: the probability the indicator has
+  been active at least once by each instant. Unlike `mean`, it never
+  comes back down: a component repaired after its first failure still
+  counts as having failed.
 
 ```python
 est = pyraichu.monte_carlo(
