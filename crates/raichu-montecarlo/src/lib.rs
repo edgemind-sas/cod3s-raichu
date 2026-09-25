@@ -73,6 +73,31 @@ pub struct QuantileSeries {
     pub values: Vec<f64>,
 }
 
+/// The smallest and the largest value a measure took across the replicas,
+/// at each schedule instant: what a study asks with the `min` and `max`
+/// statistics.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Extremes {
+    /// Smallest value over the replicas at each instant.
+    pub min: Vec<f64>,
+    /// Largest value over the replicas at each instant.
+    pub max: Vec<f64>,
+}
+
+impl Extremes {
+    fn empty(n_instants: usize) -> Self {
+        Self {
+            min: vec![f64::INFINITY; n_instants],
+            max: vec![f64::NEG_INFINITY; n_instants],
+        }
+    }
+
+    fn fold(&mut self, k: usize, value: f64) {
+        self.min[k] = self.min[k].min(value);
+        self.max[k] = self.max[k].max(value);
+    }
+}
+
 /// Estimates of one indicator over the schedule.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct IndicatorEstimate {
@@ -102,6 +127,15 @@ pub struct IndicatorEstimate {
     pub reached_mean: Vec<f64>,
     /// Sample standard deviation of the reached indicator.
     pub reached_std: Vec<f64>,
+    /// Extremes of the sampled value over the replicas.
+    pub extremes: Extremes,
+    /// Extremes of the cumulated sojourn.
+    pub sojourn_extremes: Extremes,
+    /// Extremes of the occurrence count.
+    pub nb_occurrences_extremes: Extremes,
+    /// Extremes of the reached indicator (0 and 1, or one of them when
+    /// every replica agrees).
+    pub reached_extremes: Extremes,
     /// Requested quantiles of the sampled value.
     pub quantiles: Vec<QuantileSeries>,
     /// Requested quantiles of the cumulated sojourn.
@@ -251,6 +285,10 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
         let mut nb_occurrences_std = vec![0.0; n_instants];
         let mut reached_mean = vec![0.0; n_instants];
         let mut reached_std = vec![0.0; n_instants];
+        let mut extremes = Extremes::empty(n_instants);
+        let mut sojourn_extremes = Extremes::empty(n_instants);
+        let mut nb_occurrences_extremes = Extremes::empty(n_instants);
+        let mut reached_extremes = Extremes::empty(n_instants);
         for k in 0..n_instants {
             // Serial, replica-ordered accumulation (determinism).
             let (mut sum, mut sum_sq, mut sj_sum, mut sj_sum_sq) = (0.0, 0.0, 0.0, 0.0);
@@ -268,9 +306,15 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
                 // Reached by `instant` exactly when it occurred by then: the
                 // occurrence count takes an active initial value as its first
                 // entry, and its bound is the sample's own.
-                if nb_occ > 0.0 {
-                    reached_sum += 1.0;
-                }
+                let reached = if nb_occ > 0.0 { 1.0 } else { 0.0 };
+                reached_sum += reached;
+                // Extremes are order-independent, but folded here, in the
+                // same replica-ordered pass, so a NaN or a signed zero
+                // resolves the same way whatever the thread count.
+                extremes.fold(k, value);
+                sojourn_extremes.fold(k, sojourn);
+                nb_occurrences_extremes.fold(k, nb_occ);
+                reached_extremes.fold(k, reached);
             }
             mean[k] = sum / n;
             sojourn_mean[k] = sj_sum / n;
@@ -333,6 +377,10 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
             nb_occurrences_std,
             reached_mean,
             reached_std,
+            extremes,
+            sojourn_extremes,
+            nb_occurrences_extremes,
+            reached_extremes,
             quantiles,
             sojourn_quantiles,
         });
