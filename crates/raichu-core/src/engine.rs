@@ -1781,6 +1781,12 @@ struct ContinuousSystem<'m> {
     /// tolerance the resolution that opened it settled to are the same
     /// number.
     flow_tolerance: f64,
+    /// The run's sweep budget ([`FlowConfig::sweep_budget`]): how many
+    /// passes a torn sweep may repeat inside one right-hand side.
+    sweep_budget: usize,
+    /// The attribute vector before the last pass of a torn sweep, reused
+    /// across evaluations.
+    settle_scratch: Vec<Value>,
 }
 
 impl ContinuousSystem<'_> {
@@ -1797,10 +1803,35 @@ impl ContinuousSystem<'_> {
                 scratch: &mut self.scratch,
                 changed: &mut changed,
             };
-            if let Err(error) =
-                recompute_explicit(self.model, &mut self.vars, &self.states, t, &mut ctx)
-            {
-                self.error = Some(error);
+            if !self.model.sweep_reads_ahead {
+                if let Err(error) =
+                    recompute_explicit(self.model, &mut self.vars, &self.states, t, &mut ctx)
+                {
+                    self.error = Some(error);
+                }
+                return;
+            }
+            // A torn ring: one pass reads, at the tear, what the previous
+            // evaluation left there, which may be a rejected trial step.
+            // Repeating the pass until it settles to the flow tolerance
+            // makes the right-hand side a function of `(t, y)` again, the
+            // same fixpoint the resolution settles to at the segment
+            // boundary. Bounded by the resolution's own sweep budget; a
+            // ring that does not settle inside it keeps the last pass, the
+            // single-pass behaviour, and the resolution at the next
+            // boundary is where a genuine stall is diagnosed.
+            for _ in 0..self.sweep_budget.max(1) {
+                self.settle_scratch.clear();
+                self.settle_scratch.extend_from_slice(&self.vars);
+                if let Err(error) =
+                    recompute_explicit(self.model, &mut self.vars, &self.states, t, &mut ctx)
+                {
+                    self.error = Some(error);
+                    return;
+                }
+                if flows_settled(&self.settle_scratch, &self.vars, self.flow_tolerance) {
+                    return;
+                }
             }
         }
     }
@@ -3582,6 +3613,8 @@ impl<'m> Engine<'m> {
             scratch: FlowScratch::default(),
             flow_demands: Vec::new(),
             flow_tolerance: self.config.flow.tolerance,
+            sweep_budget: self.config.flow.sweep_budget,
+            settle_scratch: Vec::new(),
         };
         self.work.segments += 1;
 

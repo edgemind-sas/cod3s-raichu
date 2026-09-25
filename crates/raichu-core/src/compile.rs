@@ -458,6 +458,21 @@ pub struct CompiledModel {
     /// re-evaluated as the clock advances rather than once at the
     /// initial instant and never again.
     pub explicit_reads_time: bool,
+    /// Whether some step of the explicit sweep reads an attribute that the
+    /// same step or a LATER one writes: a ring the evaluation order had to
+    /// tear somewhere.
+    ///
+    /// One pass of such a sweep reads, at the tear, the value the previous
+    /// evaluation left behind, so its result depends on what was evaluated
+    /// before rather than on the state alone. The flow resolution iterates
+    /// to the fixpoint and does not care; the solver's right-hand side,
+    /// which runs one pass per stage, does: it becomes a function of the
+    /// evaluation history, including rejected trial steps, and an active-set
+    /// margin sitting on an exact balance crosses its band on that noise
+    /// and restarts the segment over and over. The engine reads this flag
+    /// to repeat the pass inside the right-hand side until it settles
+    /// (`evolC`); a sweep without a tear keeps its single pass, bit for bit.
+    pub(crate) sweep_reads_ahead: bool,
     /// Switching loops found in this model: an automaton whose guard
     /// reads a quantity its own decision moves, where some automaton on
     /// the cycle switches on a single threshold.
@@ -693,6 +708,41 @@ impl Resolver {
             }
         }
     }
+}
+
+/// Whether a step of `explicit` reads an attribute written by itself or by
+/// a later step (see [`CompiledModel::sweep_reads_ahead`]).
+fn sweep_reads_ahead(explicit: &[CStep]) -> bool {
+    // The last step writing each attribute: a read is ahead of its writer
+    // when that writer sits at or after the reading step.
+    let mut last_writer: HashMap<VarIdx, usize> = HashMap::new();
+    for (index, step) in explicit.iter().enumerate() {
+        match step {
+            CStep::Equation { target, .. } => {
+                last_writer.insert(*target, index);
+            }
+            CStep::Allocate(allocation) => {
+                for &var in &allocation.allocated {
+                    last_writer.insert(var, index);
+                }
+            }
+        }
+    }
+    let (mut vars, mut auts) = (Vec::new(), Vec::new());
+    explicit.iter().enumerate().any(|(index, step)| {
+        vars.clear();
+        match step {
+            CStep::Equation { expr, .. } => expr.collect_sensitivity(&mut vars, &mut auts),
+            CStep::Allocate(allocation) => {
+                allocation
+                    .available
+                    .collect_sensitivity(&mut vars, &mut auts);
+                vars.extend_from_slice(&allocation.demands);
+            }
+        }
+        vars.iter()
+            .any(|var| last_writer.get(var).is_some_and(|&writer| writer >= index))
+    })
 }
 
 impl CExpr {
@@ -1425,6 +1475,7 @@ impl CompiledModel {
                 // reads no clock of its own.
                 CStep::Allocate(_) => false,
             }),
+            sweep_reads_ahead: sweep_reads_ahead(&explicit),
             explicit,
             watched,
             flow_margins,

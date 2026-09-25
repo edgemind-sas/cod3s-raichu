@@ -525,6 +525,18 @@ Declared as above, `y` is 6 at every evaluation point. Without the field,
 the positional sweep computes `y` before `x` and it is 1 at the first
 one.
 
+**A step that reads what a later step writes tears a ring.** An order
+cannot always avoid it: a room feeding a ventilation that feeds the room
+back has no order in which every read comes after its write. One pass of
+such a sweep reads, at the tear, the value the previous evaluation left
+there. The flow resolution repeats the pass until it settles, at every
+discrete date and every located crossing; inside the integrator, the
+right-hand side of a torn sweep does the same, repeating the pass until
+no attribute moves by more than the flow tolerance (at most the
+resolution's sweep budget), so that it is a function of the state and not
+of the stage evaluated before it. A sweep without a tear is evaluated
+once, as it always was.
+
 ## Unbounded rate
 
 A document has no literal for an infinity, so a model meaning "no
