@@ -28,6 +28,15 @@ being added are still in hand:
 Compared on the WHOLE entry rather than on its ``attr``: a state indicator
 carries no ``attr`` at all, and entries compared on a key they have not
 would read as equal to every other one of their kind.
+
+Compared in ONE canonical form, though: a threshold that is the identity on
+a boolean (``eq true``, ``ne false``) observes the boolean itself, and the
+engine returns the same series for it as for the plain ``attribute`` entry,
+point for point. cod3s gives every variable indicator a threshold pair and a
+platform study often spells ``== True``, so that spelling meets the
+generated ``attribute`` entry of the same name as a matter of course
+(measured 2026-09-25, the internal instance's "MC DC P2"). Any other
+threshold is a different quantity and still collides.
 """
 
 from __future__ import annotations
@@ -98,6 +107,28 @@ def observation(entry: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in entry.items() if key != "name"}
 
 
+def _canonical(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """`observation(entry)`, with the identity threshold on a boolean read
+    as the attribute it tests.
+
+    Only for comparing: what a caller reads and what the document carries
+    stay as written. A boolean constant can only be compared with a boolean
+    attribute (the engine refuses anything else at build time), so the
+    threshold's own value is enough to know the attribute is one.
+    """
+    seen = observation(entry)
+    value = seen.get("value")
+    if (
+        seen.get("target") == "predicate"
+        and isinstance(value, Mapping)
+        and value.get("kind") == "bool"
+        and (seen.get("cmp"), value.get("value")) in {("eq", True), ("ne", False)}
+        and set(seen) == {"target", "attr", "cmp", "value"}
+    ):
+        return {"target": "attribute", "attr": seen["attr"]}
+    return seen
+
+
 def merge_indicators(
     indicators: list[dict[str, Any]],
     incoming: Iterable[Mapping[str, Any]],
@@ -143,6 +174,6 @@ def merge_indicators(
             if name is not None:
                 held[name] = entry
             continue
-        if observation(already) != observation(entry):
+        if _canonical(already) != _canonical(entry):
             raise collision(name, observation(entry), observation(already))
     return indicators
