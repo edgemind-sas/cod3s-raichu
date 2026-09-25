@@ -4344,7 +4344,11 @@ def build_document(
         For anything the document declares and this layer cannot carry, named.
     """
     from . import seal
-    from .plugins.muscadet import MuscadetPlugin, _carry_grafts
+    from .plugins.muscadet import (
+        MuscadetPlugin,
+        _carry_grafts,
+        _latch_held_writes_on_persistent_gates,
+    )
 
     check_system_spec(spec)
     flows, controllers, modes = _split_kinds(spec)
@@ -4409,15 +4413,26 @@ def build_document(
         if obj["type"] != "ObjCtrl":
             _refuse_unreachable_references(obj, body)
             _refuse_a_latched_production_a_condition_also_writes(obj, body)
-            _refuse_a_held_write_on_a_persistent_gate(obj, persistent_gates)
             _refuse_a_pulse_on_a_reinitialized_gate(obj, reinitialized_gates)
 
-    # The two whole-model closures the plugin's own expansion runs, and for
-    # reasons that hold here identically: an availability gate the document
-    # asked to MEMORISE cannot also be written by a mode, and two modes
-    # writing one attribute each undo the other's failure unless their
-    # reinitialization effects are folded into one writer. Neither is
-    # decidable one mode at a time.
+    # A gate the document asked to MEMORISE and a single mode holds is written
+    # on that mode's edges, as the reference writes it; two modes holding it
+    # are refused. Whole-model, and here rather than in the plugin's own
+    # closure below, because the flows that carry the control are this route's
+    # declarations, which the plugin never sees.
+    try:
+        _latch_held_writes_on_persistent_gates(
+            body,
+            objects,
+            {gate: gate[1][: -len(AVAILABILITY_SUFFIX)] for gate in persistent_gates},
+        )
+    except ValueError as exc:
+        raise ComponentSpecError(str(exc).removeprefix("muscadet plugin: ")) from exc
+
+    # The whole-model closure the plugin's own expansion runs, for a reason
+    # that holds here identically: two modes writing one attribute each undo
+    # the other's failure unless their reinitialization effects are folded into
+    # one writer, which is not decidable one mode at a time.
     plugin.finalize_model(body, objects)
 
     # Pass 2: the continuous network, closed over the controller and mode
@@ -4573,9 +4588,9 @@ def _refuse_a_latched_production_a_condition_also_writes(obj: dict, body: dict) 
 
     Refused by name rather than answered differently, for the reason the
     persistent availability gate is (see
-    :func:`~pyraichu.plugins.muscadet._refuse_a_held_write_on_a_persistent_gate`):
-    a divergence a study would have no way of noticing is worse than a model
-    it cannot run.
+    :func:`~pyraichu.plugins.muscadet._latch_held_writes_on_persistent_gates`
+    for what it refuses): a divergence a study would have no way of noticing
+    is worse than a model it cannot run.
     """
     writers = {
         component.get("name"): {
@@ -4667,48 +4682,6 @@ def _persistent_availability_gates(flows: dict) -> set[tuple[str, str]]:
             if isinstance(flow, str):
                 gates.add((str(spec.get("name") or name), flow + AVAILABILITY_SUFFIX))
     return gates
-
-
-def _refuse_a_held_write_on_a_persistent_gate(
-    obj: dict, gates: set[tuple[str, str]]
-) -> None:
-    """Refuse a standalone mode writing an availability gate declared
-    persistent.
-
-    The declaration route's half of
-    :func:`~pyraichu.plugins.muscadet._refuse_a_held_write_on_a_persistent_gate`,
-    which asks the same question of the platform's flatter vocabulary and
-    cannot see a declaration's flows. A gate a COMPONENT's own failure modes
-    derive is caught a layer lower, where the derivation is emitted
-    (:meth:`pyraichu.muscadet.ObjFlow._build_flows_out`); this one catches the
-    other writer a document has, the two-state mode declared as a component of
-    its own.
-
-    Why it is a refusal and not a divergence: this engine has no per-variable
-    reset to switch off. A mode's effect is HELD, re-evaluated to a fixpoint
-    while its state lasts, and completed with the rest branch reinitialization
-    would have restored -- so the gate comes back up on repair, which is the
-    opposite of what persistence was declared for, and nothing in the model
-    would say so.
-    """
-    if not gates:
-        return
-    for key in ("failure_effects", "repair_effects"):
-        for variable in obj.get(key) or {}:
-            for target in obj.get("targets") or []:
-                if (target, variable) not in gates:
-                    continue
-                raise ComponentSpecError(
-                    f"Failure mode {obj.get('name')} declares `{key}` on "
-                    f"`{target}.{variable}`, whose flow is declared "
-                    f"persistent (muscadet's "
-                    f"`var_fed_available_out_reset=False`). A held effect on "
-                    f"a gate that is never reinitialized has no faithful "
-                    f"expansion here: this engine restores the rest state the "
-                    f"mode declares, so the gate would come back up on repair "
-                    f"instead of latching. Declare a reinitialized gate, or "
-                    f"stop writing `{variable}`"
-                )
 
 
 def _condition_leaves(cond: Any) -> list[dict]:

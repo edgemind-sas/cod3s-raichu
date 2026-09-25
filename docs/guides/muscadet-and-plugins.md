@@ -729,6 +729,16 @@ one-shot write on a gate that is reinitialized every step is refused as
 well: the reference undoes the pulse at the next step, where an edge
 write would keep it.
 
+**A held effect on a gate declared persistent** is an edge write too, since
+0.43.0. Measured on PyCATSHOO: nothing reinitializes such a gate, so the
+held failure effect writes its value when the mode enters its failure state
+and nothing restores it on repair (the gate latches); a held repair effect
+writes the other polarity when the mode leaves it, and from t = 0, since the
+mode starts there. The expansion writes exactly that on the mode's own
+transitions. Two modes holding one such gate are refused (the reference has
+no fixpoint for them), and so are a common-cause mode and an on-demand draw
+holding it, which have no single edge to write on.
+
 Either direction may also carry an **on-demand** law
 (`{"law": "inst", "prob": …}`): one Bernoulli draw per rising edge of
 that direction's condition, its lost branch parking in a micro-state

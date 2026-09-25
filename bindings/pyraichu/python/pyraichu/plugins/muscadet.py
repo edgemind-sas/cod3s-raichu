@@ -664,48 +664,175 @@ def _refuse_a_pulse_on_a_reinitialized_gate(specs: list[dict]) -> None:
                     )
 
 
-def _refuse_a_held_write_on_a_persistent_gate(model: dict, specs: list[dict]) -> None:
-    """A persistent availability gate written by a failure mode has no
-    faithful expansion here, so it is refused by name.
+def _latch_held_writes_on_persistent_gates(
+    model: dict, specs: list[dict], gates: dict[tuple[str, str], str]
+) -> None:
+    """Turn a mode's HELD write on a persistent availability gate into the
+    edge writes the reference engine performs, in place.
 
-    `fed_available_reset: false` asks for a gate that MEMORISES. muscadet
-    switches the per-step reinitialization off
-    (``setReinitialized(False)``) and the variable then keeps whatever was
-    last written to it, which is how a detection or an alarm is made to
-    latch. This engine has no per-variable reset to switch off: a mode's
-    effect is HELD, re-evaluated to a fixpoint while the mode's state
-    lasts, and the expansion completes it with the rest branch that
-    reinitialization would have restored (:func:`_reinit_effect`). Built
-    that way the gate would come back up on repair, which is the opposite
-    of what the persistence was declared for, and nothing in the model
-    would say so.
+    `fed_available_reset: false` asks for a gate that MEMORISES: muscadet
+    switches its per-step reinitialization off (``setReinitialized(False)``)
+    and the variable keeps whatever was last written to it, which is how a
+    detection or an alarm is made to latch. A held effect is then a clamp that
+    writes its value while the mode's state lasts and restores nothing after.
+    Measured on PyCATSHOO (muscadet 5.6.0, 2026-09-26, a mode failing at 1 and
+    repairing at 2 on delays):
 
-    A persistent gate that NO mode writes needs nothing, and that is the
-    ordinary case: the control travels on every output port of a library
-    that declares it, while only a handful of ports are ever written.
-    Neither engine restores such a gate and neither writes it, so both
-    leave it at its declared initial value for the whole sequence.
+    * a failure effect alone latches: the gate goes down at 1 and stays down;
+    * a failure effect and a repair effect alternate the gate with the mode;
+    * a repair effect is held in the state the mode STARTS in, so it writes
+      from t = 0: a gate seeded down reads up before anything fires.
+
+    This engine has no per-variable reset to switch off, and the expansion's
+    held effect (:func:`_reinit_effect`) completes the failure value with the
+    rest branch reinitialization would restore: built that way the gate would
+    come back up on repair. So the level is replaced by what the reference
+    does, written on the mode's own transitions (`effects`, once per firing):
+    the failure value on every edge ENTERING the state the effect is held in;
+    the declared repair value, when there is one, on every edge LEAVING it and
+    as the gate's initial value.
+
+    Refused, by name, where no such edge exists or the reference has no
+    answer: two modes holding one gate (a standing clamp beside another writer
+    has no fixpoint on the reference, as muscadet's own write-safety note
+    says), a held write beside another mode's one-shot write on the same gate
+    (the reference's clamp resolves the pair in a way nothing here measured),
+    a gate held while ANY of several automata is failed (an `internal` mode
+    over several common-cause combinations, or an on-demand repair's parked
+    state; an `external` common cause is fine, since its control is already
+    the OR and each target's mirror automaton carries the edges), and a
+    repair effect with no failure counterpart. A persistent gate that NO mode writes needs nothing,
+    and that is the ordinary case: the control travels on every output port of
+    a library that declares it, while only a handful of ports are written.
+
+    `gates` maps each persistent ``(component, attribute)`` to its flow, for
+    the messages. The plugin route reads them off its ``ObjFlow`` objects
+    (:func:`_persistent_availability_gates`); the declaration route off its
+    flow declarations, which it does not hand to this plugin.
+
+    The initial value a held repair effect moves is written on the expanded
+    attribute; a continuous model's rebuild carries it over as a modification
+    of that attribute (:func:`_carry_grafts`).
     """
-    gates = _persistent_availability_gates(specs)
     if not gates:
         return
+    components = {c.get("name"): c for c in model.get("components", []) or []}
+    modes = {
+        spec["name"]: spec
+        for spec in specs
+        if spec.get("type") in ("ObjFM", "ObjFMInst") and "name" in spec
+    }
+    for spec in modes.values():
+        failure = spec.get("failure_effects") or {}
+        for variable in spec.get("repair_effects") or {}:
+            if variable in failure:
+                continue
+            for target in spec.get("targets") or []:
+                if (target, variable) in gates:
+                    raise ValueError(
+                        f"muscadet plugin: the failure mode `{spec['name']}` holds a "
+                        f"repair effect on `{target}.{variable}`, a gate declared "
+                        f"persistent (`fed_available_reset: false` on flow "
+                        f"`{gates[(target, variable)]}`), with no failure effect on "
+                        "it: pair it with a failure effect, or declare a "
+                        "reinitialized gate"
+                    )
     claims = _reinit_claims(model, _reinit_writer_sites(specs))
+    # The one-shot writes already on an edge, per gate, BEFORE any held write is
+    # turned into one: another mode's pulse beside a held write is a second
+    # writer the reference resolves by its clamp, which nothing here measured.
+    pulsed: dict[tuple[str, str], list[str]] = {}
+    for component in components.values():
+        for automaton in component.get("automata") or []:
+            for transition in automaton.get("transitions") or []:
+                for effect in transition.get("effects") or []:
+                    target = effect.get("target") or {}
+                    pulsed.setdefault((target.get("component"), target.get("attribute")), []).append(
+                        f"{component.get('name')}.{automaton.get('name')}.{transition.get('name')}"
+                    )
     for key, flow in sorted(gates.items()):
         entries = claims.get(key)
         if not entries:
             continue
-        component, attribute = key
-        modes = sorted({mode for mode, _, _ in entries})
-        raise ValueError(
-            f"muscadet plugin: the availability gate `{component}.{attribute}` "
-            f"is declared persistent (`fed_available_reset: false` on flow "
-            f"`{flow}`), and the failure mode(s) {modes} write it. A held "
-            "effect on a gate that is never reinitialized has no faithful "
-            "expansion here: this engine restores the rest state the mode "
-            "declares, so the gate would come back up on repair instead of "
-            "latching. Declare the flow with a reinitialized gate "
-            "(`fed_available_reset: true`), or stop writing it."
-        )
+        component_name, attribute = key
+        writers = sorted({mode for mode, _, _ in entries})
+        if key in pulsed:
+            raise ValueError(
+                f"muscadet plugin: the availability gate `{component_name}.{attribute}` "
+                f"is declared persistent (`fed_available_reset: false` on flow "
+                f"`{flow}`); the failure mode(s) {writers} hold a write on it and "
+                f"the transition(s) {sorted(pulsed[key])} write it once. A held "
+                "write is a clamp on the reference, re-applied while its state "
+                "lasts, and a one-shot write beside it is resolved by that clamp in "
+                "a way nothing here has measured: keep one kind of writer."
+            )
+        if len(writers) > 1:
+            raise ValueError(
+                f"muscadet plugin: the availability gate `{component_name}.{attribute}` "
+                f"is declared persistent (`fed_available_reset: false` on flow "
+                f"`{flow}`), and the failure modes {writers} each hold a write on "
+                "it. A gate that is never reinitialized has no fixpoint on the "
+                "reference engine under two held writers (muscadet documents the "
+                "hang), so there is nothing to reproduce: keep one writer, or "
+                "declare a reinitialized gate (`fed_available_reset: true`)."
+            )
+        for mode, function, effect in entries:
+            value = effect.get("value") or {}
+            cond = value.get("cond") or {}
+            if value.get("op") != "if" or cond.get("op") != "state_active":
+                raise ValueError(
+                    f"muscadet plugin: the failure mode `{mode}` holds "
+                    f"`{component_name}.{attribute}`, a gate declared persistent "
+                    f"(`fed_available_reset: false` on flow `{flow}`), while ANY of "
+                    "several states is active (an internal common cause over "
+                    "several combinations, or an on-demand repair's parked state). A gate "
+                    "that memorises is written on the edge that enters the state, "
+                    "and here there is no single one: declare a reinitialized gate, "
+                    "or a mode of order one on a law that is not on demand."
+                )
+            where = cond["state"]
+            host = components.get(where.get("component")) or {}
+            automaton = next(
+                (a for a in host.get("automata") or [] if a.get("name") == where.get("automaton")),
+                None,
+            )
+            if automaton is None:
+                raise ValueError(
+                    f"muscadet plugin: the failure mode `{mode}` holds "
+                    f"`{component_name}.{attribute}` on the state {where}, which the "
+                    "expansion does not carry"
+                )
+            state = where.get("state")
+            entering = [t for t in automaton.get("transitions") or [] if state in (t.get("targets") or [])]
+            leaving = [t for t in automaton.get("transitions") or [] if t.get("source") == state]
+            if any(len(t.get("targets") or []) != 1 for t in entering + leaving):
+                raise ValueError(
+                    f"muscadet plugin: the failure mode `{mode}` holds "
+                    f"`{component_name}.{attribute}`, a gate declared persistent, on "
+                    "a state a branching draw enters or leaves: an edge write would "
+                    "land on every branch"
+                )
+            for transition in entering:
+                transition.setdefault("effects", []).append(
+                    {"target": dict(effect["target"]), "value": value["then"]}
+                )
+            if attribute in (modes.get(mode, {}).get("repair_effects") or {}):
+                rest = value["otherwise"]
+                for transition in leaving:
+                    transition.setdefault("effects", []).append(
+                        {"target": dict(effect["target"]), "value": rest}
+                    )
+                if rest.get("op") == "const":
+                    for declared in components.get(component_name, {}).get("attributes") or []:
+                        if declared.get("name") == attribute:
+                            declared["init"] = dict(rest["value"])
+            function["effects"].remove(effect)
+    # A reinitialization function whose every effect became edge writes has
+    # nothing left to evaluate.
+    for component in components.values():
+        functions = component.get("sensitive_functions")
+        if functions:
+            component["sensitive_functions"] = [f for f in functions if f.get("effects")]
 
 
 def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
@@ -1065,10 +1192,9 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
     though nothing generated reads it: what reads it is the refusal of a
     gate that is DERIVED from the component's own failure modes and
     persistent at once (`pyraichu.muscadet.ObjFlow._build_flows_out`).
-    :func:`_refuse_a_held_write_on_a_persistent_gate` asks the same
-    question of the OTHER writer, a mode object declared beside the
-    component, so between them the two routes refuse one shape rather
-    than each half of it.
+    :func:`_latch_held_writes_on_persistent_gates` answers the OTHER
+    writer, a mode object declared beside the component, by writing the
+    gate on that mode's edges as the reference does.
 
     **This section's production condition is read in DISJUNCTIVE form**,
     groups OR-ed and each group's operands AND-ed, which is this layer's
@@ -1205,13 +1331,46 @@ def _carry_grafts(placeholder: dict, pristine: dict, rebuilt: dict) -> None:
     between it and `placeholder` **is** the graft, whatever list it landed
     in and whatever a future object grafts. Members are compared whole
     rather than by name, so nothing has to assume a naming convention.
+
+    **Attributes are the one exception, keyed by their name**, because the
+    schema keys them so (two of one name are refused). An attribute the
+    pristine build also declares, changed in place by another object (a
+    persistent gate a mode's held repair effect seeds, see
+    :func:`_latch_held_writes_on_persistent_gates`), is a MODIFICATION: it
+    replaces the rebuilt attribute of that name instead of being appended
+    beside it.
     """
+    declared = {
+        attribute.get("name"): attribute for attribute in pristine.get("attributes") or []
+    }
+    for attribute in placeholder.get("attributes") or []:
+        name = attribute.get("name")
+        if name in declared and attribute != declared[name]:
+            current = next(
+                (other for other in rebuilt.get("attributes") or [] if other.get("name") == name),
+                None,
+            )
+            if current is not None and current != declared[name]:
+                # The rebuild changed this attribute too: carrying one change
+                # over the other would drop one of them in silence.
+                raise ValueError(
+                    f"muscadet plugin: the attribute `{placeholder.get('name')}.{name}` "
+                    "was changed both by an object during the expansion and by the "
+                    "continuous rebuild; neither change can be kept over the other"
+                )
+            rebuilt["attributes"] = [
+                attribute if other.get("name") == name else other
+                for other in rebuilt.get("attributes") or []
+            ]
     for key, members in placeholder.items():
         if not isinstance(members, list):
             continue
-        original = [
-            json.dumps(member, sort_keys=True) for member in pristine.get(key, [])
-        ]
+        if key == "attributes":
+            members = [m for m in members if m.get("name") not in declared]
+            pristine_members = [m for m in pristine.get(key, []) if m.get("name") not in declared]
+        else:
+            pristine_members = pristine.get(key, [])
+        original = [json.dumps(member, sort_keys=True) for member in pristine_members]
         grafted = []
         for member in members:
             token = json.dumps(member, sort_keys=True)
@@ -2100,9 +2259,10 @@ class MuscadetPlugin:
         connection is present.
 
         **Persistent availability gates** (see
-        :func:`_refuse_a_held_write_on_a_persistent_gate`). A gate the
-        platform declared with `fed_available_reset: false` is refused
-        when a mode writes it, and needs nothing when none does. Which
+        :func:`_latch_held_writes_on_persistent_gates`). A gate the
+        platform declared with `fed_available_reset: false` and a single
+        mode holds is written on that mode's edges, and needs nothing when
+        no mode writes it. Which
         modes write a gate is a whole-model question, so it is asked
         here, and before the merge below, so the refusal names the modes
         that declared the effects rather than the one that hosts the fold.
@@ -2155,7 +2315,9 @@ class MuscadetPlugin:
         in one corner of a model is not a statement about what the model is
         for; the key is.
         """
-        _refuse_a_held_write_on_a_persistent_gate(model, specs)
+        _latch_held_writes_on_persistent_gates(
+            model, specs, _persistent_availability_gates(specs)
+        )
         _refuse_a_pulse_on_a_reinitialized_gate(specs)
         _refuse_a_latched_production_a_condition_also_writes(model, specs)
         _merge_reinit_writers(model, specs)
