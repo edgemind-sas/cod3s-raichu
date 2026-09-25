@@ -423,6 +423,39 @@ ceiling, and once empty delivers nothing rather than passing on what
 crosses. That is the right declaration for a store nothing crosses, and
 for an outlet shut by a declared rate of zero.
 
+#### A multi-flow volume serves a mixture
+
+A volume downstream of the transfer (`side: "out"`) holding **more than
+one** flow, beside no rule of its component, does not serve each output
+from its own stock. As muscadet's `draw_from_capacity` does (measured on
+5.6.0), it pools what its consumers ask beyond what transits it and
+hands each held flow a share of that excess in proportion to its raw
+content, for as long as the flow is stocked:
+
+```
+out_f  = min(req_f, transit_f + beyond * m_f / sum m)
+beyond = sum over held g of max(req_g - transit_g, 0)
+```
+
+`req_f` is the demand published on output `f`, `transit_f` what arrives
+on it, and `m` the raw contents: weights change the fill, not the split.
+A room of 100 holding 1 of hydrogen in 99 of air, asked 10 of each,
+hands out 0.2 of hydrogen and 10 of air; hydrogen asked alone leaves at
+`10 h / (h + a)` and is never exhausted in finite time. An empty flow
+passes on what arrives, as before. The pooled draw lives in the
+production band only (`{cap}_beyond`, then `{flow}_pooled_out`, which
+the output's allocation distributes); the capability band is unchanged,
+so consumers still size their demand on the ceiling. A single-flow
+volume and a volume upstream of the transfer are not concerned.
+
+**A rule fed by such a volume produces from what arrives.** It runs at
+`{set}_draw_scale`, its scale times the fraction of its need its
+scarcest mixed input delivered, and hands back what it does not consume
+of the others: the input releases against `{flow}_consumed_in`, so the
+volume loses exactly what the rule consumes. A rule asking 10 of
+hydrogen and 10 of air out of that room consumes 0.2 of each and makes
+0.4, as the reference does.
+
 #### Commanding the discharge: `serve_cond`
 
 `serve_rate` says how much may leave; `serve_cond` says **whether
