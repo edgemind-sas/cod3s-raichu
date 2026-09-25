@@ -223,6 +223,11 @@ class IndicatorEstimate:
     sojourn_std: list[float]
     nb_occurrences_mean: list[float]
     nb_occurrences_std: list[float]
+    #: Probability of having been active at least once by each instant (the
+    #: RAMS "had value" measure): the first-entry distribution, which stays
+    #: at 1 on a trajectory after the indicator falls back.
+    reached_mean: list[float]
+    reached_std: list[float]
     quantiles: dict[float, list[float]]
     sojourn_quantiles: dict[float, list[float]]
 
@@ -308,6 +313,8 @@ def monte_carlo(
             sojourn_std=e["sojourn_std"],
             nb_occurrences_mean=e["nb_occurrences_mean"],
             nb_occurrences_std=e["nb_occurrences_std"],
+            reached_mean=e["reached_mean"],
+            reached_std=e["reached_std"],
             quantiles={s["q"]: s["values"] for s in e["quantiles"]},
             sojourn_quantiles={s["q"]: s["values"] for s in e["sojourn_quantiles"]},
         )

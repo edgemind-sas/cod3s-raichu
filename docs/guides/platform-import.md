@@ -98,7 +98,11 @@ each indicator carries:
 - `nb-occurrences` → `IndicatorEstimate.nb_occurrences_mean` / `_std`
   (with targets: the probability the event occurred by each instant);
 - `sojourn-time` → `IndicatorEstimate.sojourn_mean` / `_std`
-  (with targets: mean time elapsed since the first occurrence).
+  (with targets: mean time elapsed since the first occurrence);
+- `had_value` → `IndicatorEstimate.reached_mean` / `_std`: the probability
+  the indicator has been active at least once by each instant. Per
+  trajectory it stays at 1 after the indicator falls back, as the
+  reference engine's `realized` computation does.
 
 ## Converting the outputs
 
