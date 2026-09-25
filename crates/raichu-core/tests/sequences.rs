@@ -78,6 +78,7 @@ fn model() -> Model {
             state: "occ".into(),
         }],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -167,6 +168,7 @@ fn early_stop_finishes_the_hit_instant() {
             state: "occ".into(),
         }],
         evaluation_order: None,
+        unbounded_rate: None,
     };
     let compiled = CompiledModel::compile(&m).unwrap();
     let config = EngineConfig {

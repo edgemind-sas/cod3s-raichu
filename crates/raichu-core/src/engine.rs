@@ -279,6 +279,28 @@ pub enum EngineError {
     /// The ODE backend failed (stiffness, non-finite derivatives, …).
     #[error("continuous evolution failed: {0}")]
     Ode(#[from] raichu_numeric::OdeError),
+    /// An ODE right-hand side reached the magnitude the model declares
+    /// as "unbounded" ([`raichu_model::Model::unbounded_rate`]): a stand-in
+    /// for "no ceiling" became the rate of a stock. Integrated, it steps
+    /// the stock far past its bound before any event is located, so the
+    /// run is refused instead of answering a non-physical number.
+    #[error(
+        "`{variable}` would change at {rate:e} per unit time at t={time}, \
+         the magnitude this model reserves for \"unbounded\" ({unbounded:e}): \
+         an unbounded draw met an unbounded supply, whose physics is an \
+         instantaneous transfer that a rate cannot express; bound one of \
+         the two (a finite fill or serve rate, or a finite demand)"
+    )]
+    UnboundedRate {
+        /// Simulation time of the evaluation.
+        time: f64,
+        /// The integrated variable, `component.attribute`.
+        variable: String,
+        /// The right-hand side value.
+        rate: f64,
+        /// The declared unbounded magnitude.
+        unbounded: f64,
+    },
     /// Watched transitions kept firing at the same instant (Zeno-like
     /// loop on a boundary).
     #[error(
@@ -1784,9 +1806,25 @@ impl OdeSystem for ContinuousSystem<'_> {
 
     fn rhs(&mut self, t: f64, y: &[f64], dydt: &mut [f64]) {
         self.load(t, y);
-        for (slot, (_, expr)) in self.model.ode.iter().enumerate() {
+        for (slot, (var, expr)) in self.model.ode.iter().enumerate() {
             match eval_f64(self.model, &self.vars, &self.states, t, expr) {
-                Ok(value) => dydt[slot] = value,
+                Ok(value) => {
+                    // `evolC` refuses a rate the model reserved for
+                    // "unbounded", recorded like any callback error and
+                    // integrated as zero until the segment returns it.
+                    match self.model.unbounded_rate {
+                        Some(unbounded) if value.abs() >= unbounded => {
+                            self.error.get_or_insert(EngineError::UnboundedRate {
+                                time: t,
+                                variable: self.model.var_names[*var].clone(),
+                                rate: value,
+                                unbounded,
+                            });
+                            dydt[slot] = 0.0;
+                        }
+                        _ => dydt[slot] = value,
+                    }
+                }
                 Err(error) => {
                     self.error.get_or_insert(error);
                     dydt[slot] = 0.0;

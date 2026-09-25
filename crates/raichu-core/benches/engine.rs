@@ -142,6 +142,7 @@ fn delay_model() -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -229,6 +230,7 @@ fn tank_model() -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -527,6 +529,7 @@ fn wide_network(watched: bool) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

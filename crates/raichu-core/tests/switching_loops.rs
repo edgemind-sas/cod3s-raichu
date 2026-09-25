@@ -101,6 +101,7 @@ fn pump(start: f64, release: f64) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

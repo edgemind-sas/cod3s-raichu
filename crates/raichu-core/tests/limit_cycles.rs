@@ -117,6 +117,7 @@ fn sawtooth() -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

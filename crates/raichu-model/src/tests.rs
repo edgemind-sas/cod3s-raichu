@@ -156,6 +156,7 @@ fn sample_model() -> Model {
         ],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -553,6 +554,7 @@ fn continuous_cycle_model(first: EquationKind, second: EquationKind) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -620,6 +622,7 @@ fn fan_in_model(second: AttrKind) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -736,6 +739,7 @@ fn ordered_model(order: Option<Vec<AttrRef>>) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: order,
+        unbounded_rate: None,
     }
 }
 

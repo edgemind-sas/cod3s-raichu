@@ -416,12 +416,28 @@ DEFAULT_HYSTERESIS = 1e-6
 #: from it, not the rate, and the empty bound is what stops the draw. A
 #: model document is JSON, which has no literal for an infinity, so the
 #: quantity crossing the document is a magnitude no physical model
-#: reaches instead. It is only ever the ceiling of a ``min`` against a
+#: reaches instead. It is meant as the ceiling of a ``min`` against a
 #: demand, never a term of a derivative and never compared for equality,
 #: so its exact value is immaterial as long as no demand approaches it
 #: and no coefficient multiplies it into an overflow -- 1e30 leaves 278
 #: decades of headroom under `f64::MAX` for both.
+#:
+#: "Never a term of a derivative" is not left to this layer's care: an
+#: unbounded demand (a volume with an infinite `fill_rate`) meeting an
+#: unbounded ceiling makes it the rate a stock drains at, whose physics is
+#: an instantaneous transfer no rate expresses. Every model this layer
+#: builds therefore DECLARES the magnitude (:func:`model_level_keys`),
+#: and the engine refuses, by name, any integrated rate reaching it.
 UNBOUNDED_SERVICE = 1e30
+
+
+def model_level_keys(evaluation_order: list[dict[str, str]]) -> dict[str, Any]:
+    """The model-wide keys a continuous network carries: the sweep order
+    it derives, and the magnitude it reserves for "unbounded"
+    (:data:`UNBOUNDED_SERVICE`), which no integrated rate may reach. One
+    function for the three routes that build such a model, so none of
+    them can carry the order without the reservation."""
+    return {"evaluation_order": evaluation_order, "unbounded_rate": UNBOUNDED_SERVICE}
 
 #: Stand-in read where a flow is held by no volume at all, so that the
 #: question "does the volume holding it transit?" has an answer without a
@@ -8777,7 +8793,7 @@ class System:
         }
         if evaluation_order is None:
             return body
-        body["evaluation_order"] = evaluation_order
+        body.update(model_level_keys(evaluation_order))
         # The feature list is derived from the body by the engine, never
         # composed here: it cannot lag what the body holds.
         return seal(body)

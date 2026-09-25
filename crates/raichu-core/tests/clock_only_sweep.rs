@@ -88,6 +88,7 @@ fn clock_model(watched: bool) -> Model {
         connections: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

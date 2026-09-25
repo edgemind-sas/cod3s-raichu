@@ -47,6 +47,7 @@ A complete, minimal model that uses most sections:
 | `indicators` | array of [Indicator](#indicator) | no (default `[]`) | what the engine measures |
 | `targets` | array of [Target](#target) | no (default `[]`) | feared-event states for [sequence analysis](../guides/sequence-analysis.md) |
 | `evaluation_order` | array of VarRef | no (default: declaration order) | sweep order of the explicit equations, see [Evaluation order](#evaluation-order) |
+| `unbounded_rate` | number | no (default: none reserved) | the magnitude that stands for "no ceiling", which no integrated rate may reach, see [Unbounded rate](#unbounded-rate) |
 
 ### Connection
 
@@ -506,6 +507,36 @@ Declared as above, `y` is 6 at every evaluation point. Without the field,
 the positional sweep computes `y` before `x` and it is 1 at the first
 one.
 
+## Unbounded rate
+
+A document has no literal for an infinity, so a model meaning "no
+ceiling" (a volume that puts no limit on the rate it is drawn at, a
+demand that takes whatever comes) writes a finite stand-in instead. As
+the ceiling of a `min` against a finite demand the stand-in is harmless.
+As the **rate of a stock** it is not: where an unbounded demand meets an
+unbounded supply, the stand-in becomes a derivative, and the integrator
+steps the stock far past its bound before any event can be located. A
+volume holding 5 read -9.3e19, and the run ended normally.
+
+`unbounded_rate` declares that magnitude. The engine then refuses any ODE
+right-hand side whose absolute value reaches it, with an error naming
+the integrated variable, the date and the rate, instead of integrating
+it. The physics of such a draw is an instantaneous transfer, which a
+rate cannot express; the modeller bounds one of the two sides (a finite
+fill or serve rate, or a finite demand).
+
+The value must be finite and positive. Absent, nothing is reserved and
+nothing is checked. The `pyraichu.muscadet` layer declares `1e30`, the
+stand-in it writes, on every model with a continuous network. A document
+carrying the field declares the `unbounded_rate` feature:
+
+```json
+{
+  "raichu_model": {"format": 1, "requires": ["unbounded_rate"]},
+  "model": {"name": "drain", "unbounded_rate": 1e30, "components": []}
+}
+```
+
 ## Document format and the feature envelope
 
 A model document comes in one of two shapes.
@@ -567,6 +598,7 @@ sealed document without ever writing the list by hand.
 |---|---|
 | `evaluation_order` | model-level [evaluation order](#evaluation-order) |
 | `allocation` | component-level [allocations](#allocation) |
+| `unbounded_rate` | model-level [unbounded rate](#unbounded-rate) |
 
 The registry names **serialized constructs**, not engine behaviour, so a
 change in how an existing construct is *interpreted* does not add a

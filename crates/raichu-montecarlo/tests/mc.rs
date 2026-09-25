@@ -51,6 +51,7 @@ fn exp_ok_nok(rate: f64) -> Model {
         }],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

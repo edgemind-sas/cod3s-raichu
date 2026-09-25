@@ -648,6 +648,20 @@ something that is not a continuous output of the component, a route that
 loops, taps that could together take more than the stream carries, and a
 receiving output that also produces something of its own.
 
+A volume **beside** the rules that starts with a stock, facing a
+consumer that takes whatever comes (a room with an infinite `fill_rate`),
+is drawn without limit on both sides: the rules draw their whole need
+while the flow is stocked, and the need is unbounded. The physics is an
+instantaneous transfer, the stock moving at once, which a rate cannot
+express. Integrated, the stock read -9.3e19 and the run ended normally;
+the layer now declares the magnitude it writes for "no ceiling" on every
+continuous model (`unbounded_rate`, see the model schema), and the
+engine refuses the rate by name. Bound one of the two sides: a finite
+`fill_rate` on the room, or a finite `serve_rate` on the volume. The
+magnitude is a model-level key like the evaluation order: a document
+that sets a different `unbounded_rate` beside a muscadet section is
+refused rather than resolved, since one model cannot reserve two.
+
 #### The model-level pass
 
 The continuous constructs are not component-local, and that is why they

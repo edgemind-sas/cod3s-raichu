@@ -96,6 +96,7 @@ fn two_component_model() -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -294,6 +295,7 @@ fn demand_model(ok_prob: f64) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

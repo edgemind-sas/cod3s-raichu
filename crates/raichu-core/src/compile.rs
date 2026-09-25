@@ -435,6 +435,11 @@ pub struct CompiledModel {
     pub targets: Vec<CTarget>,
     /// ODE attributes and right-hand sides, declaration order (CEvol).
     pub ode: Vec<(VarIdx, CExpr)>,
+    /// The model's declared unbounded magnitude
+    /// ([`raichu_model::Model::unbounded_rate`]): no ODE right-hand side
+    /// may reach it (`evolC` refuses with
+    /// [`crate::EngineError::UnboundedRate`]). `None`: nothing reserved.
+    pub unbounded_rate: Option<f64>,
     /// The explicit sweep: equations and distribution operators in
     /// evaluation order (run before ODE right-hand sides at every
     /// evaluation point). Positional unless the model declares an
@@ -1399,6 +1404,7 @@ impl CompiledModel {
             indicators,
             targets,
             ode,
+            unbounded_rate: model.unbounded_rate,
             explicit_reads_time: explicit.iter().any(|step| match step {
                 CStep::Equation { expr, .. } => expr.reads_time(),
                 // An allocation distributes a quantity it is handed; it

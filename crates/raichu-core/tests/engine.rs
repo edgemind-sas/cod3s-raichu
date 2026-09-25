@@ -149,6 +149,7 @@ fn delay_model() -> Model {
         ],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -352,6 +353,7 @@ fn instantaneous_loop_is_detected() {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let result = Engine::new(&compiled, EngineConfig::default());
@@ -417,6 +419,7 @@ fn non_confluence_is_diagnosed() {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let config = EngineConfig {
@@ -487,6 +490,7 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
@@ -541,6 +545,7 @@ fn inst_transition_fires_immediately_on_certain_branch() {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     };
     let result = run(&model, 10.0, false);
     let times: Vec<(f64, &str)> = result
@@ -669,6 +674,7 @@ fn tank_model() -> Model {
         ],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -868,6 +874,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -984,6 +991,7 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     };
     let result = run(&model, 30.0, true);
 
@@ -1119,6 +1127,7 @@ fn port_mean_and_median_aggregations() {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();

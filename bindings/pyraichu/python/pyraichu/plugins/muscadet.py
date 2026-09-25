@@ -2158,4 +2158,4 @@ class MuscadetPlugin:
                     f"declare it on what the layer observes"
                 ),
             )
-        return None if order is None else {"evaluation_order": order}
+        return None if order is None else authoring.model_level_keys(order)
