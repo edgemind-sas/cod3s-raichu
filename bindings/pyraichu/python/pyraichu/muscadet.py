@@ -6921,6 +6921,34 @@ class System:
             )
         return params
 
+    def _releasing_inputs(
+        self, in_edges: dict[tuple[str, str], list[_ContinuousEdge]]
+    ) -> set[tuple[str, str]]:
+        """The ``(component, flow)`` inputs that return what they do not
+        need to their suppliers.
+
+        Every supplier of one input is asked the input's whole demand, so
+        together they may offer more than it needs. A **rule** consumes
+        its need and no more, and muscadet's `release_unused_supply`
+        hands the surplus back pro rata of what each supplier offered:
+        without it the input kept everything offered and the difference
+        vanished, a battery beside a bus emptying at twice the rate its
+        electrolyser consumed. Only an input fed by two suppliers or more
+        can be offered too much; one a volume upstream of the rules holds
+        is filled by what arrives instead, and one no rule consumes keeps
+        what it is offered, as muscadet's does."""
+        releasing: set[tuple[str, str]] = set()
+        for (name, flow), feeding in in_edges.items():
+            obj = self.comp.get(name)
+            if obj is None or len(feeding) < 2:
+                continue
+            if not any(flow in rule_set.consumed() for rule_set in obj.rule_sets):
+                continue
+            if any(flow in capacity.flow_names for capacity in obj.capacities):
+                continue
+            releasing.add((name, flow))
+        return releasing
+
     def _emit_continuous_network(
         self, components: list[dict[str, Any]], edges: list[_ContinuousEdge]
     ) -> list[dict[str, str]] | None:
@@ -6952,6 +6980,30 @@ class System:
         for edge in edges:
             out_edges.setdefault((edge.producer, edge.flow_out), []).append(edge)
             in_edges.setdefault((edge.consumer, edge.flow_in), []).append(edge)
+        releasing = self._releasing_inputs(in_edges)
+
+        def held_empty(edge: _ContinuousEdge) -> dict[str, Any] | None:
+            """Whether `edge` leaves a volume that has run out of the flow
+            and so passes on what arrives, as a location of that volume, or
+            ``None`` when the supplier holds no such volume. What `transmits`
+            says does not enter: an empty volume with a way in serves what
+            crosses it either way (:meth:`ObjFlow._capacity_bounded_capability`)."""
+            supplier = self.comp[edge.producer]
+            capacity = supplier._capacity_of(edge.flow_out)
+            if capacity is None or not any(
+                declared.name == edge.flow_out
+                for declared in supplier.flows_continuous_in
+            ):
+                return None
+            return supplier._held_empty(capacity, edge.flow_out)
+
+        def delivered(name: str, port: str, edge: _ContinuousEdge) -> dict[str, Any]:
+            """What `edge` actually hands its consumer: its allocation,
+            less its share of the surplus a releasing input returns."""
+            channel = (
+                "delivered" if (edge.consumer, edge.flow_in) in releasing else "alloc"
+            )
+            return _var(name, _channel_attr(port, channel, edge.name))
 
         for name, obj in self.comp.items():
             component = by_name[name]
@@ -7011,14 +7063,48 @@ class System:
                     {
                         "target": f"{flow.name}_fed_out",
                         "kind": "explicit",
-                        "expr": _sum(
-                            [
-                                _var(name, _channel_attr(port, "alloc", edge.name))
-                                for edge in served
-                            ]
-                        ),
+                        "expr": _sum([delivered(name, port, edge) for edge in served]),
                     }
                 )
+                # Into a releasing input, each edge delivers its
+                # allocation scaled by what the consumer accepts, on a
+                # channel of its own so the consumer can sum it.
+                released = [
+                    edge for edge in served if (edge.consumer, edge.flow_in) in releasing
+                ]
+                if released:
+                    declared_port = next(
+                        declared for declared in component["ports"]
+                        if declared["name"] == port
+                    )
+                    declared_port["channels"].append({"name": "delivered"})
+                for edge in released:
+                    share: dict[str, Any] = _var(
+                        edge.consumer, f"{edge.flow_in}_accepted_share"
+                    )
+                    empty = held_empty(edge)
+                    if empty is not None:
+                        share = {
+                            "op": "if",
+                            "cond": empty,
+                            "then": _var(
+                                edge.consumer, f"{edge.flow_in}_accepted_held_share"
+                            ),
+                            "otherwise": share,
+                        }
+                    component["equations"].append(
+                        {
+                            "target": _channel_attr(port, "delivered", edge.name),
+                            "kind": "explicit",
+                            "expr": {
+                                "op": "mul",
+                                "args": [
+                                    _var(name, _channel_attr(port, "alloc", edge.name)),
+                                    share,
+                                ],
+                            },
+                        }
+                    )
 
                 # An output nobody reads distributes nothing: no
                 # operator, and the two totals above stand at zero.
@@ -7054,9 +7140,89 @@ class System:
             for flow in obj.flows_continuous_in:
                 port_ref = {"component": name, "port": f"{flow.name}_in"}
                 connected = bool(in_edges.get((name, flow.name)))
+                releases = (name, flow.name) in releasing
+                if releases:
+                    # The share of what was offered the rule accepts: its
+                    # need over the offers when they exceed it, all of it
+                    # otherwise. Never a division by zero: a ratio is only
+                    # taken where the offers exceed a need >= 0.
+                    #
+                    # A transiting volume that has RUN OUT passes on what
+                    # arrives first, and the other suppliers share what is
+                    # left. Scaled with them, it would hand on less than
+                    # it receives, refill, leave its empty bound, offer
+                    # its whole request, drain, and chatter on the bound
+                    # for as long as the rule runs: the reference has the
+                    # same dynamic, hidden by its fixed step. Passing on
+                    # what arrives is that sliding motion's own average,
+                    # the content held at zero.
+                    offered = {
+                        "op": "port_agg",
+                        "port": port_ref,
+                        "agg": "sum",
+                        "channel": "alloc",
+                    }
+                    need = _var(name, f"{flow.name}_demand_in")
+                    held = [
+                        {
+                            "op": "if",
+                            "cond": empty,
+                            "then": _var(
+                                edge.producer,
+                                _channel_attr(f"{edge.flow_out}_out", "alloc", edge.name),
+                            ),
+                            "otherwise": _float(0.0),
+                        }
+                        for edge in in_edges[(name, flow.name)]
+                        for empty in [held_empty(edge)]
+                        if empty is not None
+                    ]
+
+                    def ratio(wanted, available):
+                        return {
+                            "op": "if",
+                            "cond": {"op": "cmp", "cmp": "gt", "lhs": available, "rhs": wanted},
+                            "then": {"op": "div", "lhs": wanted, "rhs": available},
+                            "otherwise": _float(1.0),
+                        }
+
+                    if held:
+                        passed = _var(name, f"{flow.name}_accepted_held")
+                        component["attributes"].append(
+                            _float_attribute(f"{flow.name}_accepted_held", 0.0)
+                        )
+                        component["attributes"].append(
+                            _float_attribute(f"{flow.name}_accepted_held_share", 1.0)
+                        )
+                        component["equations"] += [
+                            {
+                                "target": f"{flow.name}_accepted_held",
+                                "kind": "explicit",
+                                "expr": _sum(held),
+                            },
+                            {
+                                "target": f"{flow.name}_accepted_held_share",
+                                "kind": "explicit",
+                                "expr": ratio(need, passed),
+                            },
+                        ]
+                        # What the other suppliers are left to cover, and
+                        # what they offered.
+                        need = _clamped_at_zero({"op": "sub", "lhs": need, "rhs": passed})
+                        offered = {"op": "sub", "lhs": offered, "rhs": passed}
+                    component["attributes"].append(
+                        _float_attribute(f"{flow.name}_accepted_share", 1.0)
+                    )
+                    component["equations"].append(
+                        {
+                            "target": f"{flow.name}_accepted_share",
+                            "kind": "explicit",
+                            "expr": ratio(need, offered),
+                        }
+                    )
                 for channel, target in (
                     ("capability", f"{flow.name}_capability_in"),
-                    ("alloc", f"{flow.name}_fed_in"),
+                    ("delivered" if releases else "alloc", f"{flow.name}_fed_in"),
                 ):
                     component["equations"].append(
                         {
@@ -7077,7 +7243,7 @@ class System:
                         }
                     )
 
-        return self._evaluation_order(components, out_edges, in_edges)
+        return self._evaluation_order(components, out_edges, in_edges, releasing)
 
     def _flow_order(
         self, edges: dict[tuple[str, str], list[_ContinuousEdge]]
@@ -7139,6 +7305,7 @@ class System:
         components: list[dict[str, Any]],
         out_edges: dict[tuple[str, str], list[_ContinuousEdge]],
         in_edges: dict[tuple[str, str], list[_ContinuousEdge]],
+        releasing: set[tuple[str, str]],
     ) -> list[dict[str, str]]:
         """The three-band sweep order: capability along the flow, demand
         back against it, production along it again.
@@ -7271,7 +7438,34 @@ class System:
                 step(producer, f"{rule_set.name}_scale")
         unconnected_inputs("demand_in")
 
-        # 3. Production, along the flow again.
+        # 3. Production, along the flow again. What a releasing input
+        # accepts reads the offers of ALL its suppliers, and a later
+        # supplier may be reached after an earlier one's own delivery
+        # (a battery fed by the bus beside it), so that share, the
+        # deliveries it scales and the totals summing them are swept at
+        # the end of the band. Nothing else in the band reads them.
+        deferred: list[tuple[str, dict[str, Any], list[_ContinuousEdge]]] = []
+
+        def fed(edge: _ContinuousEdge) -> None:
+            """What one consumer was fed, with its published rate when
+            declared."""
+            step(edge.consumer, f"{edge.flow_in}_fed_in")
+            if any(
+                declared.name == edge.flow_in
+                and declared.publish_rate == RATE_DELIVERED
+                for declared in self.comp[edge.consumer].flows_continuous_in
+            ):
+                step(edge.consumer, _rate_alias(edge.flow_in))
+
+        def delivery(producer: str, flow, served: list[_ContinuousEdge]) -> None:
+            """What an output delivered, then what each consumer it
+            serves was fed."""
+            step(producer, f"{flow.name}_fed_out")
+            if flow.publish_rate == RATE_DELIVERED:
+                step(producer, _rate_alias(flow.name))
+            for edge in served:
+                fed(edge)
+
         for producer in topological:
             # What the rules draw from a volume upstream of them reads
             # what arrived, settled by the producers visited before this
@@ -7294,27 +7488,60 @@ class System:
                     step(producer, f"{flow.name}_produced_out")
                 if served:
                     step(producer, f"{flow.name}_alloc")
-                step(producer, f"{flow.name}_fed_out")
-                if flow.publish_rate == RATE_DELIVERED:
-                    step(producer, _rate_alias(flow.name))
-                for edge in served:
-                    step(edge.consumer, f"{edge.flow_in}_fed_in")
-                    published = next(
-                        (
-                            declared
-                            for declared in self.comp[edge.consumer].flows_continuous_in
-                            if declared.name == edge.flow_in
-                            and declared.publish_rate == RATE_DELIVERED
-                        ),
-                        None,
-                    )
-                    if published is not None:
-                        step(edge.consumer, _rate_alias(edge.flow_in))
+                if any((edge.consumer, edge.flow_in) in releasing for edge in served):
+                    # Only what the release scales waits: every OTHER
+                    # consumer of this output reads its plain allocation,
+                    # settled now, and is swept here, before its own
+                    # visit reads what arrived.
+                    for edge in served:
+                        if (edge.consumer, edge.flow_in) not in releasing:
+                            fed(edge)
+                    deferred.append((producer, flow, served))
+                    continue
+                delivery(producer, flow, served)
             # What a conduit moved is what its flow delivered, so it is
             # read once that delivery is settled.
+            waiting = {flow.name for owner, flow, _ in deferred if owner == producer}
             for pair in self.comp[producer].transfers:
-                if pair.is_conduit:
+                if pair.is_conduit and pair.source not in waiting:
                     step(producer, f"{pair.name}_moved")
+        # Every offer is settled now: what each releasing input accepts,
+        # then what each of its suppliers delivered, and the totals.
+        position = {name: index for index, name in enumerate(self.comp)}
+        for name, flow_name in sorted(
+            releasing, key=lambda key: (position[key[0]], key[1])
+        ):
+            for attribute in (
+                f"{flow_name}_accepted_held",
+                f"{flow_name}_accepted_held_share",
+            ):
+                if any(
+                    equation["target"] == attribute
+                    for component in components
+                    if component["name"] == name
+                    for equation in component["equations"]
+                ):
+                    step(name, attribute)
+            step(name, f"{flow_name}_accepted_share")
+        # Every delivery and every supplier's total first, and only then
+        # what each releasing input was fed: an input sums the deliveries
+        # of ALL its suppliers, so reading it after the first one would
+        # take the others from the previous evaluation.
+        for producer, flow, served in deferred:
+            port = f"{flow.name}_out"
+            for edge in served:
+                if (edge.consumer, edge.flow_in) in releasing:
+                    step(producer, _channel_attr(port, "delivered", edge.name))
+            step(producer, f"{flow.name}_fed_out")
+            if flow.publish_rate == RATE_DELIVERED:
+                step(producer, _rate_alias(flow.name))
+            # What a conduit moved is what its flow delivered.
+            for pair in self.comp[producer].transfers:
+                if pair.is_conduit and pair.source == flow.name:
+                    step(producer, f"{pair.name}_moved")
+        for producer, flow, served in deferred:
+            for edge in served:
+                fed(edge)
         unconnected_inputs("fed_in")
 
         # The order must cover the declared steps exactly, and the

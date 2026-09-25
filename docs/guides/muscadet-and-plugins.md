@@ -309,6 +309,22 @@ declared equation on either side. A stream a two-stream transfer pair sits
 on is not a pass-through here yet: muscadet transfers it too, and this
 layer keeps the stream's declared rate as the base the pair adjusts.
 
+#### Several suppliers of one rule input
+
+Every supplier of one input is asked the input's whole demand, so
+together they may offer more than a rule needs. The rule consumes its
+need and no more: the surplus goes back to the suppliers **pro rata of
+what each offered**, as muscadet's `release_unused_supply` does. Offered
+17.63 and 20 for a need of 20, the two suppliers deliver 9.37 and 10.63,
+and a battery beside a bus is drawn by its share rather than by all it
+offered. A supplying volume that has **run out** passes on what arrives
+first and the other suppliers share the rest: scaled with them it would
+hand on less than it receives, refill, leave its empty bound and chatter
+on it, and passing on what arrives is that motion's own average, the
+content held at zero. An input a volume upstream of the rules holds is
+filled by what arrives instead, and an input no rule consumes keeps
+everything it is offered, as it does in muscadet.
+
 #### A volume beside the rules: `side`
 
 One component may hold a volume **and** transform flows, the volume on
