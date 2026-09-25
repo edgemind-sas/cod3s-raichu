@@ -39,6 +39,18 @@ pub trait OdeSystem {
     /// Evaluate the boundary margins at `(t, y)` into `out`.
     /// Event `i` fires when `out[i]` becomes ≥ 0.
     fn events(&mut self, t: f64, y: &[f64], out: &mut [f64]);
+    /// Number of **observed verdicts**: booleans whose flips are located
+    /// like events, to the event tolerance, but never end the integration.
+    /// An observation reads the trajectory and must not move it, so the
+    /// solver takes exactly the steps it would take without it.
+    fn n_observations(&self) -> usize {
+        0
+    }
+    /// Evaluate the observed verdicts at `(t, y)` into `out`.
+    fn observations(&mut self, _t: f64, _y: &[f64], _out: &mut [bool]) {}
+    /// Verdict `index` flipped at `t` (located within `tol_event`) and now
+    /// reads `now`. Called in time order within an integration.
+    fn observed(&mut self, _index: usize, _t: f64, _now: bool) {}
 }
 
 /// Why an integration segment ended.
@@ -316,6 +328,69 @@ fn locate_event(
     None
 }
 
+/// Locate every flip of the observed verdicts over `[t_lo, t_hi]` on the
+/// step's dense output and report them to the system in time order.
+///
+/// The same scan as [`locate_event`] (`sub_samples` points, then a
+/// bisection down to `tol_event`), with two differences that make it an
+/// observation rather than an event: a flip in **either** direction counts,
+/// and none of them ends the step. `v_lo` holds the verdicts at `t_lo` on
+/// entry and at `t_hi` on return, so consecutive steps chain.
+#[allow(clippy::too_many_arguments)] // internal kernel shared by both backends
+fn observe_interval(
+    system: &mut dyn OdeSystem,
+    dense: &mut dyn FnMut(f64, &mut [f64]),
+    v_lo: &mut [bool],
+    t_lo: f64,
+    t_hi: f64,
+    sub_samples: usize,
+    tol_event: f64,
+    y_scratch: &mut [f64],
+) {
+    let n = v_lo.len();
+    if n == 0 || t_hi <= t_lo {
+        return;
+    }
+    let mut at_point = vec![false; n];
+    let mut probe = vec![false; n];
+    let mut flips: Vec<(f64, usize, bool)> = Vec::new();
+    let points = sub_samples.max(1);
+    let mut prev_t = t_lo;
+    for p in 1..=points {
+        let t = if p == points {
+            t_hi
+        } else {
+            t_lo + (t_hi - t_lo) * (p as f64) / (points as f64)
+        };
+        dense(t, y_scratch);
+        system.observations(t, y_scratch, &mut at_point);
+        for index in 0..n {
+            if at_point[index] == v_lo[index] {
+                continue;
+            }
+            let before = v_lo[index];
+            let (mut lo, mut hi) = (prev_t, t);
+            while hi - lo > tol_event {
+                let mid = 0.5 * (lo + hi);
+                dense(mid, y_scratch);
+                system.observations(mid, y_scratch, &mut probe);
+                if probe[index] == before {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            flips.push((hi, index, at_point[index]));
+        }
+        v_lo.copy_from_slice(&at_point);
+        prev_t = t;
+    }
+    flips.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    for (t, index, now) in flips {
+        system.observed(index, t, now);
+    }
+}
+
 /// After a step is committed, re-establish [`locate_event`]'s precondition
 /// from the fresh margin vector `g_hi` (evaluated by the caller at the
 /// committed step's endpoint solution `y_hi`, not the interpolant
@@ -374,6 +449,10 @@ impl OdeSolver for DormandPrince45 {
             if let Some(index) = first_satisfied(&g0) {
                 return Ok(Outcome::Event { index, t: t0 });
             }
+        }
+        let mut v0 = vec![false; system.n_observations()];
+        if !v0.is_empty() {
+            system.observations(t0, y, &mut v0);
         }
         if t_end <= t0 {
             return Ok(Outcome::Reached { t: t_end });
@@ -510,6 +589,16 @@ impl OdeSolver for DormandPrince45 {
                     &mut y_scratch,
                     &mut g1,
                 ) {
+                    observe_interval(
+                        system,
+                        &mut dense_eval,
+                        &mut v0,
+                        t,
+                        t_event,
+                        p.sub_samples,
+                        p.tol_event,
+                        &mut y_scratch,
+                    );
                     // Deliver samples strictly before the event.
                     while sample_cursor < samples.len() && samples[sample_cursor] < t_event {
                         let ts = samples[sample_cursor];
@@ -521,6 +610,16 @@ impl OdeSolver for DormandPrince45 {
                     y.copy_from_slice(&y_scratch);
                     return Ok(Outcome::Event { index, t: t_event });
                 }
+                observe_interval(
+                    system,
+                    &mut dense_eval,
+                    &mut v0,
+                    t,
+                    t + h,
+                    p.sub_samples,
+                    p.tol_event,
+                    &mut y_scratch,
+                );
                 system.events(t + h, &y_new, &mut g0);
                 if let Some(outcome) = reestablish_precondition(
                     &g0,
@@ -535,6 +634,18 @@ impl OdeSolver for DormandPrince45 {
                 ) {
                     return Ok(outcome);
                 }
+            } else {
+                let mut dense_eval = |tt: f64, out: &mut [f64]| dense.eval(tt, out);
+                observe_interval(
+                    system,
+                    &mut dense_eval,
+                    &mut v0,
+                    t,
+                    t + h,
+                    p.sub_samples,
+                    p.tol_event,
+                    &mut y_scratch,
+                );
             }
 
             // Deliver samples inside the accepted step.
@@ -606,6 +717,10 @@ impl OdeSolver for FixedEuler {
                 return Ok(Outcome::Event { index, t: t0 });
             }
         }
+        let mut v0 = vec![false; system.n_observations()];
+        if !v0.is_empty() {
+            system.observations(t0, y, &mut v0);
+        }
         let mut t = t0;
         let mut dydt = vec![0.0; dim];
         let mut y_new = vec![0.0; dim];
@@ -640,6 +755,16 @@ impl OdeSolver for FixedEuler {
                     &mut y_scratch,
                     &mut g1,
                 ) {
+                    observe_interval(
+                        system,
+                        &mut linear,
+                        &mut v0,
+                        t,
+                        t_event,
+                        4,
+                        self.tol_event,
+                        &mut y_scratch,
+                    );
                     while sample_cursor < samples.len() && samples[sample_cursor] < t_event {
                         let ts = samples[sample_cursor];
                         linear(ts, &mut y_scratch);
@@ -650,6 +775,16 @@ impl OdeSolver for FixedEuler {
                     y.copy_from_slice(&y_scratch);
                     return Ok(Outcome::Event { index, t: t_event });
                 }
+                observe_interval(
+                    system,
+                    &mut linear,
+                    &mut v0,
+                    t,
+                    t + h,
+                    4,
+                    self.tol_event,
+                    &mut y_scratch,
+                );
                 system.events(t + h, &y_new, &mut g0);
                 // Re-establishing the scan's precondition here is exactly
                 // what the adaptive backend does (see
@@ -667,6 +802,17 @@ impl OdeSolver for FixedEuler {
                 ) {
                     return Ok(outcome);
                 }
+            } else {
+                observe_interval(
+                    system,
+                    &mut linear,
+                    &mut v0,
+                    t,
+                    t + h,
+                    4,
+                    self.tol_event,
+                    &mut y_scratch,
+                );
             }
             while sample_cursor < samples.len() && samples[sample_cursor] <= t + h {
                 let ts = samples[sample_cursor];
