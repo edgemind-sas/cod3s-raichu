@@ -131,6 +131,7 @@ fn independent_branches(n: usize, active: usize) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -203,6 +204,7 @@ fn shared_boundary(n: usize) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -332,6 +334,7 @@ fn a_scan_over_an_unmoving_network_costs_one_cold_pass() {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     };
     let work = run(&model, 20.0).work;
     assert_eq!(

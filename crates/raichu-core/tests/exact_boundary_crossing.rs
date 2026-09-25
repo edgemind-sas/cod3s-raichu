@@ -84,6 +84,7 @@ fn ramp_model(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Model {
         indicators: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

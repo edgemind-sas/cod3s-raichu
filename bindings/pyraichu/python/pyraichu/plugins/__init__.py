@@ -80,7 +80,7 @@ PLUGINS: dict[str, Plugin] = {}
 #: ``expand_object`` return. They are model-wide properties, so two
 #: plugins setting the same one is a contradiction, refused rather than
 #: resolved by declaration order.
-MODEL_LEVEL_KEYS = frozenset({"evaluation_order"})
+MODEL_LEVEL_KEYS = frozenset({"evaluation_order", "unbounded_rate"})
 
 
 def expand_model(model: dict[str, Any]) -> dict[str, Any]:

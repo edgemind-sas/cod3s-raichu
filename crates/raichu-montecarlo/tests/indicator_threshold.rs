@@ -97,6 +97,7 @@ fn tank(indicators: Vec<Indicator>) -> Model {
         connections: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -374,6 +375,7 @@ fn draining(initial: f64) -> Model {
         connections: vec![],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

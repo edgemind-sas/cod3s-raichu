@@ -4471,7 +4471,7 @@ def build_document(
 
     if order is None:
         return body
-    body["evaluation_order"] = order
+    body.update(authoring.model_level_keys(order))
     # Sealed the way `build_dict` seals: the required-feature list is derived
     # from the body, never composed, so it cannot lag what the body holds.
     return seal(body)

@@ -21,6 +21,7 @@ of ten, and a consumer asking for one.
 
 import math
 
+import pyraichu
 import pyraichu.muscadet as mu
 import pytest
 from conftest import CROSSING_TOL, sampled
@@ -427,3 +428,67 @@ def test_a_dead_end_vent_stocks_its_leak():
         )
         assert close(sampled(result, "MV_membrane_content_H2_membrane_leak", instant), 0.0)
         assert close(sampled(result, "SINK_H2_H2_leak_fed_in", instant), 0.7)
+
+
+def _stocked_membrane(stock: float, room_fill: float) -> mu.System:
+    """A membrane holding `stock` beside the rules that pass it on, into a
+    room whose `fill_rate` sets what it asks: the H2 showcase's membrane
+    and room, reduced."""
+
+    class Source(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_out(name="H2m", var_fed_default=0.01)
+
+    class Membrane(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="H2m")
+            self.add_flow_continuous_out(name="H2")
+            self.add_capacity(
+                name="membrane",
+                flows=[{"name": "H2m", "weight": 1.0}],
+                capacity=100.0,
+                content_init={"H2m": stock},
+                fill_rate=math.inf,
+                side="in",
+            )
+            self.add_rule_set(name="release", rules=[{"cons": {"H2m": 1.0}, "prod": {"H2": 1.0}}])
+
+    class Room(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="H2")
+            self.add_capacity(
+                name="room", flow="H2", capacity=100.0, content_init={"H2": 2.0}, fill_rate=room_fill
+            )
+
+    system = mu.System("stocked_membrane")
+    system.add_component(Source, "SRC")
+    system.add_component(Membrane, "MEM")
+    system.add_component(Room, "ROOM")
+    system.connect("SRC", "H2m", "MEM", "H2m")
+    system.connect("MEM", "H2", "ROOM", "H2")
+    return system
+
+
+def test_an_unbounded_draw_on_a_stocked_volume_is_refused_by_name():
+    """A room taking whatever comes, a membrane putting no ceiling on what
+    it serves while it holds something: the draw is unbounded on both
+    sides, and its physics is an instantaneous transfer that no rate
+    expresses. Integrated, the membrane read -9.3e19 and the run exited
+    cleanly; the layer now reserves the magnitude it writes for "no
+    ceiling", and the engine refuses the rate by name."""
+    document = _stocked_membrane(stock=5.0, room_fill=math.inf).build_dict()
+    assert document["model"]["unbounded_rate"] == mu.UNBOUNDED_SERVICE
+    assert "unbounded_rate" in document[pyraichu.MODEL_ENVELOPE_KEY]["requires"]
+    with pytest.raises(pyraichu.SimulationError, match=r"MEM\.membrane_content_H2m.*unbounded"):
+        _stocked_membrane(stock=5.0, room_fill=math.inf).simulate(t_max=1.0, samples=[1.0])
+
+
+@pytest.mark.parametrize(
+    "stock,room_fill,membrane",
+    # An empty membrane passes on what arrives; a bounded room drains a
+    # stocked one at its own rate: 5 - 1 + 0.01 after one hour.
+    [(0.0, math.inf, 0.0), (5.0, 1.0, 4.01)],
+)
+def test_a_bounded_side_of_the_draw_integrates_as_before(stock, room_fill, membrane):
+    result = _stocked_membrane(stock=stock, room_fill=room_fill).simulate(t_max=1.0, samples=[1.0])
+    assert abs(sampled(result, "MEM_membrane_content_H2m", 1.0) - membrane) < 1e-9

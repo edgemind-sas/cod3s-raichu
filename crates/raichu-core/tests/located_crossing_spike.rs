@@ -145,6 +145,7 @@ fn same_component_model() -> Model {
         }],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 
@@ -234,6 +235,7 @@ fn across_connection_model() -> Model {
         }],
         targets: vec![],
         evaluation_order: None,
+        unbounded_rate: None,
     }
 }
 

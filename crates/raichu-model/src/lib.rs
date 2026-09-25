@@ -629,11 +629,20 @@ pub enum Feature {
     /// leave every allocated quantity at its channel default, and report
     /// a network that delivers nothing without a word.
     Allocation,
+    /// Model-level [`Model::unbounded_rate`]: the magnitude an authoring
+    /// layer writes for "no ceiling", which no integrated rate may reach.
+    /// An engine that ignored the field would integrate that magnitude as
+    /// a rate and report a stock of -1e19 without a word.
+    UnboundedRate,
 }
 
 impl Feature {
     /// Every feature this engine implements, in declaration order.
-    pub const ALL: &'static [Feature] = &[Feature::EvaluationOrder, Feature::Allocation];
+    pub const ALL: &'static [Feature] = &[
+        Feature::EvaluationOrder,
+        Feature::Allocation,
+        Feature::UnboundedRate,
+    ];
 
     /// Serialized name of the feature.
     #[must_use]
@@ -641,6 +650,7 @@ impl Feature {
         match self {
             Feature::EvaluationOrder => "evaluation_order",
             Feature::Allocation => "allocation",
+            Feature::UnboundedRate => "unbounded_rate",
         }
     }
 
@@ -817,6 +827,30 @@ pub struct Model {
     /// [`Feature::EvaluationOrder`] in its [`FormatHeader`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_order: Option<Vec<AttrRef>>,
+    /// **Declared unbounded magnitude**: the value an authoring layer
+    /// writes where it means "no ceiling" (a volume that puts no limit on
+    /// the rate it is drawn at, a demand that takes whatever comes). A
+    /// document has no literal for an infinity, so such a quantity
+    /// crosses it as a finite stand-in, harmless as the ceiling of a
+    /// `min` against a finite demand.
+    ///
+    /// It is NOT harmless as a rate. Where an unbounded demand meets an
+    /// unbounded ceiling, the stand-in becomes the derivative of a
+    /// stock, and the integrator steps it over the stock's empty bound
+    /// before any event can be located: a volume of 5 read -9.3e19. The
+    /// physics is an impulse (the stock moves at once), which a rate
+    /// cannot express. Declared here, the engine refuses any ODE
+    /// right-hand side whose magnitude reaches this value, with a typed
+    /// error naming the variable and the date, instead of integrating it.
+    ///
+    /// Absent (the default), no magnitude is reserved and nothing is
+    /// checked. Present, it must be finite and positive
+    /// ([`ModelError::UnboundedRateInvalid`]).
+    ///
+    /// Non-baseline construct: a document carrying it must declare
+    /// [`Feature::UnboundedRate`] in its [`FormatHeader`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unbounded_rate: Option<f64>,
 }
 
 /// Typed model-validation errors. Every invalid model is reported with a
@@ -1422,6 +1456,15 @@ pub enum ModelError {
         /// The doubly-used step name.
         name: String,
     },
+    /// The declared unbounded magnitude is not a finite positive number.
+    #[error(
+        "the declared unbounded rate is {value}: it must be finite and \
+         positive, the magnitude no integrated rate may reach"
+    )]
+    UnboundedRateInvalid {
+        /// The declared value.
+        value: f64,
+    },
     /// A distribution operator does not sit on an out port of its
     /// component.
     #[error(
@@ -1723,6 +1766,9 @@ impl Model {
         if self.evaluation_order.is_some() {
             features.insert(Feature::EvaluationOrder);
         }
+        if self.unbounded_rate.is_some() {
+            features.insert(Feature::UnboundedRate);
+        }
         if self
             .components
             .iter()
@@ -1796,6 +1842,11 @@ impl Model {
         self.check_priority_surplus_return(&scopes)?;
         self.check_evaluation_order()?;
         self.check_indicators(&scopes)?;
+        if let Some(value) = self.unbounded_rate {
+            if !(value.is_finite() && value > 0.0) {
+                return Err(ModelError::UnboundedRateInvalid { value });
+            }
+        }
         Ok(())
     }
 
