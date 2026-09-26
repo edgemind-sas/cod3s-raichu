@@ -27,6 +27,7 @@
 
 pub mod compile;
 pub mod engine;
+pub mod fault_tree;
 pub mod flow;
 pub mod loops;
 pub mod raw_sequences;
@@ -38,6 +39,9 @@ pub use engine::{
     Fireable, FireableKind, FlowConfig, FlowStall, HazardSample, IndicatorSeries, JournalRecord,
     ProbeStop, Provenance, SeqEvent, Sequence, SimulationResult, Snapshot, StochasticDates,
     WorkCounters,
+};
+pub use fault_tree::{
+    fault_tree, BasicLaw, FaultTree, FaultTreeError, FaultTreeSettings, FtNode, GateOp, TreeEvent,
 };
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
 pub use loops::{switching_loops, SwitchingLoop};

@@ -1085,6 +1085,18 @@ pub struct SimulationResult {
     pub final_time: f64,
 }
 
+/// Evaluate a compiled expression with every attribute frozen at `vars`
+/// and every automaton in `states`, at time zero: what the fault-tree
+/// generator reads a guard, a rate or a boundary as.
+pub(crate) fn eval_frozen(
+    model: &CompiledModel,
+    vars: &[Value],
+    states: &[StateIdx],
+    expr: &CExpr,
+) -> Result<Value, EngineError> {
+    eval_expr(model, vars, states, 0.0, expr)
+}
+
 /// Evaluate a compiled expression against an explicit state (usable
 /// both by the engine and by the continuous-system adapter).
 fn eval_expr(
