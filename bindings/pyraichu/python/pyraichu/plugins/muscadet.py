@@ -1085,21 +1085,18 @@ def _prod_cond_carried_modes(condition: Any) -> tuple[str, ...]:
 
 
 #: Keys a ``flows_out`` entry may carry that this section builds nothing from,
-#: each with what to write instead. The muscadet-facing route already gives all
-#: three exactly this treatment (`pyraichu.declare`, ``_DISCRETE_OUT_INERT``):
+#: each with what to write instead. The muscadet-facing route already gives both
+#: exactly this treatment (`pyraichu.declare`, ``_DISCRETE_OUT_INERT``):
 #: inert at the value that declares nothing, refused above it. Dropped instead,
 #: each costs the same class of wrong answer the inner mode does, a condition
 #: running unnegated or uncompared, or an output delivering the opposite of what
 #: it says.
 #:
-#: The guidance differs per key and is not interchangeable. The two matrices are
-#: the same negation and comparison the operand carries INLINE, so they have a
-#: spelling here to be redirected to. ``negate`` is not of that family at all:
-#: muscadet defines it as negating the flow OUTPUT itself (`muscadet/flow.py`,
-#: "Indicates if the flow output is negated"), which this layer carries on
-#: neither route, so it is refused with no substitute to offer. Telling its
-#: author to move it onto an operand would send them to a key that means
-#: something else.
+#: The two matrices are the same negation and comparison the operand carries
+#: INLINE, so they have a spelling here to be redirected to. ``negate`` is not of
+#: that family: muscadet defines it as negating the flow OUTPUT itself, and a
+#: plain output carries it (:meth:`~pyraichu.muscadet.ObjFlow.add_flow_out`); a
+#: temporised or triggered one does not, and refuses it below.
 _PROD_COND_UNBUILT_KEYS: tuple[tuple[str, str], ...] = (
     (
         "var_prod_cond_negate",
@@ -1112,13 +1109,6 @@ _PROD_COND_UNBUILT_KEYS: tuple[tuple[str, str], ...] = (
         "it is the operand comparison written as a matrix beside the "
         "condition; write it on the operand instead, which both routes carry: "
         "{'name': 'f', 'op': '>', 'value': 0}",
-    ),
-    (
-        "negate",
-        "it negates the flow OUTPUT rather than anything in the condition, and "
-        "this layer carries that on no route, so there is no spelling to move "
-        "it to. Declare the inversion where the value is produced, or state "
-        "the condition that holds when the output should feed",
     ),
 )
 
@@ -1134,6 +1124,13 @@ def _refuse_an_unbuilt_prod_cond_key(obj: authoring.ObjFlow, flow: dict) -> None
     see :func:`_prod_cond_inner_mode`.
     """
     where = f"ObjFlow `{obj.name}`: `flows_out` entry {flow.get('name')!r}"
+    if flow.get("negate") and ("tempo" in flow or "trigger" in flow):
+        raise ValueError(
+            f"{where} declares `negate`=True on a "
+            f"{'temporised' if 'tempo' in flow else 'triggered'} output, whose "
+            "delivery is an automaton's state: a plain output carries the "
+            "negation, this one does not"
+        )
     for key, guidance in _PROD_COND_UNBUILT_KEYS:
         if not flow.get(key):
             continue
@@ -1231,6 +1228,7 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 var_prod_cond=flow.get("var_prod_cond"),
                 var_prod_cond_inner_mode=_prod_cond_inner_mode(flow),
                 var_is_active_default=flow.get("var_is_active_default"),
+                negate=bool(flow.get("negate", False)),
                 **gate,
             )
 

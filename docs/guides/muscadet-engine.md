@@ -218,6 +218,16 @@ test written on one proves nothing about the reading it got. That is why
 `python/tests/unit/test_prod_cond_inner_mode.py` opposes the two on a
 multi-clause condition, and runs it.
 
+**`negate` on an output** is muscadet's `FlowOut.negate`: the output
+publishes `not (production and active and available)`, the inverter of a logic
+chain. It is carried on a plain output and refused by name on a temporised or
+triggered one, whose delivery is an automaton's state. One consequence is
+worth knowing: a negated output can publish `fed` while its own availability
+is false, which no other output does, so an input a negated output feeds reads
+the availability channel beside the feed, aggregated under the input's own
+logic, exactly as muscadet computes every input. Every other input keeps the
+feed channel alone, and builds the expression it always built.
+
 ## An operand that says more than a flow name
 
 A production condition is groups of operands, and an operand is either a bare
@@ -807,3 +817,93 @@ The consequences, stated so nobody looks for the old path:
   one covering the route that survives: one muscadet model, both engines, a
   live PyCATSHOO oracle rather than a recorded trajectory. See
   [Cross-validation](../benchmarks/cross-validation.md).
+
+## Replaying muscadet's own examples on both engines
+
+Everything above is measured model by model, on questions chosen because
+each one was worth asking. That leaves a gap it cannot close by itself: the
+models it asks them of are the ones someone thought to write down. muscadet
+ships a corpus of its own under `examples/`, and those are the models that
+define what the framework means, so a bench enumerates them rather than
+naming them one by one.
+
+That bench lives in this project's cross-validation harness, which needs a
+PyCATSHOO installation to run and is not part of the distribution. What it
+found is below; how it is wired is an internal matter, and the numbers are
+the part that is useful here.
+
+Seventeen models at muscadet 5.6.0. Each leaves a run in exactly one of four
+states, and a model in none of them fails the bench, which is the rule that
+stops one from quietly ceasing to be measured.
+
+| State | How many | What it means |
+|---|---|---|
+| green | 10 | both engines answered, and agree |
+| refused | 4 | an engine, or the example itself, declined to go on |
+| drawn | 3 | the numbers come from a draw, so no byte comparison can hold |
+| disagreeing | 0 | both ran, and answered differently |
+
+The version floor is refused rather than degraded. Below muscadet 5.6.0 the
+corpus is a different corpus, and a bench that quietly measures less than it
+claims is worse than one that does not run.
+
+### What the four states are declared in
+
+A manifest holds what each model is: how it hands over its system, which
+comparison regime its laws put it in, whether a closed form can witness it.
+That is declared rather than derived at run time, because a derived
+classification reclassifies a model the day muscadet edits it and then
+reports the reclassification as a disagreement between engines.
+
+Every declared entry is **launched**, never skipped. A refusal that has
+silently changed its message, or stopped happening, is a fact about the
+engine's reach that only a launch can notice; a table read as a skip-list
+would hide exactly the day a gap closed.
+
+### Reaching a model that was never written to hand one over
+
+Nine of the seventeen construct a system and run it in the same gesture at
+module scope. The driver takes the system mid-sentence, through three
+interceptions rather than one, and the second is the one that decides
+whether the import survives at all: eight of those nine build an indicator
+figure on the line after their run, and that call concatenates indicator
+values that stay empty until the run's post-processing fills them. Patching
+the figure's write and display calls does not reach it, because the call
+that raises is the one that builds the figure.
+
+The third interception widens the indicator declaration to ask the reference
+engine for a per-instant dispersion. The examples declare `stats=["mean"]`
+and the restitution mask is derived from that list when the simulation is
+prepared, so it cannot be asked for afterwards.
+
+The other eight expose a build entry point and declare no indicator at all,
+so the bench supplies what to watch: every `*_fed_in` and `*_fed_out`
+variable, which is what every model that does declare indicators chose to
+watch.
+
+### Which instants are compared, and which are not
+
+A factory model is sampled at half-integer offsets over a horizon the
+manifest names. Every transition date in this corpus is a whole number, so a
+half-integer grid cannot land on one.
+
+That matters because the reference engine observes the state **before** the
+transitions due at an instant are resolved, and RAICHU observes it after;
+muscadet's conformance registry declares that convention against the
+reference engine. A sample posted on a transition date measures that
+registered divergence and not parity. Measured on `rbd_04`: of its thousand
+sampled instants exactly one diverged, the horizon itself, where two
+components swap states. Dropping it takes the model to zero.
+
+### Two engines agreeing is not two engines being right
+
+A mistake both make together passes every comparison the bench can run. So
+where the answer can be worked out, it is written down and each engine is
+checked against it separately. Two such forms exist today, deliberately
+fewer than the models that could carry one, and a test pins that gap so it
+cannot drift shut unnoticed.
+
+One of them is bounded to the window its model's docstring actually states.
+The first version of it ran past that last date and failed against **both**
+engines at once: they agreed with each other, and the witness was the thing
+that was wrong. That is what a closed form is for.
