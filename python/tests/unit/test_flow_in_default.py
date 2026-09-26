@@ -324,7 +324,8 @@ def test_the_availability_default_is_accepted_only_where_it_says_nothing():
       `fed` entails `available` per producer, and `all`, `any` and
       `sum >= k` are monotone: the second factor cannot change a verdict
       the first has given. The one construction that would break the
-      implication is a NEGATED output, which this layer refuses.
+      implication is a NEGATED output, and an input a negated output feeds
+      reads the availability channel as well.
 
     So `False` would say something this layer cannot honour, and it is
     refused by name rather than dropped."""
@@ -350,20 +351,15 @@ def test_the_availability_default_is_accepted_only_where_it_says_nothing():
 
 
 def test_a_negated_output_is_what_would_break_the_implication():
-    """The exception named just above, pinned rather than argued.
+    """The exception named just above, and what stands in its place.
 
     `negate` inverts the whole conjunction on a muscadet output, so a
-    negated output can publish `fed` while its availability is false --
-    and then a consumer's two channels no longer agree. Neither surface
-    can declare one: the authoring layer has no such keyword, and the
-    declaration reader refuses the key at anything but `False`."""
-    assert "negate" not in mu.ObjFlow.add_flow_out.__code__.co_varnames
-
+    negated output can publish `fed` while its availability is false. An
+    input such an output feeds therefore reads the availability channel
+    beside the feed, as muscadet does, and only that input: every other
+    input keeps the feed channel alone (``test_flow_out_negate.py``)."""
     spec = {
         "name": "L",
         "flows": [{"cls": "FlowOut", "name": "cooling", "negate": True}],
     }
-    with pytest.raises(declare.ComponentSpecError) as raised:
-        declare.build_component(mu.System(name="probe"), spec)
-
-    assert "negate" in str(raised.value)
+    declare.build_component(mu.System(name="probe"), spec)

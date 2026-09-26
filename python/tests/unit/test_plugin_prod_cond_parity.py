@@ -375,18 +375,17 @@ def test_a_condition_that_declares_nothing_carries_either_mode(mode):
     [
         ("var_prod_cond_negate", [[True]]),
         ("var_prod_cond_compare", [[{"op": ">", "value": 0}]]),
-        ("negate", True),
     ],
-    ids=["negate-matrix", "compare-matrix", "flow-negate"],
+    ids=["negate-matrix", "compare-matrix"],
 )
 def test_the_rest_of_the_family_is_refused_when_it_declares_something(key, value):
-    """Three more keys this section builds nothing from.
+    """Two more keys this section builds nothing from.
 
     Two of them are the operand negation and comparison written as a matrix
     beside the condition, where the operand carries the same thing inline.
     Dropped rather than refused, they cost the same wrong answer the inner
     mode does: a condition running unnegated or uncompared. The
-    muscadet-facing route already treats all three as inert at the value that
+    muscadet-facing route already treats both as inert at the value that
     declares nothing and refuses them above it, so this is that treatment
     reaching the other route rather than a new rule.
     """
@@ -394,19 +393,15 @@ def test_the_rest_of_the_family_is_refused_when_it_declares_something(key, value
         via_plugin(TWO_CLAUSES, None, fed={A: True, B: False}, extra={key: value})
 
 
-def test_a_negated_output_is_refused_without_being_sent_to_the_operand():
-    """``negate`` is not of the production-condition family, and the refusal
-    must not pretend it is.
-
-    muscadet defines it as negating the flow OUTPUT, not anything inside the
-    condition, and this layer carries that on no route. An author told to
-    move it onto an operand would be sent to a key that means something
-    else, so the message offers no substitute for this one.
-    """
-    with pytest.raises(ValueError, match=r"negates the flow OUTPUT") as raised:
+def test_a_negated_output_publishes_the_negation_of_its_delivery():
+    """``negate`` is not of the production-condition family: muscadet
+    defines it as negating the flow OUTPUT, and a plain output carries it
+    (``test_flow_out_negate.py``). Here the condition holds, so the negated
+    output publishes False."""
+    assert (
         via_plugin(TWO_CLAUSES, None, fed={A: True, B: False}, extra={"negate": True})
-
-    assert "write it on the operand" not in str(raised.value)
+        is False
+    )
 
 
 @pytest.mark.parametrize(

@@ -453,9 +453,12 @@ _DISCRETE_OUT_INERT = dict(
     negate=False,
 )
 
+#: A plain output carries muscadet's `negate` (the output publishes the
+#: negation of what it would deliver). The temporised and triggered outputs keep
+#: it inert: no model negates one, and their delivery is an automaton's state.
 _DISCRETE_OUT = _Vocabulary(
-    carried=_DISCRETE_OUT_KEYS,
-    inert=_DISCRETE_OUT_INERT,
+    carried=dict(_DISCRETE_OUT_KEYS, negate="negate"),
+    inert={key: value for key, value in _DISCRETE_OUT_INERT.items() if key != "negate"},
     uncarried=_FLOW_UNCARRIED,
 )
 
