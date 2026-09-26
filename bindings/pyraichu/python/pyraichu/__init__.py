@@ -11,6 +11,7 @@ import json
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ._pyraichu import (
@@ -21,7 +22,9 @@ from ._pyraichu import (
     ModelError,
     SimulationError,
     __version__,
+    analyse_raw_sequences_json,
     analyse_sequences_json,
+    run_sequences_json,
     monte_carlo_json,
     required_features,
     seal_model,
@@ -50,8 +53,11 @@ __all__ = [
     "SimulationError",
     "SimulationResult",
     "__version__",
+    "analyse_raw_sequences",
     "analyse_sequences",
     "expand_model",
+    "run_sequences",
+    "SequenceCampaign",
     "interactive",
     "load_model",
     "model_body",
@@ -370,6 +376,77 @@ def analyse_sequences(
     """
     return json.loads(
         analyse_sequences_json(model.json, nb_runs, t_max, seed, threads, flow)
+    )
+
+
+@dataclass(frozen=True)
+class SequenceCampaign:
+    """A sequence campaign kept whole: its two reduced levels, and where its
+    raw corpus was written.
+
+    ``cleaned`` is every distinct path to each feared event, transient
+    failure/repair cycles removed (cod3s's ``sequences_all.json`` level);
+    ``minimal`` is what :func:`analyse_sequences` returns. Both are lists of
+    ``{events: [{obj, attr, time}], end_cause, end_time, weight}``.
+
+    ``raw_path`` is the ``raichu.sequences`` corpus, one line per trajectory
+    (see the sequence-format reference), or ``None`` when none was asked for.
+    ``header`` is that corpus's first line when it was read back by
+    :func:`analyse_raw_sequences`, ``None`` otherwise.
+    """
+
+    cleaned: list[dict[str, Any]]
+    minimal: list[dict[str, Any]]
+    raw_path: Path | None = None
+    header: dict[str, Any] | None = None
+
+
+def run_sequences(
+    model: Model,
+    nb_runs: int,
+    t_max: float,
+    seed: int = 0,
+    threads: int | None = None,
+    flow: FlowConfig | None = None,
+    raw_path: str | Path | None = None,
+) -> SequenceCampaign:
+    """A sequence campaign whose raw corpus is kept.
+
+    Runs the campaign :func:`analyse_sequences` runs, with the same seed
+    giving the same trajectories, and returns both reduced levels. When
+    ``raw_path`` is given, every trajectory's raw sequence is written there in
+    the ``raichu.sequences`` format (JSON Lines: a header line, then one line
+    per replica in replica order), straight from the engine: a campaign of any
+    size never becomes Python objects. :func:`analyse_raw_sequences` reads it
+    back and recomputes the reduction.
+    """
+    path = None if raw_path is None else Path(raw_path)
+    levels = json.loads(
+        run_sequences_json(
+            model.json,
+            nb_runs,
+            t_max,
+            seed,
+            threads,
+            flow,
+            None if path is None else str(path),
+        )
+    )
+    return SequenceCampaign(cleaned=levels["cleaned"], minimal=levels["minimal"], raw_path=path)
+
+
+def analyse_raw_sequences(raw_path: str | Path) -> SequenceCampaign:
+    """Read a ``raichu.sequences`` corpus and reduce it again.
+
+    The reduction is the engine's own, so a corpus written by
+    :func:`run_sequences` gives back exactly the levels that campaign
+    returned. Refuses another format and a version newer than this engine
+    reads.
+    """
+    path = Path(raw_path)
+    levels = json.loads(analyse_raw_sequences_json(str(path)))
+    return SequenceCampaign(
+        cleaned=levels["cleaned"], minimal=levels["minimal"], raw_path=path, header=levels["header"]
     )
 
 

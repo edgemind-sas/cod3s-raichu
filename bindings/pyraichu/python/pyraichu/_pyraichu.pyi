@@ -64,6 +64,16 @@ def analyse_sequences_json(
     threads: int | None = None,
     flow: FlowConfig | None = None,
 ) -> str: ...
+def run_sequences_json(
+    model_json: str,
+    nb_runs: int,
+    t_max: float,
+    seed: int = 0,
+    threads: int | None = None,
+    flow: FlowConfig | None = None,
+    raw_path: str | None = None,
+) -> str: ...
+def analyse_raw_sequences_json(raw_path: str) -> str: ...
 
 class Snapshot:
     """Opaque interactive-session checkpoint (see ``Interactive``)."""

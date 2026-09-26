@@ -29,6 +29,7 @@ pub mod compile;
 pub mod engine;
 pub mod flow;
 pub mod loops;
+pub mod raw_sequences;
 pub mod sequence;
 
 pub use compile::{CompileError, CompiledModel, MarginIndex, WatchedIdx};
@@ -40,4 +41,8 @@ pub use engine::{
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
 pub use loops::{switching_loops, SwitchingLoop};
 pub use raichu_numeric::{SolverParams, SolverStats};
-pub use sequence::{analyse, filter_cycles, group_sequences, minimal_sequences};
+pub use raw_sequences::{
+    read_raw_sequences, write_raw_sequences, RawHeader, RawSequencesError, RAW_SEQUENCES_FORMAT,
+    RAW_SEQUENCES_VERSION,
+};
+pub use sequence::{analyse, clean, filter_cycles, group_sequences, minimal_sequences};
