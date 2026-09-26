@@ -158,6 +158,15 @@ def banding(name: str, control: str, direction: str, activate, release=None) -> 
     }
 
 
+def compare(control: str, operator: str, threshold: float) -> dict:
+    return {
+        "op": "compare",
+        "input": control,
+        "operator": operator,
+        "threshold": threshold,
+    }
+
+
 def firings(result, automaton: str) -> list[tuple[float, str]]:
     """Every firing of one automaton, as `(date, destination state)`."""
     return [
@@ -1103,6 +1112,50 @@ def controller(**over) -> dict:
             "does not declare",
         ),
         (
+            {
+                "controls_out": [
+                    {
+                        "name": "o",
+                        "kind": "bool",
+                        "emit": {
+                            "op": "ternary",
+                            "high": compare("vol", ">", 2.0),
+                            "low": compare("vol", "<", 1.0),
+                        },
+                    }
+                ]
+            },
+            "carries a condition",
+        ),
+        (
+            {
+                "controls_out": [
+                    {
+                        "name": "o",
+                        "kind": "value",
+                        "emit": {
+                            "op": "ternary",
+                            "high": {"op": "republish", "input": "vol"},
+                            "low": compare("vol", "<", 1.0),
+                        },
+                    }
+                ]
+            },
+            "reads two conditions",
+        ),
+        (
+            {
+                "controls_out": [
+                    {
+                        "name": "o",
+                        "kind": "value",
+                        "emit": {"op": "ternary", "high": compare("vol", ">", 2.0)},
+                    }
+                ]
+            },
+            "declares `low`",
+        ),
+        (
             {"controls_in": [{"name": "vol", "kind": "temperature"}]},
             "a measurement reads one of",
         ),
@@ -1127,6 +1180,107 @@ def test_a_malformed_controller_is_refused_where_it_is_written(over, message):
     threshold is indistinguishable from one that never declared any."""
     with pytest.raises(ValueError, match=message):
         pyraichu.expand_model(controller(**over))
+
+
+# --- a ternary command, read by another controller ----------------------
+
+
+#: The first stage's two thresholds: +1 above the high one, -1 below the
+#: low one, 0 between them. The cistern fills at one from empty, so its
+#: level IS the date and every switch has an exact date.
+TERNARY_LOW = 6.0
+TERNARY_HIGH = 11.0
+
+
+def a_comparator_chain() -> dict:
+    """Two stages. The first publishes a ternary command on the cistern's
+    level, the shape of the hydrogen plant's `Automaton.signal_out`; the
+    second reads that command as a number and thresholds it twice: at the
+    top of the ternary domain (`>= 1`, what the plant chains) and strictly
+    inside it (`>= 0`, what a flattened chain cannot say)."""
+    system = mu.System("comparator_chain")
+    system.add_component(Rain, "P")
+    system.add_component(filling(0.0), "T")
+    system.connect("P", "w", "T", "w")
+    first = {
+        "type": "ObjCtrl",
+        "name": "A1",
+        "controls_in": [{"name": "vol", "kind": "level"}],
+        "controls_out": [
+            {
+                "name": "cmd",
+                "kind": "value",
+                "emit": {
+                    "op": "ternary",
+                    "high": compare("vol", ">", TERNARY_HIGH),
+                    "low": compare("vol", "<", TERNARY_LOW),
+                },
+            }
+        ],
+    }
+    second = {
+        "type": "ObjCtrl",
+        "name": "A2",
+        "controls_in": [{"name": "sig", "kind": "level"}],
+        "controls_out": [
+            {"name": "active", "kind": "bool", "emit": compare("sig", ">=", 1.0)},
+            {"name": "not_low", "kind": "bool", "emit": compare("sig", ">=", 0.0)},
+        ],
+    }
+    return with_controllers(
+        system,
+        [first, second],
+        [
+            ("T", "vol_level_out", "A1", "vol_level_in"),
+            ("A1", "cmd_level_out", "A2", "sig_level_in"),
+        ],
+    )
+
+
+@pytest.fixture(scope="module")
+def chain_run():
+    body = pyraichu.expand_model(a_comparator_chain())
+    return pyraichu.simulate(pyraichu.load_model(body), t_max=15.0)
+
+
+def test_a_ternary_command_publishes_minus_one_zero_and_plus_one(chain_run):
+    """-1 while the level is below the low threshold, 0 between the two,
+    +1 above the high one, each switch at the date the level crosses."""
+    changes = switches(chain_run.indicators["A1_cmd_level"])
+    assert [value for _, value in changes] == [-1.0, 0.0, 1.0]
+    assert abs(changes[1][0] - TERNARY_LOW) < CROSSING_TOL
+    assert abs(changes[2][0] - TERNARY_HIGH) < CROSSING_TOL
+
+
+def test_a_second_controller_thresholds_the_first_one_s_command(chain_run):
+    """The chain the hydrogen plant writes: the downstream stage reads the
+    upstream command and turns at the upstream's own crossing."""
+    changes = switches(chain_run.indicators["A2_active"])
+    assert [value for _, value in changes] == [False, True]
+    assert abs(changes[1][0] - TERNARY_HIGH) < CROSSING_TOL
+
+
+def test_a_threshold_inside_the_ternary_domain_reads_the_hold(chain_run):
+    """What only a chain can say: `>= 0` holds on the upstream's hold as well
+    as on its activation, so it turns at the LOW threshold. A downstream
+    stage flattened onto the level with the upstream's two thresholds
+    turns at one of them only through its own `>` / `<` pair."""
+    changes = switches(chain_run.indicators["A2_not_low"])
+    assert [value for _, value in changes] == [False, True]
+    assert abs(changes[1][0] - TERNARY_LOW) < CROSSING_TOL
+
+
+def test_a_ternary_command_is_forced_and_scaled_like_any_value_output():
+    """The three endpoints every value output carries reach a ternary one:
+    a gain, a forcing flag and a forced value."""
+    body = pyraichu.expand_model(a_comparator_chain())
+    names = {
+        attribute["name"]
+        for component in body["components"]
+        if component["name"] == "A1"
+        for attribute in component["attributes"]
+    }
+    assert {"cmd_level_gain", "cmd_forced", "cmd_forced_value"} <= names
 
 
 # --- regression ---------------------------------------------------------
