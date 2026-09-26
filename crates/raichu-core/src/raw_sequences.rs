@@ -27,12 +27,26 @@
 //! the reduction reads: without it the reduction could not be recomputed from
 //! the file.
 //!
+//! # Observations
+//!
+//! A campaign may also record, for every trajectory, the value of chosen
+//! attributes at chosen instants: the header's optional `observations` names
+//! them (`[{"name", "time"}]`), and each trajectory line then carries an
+//! `observed` array holding their values in that order (a boolean reads `0`
+//! or `1`). Both fields are absent when nothing is observed, so a corpus
+//! without observations is byte-for-byte what earlier engines wrote, and a
+//! reader that predates them ignores them. What they are for is a
+//! **condition** on the trajectories ([`ObservedCondition`]): keep only
+//! those whose observed value satisfies it, before the reduction.
+//!
 //! A reader refuses another `format` and a `version` above the one it knows.
-//! A later version may add fields to either kind of line; a v1 reader ignores
-//! what it does not know.
+//! Fields may be added to either kind of line without a new version as long
+//! as a reader that ignores them still reads the corpus right; a v1 reader
+//! ignores what it does not know.
 
 use std::io::{BufRead, Write};
 
+use raichu_expr::CmpOp;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{SeqEvent, Sequence};
@@ -67,6 +81,24 @@ pub struct RawHeader {
     pub targets: Vec<String>,
     /// The names of the positions of an event array.
     pub event_fields: Vec<String>,
+    /// What every trajectory line's `observed` array holds, in order; empty
+    /// (and absent from the file) when the campaign observed nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observations: Vec<RawObservation>,
+}
+
+/// One observed quantity: an attribute's value at one instant of every
+/// trajectory.
+///
+/// `time` is the instant as the campaign sampled it. A trajectory stopped
+/// at a feared event holds its final state through the later instants, and
+/// an instant at an event date reads the state after the event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawObservation {
+    /// The name a condition refers to it by, unique in the corpus.
+    pub name: String,
+    /// The instant it was read at.
+    pub time: f64,
 }
 
 impl RawHeader {
@@ -90,7 +122,105 @@ impl RawHeader {
             t_max,
             targets,
             event_fields: EVENT_FIELDS.iter().map(|f| (*f).to_owned()).collect(),
+            observations: Vec::new(),
         }
+    }
+
+    /// The same header, declaring what each trajectory's `observed` array
+    /// holds.
+    #[must_use]
+    pub fn with_observations(mut self, observations: Vec<RawObservation>) -> Self {
+        self.observations = observations;
+        self
+    }
+}
+
+/// A raw corpus read back whole: its header, its trajectories in replica
+/// order, and each trajectory's observed values (one row per trajectory,
+/// in the order of [`RawHeader::observations`]; rows are empty when the
+/// campaign observed nothing).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawCorpus {
+    /// The first line.
+    pub header: RawHeader,
+    /// The trajectories, each weighing one.
+    pub sequences: Vec<Sequence>,
+    /// The observed values, one row per trajectory.
+    pub observed: Vec<Vec<f64>>,
+}
+
+/// A condition on the trajectories of a corpus: keep a trajectory when its
+/// value of `observation` compares to `value` as `op` says.
+///
+/// The comparison is on the recorded double, exactly: a boolean attribute
+/// was recorded as `0` or `1`, so `== 1` keeps the trajectories where it
+/// held.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObservedCondition {
+    /// The name of the observation it reads, among the header's.
+    pub observation: String,
+    /// The comparison.
+    pub op: CmpOp,
+    /// The constant the observed value is compared against.
+    pub value: f64,
+}
+
+impl ObservedCondition {
+    /// Whether `observed` satisfies the condition.
+    #[must_use]
+    pub fn holds(&self, observed: f64) -> bool {
+        match self.op {
+            CmpOp::Eq => observed == self.value,
+            CmpOp::Ne => observed != self.value,
+            CmpOp::Lt => observed < self.value,
+            CmpOp::Le => observed <= self.value,
+            CmpOp::Gt => observed > self.value,
+            CmpOp::Ge => observed >= self.value,
+        }
+    }
+}
+
+impl RawCorpus {
+    /// The trajectories that satisfy `condition`, in replica order.
+    ///
+    /// # Errors
+    /// [`RawSequencesError::Format`] when the corpus observed nothing by
+    /// that name: a condition on a quantity the campaign did not record
+    /// cannot be decided, and keeping every trajectory would read as a
+    /// filter that passed them all.
+    pub fn filtered(
+        &self,
+        condition: &ObservedCondition,
+    ) -> Result<Vec<Sequence>, RawSequencesError> {
+        let position = self
+            .header
+            .observations
+            .iter()
+            .position(|o| o.name == condition.observation)
+            .ok_or_else(|| {
+                let known: Vec<&str> = self
+                    .header
+                    .observations
+                    .iter()
+                    .map(|o| o.name.as_str())
+                    .collect();
+                RawSequencesError::Format(format!(
+                    "the corpus observed no `{}`; it observed {}",
+                    condition.observation,
+                    if known.is_empty() {
+                        "nothing".to_owned()
+                    } else {
+                        format!("{known:?}")
+                    }
+                ))
+            })?;
+        Ok(self
+            .sequences
+            .iter()
+            .zip(&self.observed)
+            .filter(|(_, row)| condition.holds(row[position]))
+            .map(|(sequence, _)| sequence.clone())
+            .collect())
     }
 }
 
@@ -101,6 +231,8 @@ struct RawRecord<'a> {
     end_cause: &'a Option<String>,
     end_time: f64,
     events: Vec<(f64, &'a str, &'a str, &'a Option<String>)>,
+    #[serde(skip_serializing_if = "<[f64]>::is_empty")]
+    observed: &'a [f64],
 }
 
 /// One trajectory line, as read. The dates are kept as their JSON lexemes
@@ -118,15 +250,17 @@ struct ReadRecord {
         String,
         Option<String>,
     )>,
+    #[serde(default)]
+    observed: Vec<Box<serde_json::value::RawValue>>,
 }
 
-/// A date read back from its JSON lexeme.
-fn date(raw: &serde_json::value::RawValue, line: usize) -> Result<f64, RawSequencesError> {
+/// A number (a date or an observed value) read back from its JSON lexeme.
+fn number(raw: &serde_json::value::RawValue, line: usize) -> Result<f64, RawSequencesError> {
     raw.get()
         .parse::<f64>()
         .map_err(|e| RawSequencesError::Line {
             line,
-            detail: format!("`{}` is not a date: {e}", raw.get()),
+            detail: format!("`{}` is not a number: {e}", raw.get()),
         })
 }
 
@@ -154,15 +288,35 @@ pub enum RawSequencesError {
 ///
 /// `sequences` must be the campaign's raw trajectories in replica order,
 /// `header.nb_runs` of them: the file states that count, and a reader checks
-/// it.
+/// it. A header that declares observations needs [`write_raw_corpus`].
 ///
 /// # Errors
-/// [`RawSequencesError::Format`] when the count differs from the header's;
+/// [`RawSequencesError::Format`] when the count differs from the header's,
+/// or when the header declares observations;
 /// [`RawSequencesError::Io`] when the writer fails.
 pub fn write_raw_sequences<W: Write>(
+    writer: W,
+    header: &RawHeader,
+    sequences: &[Sequence],
+) -> Result<(), RawSequencesError> {
+    write_raw_corpus(writer, header, sequences, &[])
+}
+
+/// Write `sequences` and their observed values as a raw corpus under
+/// `header`, one line each.
+///
+/// `observed` holds one row per trajectory, each with one value per
+/// observation the header declares, in that order; it is empty when the
+/// header declares none.
+///
+/// # Errors
+/// [`RawSequencesError::Format`] when a count differs from what the header
+/// states; [`RawSequencesError::Io`] when the writer fails.
+pub fn write_raw_corpus<W: Write>(
     mut writer: W,
     header: &RawHeader,
     sequences: &[Sequence],
+    observed: &[Vec<f64>],
 ) -> Result<(), RawSequencesError> {
     if sequences.len() as u64 != header.nb_runs {
         return Err(RawSequencesError::Format(format!(
@@ -170,6 +324,31 @@ pub fn write_raw_sequences<W: Write>(
             header.nb_runs,
             sequences.len()
         )));
+    }
+    let width = header.observations.len();
+    if width == 0 && !observed.is_empty() {
+        return Err(RawSequencesError::Format(
+            "observed values are written under a header that declares no observation".to_owned(),
+        ));
+    }
+    if width > 0 {
+        if observed.len() != sequences.len() {
+            return Err(RawSequencesError::Format(format!(
+                "{} trajectories are written with {} rows of observed values",
+                sequences.len(),
+                observed.len()
+            )));
+        }
+        if let Some((run, row)) = observed
+            .iter()
+            .enumerate()
+            .find(|(_, row)| row.len() != width)
+        {
+            return Err(RawSequencesError::Format(format!(
+                "run {run} has {} observed values where the header declares {width}",
+                row.len()
+            )));
+        }
     }
     writer.write_all(json_line(header)?.as_bytes())?;
     for (run, sequence) in sequences.iter().enumerate() {
@@ -182,6 +361,7 @@ pub fn write_raw_sequences<W: Write>(
                 .iter()
                 .map(|e| (e.time, e.obj.as_str(), e.attr.as_str(), &e.cycle_group))
                 .collect(),
+            observed: observed.get(run).map_or(&[], Vec::as_slice),
         };
         writer.write_all(json_line(&record)?.as_bytes())?;
     }
@@ -190,16 +370,27 @@ pub fn write_raw_sequences<W: Write>(
 }
 
 /// Read a raw corpus back: its header and its trajectories, in replica
-/// order, each weighing one.
+/// order, each weighing one. Observed values, if any, are dropped: read
+/// them with [`read_raw_corpus`].
+///
+/// # Errors
+/// As [`read_raw_corpus`].
+pub fn read_raw_sequences<R: BufRead>(
+    reader: R,
+) -> Result<(RawHeader, Vec<Sequence>), RawSequencesError> {
+    let corpus = read_raw_corpus(reader)?;
+    Ok((corpus.header, corpus.sequences))
+}
+
+/// Read a raw corpus back whole: header, trajectories and observed values.
 ///
 /// # Errors
 /// [`RawSequencesError::Line`] on a line that is not the expected JSON;
 /// [`RawSequencesError::Format`] on another format, a version above
-/// [`RAW_SEQUENCES_VERSION`], runs out of order, or a trajectory count that
-/// is not the header's.
-pub fn read_raw_sequences<R: BufRead>(
-    reader: R,
-) -> Result<(RawHeader, Vec<Sequence>), RawSequencesError> {
+/// [`RAW_SEQUENCES_VERSION`], runs out of order, a trajectory count that
+/// is not the header's, or a trajectory whose observed values are not one
+/// per declared observation.
+pub fn read_raw_corpus<R: BufRead>(reader: R) -> Result<RawCorpus, RawSequencesError> {
     let mut lines = reader.lines().enumerate();
     let header: RawHeader = match lines.next() {
         None => return Err(RawSequencesError::Format("the corpus is empty".to_owned())),
@@ -220,7 +411,9 @@ pub fn read_raw_sequences<R: BufRead>(
             header.version
         )));
     }
+    let width = header.observations.len();
     let mut sequences = Vec::new();
+    let mut observed = Vec::new();
     for (index, line) in lines {
         let line = line?;
         if line.trim().is_empty() {
@@ -246,15 +439,31 @@ pub fn read_raw_sequences<R: BufRead>(
                 Ok(SeqEvent {
                     obj,
                     attr,
-                    time: date(&time, index + 1)?,
+                    time: number(&time, index + 1)?,
                     cycle_group,
                 })
             })
             .collect::<Result<Vec<_>, RawSequencesError>>()?;
+        if record.observed.len() != width {
+            return Err(RawSequencesError::Format(format!(
+                "line {} holds {} observed values where the header declares {width}",
+                index + 1,
+                record.observed.len()
+            )));
+        }
+        if width > 0 {
+            observed.push(
+                record
+                    .observed
+                    .iter()
+                    .map(|value| number(value, index + 1))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+        }
         sequences.push(Sequence {
             events,
             end_cause: record.end_cause,
-            end_time: date(&record.end_time, index + 1)?,
+            end_time: number(&record.end_time, index + 1)?,
             weight: 1.0,
         });
     }
@@ -265,7 +474,11 @@ pub fn read_raw_sequences<R: BufRead>(
             sequences.len()
         )));
     }
-    Ok((header, sequences))
+    Ok(RawCorpus {
+        header,
+        sequences,
+        observed,
+    })
 }
 
 /// One JSON document on one line.

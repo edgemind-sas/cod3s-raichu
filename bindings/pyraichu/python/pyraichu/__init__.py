@@ -65,7 +65,9 @@ __all__ = [
     "exploration_domain",
     "explore",
     "run_sequences",
+    "Observation",
     "SequenceCampaign",
+    "SequenceCondition",
     "interactive",
     "load_model",
     "model_body",
@@ -389,6 +391,48 @@ def analyse_sequences(
 
 
 @dataclass(frozen=True)
+class Observation:
+    """A quantity a sequence campaign reads on every trajectory: the value of
+    ``component.attribute`` at ``time``.
+
+    The raw corpus carries it under ``name``, which a
+    :class:`SequenceCondition` refers to. The value is the state the
+    trajectory was in at that instant: after any event at that date, and the
+    final state for a trajectory that stopped at a feared event earlier. An
+    instant past the horizon reads the horizon. A boolean reads ``0`` or
+    ``1``.
+    """
+
+    name: str
+    component: str
+    attribute: str
+    time: float
+
+
+#: The comparisons a :class:`SequenceCondition` accepts.
+CONDITION_OPS = ("==", "!=", "<", "<=", ">", ">=")
+
+
+@dataclass(frozen=True)
+class SequenceCondition:
+    """Keep a trajectory when its observed value of ``observation`` compares
+    to ``value`` as ``op`` says (one of ``==``, ``!=``, ``<``, ``<=``, ``>``,
+    ``>=``). The comparison is on the recorded double, exactly.
+    """
+
+    observation: str
+    op: str
+    value: float
+
+    def __post_init__(self) -> None:
+        if self.op not in CONDITION_OPS:
+            raise ValueError(f"{self.op!r} is not a comparison; use one of {', '.join(CONDITION_OPS)}")
+
+    def _arg(self) -> tuple[str, str, float]:
+        return (self.observation, self.op, float(self.value))
+
+
+@dataclass
 class SequenceCampaign:
     """A sequence campaign kept whole: its two reduced levels, and where its
     raw corpus was written.
@@ -402,12 +446,18 @@ class SequenceCampaign:
     (see the sequence-format reference), or ``None`` when none was asked for.
     ``header`` is that corpus's first line when it was read back by
     :func:`analyse_raw_sequences`, ``None`` otherwise.
+
+    ``condition`` reports the :class:`SequenceCondition` the levels were
+    reduced under, ``{observation, op, value, total_trajectories,
+    kept_trajectories}``, or is ``None`` when every trajectory was reduced.
+    The raw corpus always holds every trajectory.
     """
 
     cleaned: list[dict[str, Any]]
     minimal: list[dict[str, Any]]
     raw_path: Path | None = None
     header: dict[str, Any] | None = None
+    condition: dict[str, Any] | None = None
 
 
 def run_sequences(
@@ -418,6 +468,8 @@ def run_sequences(
     threads: int | None = None,
     flow: FlowConfig | None = None,
     raw_path: str | Path | None = None,
+    observations: Iterable[Observation] = (),
+    condition: SequenceCondition | None = None,
 ) -> SequenceCampaign:
     """A sequence campaign whose raw corpus is kept.
 
@@ -428,8 +480,13 @@ def run_sequences(
     per replica in replica order), straight from the engine: a campaign of any
     size never becomes Python objects. :func:`analyse_raw_sequences` reads it
     back and recomputes the reduction.
+
+    ``observations`` are read on every trajectory and written into the raw
+    corpus; they do not change the trajectories. ``condition`` reduces only
+    the trajectories it holds on, and names one of ``observations``.
     """
     path = None if raw_path is None else Path(raw_path)
+    observed = [(o.name, o.component, o.attribute, float(o.time)) for o in observations]
     levels = json.loads(
         run_sequences_json(
             model.json,
@@ -439,23 +496,35 @@ def run_sequences(
             threads,
             flow,
             None if path is None else str(path),
+            observed or None,
+            None if condition is None else condition._arg(),
         )
     )
-    return SequenceCampaign(cleaned=levels["cleaned"], minimal=levels["minimal"], raw_path=path)
+    return SequenceCampaign(
+        cleaned=levels["cleaned"],
+        minimal=levels["minimal"],
+        raw_path=path,
+        condition=levels.get("condition"),
+    )
 
 
-def analyse_raw_sequences(raw_path: str | Path) -> SequenceCampaign:
+def analyse_raw_sequences(raw_path: str | Path, condition: SequenceCondition | None = None) -> SequenceCampaign:
     """Read a ``raichu.sequences`` corpus and reduce it again.
 
     The reduction is the engine's own, so a corpus written by
     :func:`run_sequences` gives back exactly the levels that campaign
-    returned. Refuses another format and a version newer than this engine
-    reads.
+    returned. With ``condition``, only the trajectories it holds on are
+    reduced; it must name an observation the corpus carries. Refuses another
+    format and a version newer than this engine reads.
     """
     path = Path(raw_path)
-    levels = json.loads(analyse_raw_sequences_json(str(path)))
+    levels = json.loads(analyse_raw_sequences_json(str(path), None if condition is None else condition._arg()))
     return SequenceCampaign(
-        cleaned=levels["cleaned"], minimal=levels["minimal"], raw_path=path, header=levels["header"]
+        cleaned=levels["cleaned"],
+        minimal=levels["minimal"],
+        raw_path=path,
+        header=levels["header"],
+        condition=levels.get("condition"),
     )
 
 

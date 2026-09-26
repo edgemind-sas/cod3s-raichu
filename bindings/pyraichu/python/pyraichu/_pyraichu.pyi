@@ -72,8 +72,15 @@ def run_sequences_json(
     threads: int | None = None,
     flow: FlowConfig | None = None,
     raw_path: str | None = None,
+    observations: list[tuple[str, str, str, float]] | None = None,
+    condition: tuple[str, str, float] | None = None,
 ) -> str: ...
-def analyse_raw_sequences_json(raw_path: str) -> str: ...
+def analyse_raw_sequences_json(
+    raw_path: str, condition: tuple[str, str, float] | None = None
+) -> str: ...
+def analyse_raw_sequences_json(
+    raw_path: str, condition: tuple[str, str, float] | None = None
+) -> str: ...
 
 def explore_json(
     model_json: str,

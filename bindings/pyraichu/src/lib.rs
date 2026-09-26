@@ -15,7 +15,8 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use raichu::raichu_core::analyse as analyse_sequences;
 use raichu::raichu_core::{
-    clean as clean_sequences, minimal_sequences, read_raw_sequences, write_raw_sequences, RawHeader,
+    clean as clean_sequences, minimal_sequences, read_raw_corpus, write_raw_corpus,
+    ObservedCondition, RawCorpus, RawHeader, RawObservation,
 };
 use raichu::raichu_core::{
     CompiledModel, Engine, EngineConfig, FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot,
@@ -26,8 +27,13 @@ use raichu::raichu_explore::{
     read_exploration as read_exploration_result, Algorithm, Cutoffs, DiscretisedSettings,
     ExactSettings, ExplorationResult, Precision,
 };
+use raichu::raichu_expr::{AttrRef, CmpOp};
 use raichu::raichu_model::Model;
-use raichu::raichu_montecarlo::{run as mc_run, run_sequences as mc_run_sequences, McConfig};
+use raichu::raichu_model::{Indicator, IndicatorTarget};
+use raichu::raichu_montecarlo::{
+    run as mc_run, run_sequences as mc_run_sequences,
+    run_sequences_observed as mc_run_sequences_observed, McConfig, SequenceObservation,
+};
 
 create_exception!(
     _pyraichu,
@@ -369,15 +375,74 @@ fn reduced_levels(raw: Vec<raichu::raichu_core::engine::Sequence>) -> PyResult<s
     }))
 }
 
+/// A condition as the binding receives it: `(observation, op, value)`, with
+/// `op` one of `==`, `!=`, `<`, `<=`, `>`, `>=`.
+type ConditionArg = (String, String, f64);
+
+fn observed_condition(condition: ConditionArg) -> PyResult<ObservedCondition> {
+    let (observation, op, value) = condition;
+    let op = match op.as_str() {
+        "==" => CmpOp::Eq,
+        "!=" => CmpOp::Ne,
+        "<" => CmpOp::Lt,
+        "<=" => CmpOp::Le,
+        ">" => CmpOp::Gt,
+        ">=" => CmpOp::Ge,
+        other => {
+            return Err(SimulationError::new_err(format!(
+                "`{other}` is not a comparison; use one of ==, !=, <, <=, >, >="
+            )))
+        }
+    };
+    Ok(ObservedCondition {
+        observation,
+        op,
+        value,
+    })
+}
+
+/// Reduce a corpus to its two levels, first keeping only the trajectories
+/// `condition` holds on when one is given, and report what it kept.
+fn reduce_corpus(
+    corpus: &RawCorpus,
+    condition: Option<ConditionArg>,
+) -> PyResult<serde_json::Value> {
+    let Some(condition) = condition else {
+        return reduced_levels(corpus.sequences.clone());
+    };
+    let symbol = condition.1.clone();
+    let condition = observed_condition(condition)?;
+    let kept = corpus
+        .filtered(&condition)
+        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    let kept_count = kept.len();
+    let mut levels = reduced_levels(kept)?;
+    levels["condition"] = serde_json::json!({
+        "observation": condition.observation,
+        "op": symbol,
+        "value": condition.value,
+        "total_trajectories": corpus.sequences.len(),
+        "kept_trajectories": kept_count,
+    });
+    Ok(levels)
+}
+
 /// A sequence campaign kept whole: run `nb_runs` sequence-recording replicas
 /// (target early-stop), write the RAW corpus to `raw_path` in the
 /// `raichu.sequences` format when one is given, and return the JSON of the
 /// two reduced levels, `{"cleaned": [...], "minimal": [...]}`.
 ///
+/// `observations` lists `(name, component, attribute, time)`: the value of
+/// that attribute at that instant is read on every trajectory and carried by
+/// the raw corpus under `name`. `condition` is `(observation, op, value)`:
+/// only the trajectories whose observed value satisfies it are reduced, and
+/// the returned JSON then holds a `condition` report. The raw corpus always
+/// holds every trajectory.
+///
 /// The raw corpus is written from Rust and never materialised as Python
 /// objects: a large campaign holds one line per replica.
 #[pyfunction]
-#[pyo3(signature = (model_json, nb_runs, t_max, seed = 0, threads = None, flow = None, raw_path = None))]
+#[pyo3(signature = (model_json, nb_runs, t_max, seed = 0, threads = None, flow = None, raw_path = None, observations = None, condition = None))]
 #[allow(clippy::too_many_arguments)]
 fn run_sequences_json(
     py: Python<'_>,
@@ -388,9 +453,35 @@ fn run_sequences_json(
     threads: Option<usize>,
     flow: Option<FlowConfig>,
     raw_path: Option<std::path::PathBuf>,
+    observations: Option<Vec<(String, String, String, f64)>>,
+    condition: Option<ConditionArg>,
 ) -> PyResult<String> {
-    let model: Model = Model::from_json(model_json)
+    let mut model: Model = Model::from_json(model_json)
         .map_err(|e| ModelError::new_err(format!("invalid model JSON: {e}")))?;
+    let observations = observations.unwrap_or_default();
+    // Each observation reads an attribute through an indicator added for
+    // it: the engine samples indicators, and a name already taken would
+    // make the reading ambiguous.
+    for (name, component, attribute, _) in &observations {
+        if model
+            .indicators
+            .iter()
+            .any(|indicator| &indicator.name == name)
+        {
+            return Err(ModelError::new_err(format!(
+                "the observation `{name}` has the name of an indicator the model already declares"
+            )));
+        }
+        model.indicators.push(Indicator {
+            name: name.clone(),
+            target: IndicatorTarget::Attribute {
+                attr: AttrRef {
+                    component: component.clone(),
+                    attribute: attribute.clone(),
+                },
+            },
+        });
+    }
     let compiled =
         CompiledModel::compile(&model).map_err(|e| ModelError::new_err(e.to_string()))?;
     let flow = flow_policy(flow);
@@ -406,40 +497,79 @@ fn run_sequences_json(
             stop_at_targets: false,
             flow,
         };
-        let raw = mc_run_sequences(&compiled, &config)
+        let asked: Vec<SequenceObservation> = observations
+            .iter()
+            .map(|(name, _, _, time)| SequenceObservation {
+                indicator: name.clone(),
+                time: *time,
+            })
+            .collect();
+        let campaign = mc_run_sequences_observed(&compiled, &config, &asked)
             .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let header = RawHeader::new(
+            raichu::VERSION,
+            &model.name,
+            seed,
+            nb_runs,
+            t_max,
+            compiled.targets.iter().map(|t| t.name.clone()).collect(),
+        )
+        .with_observations(
+            observations
+                .iter()
+                .zip(&campaign.times)
+                .map(|((name, _, _, _), time)| RawObservation {
+                    name: name.clone(),
+                    time: *time,
+                })
+                .collect(),
+        );
+        let observed = if observations.is_empty() {
+            Vec::new()
+        } else {
+            campaign.observed
+        };
         if let Some(path) = raw_path {
-            let header = RawHeader::new(
-                raichu::VERSION,
-                &model.name,
-                seed,
-                nb_runs,
-                t_max,
-                compiled.targets.iter().map(|t| t.name.clone()).collect(),
-            );
             let file = std::fs::File::create(&path).map_err(|e| {
                 SimulationError::new_err(format!("cannot create {}: {e}", path.display()))
             })?;
-            write_raw_sequences(std::io::BufWriter::new(file), &header, &raw)
-                .map_err(|e| SimulationError::new_err(e.to_string()))?;
+            write_raw_corpus(
+                std::io::BufWriter::new(file),
+                &header,
+                &campaign.sequences,
+                &observed,
+            )
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
         }
-        Ok(reduced_levels(raw)?.to_string())
+        let corpus = RawCorpus {
+            header,
+            sequences: campaign.sequences,
+            observed,
+        };
+        Ok(reduce_corpus(&corpus, condition)?.to_string())
     })
 }
 
 /// Read a raw corpus written by [`run_sequences_json`] and reduce it again:
-/// the JSON `{"header": {...}, "cleaned": [...], "minimal": [...]}`.
+/// the JSON `{"header": {...}, "cleaned": [...], "minimal": [...]}`, reduced
+/// from the trajectories `condition` holds on when one is given (plus a
+/// `condition` report).
 #[pyfunction]
-fn analyse_raw_sequences_json(py: Python<'_>, raw_path: std::path::PathBuf) -> PyResult<String> {
+#[pyo3(signature = (raw_path, condition = None))]
+fn analyse_raw_sequences_json(
+    py: Python<'_>,
+    raw_path: std::path::PathBuf,
+    condition: Option<ConditionArg>,
+) -> PyResult<String> {
     py.detach(|| {
         let file = std::fs::File::open(&raw_path).map_err(|e| {
             SimulationError::new_err(format!("cannot open {}: {e}", raw_path.display()))
         })?;
-        let (header, raw) = read_raw_sequences(std::io::BufReader::new(file))
+        let corpus = read_raw_corpus(std::io::BufReader::new(file))
             .map_err(|e| SimulationError::new_err(e.to_string()))?;
-        let mut levels = reduced_levels(raw)?;
-        levels["header"] =
-            serde_json::to_value(&header).map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let mut levels = reduce_corpus(&corpus, condition)?;
+        levels["header"] = serde_json::to_value(&corpus.header)
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
         Ok(levels.to_string())
     })
 }
