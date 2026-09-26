@@ -31,7 +31,7 @@ Two sections.
   An input declaring an ``aggregate`` reduces several sources to one value.
 
   **A ratio input is what a closed grammar costs, and where that cost is
-  paid.** There is no division among the four operators below: a quotient
+  paid.** There is no division among the operators below: a quotient
   carries no threshold anything could root-find, so admitting it would break
   the property the whole grammar exists for. A fraction is materialised by
   the volume that holds the constituents and reaches the controller as an
@@ -56,11 +56,15 @@ noticed at whatever event happens to come next.
 
 **What an output carries: a closed grammar, never a function.** An output
 declares its value under ``emit``, and what may be written there is a
-composition of exactly four operators: :class:`CtrlCompare` (a reading
+composition of exactly five operators: :class:`CtrlCompare` (a reading
 against a threshold), :class:`CtrlBand` (two thresholds and a direction),
-:class:`CtrlCombine` (booleans by and / or / not / k-of-n) and
-:class:`CtrlRepublish` (a reading, times a gain). A Python callable is
-refused there, and so is anything that is not one of the four.
+:class:`CtrlCombine` (booleans by and / or / not / k-of-n),
+:class:`CtrlRepublish` (a reading, times a gain) and :class:`CtrlTernary`
+(two conditions published as +1, 0 or -1, the command of a two-threshold
+comparator made readable by another controller). A Python callable is
+refused there, and so is anything that is not one of the five. muscadet
+stops at the first four; the fifth is this layer's, and it removes
+nothing muscadet declares.
 
 The reason is the one the whole module turns on. The engine dates a crossing
 exactly only on a form it **recognises**: a threshold it can root-find, an
@@ -150,8 +154,8 @@ MEASUREMENT_RATE = "rate"
 #: A measurement input reads the **ratio** one constituent is of what a
 #: volume holds: a dimensionless fraction, published per constituent by the
 #: volume itself. It exists so that a controller can threshold a fraction,
-#: the output grammar being closed at four operators, none of them
-#: arithmetic.
+#: the output grammar being closed and carrying no arithmetic on a
+#: reading.
 MEASUREMENT_RATIO = "ratio"
 
 #: Every nature a measurement input may be declared with.
@@ -226,13 +230,21 @@ CTRL_OP_COMBINE = "combine"
 #: a quantity has no crossing to date.
 CTRL_OP_REPUBLISH = "republish"
 
+#: Two conditions published as a number: +1 while the first holds, -1
+#: while the second does, 0 otherwise. The command of a two-threshold
+#: comparator, made publishable so that another controller can read it
+#: and threshold it. Compiles to an explicit equation over the states of
+#: its two operands' automata, so every change of the number it publishes
+#: is a crossing one of those automata has already located.
+CTRL_OP_TERNARY = "ternary"
+
 #: The operators that answer a **boolean**, and therefore the ones a
 #: :data:`CTRL_OUT_BOOL` output may emit.
 CTRL_BOOL_OPERATORS = (CTRL_OP_COMPARE, CTRL_OP_BAND, CTRL_OP_COMBINE)
 
 #: The operators that answer a **number**, and therefore the ones a
 #: :data:`CTRL_OUT_VALUE` output may emit.
-CTRL_VALUE_OPERATORS = (CTRL_OP_REPUBLISH,)
+CTRL_VALUE_OPERATORS = (CTRL_OP_REPUBLISH, CTRL_OP_TERNARY)
 
 #: The closed list an output value is composed from.
 CTRL_OPERATORS = CTRL_BOOL_OPERATORS + CTRL_VALUE_OPERATORS
@@ -530,6 +542,37 @@ class CtrlRepublish(CtrlNode):
         return [self.input]
 
 
+@dataclass
+class CtrlTernary(CtrlNode):
+    """Two conditions published as a number: +1, 0 or -1.
+
+    ``{"op": "ternary", "high": <condition>, "low": <condition>}``
+
+    What a two-threshold comparator answers when its answer is read by
+    another controller rather than by a control port: the hydrogen plant's
+    ``Automaton.signal_out``, which a second stage thresholds at ``>= 1``
+    and ``<= -1``. The number is ``high - low``, each read as one or zero,
+    so both holding at once publishes 0, their difference.
+
+    It adds no arithmetic on a reading. The two operands are conditions,
+    each already compiled to a watched automaton, and the number changes
+    only when one of them turns: a downstream threshold on it is crossed at
+    a date some upstream automaton has located, which is the property the
+    closed grammar exists for.
+    """
+
+    IS_BOOLEAN = False
+
+    op: str = CTRL_OP_TERNARY
+    #: The condition published as +1.
+    high: CtrlNode | None = None
+    #: The condition published as -1.
+    low: CtrlNode | None = None
+
+    def operand_nodes(self) -> list[CtrlNode]:
+        return [node for node in (self.high, self.low) if node is not None]
+
+
 def _require_keys(where: str, spec: dict, accepted: tuple[str, ...]) -> None:
     """Refuse a declaration key nothing reads, naming it.
 
@@ -590,6 +633,8 @@ def build_ctrl_node(where: str, spec: Any) -> CtrlNode | None:
         return _build_combine(where, spec)
     if op == CTRL_OP_REPUBLISH:
         return _build_republish(where, spec)
+    if op == CTRL_OP_TERNARY:
+        return _build_ternary(where, spec)
     raise ValueError(f"{where}: unknown operator {op!r}, expected one of {operators}")
 
 
@@ -705,6 +750,24 @@ def _build_republish(where: str, spec: dict) -> CtrlRepublish:
         raise ValueError(f"{where}: a republication declares `input`")
     gain = 1.0 if "gain" not in spec else _number(where, "gain", spec["gain"])
     return CtrlRepublish(input=str(spec["input"]), gain=gain)
+
+
+def _build_ternary(where: str, spec: dict) -> CtrlTernary:
+    _require_keys(where, spec, ("high", "low"))
+    for key in ("high", "low"):
+        if key not in spec:
+            raise ValueError(f"{where}: a ternary command declares `{key}`")
+    high = build_ctrl_node(f"{where} high", spec["high"])
+    low = build_ctrl_node(f"{where} low", spec["low"])
+    for key, node in (("high", high), ("low", low)):
+        if node is None or not node.IS_BOOLEAN:
+            raise ValueError(
+                f"{where}: a ternary command reads two conditions, and `{key}` "
+                f"is {getattr(node, 'op', node)!r}, which carries a number. The "
+                f"operators that answer a condition are "
+                f"{', '.join(CTRL_BOOL_OPERATORS)}"
+            )
+    return CtrlTernary(high=high, low=low)
 
 
 # ----------------------------------------------------------------------
@@ -1085,6 +1148,22 @@ class _Compiler:
                 for operand in operands
             ]
             return _cmp("ge", {"op": "add", "args": votes}, _float(float(node.k)))
+
+        if isinstance(node, CtrlTernary):
+            # One or zero per condition, their difference published. Read off
+            # the operands' automaton states like every other emission, so
+            # the equation announces a change exactly when an automaton has
+            # located one.
+            signs = [
+                {
+                    "op": "if",
+                    "cond": self.read(out_name, operand, f"{path}_{side}"),
+                    "then": _float(1.0),
+                    "otherwise": _float(0.0),
+                }
+                for side, operand in (("high", node.high), ("low", node.low))
+            ]
+            return {"op": "sub", "lhs": signs[0], "rhs": signs[1]}
 
         channel = self.channel(where, node)
         return _attr(self.name, channel.attribute)

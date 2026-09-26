@@ -527,8 +527,8 @@ literal for an infinity.
 The third is the one a flammability threshold is written on: two per cent
 of hydrogen in a room means two per cent of what the room holds, not two
 per cent of the room. A controller cannot compute it, its output grammar
-being closed at four operators with no arithmetic among them, so a
-fraction a controller can threshold is one the volume publishes.
+being closed and carrying no arithmetic on a reading, so a fraction a
+controller can threshold is one the volume publishes.
 
 Only a volume holding **more than one** constituent publishes ratios: a
 single-flow volume's ratio is identically one wherever it holds anything.
@@ -792,10 +792,30 @@ observation inputs (`controls_in`, a capacity level, a delivered rate or
 a constituent's share, optionally reduced over several publishers by
 `sum`, `mean` or `median`) and control outputs (`controls_out`, a boolean
 signal or a published number), and each output's value is composed from a
-**closed grammar** of four operators: `compare` (a reading against a
+**closed grammar** of five operators: `compare` (a reading against a
 threshold), `band` (two thresholds and a direction: a hysteresis band),
-`combine` (`and` / `or` / `not` / k-of-n) and `republish` (a reading,
-times a gain).
+`combine` (`and` / `or` / `not` / k-of-n), `republish` (a reading,
+times a gain) and `ternary` (two conditions published as +1, 0 or -1).
+
+`ternary` is what lets a chain of comparators be written as a chain: the
+first stage publishes its command as a number, and the next reads it
+through an ordinary `level` input and thresholds it, anywhere in the
+domain, `>= 0` included. The number changes only when one of its two
+conditions turns, so a downstream crossing is dated by an automaton that
+has already located it. muscadet's own grammar stops at the first four,
+so `ternary` is reached through the plugin data and the authoring layer,
+not through a muscadet declaration.
+
+```json
+{"type": "ObjCtrl", "name": "STAGE_1",
+ "controls_in": [{"name": "tank", "kind": "level"}],
+ "controls_out": [{"name": "signal", "kind": "value",
+                   "emit": {"op": "ternary",
+                            "high": {"op": "compare", "input": "tank",
+                                     "operator": ">", "threshold": 11.0},
+                            "low": {"op": "compare", "input": "tank",
+                                    "operator": "<", "threshold": 6.0}}}]}
+```
 
 Every threshold compiles to a **watched** two-state automaton, so a
 crossing is located by root-finding rather than noticed at the next
