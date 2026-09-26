@@ -709,11 +709,35 @@ a suffix: a variable ending in `_qty` on a component holding no volume of that
 name, or holding one another component declares, is left exactly as the
 document wrote it.
 
+## An instrument that republishes what it reads
+
+`measurements_out` (muscadet's `add_measurement_out`, R37) is carried. An
+instrument is a component that publishes a reading under the very aliases a
+capacity uses, so an observer cannot tell it from the volume behind it: its
+`source` is a capacity or a measurement channel of the same component, and it
+republishes the level, the fill and, for each constituent in `flows`, the
+constituent's level, fill and share. Everything it publishes is multiplied by
+`{name}_level_gain`, the endpoint a failure mode clamps: 0 is a dead
+instrument, 5 a wild one. A declaration with no `source` publishes its
+`level_default` and nothing refreshes it.
+
+The readers and the instruments are swept in the order the reading flows,
+volume, instrument's channel, its publication, observer, so an observer
+reads this evaluation's publication rather than the previous one's; a
+reading fed back into its own source through instruments has no such order
+and is refused naming the channels. A continuous output's rate is not a
+source: a flow publishes its own rate channel (`publish_rate`), which an
+observer reads directly.
+
+muscadet 5.6.0 writes `kind`, `rate_default` and `ratio_default` on every
+measurement channel, a level one included. They are accepted at the values a
+level channel carries (`"level"`, 0) and refused above them.
+
 ## A machine that moves a mixture, and the section it is declared in
 
 muscadet 5.4.0 added `add_mixture_in` (R51), and its read-back writes a
 `mixtures` section on **every** flow component, `[]` included. The key is
-therefore read the way `measurements_out` and `automata` are: **accepted while
+therefore read the way `automata` is: **accepted while
 it declares nothing**, refused as soon as it declares something. A reader
 refusing it by name would refuse the whole corpus at the first component it
 meets, ventilated or not, which is what a refusal keyed on the *presence* of a

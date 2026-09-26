@@ -127,13 +127,24 @@ def test_an_unknown_section_is_refused_naming_it():
     assert "rules" in str(raised.value)
 
 
-def test_a_published_measurement_is_refused_naming_the_section():
-    """`measurements_out` has no counterpart here: a capacity publishes
-    its own level and the system wires it."""
-    with pytest.raises(declare.ComponentSpecError) as raised:
-        declare.check_spec(a_heat_pump(measurements_out=[{"name": "probe"}]))
-
-    assert "measurements_out" in str(raised.value)
+def test_a_published_measurement_is_carried_with_muscadet_s_keys():
+    """`measurements_out` (muscadet's instrument, R37) is carried: every key
+    muscadet writes on an entry is read, and a misspelt one is refused by
+    name like anywhere else."""
+    probe = {
+        "name": "probe",
+        "source": None,
+        "flows": [],
+        "level_default": 2.0,
+        "fill_default": 0.0,
+        "ratio_default": 0.0,
+        "gain_default": 1.0,
+    }
+    assert declare.check_spec(a_heat_pump(measurements_out=[probe])) == "PUMP"
+    with pytest.raises(declare.ComponentSpecError, match="gian_default"):
+        declare.check_spec(
+            a_heat_pump(measurements_out=[{"name": "probe", "gian_default": 1.0}])
+        )
 
 
 def test_a_declared_automaton_is_refused_naming_the_section():
