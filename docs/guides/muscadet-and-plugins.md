@@ -134,6 +134,14 @@ The plugin peer of the builder's component, and the only object that
 carries a **conserved quantity**. Its boolean sections (`flows_in`,
 `flows_out`, `failure_modes`) read the flat vocabulary shown above.
 
+A `flows_out` production condition (`var_prod_cond`) that declares no
+`var_prod_cond_inner_mode` keeps this section's own reading: the groups
+OR-ed, each group's operands AND-ed, and a flat list one conjunction, so
+`[["grid_a"], ["grid_b"]]` is a supply fed by either grid. A declared mode
+is honoured with muscadet's meaning (`"or"` is a conjunction of
+disjunctions, `"and"` a disjunction of conjunctions), which is also what
+the authoring classes read by default.
+
 Its **continuous** sections read muscadet's own declaration vocabulary,
 key for key: the vocabulary `pyraichu.declare` reads, so a key one entry
 point accepts and the other refuses does not exist.

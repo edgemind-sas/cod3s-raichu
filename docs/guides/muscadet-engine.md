@@ -206,6 +206,13 @@ under `"or"`. Read for the other, an alarm voting over three detections stops
 alerting as soon as **one** of them falls, while the other two hold: a study
 then reads an unavailability its model never stated, and the run is green.
 
+The authoring classes (`pyraichu.muscadet`, `add_flow_out` and its tempo and
+trigger siblings) take the same key with the same default, so a model written
+directly in Python reads a condition as muscadet does; this route hands them
+its converted form stated as `"and"`. The plugin's `flows_out` section keeps
+its own reading, the groups OR-ed and a flat list one conjunction, where no
+mode is declared, and honours a declared one with muscadet's meaning.
+
 A condition of one group of one operand means the same thing either way, so a
 test written on one proves nothing about the reading it got. That is why
 `python/tests/unit/test_prod_cond_inner_mode.py` opposes the two on a
