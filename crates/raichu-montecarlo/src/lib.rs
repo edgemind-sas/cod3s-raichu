@@ -436,3 +436,147 @@ pub fn run_sequences(
     };
     Ok(per.into_iter().flatten().collect())
 }
+
+/// One quantity a sequence campaign reads on every trajectory: the value of
+/// the model indicator named `indicator` at `time`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SequenceObservation {
+    /// The model indicator whose value is read.
+    pub indicator: String,
+    /// The instant it is read at. An instant past the horizon reads the
+    /// value at the horizon, which is the trajectory's last state.
+    pub time: f64,
+}
+
+/// A sequence campaign's trajectories with the values observed on each.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservedSequences {
+    /// The raw trajectories, in replica order.
+    pub sequences: Vec<Sequence>,
+    /// One row per trajectory, one value per observation in the order they
+    /// were asked for; a boolean reads `0` or `1`.
+    pub observed: Vec<Vec<f64>>,
+    /// The instant each observation was actually read at: its requested
+    /// instant, brought back to the horizon when it lay beyond.
+    pub times: Vec<f64>,
+}
+
+/// [`run_sequences`], reading `observations` on every trajectory as it
+/// runs: the same seed gives the same trajectories, plus their values.
+///
+/// A trajectory that stops at a feared event holds its final state through
+/// the later instants, and an instant at an event date reads the state
+/// after the event, so the value is the state the trajectory was in at
+/// that instant, or ended in.
+///
+/// # Errors
+/// [`EngineError::TypeError`] for an observation naming no model
+/// indicator or read at an instant that is negative or not finite; any
+/// error a replica raises.
+pub fn run_sequences_observed(
+    model: &CompiledModel,
+    config: &McConfig,
+    observations: &[SequenceObservation],
+) -> Result<ObservedSequences, EngineError> {
+    use rayon::prelude::*;
+
+    let mut columns = Vec::with_capacity(observations.len());
+    let mut times = Vec::with_capacity(observations.len());
+    for observation in observations {
+        let column = model
+            .indicators
+            .iter()
+            .position(|indicator| indicator.name == observation.indicator)
+            .ok_or_else(|| EngineError::TypeError {
+                time: 0.0,
+                detail: format!(
+                    "the observation reads `{}`, which is no indicator of the model",
+                    observation.indicator
+                ),
+            })?;
+        if !observation.time.is_finite() || observation.time < 0.0 {
+            return Err(EngineError::TypeError {
+                time: 0.0,
+                detail: format!(
+                    "the observation of `{}` is read at {}, which is not an instant of a \
+                     trajectory",
+                    observation.indicator, observation.time
+                ),
+            });
+        }
+        columns.push(column);
+        times.push(observation.time.min(config.t_max));
+    }
+    let mut samples = times.clone();
+    samples.sort_by(f64::total_cmp);
+    samples.dedup();
+
+    let compute = || -> Result<Vec<(Sequence, Vec<f64>)>, EngineError> {
+        (0..config.nb_runs)
+            .into_par_iter()
+            .map(|replica| {
+                let engine_config = EngineConfig {
+                    t_max: config.t_max,
+                    sequences: true,
+                    stop_at_targets: true,
+                    seed: config.seed,
+                    rng_stream: replica,
+                    ode: config.ode.clone(),
+                    flow: config.flow.clone(),
+                    samples: samples.clone(),
+                    ..EngineConfig::default()
+                };
+                let result = Engine::new(model, engine_config)?.run()?;
+                let row = columns
+                    .iter()
+                    .zip(&times)
+                    .map(|(&column, &time)| {
+                        result.samples[column]
+                            .points
+                            .iter()
+                            .find(|(at, _)| *at == time)
+                            .map(|(_, value)| observed_number(*value))
+                            .ok_or_else(|| EngineError::TypeError {
+                                time,
+                                detail: format!(
+                                    "replica {replica} recorded no value of `{}` at {time}",
+                                    model.indicators[column].name
+                                ),
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let sequence = result.sequence.ok_or_else(|| EngineError::TypeError {
+                    time: 0.0,
+                    detail: format!("replica {replica} recorded no sequence"),
+                })?;
+                Ok((sequence, row))
+            })
+            .collect()
+    };
+    let per = match config.threads {
+        None => compute()?,
+        Some(threads) => rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .map_err(|e| EngineError::TypeError {
+                time: 0.0,
+                detail: format!("thread-pool construction failed: {e}"),
+            })?
+            .install(compute)?,
+    };
+    let (sequences, observed) = per.into_iter().unzip();
+    Ok(ObservedSequences {
+        sequences,
+        observed,
+        times,
+    })
+}
+
+/// An indicator value as the number a raw corpus records.
+fn observed_number(value: Value) -> f64 {
+    match value {
+        Value::Bool(b) => f64::from(u8::from(b)),
+        Value::Int(i) => i as f64,
+        Value::Float(x) => x,
+    }
+}

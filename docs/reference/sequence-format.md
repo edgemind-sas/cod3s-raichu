@@ -27,6 +27,7 @@ with the engine's own pipeline.
 | `t_max` | number | the horizon |
 | `targets` | array of strings | the feared events the campaign stops at, in declaration order |
 | `event_fields` | array of strings | the positions of an event array: `["time", "obj", "attr", "cycle_group"]` |
+| `observations` | array of objects, optional | what each trajectory's `observed` array holds, `{"name", "time"}` each; absent when nothing is observed (see [Observations](#observations)) |
 
 **Then one line per trajectory**, in replica order:
 
@@ -36,6 +37,7 @@ with the engine's own pipeline.
 | `end_cause` | string or `null` | the feared event reached, or `null` when the trajectory ran to the horizon |
 | `end_time` | number | when it stopped |
 | `events` | array of event arrays | the monitored events, in firing order |
+| `observed` | array of numbers, optional | one value per header observation, in that order; absent when nothing is observed |
 
 An **event array** is `[time, obj, attr, cycle_group]`: the firing date, the
 component, the monitored state entered, and the cycle group of the transition
@@ -61,13 +63,50 @@ Dates are written with the shortest decimal that reads back to the same
 double, and the engine's reader rounds correctly, so a corpus reads back bit
 for bit and re-reduces to exactly the levels its campaign returned.
 
+## Observations
+
+A campaign may also read, on every trajectory, the value of chosen
+attributes at chosen instants: `pyraichu.run_sequences(...,
+observations=[Observation(name, component, attribute, time)])`. The header
+then lists them, and every trajectory line carries their values:
+
+```json
+{"format":"raichu.sequences","version":1,...,"observations":[{"name":"A_flow","time":50.0}]}
+{"run":0,"end_cause":null,"end_time":100.0,"events":[...],"observed":[1]}
+```
+
+The value is the state the trajectory was in at that instant: after any
+event at that very date, and, for a trajectory that stopped at a feared
+event earlier, the state it stopped in. An instant past the horizon is read
+at the horizon, and the header records the instant actually read. A boolean
+reads `0` or `1`. Observing does not change the trajectories: the same seed
+gives the same corpus, observations added.
+
+What observations are for is a **condition**: `SequenceCondition(observation,
+op, value)` keeps the trajectories whose observed value compares to `value`
+as `op` says (`==`, `!=`, `<`, `<=`, `>`, `>=`, on the recorded double,
+exactly), and the levels are reduced from those alone. Passed to
+`run_sequences`, it filters the campaign's own levels; passed to
+`analyse_raw_sequences`, it filters a corpus read back. Either way the raw
+corpus keeps every trajectory, so the same file answers another condition
+later, and the result's `condition` field reports how many trajectories the
+condition kept out of how many. A condition naming an observation the
+corpus does not carry is refused: keeping every trajectory would read as a
+condition that held on all of them.
+
+Both fields are optional within version 1: a corpus that observes nothing
+is written exactly as before, and a reader that predates them ignores them
+and still reads the trajectories right.
+
 ## Reading rules
 
 A reader refuses a corpus whose `format` is not `"raichu.sequences"` or whose
 `version` is above the one it knows, a trajectory line out of replica order,
-and a trajectory count that is not the header's. A later version may add
-fields to either kind of line; a version 1 reader ignores fields it does not
-know.
+a trajectory count that is not the header's, and a trajectory whose
+`observed` values are not one per declared observation. Fields may be added
+to either kind of line without a new version as long as a reader that
+ignores them still reads the corpus right; a version 1 reader ignores
+fields it does not know.
 
 ## The three levels
 

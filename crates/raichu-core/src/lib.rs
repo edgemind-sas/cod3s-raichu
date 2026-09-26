@@ -43,7 +43,8 @@ pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
 pub use loops::{switching_loops, SwitchingLoop};
 pub use raichu_numeric::{SolverParams, SolverStats};
 pub use raw_sequences::{
-    read_raw_sequences, write_raw_sequences, RawHeader, RawSequencesError, RAW_SEQUENCES_FORMAT,
+    read_raw_corpus, read_raw_sequences, write_raw_corpus, write_raw_sequences, ObservedCondition,
+    RawCorpus, RawHeader, RawObservation, RawSequencesError, RAW_SEQUENCES_FORMAT,
     RAW_SEQUENCES_VERSION,
 };
 pub use sequence::{analyse, clean, filter_cycles, group_sequences, minimal_sequences};
