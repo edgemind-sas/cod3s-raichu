@@ -16,11 +16,21 @@ tolerances are part of the [provenance](reproducibility.md)).
 | `max_step` | hard cap on the step size (missed-crossing safety net) | `0.1` |
 | `tol_event` | time tolerance of the boundary-crossing bisection | `1e-10` |
 | `sub_samples` | dense interior points scanned per step for guard crossings | `16` |
+| `event_resolution` | widest spacing accepted between two scan points: a floor on resolution | none (the engine's own, `step / sub_samples`) |
 
 The defaults are **deliberately conservative**: they locate events to
 `1e-10` and scan 16 interior points per step, buying far more accuracy
 than most studies need. Relaxing them can speed a hybrid Monte-Carlo run
 by an order of magnitude at an accuracy that is still excellent.
+
+`event_resolution` answers a different question: how short an episode can
+be and still be seen. The scan finds a crossing only when a scan point
+lands inside the window where the guard holds, so a window narrower than
+the spacing (`max_step / sub_samples` at most, `0.00625` by default) can
+fall between two points. Setting `event_resolution` finer adds scan points
+to every step wider than it, and the short episode is bracketed; setting it
+coarser than the engine's own spacing changes nothing, bit for bit. Through
+the muscadet route, a study's `pdmp_dt` arrives as this keyword.
 
 ## A fast profile
 

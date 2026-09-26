@@ -269,7 +269,7 @@ fn simulate_json(
 /// is an optional [`FlowConfig`] overriding the convergence policy of
 /// the continuous flow resolution, applied to every replica.
 #[pyfunction]
-#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false, flow = None))]
+#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false, flow = None, event_resolution = None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn monte_carlo_json(
     py: Python<'_>,
@@ -287,7 +287,16 @@ fn monte_carlo_json(
     sub_samples: Option<usize>,
     stop_at_targets: bool,
     flow: Option<FlowConfig>,
+    event_resolution: Option<f64>,
 ) -> PyResult<String> {
+    if let Some(v) = event_resolution {
+        if !(v.is_finite() && v > 0.0) {
+            return Err(SimulationError::new_err(format!(
+                "event_resolution is the widest spacing accepted between two \
+                 crossing scan points, a finite positive time, got {v}"
+            )));
+        }
+    }
     let compiled = parse_and_compile(model_json)?;
     let flow = flow_policy(flow);
     py.detach(|| {
@@ -307,6 +316,7 @@ fn monte_carlo_json(
         if let Some(v) = sub_samples {
             ode.sub_samples = v;
         }
+        ode.event_resolution = event_resolution;
         let config = McConfig {
             nb_runs,
             seed,

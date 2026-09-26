@@ -726,15 +726,27 @@ def test_each_of_the_five_is_accepted_where_it_says_something(key):
     assert list(result.indicators[f"T_{FLOW}_fed_in"].mean) == [1.0, 0.0]
 
 
-def test_the_integration_step_is_a_divergence_and_says_so_where_a_reader_looks():
-    """`pdmp_dt` is not of the same kind as the four beside it: it asks for
-    the reference solver's integration step, which RAICHU has no counterpart
-    for, so on a CONTINUOUS model it would change a result rather than a draw.
-    It is accepted here -- refusing it would refuse every continuous study the
-    platform writes -- and named apart from the silent ones, because the place
-    that gap is stated is muscadet's conformance registry."""
+def test_the_integration_step_reaches_the_engine_as_its_event_resolution():
+    """`pdmp_dt` asks the reference solver for a base step, so a study that
+    tightens it catches a shorter episode. RAICHU locates crossings instead,
+    and honours the request as the widest spacing it accepts between two
+    crossing-scan points (`event_resolution`, see `test_event_resolution.py`
+    for what it catches). A study that says nothing keeps the engine's own."""
+    asked = engine._run_parameters({"schedule": [0.0, 1.0], "pdmp_dt": 0.002})
+    assert asked[3] == 0.002
+    silent = engine._run_parameters({"schedule": [0.0, 1.0]})
+    assert silent[3] is None
+    assert engine.RESOLUTION_PARAMETER == "pdmp_dt"
     assert "pdmp_dt" not in engine._UNREAD_PARAMETERS
-    assert "pdmp_dt" in engine._DIVERGENT_PARAMETERS
+
+
+@pytest.mark.parametrize("value", [0.0, -0.02, "fine", True])
+def test_an_integration_step_that_is_not_a_positive_time_is_refused(value):
+    with pytest.raises(declare.SystemSpecError, match="pdmp_dt"):
+        engine.simulate(
+            rbd_declaration(),
+            {"nb_runs": 1, "schedule": [0.0, 1.0], "pdmp_dt": value},
+        )
 
 
 def test_a_parameter_this_engine_does_not_read_is_refused_rather_than_dropped():
