@@ -204,8 +204,6 @@ def test_the_class_a_declaration_was_read_back_from_is_informational():
 #: the whole group, not a rate per flow. What leaves per constituent is
 #: not declarable at all -- it is fixed by the composition of the volume
 #: drawn from.
-MIXTURE_GROUP = {"name": "extract", "flows": ["elec"], "flow_rate": 50.0}
-
 
 def test_the_mixture_section_muscadet_writes_on_every_component_is_accepted_empty():
     """muscadet 5.4.0 writes `mixtures` on EVERY flow component, `[]`
@@ -215,35 +213,23 @@ def test_the_mixture_section_muscadet_writes_on_every_component_is_accepted_empt
     assert declare.check_spec(a_heat_pump(mixtures=[])) == "PUMP"
 
 
-def test_a_declared_mixture_group_is_refused_naming_the_section():
-    """The other half, and the reason the acceptance above is not a
-    silence: a group is one rate for several constituents, and every rate
-    this layer carries is a rate per flow. Read as two demands it would
-    give the model two degrees of freedom where the physics has one, and
-    return a trajectory that is wrong rather than absent."""
-    with pytest.raises(declare.ComponentSpecError) as raised:
-        declare.check_spec(a_heat_pump(mixtures=[MIXTURE_GROUP]))
-
-    message = str(raised.value)
-    assert "mixtures" in message
-    assert "PUMP" in message
-    # The mechanism it names in muscadet, so the refusal is traceable to
-    # the declaration that provoked it...
-    assert "add_mixture_in" in message
-    # ...and what the seam does not carry, rather than a bare "unknown".
-    assert "unknown declaration key" not in message
-
-
-def test_a_mixture_group_is_refused_on_the_build_too_and_not_only_on_the_check():
-    """`check_spec` and `build_component` share one expansion, so a
-    refusal reachable from the mapping cannot be validated away by
-    building instead of checking."""
-    system = mu.System(name="ventilated")
-
-    with pytest.raises(declare.ComponentSpecError) as raised:
-        declare.build_component(system, a_heat_pump(mixtures=[MIXTURE_GROUP]))
-
-    assert "mixtures" in str(raised.value)
+def test_a_declared_mixture_group_is_carried_with_muscadet_s_keys():
+    """A group is carried (R51): what it draws per constituent is settled
+    from the connections when the model is generated, so a declaration
+    naming an input the component declares validates, and one naming an
+    input it lacks is refused by the group's name."""
+    ventilated = a_heat_pump(
+        flows=a_heat_pump()["flows"] + [{"cls": "FlowContinuousIn", "name": "air"}],
+        mixtures=[{"name": "extraction", "flows": ["elec", "air"], "flow_rate": 50.0}],
+    )
+    assert declare.check_spec(ventilated) == "PUMP"
+    with pytest.raises(declare.ComponentSpecError, match="extraction"):
+        declare.build_component(
+            mu.System(name="ventilated"),
+            a_heat_pump(
+                mixtures=[{"name": "extraction", "flows": ["smoke"], "flow_rate": 1.0}]
+            ),
+        )
 
 
 def test_the_empty_mixture_section_builds_the_model_it_built_before_the_key():
