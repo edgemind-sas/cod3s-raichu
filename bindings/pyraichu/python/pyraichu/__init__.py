@@ -555,7 +555,8 @@ _EXPLORATION_FIELDS = (
 @dataclass(frozen=True)
 class Exploration:
     """The result of a sequence-tree exploration (:func:`explore`), in its
-    open format, ``raichu.exploration`` v1.
+    open format, ``raichu.exploration`` (version 1 for an exact result,
+    version 2 for a discretised one).
 
     ``sequences`` are the retained :class:`ExploredSequence` s by
     decreasing probability; ``steps`` is the table they index, one entry
@@ -571,6 +572,15 @@ class Exploration:
     ``algorithm`` the driver, ``expanded_nodes`` the work done, and
     ``imprecise_sequences`` how many probabilities are not guaranteed to
     the declared precision.
+
+    ``discretisation`` is ``None`` for an exact result (and absent from its
+    document). For a discretised one it is ``{level, refinement}``:
+    ``level`` is the number of equal-mass cells behind the reported
+    numbers, and ``refinement`` is ``None`` when no error estimate was
+    made, otherwise ``{base_level, base_lower, base_upper,
+    error_estimate, truncation_dominated}``. The probabilities and bounds
+    of a discretised result are those of the discretised model;
+    :attr:`error_estimate` is the estimate of the discretisation error.
     """
 
     format: str
@@ -591,6 +601,7 @@ class Exploration:
     inconclusive: bool
     expanded_nodes: int
     imprecise_sequences: int
+    discretisation: dict[str, Any] | None = None
 
     @classmethod
     def _from_json(cls, text: str) -> Exploration:
@@ -599,12 +610,23 @@ class Exploration:
         table = tuple(raw["steps"])
         fields["steps"] = table
         fields["sequences"] = [ExploredSequence._from_dict(s, table) for s in raw["sequences"]]
+        fields["discretisation"] = raw.get("discretisation")
         return cls(**fields)
 
     @property
     def relative_gap(self) -> float:
         """``(upper - lower) / upper``, 0 when ``upper`` is 0."""
         return (self.upper - self.lower) / self.upper if self.upper > 0 else 0.0
+
+    @property
+    def error_estimate(self) -> float | None:
+        """The discretisation error estimate by refinement (a probability):
+        ``None`` for an exact result, and for a discretised one whose
+        refinement was switched off (no estimate was made). It is an
+        estimate, not a bound."""
+        if self.discretisation is None or self.discretisation["refinement"] is None:
+            return None
+        return self.discretisation["refinement"]["error_estimate"]
 
     def to_json(self, path: str | Path | None = None) -> str:
         """The result in the ``raichu.exploration`` format, as JSON text;
@@ -613,6 +635,8 @@ class Exploration:
         document = {name: getattr(self, name) for name in _EXPLORATION_FIELDS}
         document["steps"] = list(self.steps)
         document["sequences"] = [s._to_dict() for s in self.sequences]
+        if self.discretisation is not None:
+            document["discretisation"] = self.discretisation
         text = json.dumps(document)
         if path is not None:
             Path(path).write_text(text, encoding="utf-8")
@@ -626,7 +650,8 @@ class Exploration:
         Each ``weight`` is a **probability** here, not a replica count: the
         retained sequences are disjoint, so the weights that collapse into
         one minimal sequence add up, and they total ``lower``. The dates
-        are 0, since the exact driver never moves the clock, which is also
+        are 0: the exact driver never moves the clock, and a discretised
+        sequence merges cells fired at different instants, which is also
         why an exploration is not an input to date-based post-processing.
         """
         return json.loads(exploration_minimal_sequences_json(self.to_json()))
@@ -646,6 +671,8 @@ def explore(
     rel_precision: float | None = None,
     max_terms: int | None = None,
     threads: int | None = None,
+    level: int | None = None,
+    refine: bool = True,
 ) -> Exploration:
     """Explore the sequence tree of ``model`` to the feared event
     ``target`` (a declared target), instead of drawing Monte-Carlo
@@ -663,13 +690,29 @@ def explore(
     override the numerical precision of the sequence probabilities.
     ``threads`` sets the worker count; the result does not depend on it.
 
-    ``algorithm="exact"`` is the only algorithm provided: the Markov
-    family (instantaneous branchings, exponential laws whose rate is
-    constant between jumps, no continuous evolution), with every
-    probability in closed form. Raises :class:`SimulationError` for an
-    invalid setting (before anything runs), for a model outside the
-    domain (see :func:`exploration_domain`), and when a law outside it
-    becomes armed, naming the transition and the sequence that armed it.
+    ``algorithm`` selects the driver:
+
+    - ``"exact"`` (default): the Markov family (instantaneous branchings,
+      exponential laws whose rate is constant between jumps, no continuous
+      evolution), with every probability in closed form.
+    - ``"discretised"``: every law the engine carries and continuous
+      evolution. At each explored state the distribution of the next event
+      (which armed transition fires first, and when) is cut into ``level``
+      cells of equal probability (default 8). With ``refine`` (default)
+      the run is repeated at ``2 x level``, which is the reported one, and
+      the difference between the two is the error estimate
+      (:attr:`Exploration.error_estimate`, an estimate, not a bound); with
+      ``refine=False`` no estimate is made. ``max_branches`` defaults to
+      1 000 000 expanded nodes per pass when omitted.
+
+    ``level`` and ``refine=False`` apply to the discretised algorithm only,
+    ``rel_precision`` and ``max_terms`` to the exact one only; passing one
+    to the other algorithm raises. Raises :class:`SimulationError` for an
+    unknown algorithm or an invalid setting (before anything runs), for a
+    model outside the algorithm's domain (see :func:`exploration_domain`
+    for the exact one), and, in the exact algorithm, when a law outside
+    its domain becomes armed, naming the transition and the sequence that
+    armed it.
     """
     return Exploration._from_json(
         explore_json(
@@ -685,6 +728,8 @@ def explore(
             rel_precision,
             max_terms,
             threads,
+            level,
+            refine,
         )
     )
 

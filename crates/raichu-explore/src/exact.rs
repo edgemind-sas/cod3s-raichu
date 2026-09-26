@@ -72,18 +72,19 @@
 //! reduced in child order. The explored set, the sequences and every
 //! number are therefore bit-identical whatever the thread count.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 
 use raichu_core::compile::{CExpr, CLaw, CStep};
-use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError, Snapshot};
-use raichu_model::TransitionKind;
+#[cfg(doc)]
+use raichu_core::EngineConfig;
+use raichu_core::{CompiledModel, Engine, EngineError};
 use raichu_numeric::{PhaseTypeAccumulator, PhaseTypeError};
 use serde::{Deserialize, Serialize};
 
-use crate::result::{
-    relative_gap, Algorithm, CutoffTallies, Cutoffs, ExplorationResult, ExploredEvent,
-    ExploredSequence, ExploredStep, Precision, DEFAULT_GAP_TOLERANCE, EXPLORATION_FORMAT,
-    EXPLORATION_VERSION,
+use crate::result::{Algorithm, Cutoffs, ExplorationResult, Precision, DEFAULT_GAP_TOLERANCE};
+use crate::walk::{
+    assemble, drive, engine_config, instantaneous_branches, invalid, path_names, validate_common,
+    Common, Expansion, NodeMass, Strategy, Timed,
 };
 
 /// Settings of an exact exploration.
@@ -304,8 +305,7 @@ pub fn explore_exact(
     model: &CompiledModel,
     settings: &ExactSettings,
 ) -> Result<ExplorationResult, EngineError> {
-    use rayon::prelude::*;
-
+    let common = settings.common();
     validate(model, settings)?;
     let violations = exact_domain_report(model);
     if !violations.is_empty() {
@@ -315,283 +315,44 @@ pub fn explore_exact(
     }
     let root_acc = PhaseTypeAccumulator::new(settings.horizon, (&settings.precision).into())
         .map_err(|e| invalid("precision", e.to_string()))?;
-    let config = engine_config();
-
-    let mut root = Walker::new(
+    let partials = drive(
         model,
-        settings,
-        Engine::new(model, config.clone())?,
-        settings.cutoffs.max_branches,
-    );
-    let (children, child_acc, child_streak) = match root.examine(1.0, &root_acc, 0)? {
-        Node::Leaf => return Ok(assemble(model, settings, vec![root.out])),
-        Node::Expand {
-            children,
-            child_acc,
-            child_streak,
-        } => (children, child_acc, child_streak),
-    };
-    let root_snapshot = root.engine.snapshot();
-    let shares = split_budget(
-        settings
-            .cutoffs
-            .max_branches
-            .map(|cap| cap.saturating_sub(root.out.expanded)),
-        children.len(),
-    );
-
-    let explore_child = |k: usize| -> Result<Partial, EngineError> {
-        let mut walker = Walker::new(
-            model,
-            settings,
-            Engine::new(model, config.clone())?,
-            shares[k],
-        );
-        walker.engine.restore(&root_snapshot);
-        walker.explore_below(1.0, 0, child_streak, &child_acc, children[k])?;
-        Ok(walker.out)
-    };
-    let compute = || -> Vec<Result<Partial, EngineError>> {
-        (0..children.len())
-            .into_par_iter()
-            .map(explore_child)
-            .collect()
-    };
-    let outcomes = match settings.threads {
-        None => compute(),
-        Some(threads) => rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .map_err(|e| invalid("threads", format!("thread-pool construction failed: {e}")))?
-            .install(compute),
-    };
-
-    // Reduction in child order: the first error in exploration order wins,
-    // and every sum is taken in that order.
-    let mut partials = vec![root.out];
-    for outcome in outcomes {
-        partials.push(outcome?);
-    }
-    Ok(assemble(model, settings, partials))
+        &common,
+        &ExactStrategy { model },
+        &engine_config(),
+        &root_acc,
+        false,
+    )?;
+    Ok(assemble(
+        model,
+        &common,
+        Algorithm::Exact,
+        &settings.precision,
+        partials,
+        false,
+    ))
 }
 
-/// The engine configuration of an exploration: no journal, no samples, no
-/// trace (the explorer builds its own), the target latch on.
-fn engine_config() -> EngineConfig {
-    EngineConfig {
-        journal: false,
-        sequences: false,
-        stop_at_targets: true,
-        samples: Vec::new(),
-        ..EngineConfig::default()
-    }
-}
-
-fn invalid(parameter: &str, detail: String) -> EngineError {
-    EngineError::InvalidStudyParameter {
-        parameter: parameter.to_owned(),
-        detail,
+impl ExactSettings {
+    fn common(&self) -> Common<'_> {
+        Common {
+            target: &self.target,
+            horizon: self.horizon,
+            cutoffs: &self.cutoffs,
+            gap_tolerance: self.gap_tolerance,
+            threads: self.threads,
+        }
     }
 }
 
 /// Up-front validation of the settings against the model.
 fn validate(model: &CompiledModel, settings: &ExactSettings) -> Result<(), EngineError> {
-    if !model.targets.iter().any(|t| t.name == settings.target) {
-        let known: Vec<&str> = model.targets.iter().map(|t| t.name.as_str()).collect();
-        return Err(invalid(
-            "target",
-            format!(
-                "no target named `{}` in the model (declared: [{}])",
-                settings.target,
-                known.join(", ")
-            ),
-        ));
-    }
-    if !settings.horizon.is_finite() || settings.horizon < 0.0 {
-        return Err(invalid(
-            "horizon",
-            format!(
-                "a horizon is a finite nonnegative time, got {}",
-                settings.horizon
-            ),
-        ));
-    }
-    let cutoffs = &settings.cutoffs;
-    if let Some(p) = cutoffs.min_probability {
-        if p.is_nan() || p <= 0.0 || p > 1.0 {
-            return Err(invalid(
-                "min_probability",
-                format!("a minimal probability lies in (0, 1], got {p}"),
-            ));
-        }
-    }
-    if cutoffs.max_branches == Some(0) {
-        return Err(invalid(
-            "max_branches",
-            "the branch cap counts expanded nodes and must be at least 1, got 0".to_owned(),
-        ));
-    }
-    if cutoffs.max_failures.is_some()
-        && !model
-            .transitions
-            .iter()
-            .any(|t| t.kind == Some(TransitionKind::Failure))
-    {
-        return Err(invalid(
-            "max_failures",
-            "no transition of the model is declared a `failure` (kind), so a failure \
-             count would silently count nothing"
-                .to_owned(),
-        ));
-    }
-    if settings.gap_tolerance.is_nan() || !(0.0..=1.0).contains(&settings.gap_tolerance) {
-        return Err(invalid(
-            "gap_tolerance",
-            format!(
-                "a relative gap tolerance lies in [0, 1], got {}",
-                settings.gap_tolerance
-            ),
-        ));
-    }
-    if settings.threads == Some(0) {
-        return Err(invalid(
-            "threads",
-            "at least one thread is needed, got 0".to_owned(),
-        ));
-    }
+    validate_common(model, &settings.common())?;
     PhaseTypeAccumulator::new(0.0, (&settings.precision).into()).map_err(|e| match e {
         PhaseTypeError::InvalidSettings { reason } => invalid("precision", reason),
         other => invalid("precision", other.to_string()),
     })?;
     Ok(())
-}
-
-/// Branch-cap shares of the root's children: `remaining` split equally,
-/// the remainder to the first children in order. `None` when uncapped.
-fn split_budget(remaining: Option<u64>, children: usize) -> Vec<Option<u64>> {
-    let Some(remaining) = remaining else {
-        return vec![None; children];
-    };
-    let n = children as u64;
-    if n == 0 {
-        return Vec::new();
-    }
-    (0..n)
-        .map(|k| Some(remaining / n + u64::from(k < remaining % n)))
-        .collect()
-}
-
-/// Final assembly: partial results summed in the given (exploration)
-/// order, the step table built from the distinct steps of the retained
-/// paths, then sequences ranked.
-fn assemble(
-    model: &CompiledModel,
-    settings: &ExactSettings,
-    partials: Vec<Partial>,
-) -> ExplorationResult {
-    let mut raw = Vec::new();
-    let mut lower = 0.0;
-    let mut tallies = CutoffTallies::default();
-    let mut expanded = 0;
-    for partial in partials {
-        lower += partial.lower;
-        tallies.merge(&partial.tallies);
-        expanded += partial.expanded;
-        raw.extend(partial.sequences);
-    }
-    let upper = lower + tallies.total_mass();
-
-    // The table: every distinct (transition, branch), in that order, so it
-    // depends on the retained set only, never on the thread count.
-    let mut ids: BTreeMap<(u32, u32), u32> = raw
-        .iter()
-        .flat_map(|sequence| sequence.path.iter().map(|&pair| (pair, 0)))
-        .collect();
-    let mut steps = Vec::with_capacity(ids.len());
-    for (k, (&(idx, branch), id)) in ids.iter_mut().enumerate() {
-        // Fewer distinct steps than (transition, branch) pairs: fits a u32.
-        *id = k as u32;
-        steps.push(resolve_step(model, idx as usize, branch as usize));
-    }
-    let mut sequences: Vec<ExploredSequence> = raw
-        .into_iter()
-        .map(|sequence| ExploredSequence {
-            steps: sequence.path.iter().map(|pair| ids[pair]).collect(),
-            end_cause: settings.target.clone(),
-            probability: sequence.probability,
-            error_bound: sequence.error_bound,
-            imprecise: sequence.imprecise,
-        })
-        .collect();
-    let key = |id: &u32| {
-        let step = &steps[*id as usize];
-        (&step.transition, &step.from, &step.to)
-    };
-    sequences.sort_by(|a, b| {
-        b.probability
-            .total_cmp(&a.probability)
-            .then_with(|| a.steps.iter().map(key).cmp(b.steps.iter().map(key)))
-    });
-    let imprecise_sequences = sequences.iter().filter(|s| s.imprecise).count();
-    ExplorationResult {
-        format: EXPLORATION_FORMAT.to_owned(),
-        version: EXPLORATION_VERSION,
-        engine_version: env!("CARGO_PKG_VERSION").to_owned(),
-        model: model.name.clone(),
-        algorithm: Algorithm::Exact,
-        target: settings.target.clone(),
-        horizon: settings.horizon,
-        cutoffs: settings.cutoffs.clone(),
-        gap_tolerance: settings.gap_tolerance,
-        precision: settings.precision.clone(),
-        inconclusive: relative_gap(lower, upper) > settings.gap_tolerance,
-        steps,
-        sequences,
-        lower,
-        upper,
-        cutoff_tallies: tallies,
-        expanded_nodes: expanded,
-        imprecise_sequences,
-    }
-}
-
-/// The resolved form of step `(idx, branch)`: names, and the monitored
-/// event when the transition is monitored.
-fn resolve_step(model: &CompiledModel, idx: usize, branch: usize) -> ExploredStep {
-    let transition = &model.transitions[idx];
-    let automaton = &model.automata[transition.automaton];
-    let to = automaton.states[transition.targets[branch]].clone();
-    ExploredStep {
-        transition: transition.name.clone(),
-        from: automaton.states[transition.source].clone(),
-        event: transition.monitored.then(|| ExploredEvent {
-            obj: transition.component.clone(),
-            attr: to.clone(),
-            cycle_group: transition.cycle_group.clone(),
-        }),
-        to,
-    }
-}
-
-/// A retained sequence as the walker records it: its path as compact
-/// `(transition, branch)` pairs, resolved into the step table only at
-/// assembly.
-#[derive(Debug)]
-struct RawSequence {
-    path: Vec<(u32, u32)>,
-    probability: f64,
-    error_bound: f64,
-    imprecise: bool,
-}
-
-/// What one worker found: its retained sequences in exploration order,
-/// their probability summed in that order, and its cut-off tallies.
-#[derive(Debug, Default)]
-struct Partial {
-    sequences: Vec<RawSequence>,
-    lower: f64,
-    tallies: CutoffTallies,
-    expanded: u64,
 }
 
 /// One branch out of a node: fire `transition` into its target at
@@ -603,343 +364,134 @@ struct Child {
     factor: f64,
 }
 
-/// A node, examined.
-enum Node {
-    /// Nothing to explore below (retained sequence, other target,
-    /// absorbing state, or branch cap).
-    Leaf,
-    /// Children in visiting order, and the accumulator they share (the
-    /// node's own, extended by the node's sojourn when it is timed).
-    Expand {
-        children: Vec<Child>,
-        child_acc: PhaseTypeAccumulator,
-        /// Consecutive instantaneous firings leading to each child: the
-        /// node's own count plus one when the node fires an instantaneous
-        /// transition, 0 when it takes a timed step.
-        child_streak: usize,
-    },
-}
-
-/// A node of the current path whose children are being visited: the
-/// heap-allocated replacement of a native recursion frame.
-struct Frame {
-    /// Embedded-path probability of the node.
-    pi: f64,
-    /// Failures fired from the initial state to the node.
-    failures: u64,
-    /// Consecutive instantaneous firings leading to each child.
-    child_streak: usize,
-    /// Children in visiting order.
-    children: Vec<Child>,
-    /// The accumulator the children share.
-    child_acc: PhaseTypeAccumulator,
-    /// The node's snapshot, taken only when it has more than one child
-    /// (a lone child never needs the node restored).
-    snapshot: Option<Snapshot>,
-    /// Index of the next child to visit.
-    next: usize,
-    /// Whether the engine has moved since the snapshot was taken.
-    dirty: bool,
-}
-
-/// A depth-first walker over one engine.
-struct Walker<'a, 'm> {
+/// The exact node expansion: branches over the embedded jump chain, the
+/// children of a node sharing the phase accumulator of the sojourns
+/// leading to them.
+struct ExactStrategy<'m> {
     model: &'m CompiledModel,
-    settings: &'a ExactSettings,
-    engine: Engine<'m>,
-    /// `(transition, branch)` fired from the initial state to the current
-    /// node, compact: a transition index and a branch index both fit a
-    /// `u32` (a compiled model's transitions are counted in thousands).
-    path: Vec<(u32, u32)>,
-    /// Remaining expansions allowed (`None` = uncapped).
-    budget: Option<u64>,
-    /// Cap on consecutive instantaneous firings along the path
-    /// ([`EngineConfig::max_fixpoint_iterations`]).
-    max_instantaneous: usize,
-    out: Partial,
 }
 
-impl<'a, 'm> Walker<'a, 'm> {
-    fn new(
-        model: &'m CompiledModel,
-        settings: &'a ExactSettings,
-        engine: Engine<'m>,
-        budget: Option<u64>,
-    ) -> Self {
-        Walker {
-            model,
-            settings,
-            engine,
-            path: Vec::new(),
-            budget,
-            max_instantaneous: engine_config().max_fixpoint_iterations,
-            out: Partial::default(),
-        }
-    }
+impl Strategy for ExactStrategy<'_> {
+    type Child = Child;
+    type Shared = PhaseTypeAccumulator;
 
-    /// Examine the current node, of embedded-path probability `pi`,
-    /// sojourn accumulator `acc`, reached after `streak` consecutive
-    /// instantaneous firings: record it when it is a retained sequence,
-    /// tally it when the branch cap stops it, or list its children.
-    fn examine(
-        &mut self,
-        pi: f64,
-        acc: &PhaseTypeAccumulator,
-        streak: usize,
-    ) -> Result<Node, EngineError> {
-        let armed = self.engine.fireable();
-
-        // 1. Instantaneous first, lowest index first.
-        let instantaneous = armed
+    fn immediate(&self, engine: &Engine<'_>) -> Option<usize> {
+        let model = self.model;
+        engine
+            .fireable()
             .iter()
             .map(|f| f.index)
-            .filter(|&idx| is_instantaneous(&self.model.transitions[idx].distrib))
-            .min();
-        let (children, child_acc, child_streak) = if let Some(idx) = instantaneous {
-            if streak >= self.max_instantaneous {
-                let prefix = self.path.len().saturating_sub(streak);
-                return Err(EngineError::InstantaneousCycle {
-                    transition: self.model.transitions[idx].name.clone(),
-                    firings: self.max_instantaneous,
-                    sequence: self.path_names()[..prefix].to_vec(),
-                });
-            }
-            let children = match &self.model.transitions[idx].distrib {
-                CLaw::Inst(probs) => probs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, p)| **p > 0.0)
-                    .map(|(branch, p)| Child {
-                        transition: idx,
-                        branch,
-                        factor: *p,
-                    })
-                    .collect(),
-                _ => vec![Child {
-                    transition: idx,
-                    branch: 0,
-                    factor: 1.0,
-                }],
-            };
-            let mut child_acc = acc.clone();
-            child_acc.push_instantaneous();
-            (children, child_acc, streak + 1)
-        } else {
-            // 2. Target reached: a retained sequence (or another target:
-            //    a leaf that contributes nothing).
-            if let Some((name, _)) = self.engine.reached_target() {
-                if name == self.settings.target {
-                    self.record(pi, acc);
-                }
-                return Ok(Node::Leaf);
-            }
-            // 3. Exponential competition, in transition index order; any
-            //    other armed law is outside the domain.
-            let mut indices: Vec<usize> = armed.iter().map(|f| f.index).collect();
-            indices.sort_unstable();
-            let mut rates = Vec::with_capacity(indices.len());
-            for idx in indices {
-                let law = &self.model.transitions[idx].distrib;
-                match law {
-                    CLaw::Exp(_)
-                    | CLaw::ExpVar {
-                        continuous: false, ..
-                    } => {
-                        let rate = self.engine.armed_rate(idx)?.unwrap_or(0.0);
-                        if rate > 0.0 {
-                            rates.push((idx, rate));
-                        }
-                    }
-                    _ => {
-                        return Err(EngineError::LawOutsideExactDomain {
-                            transition: self.model.transitions[idx].name.clone(),
-                            law: law_label(law),
-                            sequence: self.path_names(),
-                        })
-                    }
-                }
-            }
-            let total: f64 = rates.iter().map(|(_, rate)| rate).sum();
-            if total <= 0.0 {
-                // Absorbing leaf.
-                return Ok(Node::Leaf);
-            }
-            let children = rates
-                .iter()
-                .map(|&(idx, rate)| Child {
-                    transition: idx,
-                    branch: 0,
-                    factor: rate / total,
-                })
-                .collect();
-            let mut child_acc = acc.clone();
-            child_acc
-                .push(total)
-                .map_err(|e: PhaseTypeError| EngineError::TypeError {
-                    time: 0.0,
-                    detail: format!("sojourn rate after [{}]: {e}", self.path_names().join(", ")),
-                })?;
-            (children, child_acc, 0)
-        };
-
-        // Branch cap: counts expanded nodes.
-        if let Some(budget) = self.budget.as_mut() {
-            if *budget == 0 {
-                self.out
-                    .tallies
-                    .max_branches
-                    .add(pi * acc.absorption().value);
-                return Ok(Node::Leaf);
-            }
-            *budget -= 1;
-        }
-        self.out.expanded += 1;
-        Ok(Node::Expand {
-            children,
-            child_acc,
-            child_streak,
-        })
+            .filter(|&idx| is_instantaneous(&model.transitions[idx].distrib))
+            .min()
     }
 
-    /// Explore the subtree below `child` of the current node (embedded
-    /// probability `pi`, `failures` so far, children reached after
-    /// `streak` consecutive instantaneous firings, sharing `child_acc`),
-    /// the engine sitting at that node.
-    ///
-    /// Depth first over an explicit frame stack, in exactly the order a
-    /// recursion takes: a node's children in order, each child's subtree
-    /// before the next child. The bottom frame holds `child` alone and is
-    /// not a node of the path; every frame above it is.
-    fn explore_below(
-        &mut self,
-        pi: f64,
-        failures: u64,
-        streak: usize,
-        child_acc: &PhaseTypeAccumulator,
-        child: Child,
-    ) -> Result<(), EngineError> {
-        let mut stack = vec![Frame {
-            pi,
-            failures,
-            child_streak: streak,
-            children: vec![child],
-            child_acc: child_acc.clone(),
-            snapshot: None,
-            next: 0,
-            dirty: false,
-        }];
-        while let Some(top) = stack.len().checked_sub(1) {
-            let frame = &mut stack[top];
-            let Some(&child) = frame.children.get(frame.next) else {
-                stack.pop();
-                if !stack.is_empty() {
-                    self.path.pop();
-                }
-                continue;
-            };
-            frame.next += 1;
-            let Some((child_pi, child_failures)) =
-                self.admit(frame.pi, frame.failures, &frame.child_acc, &child)
-            else {
-                continue;
-            };
-            if frame.dirty {
-                if let Some(snapshot) = &frame.snapshot {
-                    self.engine.restore(snapshot);
-                }
-            }
-            frame.dirty = true;
-            let child_streak = frame.child_streak;
-            self.engine.fire_now(child.transition, Some(child.branch))?;
-            // The explorer keeps its own path: the engine's history would
-            // make every snapshot grow with the depth (quadratic memory).
-            self.engine.forget_history();
-            self.path
-                .push((child.transition as u32, child.branch as u32));
-            match self.examine(child_pi, &stack[top].child_acc, child_streak)? {
-                Node::Leaf => {
-                    self.path.pop();
-                }
-                Node::Expand {
-                    children,
-                    child_acc,
-                    child_streak,
+    fn instantaneous_children(
+        &self,
+        model: &CompiledModel,
+        idx: usize,
+        parent: &PhaseTypeAccumulator,
+        _via: Option<&Child>,
+    ) -> (Vec<Child>, PhaseTypeAccumulator) {
+        let children = instantaneous_branches(model, idx)
+            .into_iter()
+            .map(|(branch, factor)| Child {
+                transition: idx,
+                branch,
+                factor,
+            })
+            .collect();
+        let mut child_acc = parent.clone();
+        child_acc.push_instantaneous();
+        (children, child_acc)
+    }
+
+    fn timed(
+        &self,
+        engine: &mut Engine<'_>,
+        parent: &PhaseTypeAccumulator,
+        _via: Option<&Child>,
+        path: &[(u32, u32)],
+    ) -> Timed<Child, PhaseTypeAccumulator> {
+        let model = self.model;
+        // Exponential competition, in transition index order; any other
+        // armed law is outside the domain.
+        let mut indices: Vec<usize> = engine.fireable().iter().map(|f| f.index).collect();
+        indices.sort_unstable();
+        let mut rates = Vec::with_capacity(indices.len());
+        for idx in indices {
+            let law = &model.transitions[idx].distrib;
+            match law {
+                CLaw::Exp(_)
+                | CLaw::ExpVar {
+                    continuous: false, ..
                 } => {
-                    let snapshot = (children.len() > 1).then(|| self.engine.snapshot());
-                    stack.push(Frame {
-                        pi: child_pi,
-                        failures: child_failures,
-                        child_streak,
-                        children,
-                        child_acc,
-                        snapshot,
-                        next: 0,
-                        dirty: false,
-                    });
+                    let rate = engine.armed_rate(idx)?.unwrap_or(0.0);
+                    if rate > 0.0 {
+                        rates.push((idx, rate));
+                    }
+                }
+                _ => {
+                    return Err(EngineError::LawOutsideExactDomain {
+                        transition: model.transitions[idx].name.clone(),
+                        law: law_label(law),
+                        sequence: path_names(model, path),
+                    })
                 }
             }
         }
-        Ok(())
+        let total: f64 = rates.iter().map(|(_, rate)| rate).sum();
+        if total <= 0.0 {
+            // Absorbing leaf.
+            return Ok(None);
+        }
+        let children = rates
+            .iter()
+            .map(|&(idx, rate)| Child {
+                transition: idx,
+                branch: 0,
+                factor: rate / total,
+            })
+            .collect();
+        let mut child_acc = parent.clone();
+        child_acc
+            .push(total)
+            .map_err(|e: PhaseTypeError| EngineError::TypeError {
+                time: 0.0,
+                detail: format!(
+                    "sojourn rate after [{}]: {e}",
+                    path_names(model, path).join(", ")
+                ),
+            })?;
+        Ok(Some(Expansion {
+            children,
+            shared: child_acc,
+            snapshot: None,
+        }))
     }
 
-    /// Apply the cut-offs to `child` of a node (probability `pi`,
-    /// `failures` so far, children sharing `child_acc`): `None` when it
-    /// carries no mass or is pruned (its mass then tallied), otherwise its
-    /// embedded probability and failure count.
-    fn admit(
-        &mut self,
-        pi: f64,
-        failures: u64,
-        child_acc: &PhaseTypeAccumulator,
-        child: &Child,
-    ) -> Option<(f64, u64)> {
-        let child_pi = pi * child.factor;
-        let mass = child_pi * child_acc.absorption().value;
-        if mass <= 0.0 {
-            return None;
-        }
-        let transition = &self.model.transitions[child.transition];
-        let is_failure = transition.kind == Some(TransitionKind::Failure) && child.branch == 0;
-        let child_failures = failures + u64::from(is_failure);
-        let length = self.path.len() + 1;
-        let cutoffs = &self.settings.cutoffs;
-        let tallies = &mut self.out.tallies;
-        if cutoffs.min_probability.is_some_and(|p| mass < p) {
-            tallies.min_probability.add(mass);
-            return None;
-        }
-        if cutoffs.max_length.is_some_and(|n| length > n) {
-            tallies.max_length.add(mass);
-            return None;
-        }
-        if cutoffs.max_failures.is_some_and(|n| child_failures > n) {
-            tallies.max_failures.add(mass);
-            return None;
-        }
-        Some((child_pi, child_failures))
-    }
-
-    /// Record the current node as a retained sequence.
-    fn record(&mut self, pi: f64, acc: &PhaseTypeAccumulator) {
-        let absorption = acc.absorption();
-        let probability = pi * absorption.value;
-        if probability <= 0.0 {
-            return;
-        }
-        self.out.lower += probability;
-        self.out.sequences.push(RawSequence {
-            path: self.path.clone(),
-            probability,
+    fn node_mass(&self, pi: f64, parent: &PhaseTypeAccumulator, _via: Option<&Child>) -> NodeMass {
+        let absorption = parent.absorption();
+        NodeMass {
+            value: pi * absorption.value,
             error_bound: pi * absorption.error_bound,
             imprecise: absorption.flagged,
-        });
+        }
     }
 
-    fn path_names(&self) -> Vec<String> {
-        self.path
-            .iter()
-            .map(|&(idx, _)| self.model.transitions[idx as usize].name.clone())
-            .collect()
+    fn child_mass(&self, pi: f64, shared: &PhaseTypeAccumulator, child: &Child) -> (f64, f64, f64) {
+        let child_pi = pi * child.factor;
+        let mass = child_pi * shared.absorption().value;
+        (child_pi, mass, mass)
+    }
+
+    fn fire(&self, engine: &mut Engine<'_>, child: &Child) -> Result<(), EngineError> {
+        engine
+            .fire_now(child.transition, Some(child.branch))
+            .map(|_| ())
+    }
+
+    fn step(&self, child: &Child) -> Option<(u32, u32)> {
+        Some((child.transition as u32, child.branch as u32))
     }
 }
 

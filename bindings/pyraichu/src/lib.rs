@@ -22,8 +22,9 @@ use raichu::raichu_core::{
     SolverParams,
 };
 use raichu::raichu_explore::{
-    exact_domain_report, explore_exact, read_exploration as read_exploration_result, Algorithm,
-    Cutoffs, ExactSettings, ExplorationResult, Precision,
+    exact_domain_report, explore_discretised, explore_exact,
+    read_exploration as read_exploration_result, Algorithm, Cutoffs, DiscretisedSettings,
+    ExactSettings, ExplorationResult, Precision,
 };
 use raichu::raichu_model::Model;
 use raichu::raichu_montecarlo::{run as mc_run, run_sequences as mc_run_sequences, McConfig};
@@ -444,25 +445,38 @@ fn analyse_raw_sequences_json(py: Python<'_>, raw_path: std::path::PathBuf) -> P
 }
 
 /// Explore the sequence tree of a model to the target `target` and return
-/// the result in its open format, `raichu.exploration` v1, as JSON.
+/// the result in its open format, `raichu.exploration` (version 1 for an
+/// exact result, version 2 for a discretised one), as JSON.
 ///
 /// Each retained sequence carries its probability (dimensionless) of
 /// reaching the target by `horizon` (in the model's time unit), and the
 /// result carries a lower bound (the sum of the retained probabilities)
 /// and an upper bound (plus the mass every cut-off discarded). Every
-/// cut-off is optional; `rel_precision` and `max_terms` override the
-/// numerical precision of the sequence probabilities (engine defaults
-/// when omitted).
+/// cut-off is optional.
 ///
-/// `algorithm` selects the driver; only `"exact"` (the Markov family,
-/// probabilities in closed form) is provided. An invalid setting, a
-/// model outside the algorithm's domain, and a law outside it armed
-/// along an explored sequence raise `SimulationError` with the engine's
-/// message, the last one naming the transition and the sequence.
+/// `algorithm` selects the driver:
+///
+/// - `"exact"` (default): the Markov family, probabilities in closed
+///   form. `rel_precision` and `max_terms` override the numerical
+///   precision of the sequence probabilities (engine defaults when
+///   omitted); `level` must be omitted and `refine` left true.
+/// - `"discretised"`: every law the engine carries and continuous
+///   evolution. The distribution of the next event is cut into `level`
+///   equal-mass cells (default `DEFAULT_LEVEL`, 8); with `refine` the run
+///   is repeated at `2 x level`, which is the reported one, and the
+///   difference is the error estimate. `max_branches` defaults to
+///   `DEFAULT_MAX_BRANCHES` per pass when omitted; `rel_precision` and
+///   `max_terms` must be omitted (they do not apply).
+///
+/// An unknown algorithm, a setting that does not apply to the selected
+/// one, an invalid setting, a model outside the algorithm's domain, and a
+/// law outside it armed along an explored sequence raise
+/// `SimulationError` with the engine's message, the last one naming the
+/// transition and the sequence.
 ///
 /// The GIL is released while the exploration runs.
 #[pyfunction]
-#[pyo3(signature = (model_json, target, horizon, algorithm = "exact", min_probability = None, max_length = None, max_failures = None, max_branches = None, gap_tolerance = None, rel_precision = None, max_terms = None, threads = None))]
+#[pyo3(signature = (model_json, target, horizon, algorithm = "exact", min_probability = None, max_length = None, max_failures = None, max_branches = None, gap_tolerance = None, rel_precision = None, max_terms = None, threads = None, level = None, refine = true))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn explore_json(
     py: Python<'_>,
@@ -478,34 +492,80 @@ fn explore_json(
     rel_precision: Option<f64>,
     max_terms: Option<usize>,
     threads: Option<usize>,
+    level: Option<u32>,
+    refine: bool,
 ) -> PyResult<String> {
-    let _algorithm: Algorithm = algorithm.parse().map_err(|e| {
+    let parsed: Algorithm = algorithm.parse().map_err(|e| {
         SimulationError::new_err(format!(
             "exploration algorithm `{algorithm}` is not provided by this engine: {e}"
         ))
     })?;
+    let not_applicable = |setting: &str, only: &str| {
+        SimulationError::new_err(format!(
+            "`{setting}` does not apply to the `{algorithm}` exploration algorithm \
+             (only to `{only}`)"
+        ))
+    };
     let compiled = parse_and_compile(model_json)?;
-    let mut settings = ExactSettings::new(target, horizon);
-    settings.cutoffs = Cutoffs {
-        min_probability,
-        max_length,
-        max_failures,
-        max_branches,
-    };
-    if let Some(tolerance) = gap_tolerance {
-        settings.gap_tolerance = tolerance;
+    match parsed {
+        Algorithm::Exact => {
+            if level.is_some() {
+                return Err(not_applicable("level", "discretised"));
+            }
+            if !refine {
+                return Err(not_applicable("refine", "discretised"));
+            }
+            let mut settings = ExactSettings::new(target, horizon);
+            settings.cutoffs = Cutoffs {
+                min_probability,
+                max_length,
+                max_failures,
+                max_branches,
+            };
+            if let Some(tolerance) = gap_tolerance {
+                settings.gap_tolerance = tolerance;
+            }
+            let defaults = Precision::default();
+            settings.precision = Precision {
+                rel_precision: rel_precision.unwrap_or(defaults.rel_precision),
+                max_terms: max_terms.unwrap_or(defaults.max_terms),
+            };
+            settings.threads = threads;
+            py.detach(|| {
+                let result = explore_exact(&compiled, &settings)
+                    .map_err(|e| SimulationError::new_err(e.to_string()))?;
+                serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
+            })
+        }
+        Algorithm::Discretised => {
+            if rel_precision.is_some() {
+                return Err(not_applicable("rel_precision", "exact"));
+            }
+            if max_terms.is_some() {
+                return Err(not_applicable("max_terms", "exact"));
+            }
+            let mut settings = DiscretisedSettings::new(target, horizon);
+            settings.cutoffs = Cutoffs {
+                min_probability,
+                max_length,
+                max_failures,
+                max_branches: max_branches.or(settings.cutoffs.max_branches),
+            };
+            if let Some(tolerance) = gap_tolerance {
+                settings.gap_tolerance = tolerance;
+            }
+            if let Some(level) = level {
+                settings.level = level;
+            }
+            settings.refine = refine;
+            settings.threads = threads;
+            py.detach(|| {
+                let result = explore_discretised(&compiled, &settings)
+                    .map_err(|e| SimulationError::new_err(e.to_string()))?;
+                serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
+            })
+        }
     }
-    let defaults = Precision::default();
-    settings.precision = Precision {
-        rel_precision: rel_precision.unwrap_or(defaults.rel_precision),
-        max_terms: max_terms.unwrap_or(defaults.max_terms),
-    };
-    settings.threads = threads;
-    py.detach(|| {
-        let result = explore_exact(&compiled, &settings)
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
-        serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
-    })
 }
 
 /// The static exact-domain report of a model, as a JSON array: every

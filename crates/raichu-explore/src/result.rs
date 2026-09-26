@@ -1,5 +1,6 @@
 //! The result of a sequence-tree exploration, in its own open format:
-//! `raichu.exploration`, version 1.
+//! `raichu.exploration`, version 1 for an exact result and version 2 for a
+//! discretised one ([`Algorithm::format_version`]).
 //!
 //! An exploration answers "which sequences lead to the feared event by
 //! the horizon, and with what probability", and says how much it left
@@ -27,7 +28,13 @@
 //!
 //! The format is plain serde data. A reader refuses another `format` and a
 //! `version` above the one it knows; a later version may add fields, which
-//! a version-1 reader ignores.
+//! an earlier reader ignores. Version 2 added the `discretised` algorithm
+//! and its `discretisation` field: an exact result is still written as
+//! version 1, byte for byte as before, and a version-1 reader refuses a
+//! discretised document by its version rather than by an unknown
+//! algorithm name. A document declaring an algorithm that its version
+//! predates (a `discretised` result at version 1) is refused as
+//! inconsistent ([`ReadExplorationError::AlgorithmVersion`]).
 
 use raichu_core::{SeqEvent, Sequence};
 use serde::{Deserialize, Serialize};
@@ -35,8 +42,11 @@ use serde::{Deserialize, Serialize};
 /// The `format` of an exploration result.
 pub const EXPLORATION_FORMAT: &str = "raichu.exploration";
 
-/// The version this crate writes, and the highest it reads.
-pub const EXPLORATION_VERSION: u32 = 1;
+/// The highest format version this crate reads, and the one it writes for
+/// the most recent algorithm. Each result is written at its algorithm's
+/// own version ([`Algorithm::format_version`]): 1 for [`Algorithm::Exact`],
+/// 2 for [`Algorithm::Discretised`].
+pub const EXPLORATION_VERSION: u32 = 2;
 
 /// Default relative gap `(upper - lower) / upper` above which a result is
 /// flagged inconclusive.
@@ -51,12 +61,35 @@ pub enum Algorithm {
     /// probability times the probability that its sojourns end by the
     /// horizon).
     Exact,
+    /// Discretised exploration: the distribution of the random next event
+    /// (which armed transition fires first, and when) is cut into cells of
+    /// equal probability mass, each cell a branch fired at its
+    /// mass-median instant. Covers every law the engine carries and
+    /// continuous evolution; the bounds are bounds on the discretised
+    /// model, and the result states the discretisation level and an
+    /// estimate of the discretisation error ([`Discretisation`]).
+    Discretised,
+}
+
+impl Algorithm {
+    /// The format version a result of this algorithm is written at, which
+    /// is also the first version that knows the algorithm: 1 for
+    /// [`Algorithm::Exact`] (so an exact document is unchanged since
+    /// version 1), 2 for [`Algorithm::Discretised`].
+    #[must_use]
+    pub fn format_version(self) -> u32 {
+        match self {
+            Algorithm::Exact => 1,
+            Algorithm::Discretised => 2,
+        }
+    }
 }
 
 impl std::str::FromStr for Algorithm {
     type Err = String;
 
-    /// Parse an algorithm by its serialized name (`exact`). The accepted
+    /// Parse an algorithm by its serialized name (`exact`,
+    /// `discretised`). The accepted
     /// names are the serde spellings, so they cannot drift from the
     /// result format; an unknown name is refused with the list of known
     /// ones.
@@ -79,9 +112,25 @@ pub enum ReadExplorationError {
     /// The document declares a version above [`EXPLORATION_VERSION`] (or
     /// none).
     #[error(
-        "exploration format version {0:?} is not readable by this engine (reads up to version 1)"
+        "exploration format version {0:?} is not readable by this engine (reads up to version {max})",
+        max = EXPLORATION_VERSION
     )]
     Version(Option<u32>),
+    /// The document declares an algorithm introduced by a later format
+    /// version than the one it declares (a `discretised` result at
+    /// version 1): it was not written by this format's writer.
+    #[error(
+        "inconsistent exploration document: algorithm `{algorithm:?}` needs format version \
+         {required} or above, but the document declares version {version}"
+    )]
+    AlgorithmVersion {
+        /// The declared algorithm.
+        algorithm: Algorithm,
+        /// The declared version.
+        version: u32,
+        /// The first version that knows the algorithm.
+        required: u32,
+    },
     /// A sequence refers to a step outside the result's step table.
     #[error("sequence {sequence} refers to step {step}, but the step table holds {table} steps")]
     DanglingStep {
@@ -95,8 +144,9 @@ pub enum ReadExplorationError {
 }
 
 /// Read an exploration result from its JSON document, refusing another
-/// `format`, a `version` above [`EXPLORATION_VERSION`], and a sequence
-/// referring to a step outside the step table. The envelope
+/// `format`, a `version` above [`EXPLORATION_VERSION`], an algorithm its
+/// declared version predates ([`Algorithm::format_version`]), and a
+/// sequence referring to a step outside the step table. The envelope
 /// is read first, so a document of another format is refused by name
 /// rather than by the first field it happens to lack.
 pub fn read_exploration(json: &str) -> Result<ExplorationResult, ReadExplorationError> {
@@ -116,6 +166,14 @@ pub fn read_exploration(json: &str) -> Result<ExplorationResult, ReadExploration
     }
     let result: ExplorationResult =
         serde_json::from_str(json).map_err(|e| ReadExplorationError::Json(e.to_string()))?;
+    let required = result.algorithm.format_version();
+    if result.version < required {
+        return Err(ReadExplorationError::AlgorithmVersion {
+            algorithm: result.algorithm,
+            version: result.version,
+            required,
+        });
+    }
     for (sequence, explored) in result.sequences.iter().enumerate() {
         if let Some(&step) = explored
             .steps
@@ -289,7 +347,8 @@ pub struct ExploredEvent {
 
 impl ExploredEvent {
     /// The corpus event, dated 0: the exact driver never moves the clock,
-    /// so no date it could give would mean anything.
+    /// and a discretised sequence merges many cells whose representative
+    /// instants differ, so no date either could give would mean anything.
     #[must_use]
     pub fn to_seq_event(&self) -> SeqEvent {
         SeqEvent {
@@ -324,12 +383,14 @@ pub struct ExploredSequence {
     pub imprecise: bool,
 }
 
-/// The result of a sequence-tree exploration (`raichu.exploration` v1).
+/// The result of a sequence-tree exploration (`raichu.exploration`, v1 for
+/// an exact result, v2 for a discretised one).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExplorationResult {
     /// Always [`EXPLORATION_FORMAT`].
     pub format: String,
-    /// The format version, [`EXPLORATION_VERSION`] when written here.
+    /// The format version: [`Algorithm::format_version`] of `algorithm`
+    /// when written here.
     pub version: u32,
     /// The engine version that explored.
     pub engine_version: String,
@@ -369,6 +430,49 @@ pub struct ExplorationResult {
     pub expanded_nodes: u64,
     /// Number of retained sequences flagged imprecise.
     pub imprecise_sequences: usize,
+    /// The discretisation of a [`Algorithm::Discretised`] result: its
+    /// level and its error estimate. Absent from an exact result (and from
+    /// its document, which therefore reads back unchanged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discretisation: Option<Discretisation>,
+}
+
+/// The discretisation a [`Algorithm::Discretised`] result was computed
+/// with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Discretisation {
+    /// Number of equal-mass cells the next-event distribution is cut into
+    /// at every timed node, for the reported numbers (the refined level
+    /// `2K` when a refinement was made, `K` otherwise).
+    pub level: u32,
+    /// The error estimate by refinement, `None` when refinement was
+    /// switched off: then **no estimate was made**, and the reported
+    /// numbers carry no statement about the discretisation error.
+    pub refinement: Option<Refinement>,
+}
+
+/// The discretisation error estimate by refinement: the exploration run
+/// at the base level `K` and again at `2K`, the reported result being
+/// the `2K` one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Refinement {
+    /// The base level `K`.
+    pub base_level: u32,
+    /// Lower bound of the base run (dimensionless probability).
+    pub base_lower: f64,
+    /// Upper bound of the base run (dimensionless probability).
+    pub base_upper: f64,
+    /// `max(|lower_2K - lower_K|, |upper_2K - upper_K|)`: an
+    /// **estimate** of the discretisation error of the base run, which
+    /// also bounds the reported (finer) run's error when the scheme
+    /// converges. It is an estimate, not a bound.
+    pub error_estimate: f64,
+    /// `true` when the two runs' gaps `upper - lower` add up to half of
+    /// `error_estimate` or more (in particular whenever either gap exceeds
+    /// it): the difference between the two runs may then reflect what
+    /// each one truncated as much as the discretisation, since what a run
+    /// truncated from its lower bound is at most its gap.
+    pub truncation_dominated: bool,
 }
 
 impl ExplorationResult {
@@ -376,6 +480,17 @@ impl ExplorationResult {
     #[must_use]
     pub fn relative_gap(&self) -> f64 {
         relative_gap(self.lower, self.upper)
+    }
+
+    /// The discretisation error estimate by refinement, `None` for an
+    /// exact result and for a discretised one whose refinement was
+    /// switched off.
+    #[must_use]
+    pub fn error_estimate(&self) -> Option<f64> {
+        self.discretisation
+            .as_ref()
+            .and_then(|d| d.refinement.as_ref())
+            .map(|r| r.error_estimate)
     }
 
     /// The retained sequences as corpus [`Sequence`]s, each weighted by
@@ -388,8 +503,9 @@ impl ExplorationResult {
     /// total weight is [`ExplorationResult::lower`].
     ///
     /// **Not a valid input for date-based post-processing**, such as
-    /// analyses that read a free-running, dated corpus: an exact
-    /// exploration produces neither dates (the clock never moves) nor
+    /// analyses that read a free-running, dated corpus: an exploration
+    /// produces neither dates (the exact clock never moves, and a
+    /// discretised sequence merges cells fired at different instants) nor
     /// the trajectories that miss the target.
     #[must_use]
     pub fn to_sequences(&self) -> Vec<Sequence> {

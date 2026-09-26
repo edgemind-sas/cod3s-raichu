@@ -178,6 +178,44 @@ pub struct EngineConfig {
     /// policy; a model with no distribution operator runs no resolution
     /// and is untouched by any of it.
     pub flow: FlowConfig,
+    /// How the firing dates of stochastic transitions are handled:
+    /// drawn when the transition is armed (the default, the Monte-Carlo
+    /// semantics), or deferred and left to the caller
+    /// ([`StochasticDates::Deferred`], the seam of the discretised
+    /// sequence-tree explorer).
+    pub stochastic_dates: StochasticDates,
+}
+
+/// How the engine handles the firing date of a **stochastic** transition
+/// (exponential, state-dependent exponential, Weibull, lognormal, gamma,
+/// uniform, empirical). Deterministic delays, instantaneous branchings and
+/// watched transitions are unaffected by this choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StochasticDates {
+    /// The date is sampled from the RNG when the transition is armed
+    /// (`schedule_stochastic`), and a state-dependent rate is realised
+    /// against an `Exp(1)` hazard threshold drawn then. The engine fires
+    /// the earliest date. This is the Monte-Carlo semantics.
+    #[default]
+    Drawn,
+    /// Arming consumes **no** random number and schedules **no** date. The
+    /// engine records what a later resolution of the law needs: the
+    /// arming instant, the age (time spent armed, net of the pauses of a
+    /// `resume` interruption) and, for a state-dependent exponential, the
+    /// cumulative hazard `H = ∫ λ dt` accumulated so far (integrated with
+    /// the ODE against an infinite threshold when λ varies continuously,
+    /// banked at each rate change when it is piecewise constant). The
+    /// engine never fires such a transition by itself: the caller fires it
+    /// at a chosen instant with [`Engine::fire_deferred_at`], and reads the
+    /// bookkeeping with [`Engine::deferred`] and
+    /// [`Engine::probe_deferred`].
+    ///
+    /// Interruption policies act on the age: `reset` drops the armed
+    /// transition when its guard turns false (the age restarts from zero
+    /// at the next arming), `resume` freezes the age while the guard is
+    /// false, `continue` keeps the transition armed and aging, exactly as
+    /// drawn mode keeps its date and fires it whatever the guard.
+    Deferred,
 }
 
 impl Default for EngineConfig {
@@ -196,6 +234,7 @@ impl Default for EngineConfig {
             seed: 0,
             rng_stream: 0,
             flow: FlowConfig::default(),
+            stochastic_dates: StochasticDates::Drawn,
         }
     }
 }
@@ -477,6 +516,42 @@ pub enum EngineError {
         /// itself excluded), in firing order.
         sequence: Vec<String>,
     },
+    /// An operation of the deferred-draw mode was called on an engine
+    /// running with drawn dates ([`StochasticDates::Drawn`]).
+    #[error("`{operation}` needs deferred stochastic dates (`StochasticDates::Deferred`)")]
+    NotDeferredMode {
+        /// The operation that was refused.
+        operation: String,
+    },
+    /// Interactive control: `set_date` on a transition armed in deferred
+    /// mode. Such a transition has no date to override; it is fired at a
+    /// chosen instant with [`Engine::fire_deferred_at`].
+    #[error(
+        "transition `{transition}` is armed without a date (deferred stochastic \
+         dates): fire it with `fire_deferred_at` instead of dating it"
+    )]
+    DeferredDate {
+        /// The transition whose date was to be set.
+        transition: String,
+    },
+    /// [`Engine::fire_deferred_at`] asked for an instant after an event
+    /// the engine would have to process first: the next deterministic
+    /// date, a watched boundary crossing located on the way, or the
+    /// horizon. Nothing is changed.
+    #[error(
+        "cannot fire deferred transition `{transition}` at t={date}: {cause} \
+         comes first, at t={limit}"
+    )]
+    DeferredFiringTooLate {
+        /// The deferred transition.
+        transition: String,
+        /// The requested firing instant.
+        date: f64,
+        /// The instant of the event that comes first.
+        limit: f64,
+        /// What that event is, in words.
+        cause: String,
+    },
 }
 
 /// Why a continuous-flow resolution stopped without settling.
@@ -645,6 +720,108 @@ struct Hazard {
     since: f64,
 }
 
+/// Age bookkeeping of a stochastic transition armed in deferred mode
+/// ([`StochasticDates::Deferred`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DeferredAge {
+    /// Instant the transition was armed (kept across `resume` pauses).
+    armed_at: f64,
+    /// Age banked by the running stretches that ended before `since`.
+    banked: f64,
+    /// Start of the current running stretch (or of the pause).
+    since: f64,
+    /// `false` while paused by a `resume` interruption.
+    running: bool,
+}
+
+impl DeferredAge {
+    /// Age at `now`: time spent armed and running.
+    fn age(&self, now: f64) -> f64 {
+        if self.running {
+            self.banked + (now - self.since)
+        } else {
+            self.banked
+        }
+    }
+}
+
+/// One stochastic transition armed in deferred mode, as read by
+/// [`Engine::deferred`].
+#[derive(Debug, Clone)]
+pub struct DeferredTransition {
+    /// Transition index (the handle of [`Engine::fire_deferred_at`]).
+    pub index: usize,
+    /// Qualified transition name.
+    pub transition: String,
+    /// Its compiled occurrence law.
+    pub law: CLaw,
+    /// Instant it was armed (time units). A `resume` pause keeps it.
+    pub armed_at: f64,
+    /// Age `a` at the current instant (time units): the time spent armed
+    /// with the countdown running, net of `resume` pauses. The law's
+    /// conditional survival `S(a + s) / S(a)` is what resolves it.
+    pub age: f64,
+    /// `true` while a `resume` interruption holds it paused: it cannot
+    /// fire and does not age until its guard holds again.
+    pub paused: bool,
+    /// For a state-dependent exponential (`CLaw::ExpVar`) only: the
+    /// cumulative hazard `H = ∫ λ(x(u)) du` accumulated over the running
+    /// stretches since arming (dimensionless); the survival of the
+    /// remaining countdown from now is `exp(−(H(t) − H(now)))`. `None`
+    /// for every other law, whose hazard is a function of the age.
+    pub hazard: Option<f64>,
+}
+
+/// Why [`Engine::probe_deferred`] stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeStop {
+    /// The next date-scheduled (deterministic) transition is due at the
+    /// stop instant. It is not fired.
+    Deterministic {
+        /// Its transition index.
+        index: usize,
+    },
+    /// A watched boundary crossing was located (or already holds) at the
+    /// stop instant. It is not fired.
+    Watched {
+        /// Its transition index.
+        index: usize,
+    },
+    /// The requested limit was reached.
+    Limit,
+    /// The simulation horizon `t_max` came before the requested limit.
+    Horizon,
+}
+
+/// One dense sample of the cumulative hazards of the continuously
+/// varying deferred transitions (see [`DeferredProbe`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HazardSample {
+    /// Sample instant (time units).
+    pub time: f64,
+    /// Cumulative hazard `H` of each transition of
+    /// [`DeferredProbe::transitions`] at `time`, in that order.
+    pub hazards: Vec<f64>,
+}
+
+/// Result of [`Engine::probe_deferred`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredProbe {
+    /// Instant the probe stopped at (the engine clock is there).
+    pub stop: f64,
+    /// Why it stopped there.
+    pub reason: ProbeStop,
+    /// Indices of the running deferred transitions whose rate varies
+    /// continuously (`CLaw::ExpVar { continuous: true, .. }`), ascending.
+    pub transitions: Vec<usize>,
+    /// Their cumulative hazards along the probe, in strictly increasing
+    /// time, from the start instant to `stop` inclusive: one sample at
+    /// every accepted solver step end and at the interior points the
+    /// solver scans for crossings (dense output). Empty when
+    /// `transitions` is.
+    pub samples: Vec<HazardSample>,
+}
+
 /// A fired event (the discrete structure compared at validation level 1).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Event {
@@ -734,6 +911,7 @@ pub struct Snapshot {
     pending: Vec<Option<f64>>,
     frozen: Vec<Option<f64>>,
     hazards: Vec<Option<Hazard>>,
+    deferred: Vec<Option<DeferredAge>>,
     events: Vec<Event>,
     journal: Vec<JournalRecord>,
     seq_events: Vec<SeqEvent>,
@@ -1850,6 +2028,13 @@ struct ContinuousSystem<'m> {
     /// The flips the solver located, `(date, indicator, verdict after)`,
     /// in time order.
     flips: Vec<(f64, usize, bool)>,
+    /// Dense hazard recording of [`Engine::probe_deferred`]: the
+    /// cumulative hazard banked at segment start per slot of `hazards`,
+    /// and the samples taken. Rides on one extra observed verdict that
+    /// always reads `false` (so it never flips and never moves the
+    /// solver), because an observation is evaluated at every accepted
+    /// step end and at the interior scan points. `None` outside a probe.
+    trace: Option<(Vec<f64>, Vec<HazardSample>)>,
     error: Option<EngineError>,
     /// Work done inside the solver callbacks, merged back into the
     /// engine's counters when the segment returns.
@@ -1991,7 +2176,7 @@ impl OdeSystem for ContinuousSystem<'_> {
     }
 
     fn n_observations(&self) -> usize {
-        self.observed.len()
+        self.observed.len() + usize::from(self.trace.is_some())
     }
 
     fn observations(&mut self, t: f64, y: &[f64], out: &mut [bool]) {
@@ -2006,10 +2191,29 @@ impl OdeSystem for ContinuousSystem<'_> {
                 Value::Bool(true)
             );
         }
+        if let Some((bases, samples)) = self.trace.as_mut() {
+            out[self.observed.len()] = false;
+            // Interior bisection points of another verdict's flip come
+            // after the scan point that bracketed them: keep the samples
+            // strictly increasing in time.
+            if samples.last().is_none_or(|last| t > last.time) {
+                let ode_len = self.model.ode.len();
+                samples.push(HazardSample {
+                    time: t,
+                    hazards: bases
+                        .iter()
+                        .enumerate()
+                        .map(|(slot, base)| base + y[ode_len + slot].max(0.0))
+                        .collect(),
+                });
+            }
+        }
     }
 
     fn observed(&mut self, index: usize, t: f64, now: bool) {
-        self.flips.push((t, self.observed[index], now));
+        if let Some(&indicator) = self.observed.get(index) {
+            self.flips.push((t, indicator, now));
+        }
     }
 
     fn events(&mut self, t: f64, y: &[f64], out: &mut [f64]) {
@@ -2100,6 +2304,14 @@ pub struct Engine<'m> {
     /// Cumulative-hazard state per transition (`CLaw::ExpVar` only;
     /// survives a `resume` pause, cleared by `reset`/firing/exit).
     hazards: Vec<Option<Hazard>>,
+    /// Age bookkeeping per transition armed in deferred mode
+    /// ([`StochasticDates::Deferred`]); always `None` in drawn mode. A
+    /// deferred state-dependent rate keeps its cumulative hazard in
+    /// `hazards`, against an infinite threshold.
+    deferred: Vec<Option<DeferredAge>>,
+    /// Dense hazard samples being recorded by [`Engine::probe_deferred`]
+    /// (`None` outside a probe): scratch, never part of the trajectory.
+    hazard_trace: Option<Vec<HazardSample>>,
     /// Transitions whose state-dependent rate varies continuously
     /// (monitored during `integrate_to`, like watched boundaries).
     continuous_rates: Vec<TransIdx>,
@@ -2253,6 +2465,8 @@ impl<'m> Engine<'m> {
             pending: vec![None; model.transitions.len()],
             frozen: vec![None; model.transitions.len()],
             hazards: vec![None; model.transitions.len()],
+            deferred: vec![None; model.transitions.len()],
+            hazard_trace: None,
             continuous_rates,
             events: Vec::new(),
             journal: Vec::new(),
@@ -2380,7 +2594,9 @@ impl<'m> Engine<'m> {
     /// **Interactive control**: every currently-armed transition.
     ///
     /// Lists the date-scheduled transitions (delay / inst / stochastic)
-    /// with their firing date, plus the watched transitions armed in
+    /// with their firing date, the stochastic transitions armed without a
+    /// date in deferred mode ([`StochasticDates::Deferred`], date `None`,
+    /// paused ones left out), plus the watched transitions armed in
     /// their source state (date = the current instant when their guard
     /// already holds, else `None`: the boundary being located only
     /// during continuous evolution).
@@ -2398,6 +2614,16 @@ impl<'m> Engine<'m> {
                     transition: self.model.transitions[idx].name.clone(),
                     kind: fireable_kind(&self.model.transitions[idx].distrib),
                     date: Some(date),
+                });
+            }
+        }
+        for (idx, age) in self.deferred.iter().enumerate() {
+            if age.is_some_and(|age| age.running) {
+                out.push(Fireable {
+                    index: idx,
+                    transition: self.model.transitions[idx].name.clone(),
+                    kind: FireableKind::Stochastic,
+                    date: None,
                 });
             }
         }
@@ -2506,8 +2732,9 @@ impl<'m> Engine<'m> {
     /// does not advance.
     ///
     /// "Armed" means date-scheduled (any date, including the `+∞` of a
-    /// zero-rate exponential, which this method does fire if asked), or
-    /// a watched transition whose guard already holds.
+    /// zero-rate exponential, which this method does fire if asked),
+    /// armed without a date in deferred mode and not paused, or a watched
+    /// transition whose guard already holds.
     ///
     /// The firing itself draws nothing when `branch` is given, but the
     /// discrete step that follows re-arms the schedule, which draws the
@@ -2535,7 +2762,7 @@ impl<'m> Engine<'m> {
             Some(branch) => Some(self.resolve_branch(trans_idx, branch)?),
             None => None,
         };
-        if self.pending[trans_idx].is_some() {
+        if self.is_armed(trans_idx) {
             self.fire(trans_idx, forced)
         } else if self.is_immediate_watched(trans_idx)? {
             self.note_watched_firing()?;
@@ -2565,9 +2792,9 @@ impl<'m> Engine<'m> {
     /// A rate of zero (a dormant spare) is returned as `Some(0.0)`: the
     /// transition is armed, it simply cannot fire from this state.
     ///
-    /// Returns `Ok(None)` for a transition that is not armed (not
-    /// date-scheduled, including a countdown paused by a `resume`
-    /// interruption) and for every other law (delay, instantaneous,
+    /// Returns `Ok(None)` for a transition that is not armed (neither
+    /// date-scheduled nor running in deferred mode, including a countdown
+    /// paused by a `resume` interruption) and for every other law (delay, instantaneous,
     /// watched, Weibull, lognormal, gamma, uniform, empirical). The law
     /// family and, for an instantaneous branching, its branch
     /// probabilities are read from the public compiled model
@@ -2582,7 +2809,7 @@ impl<'m> Engine<'m> {
                 transition: format!("<index {trans_idx}>"),
             });
         };
-        if self.pending[trans_idx].is_none() {
+        if !self.is_armed(trans_idx) {
             return Ok(None);
         }
         match &transition.distrib {
@@ -2610,6 +2837,229 @@ impl<'m> Engine<'m> {
             .map(|(name, time)| (name.as_str(), *time))
     }
 
+    /// **Deferred draws**: every stochastic transition armed without a
+    /// date ([`StochasticDates::Deferred`]), ascending by index, with its
+    /// law, arming instant, age and, for a state-dependent exponential,
+    /// cumulative hazard at the current instant. Paused ones (`resume`
+    /// interruption, guard false) are listed with `paused` set. Always
+    /// empty in drawn mode.
+    #[must_use]
+    pub fn deferred(&self) -> Vec<DeferredTransition> {
+        self.deferred
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, age)| {
+                let age = (*age)?;
+                let transition = &self.model.transitions[idx];
+                Some(DeferredTransition {
+                    index: idx,
+                    transition: transition.name.clone(),
+                    law: transition.distrib.clone(),
+                    armed_at: age.armed_at,
+                    age: age.age(self.time),
+                    paused: !age.running,
+                    hazard: self.deferred_hazard(idx),
+                })
+            })
+            .collect()
+    }
+
+    /// **Deferred draws**: advance deterministically, firing nothing, up
+    /// to the first of the next date-scheduled transition, a watched
+    /// boundary crossing, the horizon `t_max`, and `limit`, and record
+    /// along the way the cumulative hazard of every running deferred
+    /// transition whose rate varies continuously.
+    ///
+    /// The continuous state is integrated exactly as a run would
+    /// integrate it, so the recorded hazards `H(t) = ∫ λ(x(u)) du` are
+    /// those of the trajectory in which no stochastic event occurs: the
+    /// quantity whose inverse gives the date of the first one. The
+    /// samples are dense (every accepted solver step end, plus the
+    /// solver's interior scan points), start at the current instant and
+    /// end at the stop instant. Piecewise-constant and fixed laws need no
+    /// samples: read them with [`Engine::deferred`] and the law.
+    ///
+    /// The engine is left at the stop instant, the event that stopped it
+    /// unfired: the explorer restores a [`Snapshot`] afterwards, or fires
+    /// a deferred transition from there. Errors with
+    /// [`EngineError::NotDeferredMode`] in drawn mode, and with
+    /// [`EngineError::DateInPast`] for a `limit` before the current time
+    /// or not a number (the engine is unchanged in both cases).
+    pub fn probe_deferred(&mut self, limit: f64) -> Result<DeferredProbe, EngineError> {
+        if self.config.stochastic_dates != StochasticDates::Deferred {
+            return Err(EngineError::NotDeferredMode {
+                operation: "probe_deferred".to_owned(),
+            });
+        }
+        if limit.is_nan() || limit < self.time {
+            return Err(EngineError::DateInPast {
+                transition: "<probe>".to_owned(),
+                date: limit,
+                time: self.time,
+            });
+        }
+        let transitions = self.deferred_continuous();
+        if !transitions.is_empty() {
+            self.hazard_trace = Some(vec![self.hazard_sample(&transitions)]);
+        }
+        let outcome = self.probe_inner(limit);
+        let trace = self.hazard_trace.take();
+        let (stop, reason) = outcome?;
+        let mut samples = trace.unwrap_or_default();
+        if !transitions.is_empty() && samples.last().is_none_or(|last| last.time < stop) {
+            samples.push(self.hazard_sample(&transitions));
+        }
+        Ok(DeferredProbe {
+            stop,
+            reason,
+            transitions,
+            samples,
+        })
+    }
+
+    /// The deterministic advance of [`Engine::probe_deferred`].
+    fn probe_inner(&mut self, limit: f64) -> Result<(f64, ProbeStop), EngineError> {
+        if let Some(watched) = self.immediate_watched()? {
+            return Ok((self.time, ProbeStop::Watched { index: watched }));
+        }
+        let t_max = self.config.t_max;
+        let (target, reason) = match self.next_pending() {
+            Some((idx, date)) if date <= limit && date <= t_max => {
+                (date.max(self.time), ProbeStop::Deterministic { index: idx })
+            }
+            _ if t_max < limit => (t_max.max(self.time), ProbeStop::Horizon),
+            _ => (limit, ProbeStop::Limit),
+        };
+        if self.needs_integration() && target > self.time && target.is_finite() {
+            if let Some(watched) = self.advance_continuous(target)? {
+                return Ok((self.time, ProbeStop::Watched { index: watched }));
+            }
+        }
+        if target > self.time {
+            self.flush_samples_before(target);
+            self.time = target;
+            self.note_time_change();
+        }
+        Ok((target, reason))
+    }
+
+    /// The current cumulative hazards of `transitions` as one sample.
+    fn hazard_sample(&self, transitions: &[TransIdx]) -> HazardSample {
+        HazardSample {
+            time: self.time,
+            hazards: transitions
+                .iter()
+                .map(|&idx| self.deferred_hazard(idx).unwrap_or(0.0))
+                .collect(),
+        }
+    }
+
+    /// **Deferred draws**: fire the deferred transition `trans_idx` at the
+    /// instant `t`, after advancing deterministically to it (continuous
+    /// evolution included; no other transition fires on the way). The
+    /// other deferred transitions keep their bookkeeping and age up to
+    /// `t`. `branch` forces the destination by position in the compiled
+    /// target list, as in [`Engine::fire_now`] (a stochastic law has one).
+    ///
+    /// `t` must not come after an event the engine would have to process
+    /// first: the next date-scheduled transition (firing exactly at its
+    /// date is allowed, and happens before it), a watched boundary
+    /// crossing located on the way (or already holding), or the horizon.
+    /// Such a request is refused with
+    /// [`EngineError::DeferredFiringTooLate`], naming that event and its
+    /// instant, and the engine is left unchanged.
+    ///
+    /// Also errors with [`EngineError::UnknownTransition`] for an index
+    /// out of range, [`EngineError::NotFireable`] if the transition is not
+    /// armed and running in deferred mode (not armed, paused by a
+    /// `resume` interruption, drawn mode, or not stochastic),
+    /// [`EngineError::ForcedBranchOutOfRange`] for an invalid `branch`,
+    /// and [`EngineError::DateInPast`] for `t` before the current time or
+    /// not finite; the engine is unchanged in all these cases.
+    pub fn fire_deferred_at(
+        &mut self,
+        trans_idx: TransIdx,
+        t: f64,
+        branch: Option<usize>,
+    ) -> Result<Event, EngineError> {
+        let Some(transition) = self.model.transitions.get(trans_idx) else {
+            return Err(EngineError::UnknownTransition {
+                transition: format!("<index {trans_idx}>"),
+            });
+        };
+        let name = transition.name.clone();
+        if !self.deferred_running(trans_idx) {
+            return Err(EngineError::NotFireable {
+                transition: name,
+                time: self.time,
+            });
+        }
+        let forced = match branch {
+            Some(branch) => Some(self.resolve_branch(trans_idx, branch)?),
+            None => None,
+        };
+        if !t.is_finite() || t < self.time {
+            return Err(EngineError::DateInPast {
+                transition: name,
+                date: t,
+                time: self.time,
+            });
+        }
+        let too_late = |limit: f64, cause: String| EngineError::DeferredFiringTooLate {
+            transition: name.clone(),
+            date: t,
+            limit,
+            cause,
+        };
+        if let Some((idx, date)) = self.next_pending() {
+            if t > date {
+                let cause = format!(
+                    "the next deterministic event `{}`",
+                    self.model.transitions[idx].name
+                );
+                return Err(too_late(date, cause));
+            }
+        }
+        if t > self.config.t_max {
+            return Err(too_late(self.config.t_max, "the horizon".to_owned()));
+        }
+        if t > self.time {
+            if let Some(watched) = self.immediate_watched()? {
+                let cause = format!(
+                    "the watched transition `{}`",
+                    self.model.transitions[watched].name
+                );
+                return Err(too_late(self.time, cause));
+            }
+            if self.needs_integration() {
+                // The crossing is known only once integrated: rewind on
+                // refusal so the engine is left unchanged.
+                let before = self.snapshot();
+                match self.advance_continuous(t) {
+                    Ok(None) => {}
+                    Ok(Some(watched)) => {
+                        let at = self.time;
+                        self.restore(&before);
+                        let cause = format!(
+                            "the watched transition `{}`",
+                            self.model.transitions[watched].name
+                        );
+                        return Err(too_late(at, cause));
+                    }
+                    Err(error) => {
+                        self.restore(&before);
+                        return Err(error);
+                    }
+                }
+            }
+            self.flush_samples_before(t);
+            self.time = t;
+            self.note_time_change();
+            self.watched_streak = (t, 0);
+        }
+        self.fire(trans_idx, forced)
+    }
+
     /// **Interactive control**: override the scheduled firing date of an
     /// armed transition (manual date-setting). The transition must be
     /// date-scheduled (`pending`, i.e. not a watched boundary), and the
@@ -2619,6 +3069,10 @@ impl<'m> Engine<'m> {
     /// until they fire or leave their source state; a *state-dependent
     /// rate* transition may have its date recomputed at the next
     /// discrete step (`reschedule_modifiable`).
+    ///
+    /// A stochastic transition armed in deferred mode has no date: it is
+    /// refused with [`EngineError::DeferredDate`] (fire it with
+    /// [`Engine::fire_deferred_at`]).
     pub fn set_date(&mut self, name: &str, date: f64) -> Result<(), EngineError> {
         let idx = self.transition_index(name)?;
         self.set_date_idx(idx, date)
@@ -2633,6 +3087,9 @@ impl<'m> Engine<'m> {
             });
         };
         let name = transition.name.clone();
+        if self.deferred[trans_idx].is_some() {
+            return Err(EngineError::DeferredDate { transition: name });
+        }
         if !date.is_finite() || date < self.time {
             return Err(EngineError::DateInPast {
                 transition: name,
@@ -2671,6 +3128,7 @@ impl<'m> Engine<'m> {
             pending: self.pending.clone(),
             frozen: self.frozen.clone(),
             hazards: self.hazards.clone(),
+            deferred: self.deferred.clone(),
             events: self.events.clone(),
             journal: self.journal.clone(),
             seq_events: self.seq_events.clone(),
@@ -2698,6 +3156,7 @@ impl<'m> Engine<'m> {
         self.pending = snap.pending.clone();
         self.frozen = snap.frozen.clone();
         self.hazards = snap.hazards.clone();
+        self.deferred = snap.deferred.clone();
         self.events = snap.events.clone();
         self.journal = snap.journal.clone();
         self.seq_events = snap.seq_events.clone();
@@ -2761,6 +3220,7 @@ impl<'m> Engine<'m> {
         self.pending = vec![None; n];
         self.frozen = vec![None; n];
         self.hazards = vec![None; n];
+        self.deferred = vec![None; n];
         self.events.clear();
         self.journal.clear();
         self.seq_events.clear();
@@ -3057,6 +3517,7 @@ impl<'m> Engine<'m> {
         self.pending[trans_idx] = None;
         self.frozen[trans_idx] = None;
         self.hazards[trans_idx] = None;
+        self.deferred[trans_idx] = None;
         let target = match forced {
             Some(state) => state,
             None => self.resolve_target(trans_idx)?,
@@ -3543,10 +4004,7 @@ impl<'m> Engine<'m> {
     fn needs_integration(&self) -> bool {
         !self.model.ode.is_empty()
             || self.model.explicit_reads_time
-            || self
-                .continuous_rates
-                .iter()
-                .any(|&idx| self.pending[idx].is_some())
+            || self.continuous_rates.iter().any(|&idx| self.is_armed(idx))
     }
 
     /// Limit-cycle guard on the flow side: the active set must not
@@ -3795,7 +4253,7 @@ impl<'m> Engine<'m> {
             .continuous_rates
             .iter()
             .copied()
-            .filter(|&idx| self.pending[idx].is_some())
+            .filter(|&idx| self.is_armed(idx))
             .filter_map(|idx| {
                 self.hazards[idx].map(|hazard| (idx, hazard.threshold - hazard.accumulated))
             })
@@ -3864,6 +4322,13 @@ impl<'m> Engine<'m> {
             .map(|(index, _)| index)
             .collect();
 
+        let trace = self.hazard_trace.as_ref().map(|_| {
+            let bases = hazard_monitors
+                .iter()
+                .map(|(idx, _)| self.hazards[*idx].map_or(0.0, |h| h.accumulated))
+                .collect();
+            (bases, Vec::new())
+        });
         let mut system = ContinuousSystem {
             model: self.model,
             vars: self.vars.clone(),
@@ -3873,6 +4338,7 @@ impl<'m> Engine<'m> {
             flows,
             observed,
             flips: Vec::new(),
+            trace,
             error: None,
             work: WorkCounters::default(),
             scratch: FlowScratch::default(),
@@ -3942,6 +4408,16 @@ impl<'m> Engine<'m> {
                 &segment_samples,
                 &mut on_sample,
             )?;
+
+            if let (Some(recorded), Some((_, samples))) =
+                (self.hazard_trace.as_mut(), system.trace.take())
+            {
+                for sample in samples {
+                    if recorded.last().is_none_or(|last| sample.time > last.time) {
+                        recorded.push(sample);
+                    }
+                }
+            }
 
             self.work.explicit_evaluations +=
                 system.work.explicit_evaluations + sample_work.explicit_evaluations;
@@ -4413,6 +4889,12 @@ impl<'m> Engine<'m> {
                 None => true,
                 Some(guard) => eval_bool(self.model, &self.vars, &self.states, self.time, guard)?,
             };
+            if self.config.stochastic_dates == StochasticDates::Deferred
+                && is_stochastic(&transition.distrib)
+            {
+                self.refresh_deferred(trans_idx, in_source, guard_ok)?;
+                continue;
+            }
             match self.pending[trans_idx] {
                 Some(_) if !in_source => {
                     self.pending[trans_idx] = None;
@@ -4619,6 +5101,171 @@ impl<'m> Engine<'m> {
         Ok(())
     }
 
+    /// Deferred-mode counterpart of the stochastic arms of
+    /// [`Engine::refresh_schedule`] for one stochastic transition: arm it
+    /// without a date and without a draw, and keep its age (and, for a
+    /// state-dependent rate, its cumulative hazard) under the
+    /// interruption policy. See [`StochasticDates::Deferred`].
+    fn refresh_deferred(
+        &mut self,
+        trans_idx: TransIdx,
+        in_source: bool,
+        guard_ok: bool,
+    ) -> Result<(), EngineError> {
+        let model = self.model;
+        let transition = &model.transitions[trans_idx];
+        let now = self.time;
+        let (rate, continuous) = match &transition.distrib {
+            CLaw::ExpVar { rate, continuous } => (Some(rate), *continuous),
+            _ => (None, false),
+        };
+        let mut dropped = None;
+        match self.deferred[trans_idx] {
+            Some(_) if !in_source => {
+                self.deferred[trans_idx] = None;
+                self.hazards[trans_idx] = None;
+                dropped = Some(DropReason::SourceLeft);
+            }
+            None if in_source && guard_ok => {
+                // `schedule_stochastic`, deferred: no draw, no date.
+                self.deferred[trans_idx] = Some(DeferredAge {
+                    armed_at: now,
+                    banked: 0.0,
+                    since: now,
+                    running: true,
+                });
+                if let Some(rate) = rate {
+                    let lambda = self.eval_rate(trans_idx, rate)?;
+                    self.hazards[trans_idx] = Some(Hazard {
+                        threshold: f64::INFINITY,
+                        accumulated: 0.0,
+                        rate: lambda,
+                        since: now,
+                    });
+                }
+                if self.config.journal {
+                    self.journal.push(JournalRecord::TransitionScheduled {
+                        time: now,
+                        transition: transition.name.clone(),
+                        firing_at: f64::INFINITY,
+                    });
+                }
+            }
+            None => {}
+            Some(age)
+                if !guard_ok
+                    && transition.on_interruption != raichu_model::InterruptionPolicy::Continue =>
+            {
+                // `drop_disabled`, deferred: reset forgets the age,
+                // resume freezes it (a paused one stays paused).
+                if !age.running {
+                    return Ok(());
+                }
+                if transition.on_interruption == raichu_model::InterruptionPolicy::Resume {
+                    self.deferred[trans_idx] = Some(DeferredAge {
+                        banked: age.age(now),
+                        since: now,
+                        running: false,
+                        ..age
+                    });
+                    if let Some(hazard) = self.hazards[trans_idx].as_mut() {
+                        if !continuous {
+                            hazard.accumulated += hazard.rate * (now - hazard.since);
+                        }
+                        hazard.since = now;
+                    }
+                    dropped = Some(DropReason::GuardPaused);
+                } else {
+                    self.deferred[trans_idx] = None;
+                    self.hazards[trans_idx] = None;
+                    dropped = Some(DropReason::GuardFalse);
+                }
+            }
+            #[allow(clippy::float_cmp)] // λ is re-evaluated exactly
+            Some(age) => {
+                // Guard true, or `continue` riding through a false guard.
+                if !age.running {
+                    // A `resume` pause ends: the age runs again.
+                    self.deferred[trans_idx] = Some(DeferredAge {
+                        since: now,
+                        running: true,
+                        ..age
+                    });
+                    if let Some(rate) = rate {
+                        let lambda = self.eval_rate(trans_idx, rate)?;
+                        if let Some(hazard) = self.hazards[trans_idx].as_mut() {
+                            hazard.rate = lambda;
+                            hazard.since = now;
+                        }
+                    }
+                } else if let (Some(rate), false) = (rate, continuous) {
+                    // `reschedule_modifiable`, deferred: bank the hazard
+                    // accrued at the previous rate, then carry on at λ.
+                    let lambda = self.eval_rate(trans_idx, rate)?;
+                    if let Some(hazard) = self.hazards[trans_idx].as_mut() {
+                        if lambda != hazard.rate {
+                            hazard.accumulated += hazard.rate * (now - hazard.since);
+                            hazard.since = now;
+                            hazard.rate = lambda;
+                        }
+                    }
+                }
+            }
+        }
+        if let (Some(reason), true) = (dropped, self.config.journal) {
+            self.journal.push(JournalRecord::TransitionDropped {
+                time: now,
+                transition: transition.name.clone(),
+                reason,
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether `trans_idx` is armed in deferred mode with its age
+    /// running (not paused by a `resume` interruption).
+    fn deferred_running(&self, trans_idx: TransIdx) -> bool {
+        self.deferred[trans_idx].is_some_and(|age| age.running)
+    }
+
+    /// Whether `trans_idx` is armed: date-scheduled (`pending`) or
+    /// running in deferred mode.
+    fn is_armed(&self, trans_idx: TransIdx) -> bool {
+        self.pending[trans_idx].is_some() || self.deferred_running(trans_idx)
+    }
+
+    /// Cumulative hazard of a deferred state-dependent rate at the
+    /// current instant (`None` for any other transition).
+    fn deferred_hazard(&self, trans_idx: TransIdx) -> Option<f64> {
+        let age = self.deferred[trans_idx]?;
+        let hazard = self.hazards[trans_idx]?;
+        let continuous = matches!(
+            self.model.transitions[trans_idx].distrib,
+            CLaw::ExpVar {
+                continuous: true,
+                ..
+            }
+        );
+        if continuous || !age.running {
+            // A continuous hazard is committed by the integrator at every
+            // segment end, which is where the clock stands.
+            Some(hazard.accumulated)
+        } else {
+            Some(hazard.accumulated + hazard.rate * (self.time - hazard.since))
+        }
+    }
+
+    /// The running deferred transitions whose rate varies continuously,
+    /// ascending: the hazard slots `integrate_to` monitors in deferred
+    /// mode, in its order.
+    fn deferred_continuous(&self) -> Vec<TransIdx> {
+        self.continuous_rates
+            .iter()
+            .copied()
+            .filter(|&idx| self.deferred_running(idx) && self.hazards[idx].is_some())
+            .collect()
+    }
+
     fn record_indicators(&mut self) {
         for (indicator, series) in self
             .model
@@ -4663,6 +5310,13 @@ impl<'m> Engine<'m> {
     }
 }
 
+/// Whether a compiled law is stochastic in the sense of
+/// [`StochasticDates`]: its firing date is drawn in drawn mode, deferred
+/// in deferred mode.
+fn is_stochastic(distrib: &CLaw) -> bool {
+    matches!(fireable_kind(distrib), FireableKind::Stochastic)
+}
+
 /// Classify a compiled occurrence law for interactive inspection
 /// ([`Engine::fireable`]).
 fn fireable_kind(distrib: &CLaw) -> FireableKind {
@@ -4700,4 +5354,84 @@ fn sample_empirical(points: &[(f64, f64)], u: f64) -> f64 {
     }
     // u ≤ 1 and the validated table ends at cumulative 1.
     points[points.len() - 1].0
+}
+
+#[cfg(test)]
+mod deferred_rng_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::{Engine, EngineConfig, StochasticDates};
+    use crate::CompiledModel;
+    use raichu_model::Model;
+
+    /// Two repairable components with stochastic failure and repair
+    /// laws, one of them a state-dependent rate.
+    fn model() -> Model {
+        let comp = |name: &str, occ: &str, rep: &str| {
+            format!(
+                r#"{{"name": "{name}", "ports": [], "attributes": [], "equations": [],
+                "automata": [{{"name": "fail", "states": ["ok", "nok"], "init": "ok",
+                  "transitions": [
+                    {{"name": "occ", "source": "ok", "targets": ["nok"], {occ}}},
+                    {{"name": "rep", "source": "nok", "targets": ["ok"], {rep}}}]}}]}}"#
+            )
+        };
+        let rate = r#""distrib": "exp", "rate_expr": {"op": "if",
+            "cond": {"op": "state_active", "state": {"component": "A", "automaton": "fail", "state": "nok"}},
+            "then": {"op": "const", "value": {"kind": "float", "value": 2.0}},
+            "otherwise": {"op": "const", "value": {"kind": "float", "value": 0.5}}}"#;
+        let json = format!(
+            r#"{{"name": "rng", "components": [{}, {}]}}"#,
+            comp(
+                "A",
+                r#""distrib": "weibull", "shape": 2.0, "scale": 3.0"#,
+                r#""distrib": "gamma", "shape": 2.0, "scale": 1.0"#
+            ),
+            comp(
+                "B",
+                rate,
+                r#""distrib": "uniform", "low": 1.0, "high": 2.0"#
+            ),
+        );
+        Model::from_json(&json).unwrap()
+    }
+
+    #[test]
+    fn deferred_arming_consumes_no_random_number() {
+        let compiled = CompiledModel::compile(&model()).unwrap();
+        let config = EngineConfig {
+            seed: 42,
+            stochastic_dates: StochasticDates::Deferred,
+            ..EngineConfig::default()
+        };
+        let fresh = raichu_rng::replica_rng(config.seed, config.rng_stream);
+        let mut engine = Engine::new(&compiled, config).unwrap();
+        assert_eq!(engine.deferred().len(), 2);
+        assert_eq!(engine.rng, fresh);
+        // Fire both failures: the rate of B changes, both repairs arm.
+        let a = compiled
+            .transitions
+            .iter()
+            .position(|t| t.name == "A.fail.occ");
+        let b = compiled
+            .transitions
+            .iter()
+            .position(|t| t.name == "B.fail.occ");
+        engine.fire_deferred_at(a.unwrap(), 1.0, None).unwrap();
+        engine.fire_deferred_at(b.unwrap(), 1.5, None).unwrap();
+        assert_eq!(engine.deferred().len(), 2);
+        engine.probe_deferred(4.0).unwrap();
+        assert_eq!(engine.rng, fresh);
+
+        // The same arming in drawn mode does draw: the check has teeth.
+        let drawn = Engine::new(
+            &compiled,
+            EngineConfig {
+                seed: 42,
+                ..EngineConfig::default()
+            },
+        )
+        .unwrap();
+        assert_ne!(drawn.rng, fresh);
+    }
 }

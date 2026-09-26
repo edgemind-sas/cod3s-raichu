@@ -34,9 +34,10 @@ pub mod sequence;
 
 pub use compile::{CompileError, CompiledModel, MarginIndex, WatchedIdx};
 pub use engine::{
-    DropReason, Engine, EngineConfig, EngineError, Event, Fireable, FireableKind, FlowConfig,
-    FlowStall, IndicatorSeries, JournalRecord, Provenance, SeqEvent, Sequence, SimulationResult,
-    Snapshot, WorkCounters,
+    DeferredProbe, DeferredTransition, DropReason, Engine, EngineConfig, EngineError, Event,
+    Fireable, FireableKind, FlowConfig, FlowStall, HazardSample, IndicatorSeries, JournalRecord,
+    ProbeStop, Provenance, SeqEvent, Sequence, SimulationResult, Snapshot, StochasticDates,
+    WorkCounters,
 };
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
 pub use loops::{switching_loops, SwitchingLoop};

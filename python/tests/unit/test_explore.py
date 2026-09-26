@@ -1,7 +1,8 @@
 """Sequence-tree exploration from Python.
 
-`pyraichu.explore` runs the exact exploration driver on the same model
-objects the Monte-Carlo entry points take, and returns an `Exploration`:
+`pyraichu.explore` runs the exact or the discretised exploration driver
+on the same model objects the Monte-Carlo entry points take, and returns
+an `Exploration`:
 the retained sequences to the feared event with their probabilities at
 the horizon, the lower and upper bounds, what each cut-off discarded, and
 the inconclusive flag. The result is saved and reloaded in its open
@@ -246,7 +247,7 @@ def test_reading_refuses_another_format():
     with pytest.raises(pyraichu.SimulationError, match="raichu.exploration"):
         pyraichu.read_exploration(json.dumps(document))
     document["format"] = "raichu.exploration"
-    document["version"] = 2
+    document["version"] = 3
     with pytest.raises(pyraichu.SimulationError, match="version"):
         pyraichu.read_exploration(json.dumps(document))
     document["version"] = 1
@@ -277,9 +278,9 @@ def test_an_invalid_setting_raises_before_exploration():
 
 
 def test_an_algorithm_not_provided_is_refused_by_name():
-    with pytest.raises(pyraichu.SimulationError, match="discretised"):
+    with pytest.raises(pyraichu.SimulationError, match="sampling"):
         pyraichu.explore(
-            _non_repairable(), "system_down", HORIZON, algorithm="discretised"
+            _non_repairable(), "system_down", HORIZON, algorithm="sampling"
         )
 
 
@@ -313,3 +314,182 @@ def test_the_domain_report_lists_an_ode_and_exploring_refuses_it():
 
 def test_a_model_inside_the_domain_has_an_empty_report():
     assert pyraichu.exploration_domain(_non_repairable()) == []
+
+
+# ---- discretised algorithm ----------------------------------------------------
+
+WEIBULL_SHAPE = 1.5
+WEIBULL_SCALE = 3.0
+WEIBULL_HORIZON = 2.0
+
+
+def _unit(name, law, guard=None):
+    """A non-repairable unit `name.fail` (`ok`, `nok`) failing under `law`,
+    in the core schema (the muscadet plugin carries no Weibull law)."""
+    occ = {"name": "occ", "source": "ok", "targets": ["nok"], "monitored": True, **law}
+    if guard is not None:
+        occ["guard"] = guard
+    return {
+        "name": name,
+        "automata": [
+            {"name": "fail", "states": ["ok", "nok"], "init": "ok", "transitions": [occ]}
+        ],
+    }
+
+
+def _weibull(shape, scale):
+    return {"distrib": "weibull", "shape": shape, "scale": scale}
+
+
+def _down(name):
+    return {
+        "op": "state_active",
+        "state": {"component": name, "automaton": "fail", "state": "nok"},
+    }
+
+
+def _single_weibull():
+    return pyraichu.load_model(
+        {
+            "name": "single_weibull",
+            "components": [_unit("W", _weibull(WEIBULL_SHAPE, WEIBULL_SCALE))],
+            "targets": [{"name": "w_down", "component": "W", "automaton": "fail", "state": "nok"}],
+        }
+    )
+
+
+def _two_weibulls():
+    """A (Weibull 2, 1.5), then B (Weibull 2, 1) armed once A has failed;
+    target: B down. The instant A fails at decides how long B has, so the
+    discretisation error is not zero."""
+    return pyraichu.load_model(
+        {
+            "name": "two_weibulls",
+            "components": [
+                _unit("A", _weibull(2.0, 1.5)),
+                _unit("B", _weibull(2.0, 1.0), guard=_down("A")),
+            ],
+            "targets": [{"name": "b_down", "component": "B", "automaton": "fail", "state": "nok"}],
+        }
+    )
+
+
+def _two_weibulls_closed_form(t, n=20_000):
+    """P(T_A + T_B <= t) by Simpson's rule on int_0^t f_A(s) F_B(t - s) ds."""
+
+    def f_a(s):
+        return (2.0 * s / 2.25) * math.exp(-((s / 1.5) ** 2))
+
+    def cdf_b(s):
+        return -math.expm1(-(max(s, 0.0) ** 2))
+
+    h = t / n
+    total = f_a(0.0) * cdf_b(t) + f_a(t) * cdf_b(0.0)
+    for i in range(1, n):
+        total += (4.0 if i % 2 else 2.0) * f_a(i * h) * cdf_b(t - i * h)
+    return total * h / 3.0
+
+
+def test_a_weibull_failure_explored_discretised_matches_its_closed_form():
+    result = pyraichu.explore(
+        _single_weibull(), "w_down", WEIBULL_HORIZON, algorithm="discretised"
+    )
+    assert result.algorithm == "discretised"
+    assert result.discretisation["level"] == 16
+    assert result.discretisation["refinement"]["base_level"] == 8
+    expected = -math.expm1(-((WEIBULL_HORIZON / WEIBULL_SCALE) ** WEIBULL_SHAPE))
+    estimate = result.error_estimate
+    assert estimate is not None
+    assert len(result.sequences) == 1
+    assert [t["transition"] for t in result.sequences[0].transitions] == ["W.fail.occ"]
+    assert abs(result.lower - expected) <= max(2.0 * estimate, 1e-9)
+    assert result.upper == result.lower
+
+
+def test_a_sequence_of_two_weibulls_lies_within_twice_its_error_estimate():
+    t = 2.0
+    result = pyraichu.explore(_two_weibulls(), "b_down", t, algorithm="discretised")
+    estimate = result.error_estimate
+    assert estimate > 0
+    assert not result.discretisation["refinement"]["truncation_dominated"]
+    expected = _two_weibulls_closed_form(t)
+    assert abs(result.lower - expected) <= max(2.0 * estimate, 1e-9)
+
+
+def test_the_exact_algorithm_refuses_the_weibull_model_by_name():
+    with pytest.raises(pyraichu.SimulationError, match=r"W\.fail\.occ"):
+        pyraichu.explore(_single_weibull(), "w_down", WEIBULL_HORIZON)
+
+
+def test_the_json_round_trip_keeps_the_level_and_the_error_estimate(tmp_path):
+    result = pyraichu.explore(
+        _two_weibulls(), "b_down", 2.0, algorithm="discretised", level=4
+    )
+    text = result.to_json()
+    document = json.loads(text)
+    assert document["algorithm"] == "discretised"
+    # Format version 2 introduced the discretised algorithm; an exact result
+    # stays at version 1.
+    assert document["version"] == 2
+    assert document["discretisation"]["level"] == 8
+    assert document["discretisation"]["refinement"]["base_level"] == 4
+    again = pyraichu.read_exploration(text)
+    assert again == result
+    assert again.discretisation == result.discretisation
+    assert again.error_estimate == result.error_estimate
+    assert again.to_json() == text
+
+    path = tmp_path / "discretised.json"
+    result.to_json(path)
+    assert pyraichu.read_exploration(path) == result
+
+    # A discretised document declaring version 1 is inconsistent: a version-1
+    # writer knew no such algorithm.
+    document["version"] = 1
+    with pytest.raises(pyraichu.SimulationError, match="inconsistent"):
+        pyraichu.read_exploration(json.dumps(document))
+
+
+def test_switching_the_refinement_off_yields_no_estimate():
+    result = pyraichu.explore(
+        _two_weibulls(), "b_down", 2.0, algorithm="discretised", level=4, refine=False
+    )
+    assert result.discretisation == {"level": 4, "refinement": None}
+    assert result.error_estimate is None
+    document = json.loads(result.to_json())
+    assert document["discretisation"]["refinement"] is None
+    assert pyraichu.read_exploration(result.to_json()).error_estimate is None
+
+
+def test_an_exact_result_carries_no_discretisation():
+    result = pyraichu.explore(_non_repairable(), "system_down", HORIZON)
+    assert result.discretisation is None
+    assert result.error_estimate is None
+    text = result.to_json()
+    assert "discretisation" not in json.loads(text)
+    assert pyraichu.read_exploration(text).to_json() == text
+
+
+def test_settings_of_one_algorithm_are_refused_by_the_other():
+    model = _single_weibull()
+    with pytest.raises(pyraichu.SimulationError, match="level"):
+        pyraichu.explore(_non_repairable(), "system_down", HORIZON, level=4)
+    with pytest.raises(pyraichu.SimulationError, match="refine"):
+        pyraichu.explore(_non_repairable(), "system_down", HORIZON, refine=False)
+    with pytest.raises(pyraichu.SimulationError, match="rel_precision"):
+        pyraichu.explore(
+            model, "w_down", WEIBULL_HORIZON, algorithm="discretised", rel_precision=1e-9
+        )
+    with pytest.raises(pyraichu.SimulationError, match="max_terms"):
+        pyraichu.explore(
+            model, "w_down", WEIBULL_HORIZON, algorithm="discretised", max_terms=100
+        )
+    with pytest.raises(pyraichu.SimulationError, match="level"):
+        pyraichu.explore(model, "w_down", WEIBULL_HORIZON, algorithm="discretised", level=0)
+
+
+def test_the_discretised_result_does_not_depend_on_the_thread_count():
+    model = _two_weibulls()
+    one = pyraichu.explore(model, "b_down", 2.0, algorithm="discretised", level=4, threads=1)
+    four = pyraichu.explore(model, "b_down", 2.0, algorithm="discretised", level=4, threads=4)
+    assert one == four

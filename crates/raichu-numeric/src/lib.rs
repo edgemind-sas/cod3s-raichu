@@ -25,9 +25,16 @@
 //!
 //! All tolerances are explicit in [`SolverParams`] and recorded by the
 //! caller as provenance (validation-contract level 3).
+//!
+//! Two further kernels serve the sequence-tree exploration:
+//! [`phase_type`] (absorption probability of a chain of exponential
+//! phases) and [`laws`] (survival, cumulative hazard and quantiles of
+//! every delay law the engine carries, with in-crate special functions).
 
+pub mod laws;
 pub mod phase_type;
 
+pub use laws::{Law, LawError};
 pub use phase_type::{
     Absorption, AbsorptionMethod, PhaseTypeAccumulator, PhaseTypeError, PhaseTypeSettings,
 };
