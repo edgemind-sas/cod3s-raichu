@@ -189,12 +189,20 @@ pub fn minimal_sequences(sequences: Vec<Sequence>) -> Vec<Sequence> {
     out
 }
 
-/// The full pipeline on a raw Monte-Carlo corpus: group → filter cycles →
-/// group again (cycle filtering can make distinct raw sequences coincide) →
-/// minimal.
+/// The CLEANED corpus: group → filter cycles → group again (cycle filtering
+/// can make distinct raw sequences coincide). Every distinct path to each
+/// feared event, transient failure/repair cycles removed, before any
+/// absorption into a shorter one: cod3s's post-filter snapshot
+/// (`sequences_all.json`).
+#[must_use]
+pub fn clean(raw: Vec<Sequence>) -> Vec<Sequence> {
+    group_sequences(filter_cycles(group_sequences(raw)))
+}
+
+/// The full pipeline on a raw Monte-Carlo corpus: [`clean`], then minimal.
 #[must_use]
 pub fn analyse(raw: Vec<Sequence>) -> Vec<Sequence> {
-    minimal_sequences(group_sequences(filter_cycles(group_sequences(raw))))
+    minimal_sequences(clean(raw))
 }
 
 #[cfg(test)]

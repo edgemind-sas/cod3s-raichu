@@ -54,6 +54,7 @@ nav:
       - 3. Stochastic & Monte-Carlo: tutorial/03-stochastic-and-monte-carlo.md
       - 4. Going hybrid: tutorial/04-going-hybrid.md
   - Model schema reference: reference/model-schema.md
+  - Raw sequence corpus format: reference/sequence-format.md
   - Advanced guides:
       - Reproducibility: guides/reproducibility.md
       - Numerical tuning: guides/numerical-tuning.md

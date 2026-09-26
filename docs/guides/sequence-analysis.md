@@ -110,6 +110,28 @@ The pipeline behind the call:
 4. **Minimal absorption**: a sequence that contains a shorter reaching
    sequence is absorbed into it; only irreducible cuts remain.
 
+## Keeping the raw corpus
+
+`analyse_sequences` returns the minimal sequences and discards what they were
+reduced from. `run_sequences` runs the same campaign (the same seed gives the
+same trajectories) and keeps it: the two reduced levels come back, and every
+trajectory's raw sequence is written to `raw_path` in the
+[`raichu.sequences` format](../reference/sequence-format.md), straight from the
+engine.
+
+```python
+campaign = pyraichu.run_sequences(model, nb_runs=2000, t_max=100.0, seed=42,
+                                  raw_path="campaign.jsonl")
+campaign.minimal   # what analyse_sequences returns
+campaign.cleaned   # every distinct path, transient cycles removed
+
+again = pyraichu.analyse_raw_sequences("campaign.jsonl")
+assert again.minimal == campaign.minimal
+```
+
+The raw corpus holds one line per trajectory, dates included, so it is the
+level to audit a campaign on, to filter, or to hand to another tool.
+
 ## First-occurrence indicators
 
 The Monte-Carlo estimator has the matching measures. By default

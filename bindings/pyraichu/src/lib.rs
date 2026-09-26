@@ -15,6 +15,9 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use raichu::raichu_core::analyse as analyse_sequences;
 use raichu::raichu_core::{
+    clean as clean_sequences, minimal_sequences, read_raw_sequences, write_raw_sequences, RawHeader,
+};
+use raichu::raichu_core::{
     CompiledModel, Engine, EngineConfig, FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot,
     SolverParams,
 };
@@ -350,6 +353,92 @@ fn analyse_sequences_json(
     })
 }
 
+/// The two reduced levels of a raw corpus, as the JSON object
+/// `{"cleaned": [...], "minimal": [...]}`.
+fn reduced_levels(raw: Vec<raichu::raichu_core::engine::Sequence>) -> PyResult<serde_json::Value> {
+    let cleaned = clean_sequences(raw);
+    let minimal = minimal_sequences(cleaned.clone());
+    Ok(serde_json::json!({
+        "cleaned": serde_json::to_value(&cleaned).map_err(|e| SimulationError::new_err(e.to_string()))?,
+        "minimal": serde_json::to_value(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))?,
+    }))
+}
+
+/// A sequence campaign kept whole: run `nb_runs` sequence-recording replicas
+/// (target early-stop), write the RAW corpus to `raw_path` in the
+/// `raichu.sequences` format when one is given, and return the JSON of the
+/// two reduced levels, `{"cleaned": [...], "minimal": [...]}`.
+///
+/// The raw corpus is written from Rust and never materialised as Python
+/// objects: a large campaign holds one line per replica.
+#[pyfunction]
+#[pyo3(signature = (model_json, nb_runs, t_max, seed = 0, threads = None, flow = None, raw_path = None))]
+#[allow(clippy::too_many_arguments)]
+fn run_sequences_json(
+    py: Python<'_>,
+    model_json: &str,
+    nb_runs: u64,
+    t_max: f64,
+    seed: u64,
+    threads: Option<usize>,
+    flow: Option<FlowConfig>,
+    raw_path: Option<std::path::PathBuf>,
+) -> PyResult<String> {
+    let model: Model = Model::from_json(model_json)
+        .map_err(|e| ModelError::new_err(format!("invalid model JSON: {e}")))?;
+    let compiled =
+        CompiledModel::compile(&model).map_err(|e| ModelError::new_err(e.to_string()))?;
+    let flow = flow_policy(flow);
+    py.detach(|| {
+        let config = McConfig {
+            nb_runs,
+            seed,
+            t_max,
+            samples: Vec::new(),
+            threads,
+            quantiles: Vec::new(),
+            ode: SolverParams::default(),
+            stop_at_targets: false,
+            flow,
+        };
+        let raw = mc_run_sequences(&compiled, &config)
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        if let Some(path) = raw_path {
+            let header = RawHeader::new(
+                raichu::VERSION,
+                &model.name,
+                seed,
+                nb_runs,
+                t_max,
+                compiled.targets.iter().map(|t| t.name.clone()).collect(),
+            );
+            let file = std::fs::File::create(&path).map_err(|e| {
+                SimulationError::new_err(format!("cannot create {}: {e}", path.display()))
+            })?;
+            write_raw_sequences(std::io::BufWriter::new(file), &header, &raw)
+                .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        }
+        Ok(reduced_levels(raw)?.to_string())
+    })
+}
+
+/// Read a raw corpus written by [`run_sequences_json`] and reduce it again:
+/// the JSON `{"header": {...}, "cleaned": [...], "minimal": [...]}`.
+#[pyfunction]
+fn analyse_raw_sequences_json(py: Python<'_>, raw_path: std::path::PathBuf) -> PyResult<String> {
+    py.detach(|| {
+        let file = std::fs::File::open(&raw_path).map_err(|e| {
+            SimulationError::new_err(format!("cannot open {}: {e}", raw_path.display()))
+        })?;
+        let (header, raw) = read_raw_sequences(std::io::BufReader::new(file))
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let mut levels = reduced_levels(raw)?;
+        levels["header"] =
+            serde_json::to_value(&header).map_err(|e| SimulationError::new_err(e.to_string()))?;
+        Ok(levels.to_string())
+    })
+}
+
 /// Opaque checkpoint of an [`Interactive`] session's full trajectory
 /// state (see `raichu_core::Snapshot`): produced by `Interactive.snapshot`
 /// and reinstated by `Interactive.restore`. Held as a Python object; its
@@ -539,6 +628,8 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(simulate_json, module)?)?;
     module.add_function(wrap_pyfunction!(monte_carlo_json, module)?)?;
     module.add_function(wrap_pyfunction!(analyse_sequences_json, module)?)?;
+    module.add_function(wrap_pyfunction!(run_sequences_json, module)?)?;
+    module.add_function(wrap_pyfunction!(analyse_raw_sequences_json, module)?)?;
     module.add_class::<Interactive>()?;
     module.add_class::<Snapshot>()?;
     module.add_class::<FlowConfig>()?;
