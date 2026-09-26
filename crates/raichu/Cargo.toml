@@ -16,6 +16,7 @@ raichu-core.workspace = true
 raichu-io.workspace = true
 raichu-montecarlo.workspace = true
 raichu-numeric.workspace = true
+raichu-explore.workspace = true
 
 [lints]
 workspace = true

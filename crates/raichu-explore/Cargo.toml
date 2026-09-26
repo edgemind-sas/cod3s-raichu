@@ -1,0 +1,25 @@
+[package]
+name = "raichu-explore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Sequence-tree exploration: exact enumeration of the sequences leading to a feared event, with guaranteed bounds"
+
+[dependencies]
+raichu-core.workspace = true
+raichu-model.workspace = true
+raichu-numeric.workspace = true
+rayon = "1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+raichu-expr.workspace = true
+raichu-montecarlo.workspace = true
+
+[lints]
+workspace = true

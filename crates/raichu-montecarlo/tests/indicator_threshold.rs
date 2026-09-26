@@ -68,6 +68,7 @@ fn tank(indicators: Vec<Indicator>) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    kind: None,
                     effects: vec![],
                     distrib: Distrib::Delay { time: EMPTIED_AT },
                 }],

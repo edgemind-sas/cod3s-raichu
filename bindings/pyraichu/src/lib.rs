@@ -21,6 +21,10 @@ use raichu::raichu_core::{
     CompiledModel, Engine, EngineConfig, FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot,
     SolverParams,
 };
+use raichu::raichu_explore::{
+    exact_domain_report, explore_exact, read_exploration as read_exploration_result, Algorithm,
+    Cutoffs, ExactSettings, ExplorationResult, Precision,
+};
 use raichu::raichu_model::Model;
 use raichu::raichu_montecarlo::{run as mc_run, run_sequences as mc_run_sequences, McConfig};
 
@@ -439,6 +443,123 @@ fn analyse_raw_sequences_json(py: Python<'_>, raw_path: std::path::PathBuf) -> P
     })
 }
 
+/// Explore the sequence tree of a model to the target `target` and return
+/// the result in its open format, `raichu.exploration` v1, as JSON.
+///
+/// Each retained sequence carries its probability (dimensionless) of
+/// reaching the target by `horizon` (in the model's time unit), and the
+/// result carries a lower bound (the sum of the retained probabilities)
+/// and an upper bound (plus the mass every cut-off discarded). Every
+/// cut-off is optional; `rel_precision` and `max_terms` override the
+/// numerical precision of the sequence probabilities (engine defaults
+/// when omitted).
+///
+/// `algorithm` selects the driver; only `"exact"` (the Markov family,
+/// probabilities in closed form) is provided. An invalid setting, a
+/// model outside the algorithm's domain, and a law outside it armed
+/// along an explored sequence raise `SimulationError` with the engine's
+/// message, the last one naming the transition and the sequence.
+///
+/// The GIL is released while the exploration runs.
+#[pyfunction]
+#[pyo3(signature = (model_json, target, horizon, algorithm = "exact", min_probability = None, max_length = None, max_failures = None, max_branches = None, gap_tolerance = None, rel_precision = None, max_terms = None, threads = None))]
+#[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
+fn explore_json(
+    py: Python<'_>,
+    model_json: &str,
+    target: String,
+    horizon: f64,
+    algorithm: &str,
+    min_probability: Option<f64>,
+    max_length: Option<usize>,
+    max_failures: Option<u64>,
+    max_branches: Option<u64>,
+    gap_tolerance: Option<f64>,
+    rel_precision: Option<f64>,
+    max_terms: Option<usize>,
+    threads: Option<usize>,
+) -> PyResult<String> {
+    let _algorithm: Algorithm = algorithm.parse().map_err(|e| {
+        SimulationError::new_err(format!(
+            "exploration algorithm `{algorithm}` is not provided by this engine: {e}"
+        ))
+    })?;
+    let compiled = parse_and_compile(model_json)?;
+    let mut settings = ExactSettings::new(target, horizon);
+    settings.cutoffs = Cutoffs {
+        min_probability,
+        max_length,
+        max_failures,
+        max_branches,
+    };
+    if let Some(tolerance) = gap_tolerance {
+        settings.gap_tolerance = tolerance;
+    }
+    let defaults = Precision::default();
+    settings.precision = Precision {
+        rel_precision: rel_precision.unwrap_or(defaults.rel_precision),
+        max_terms: max_terms.unwrap_or(defaults.max_terms),
+    };
+    settings.threads = threads;
+    py.detach(|| {
+        let result = explore_exact(&compiled, &settings)
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
+    })
+}
+
+/// The static exact-domain report of a model, as a JSON array: every
+/// reason, found without exploring, that the model is outside the exact
+/// exploration domain (an ODE, a reachable watched transition, an
+/// expression reading time). Each entry is the tagged violation
+/// (`kind` plus its fields) with a readable `message`; empty when none
+/// is found. A law outside the domain is only found during a run.
+#[pyfunction]
+fn exploration_domain_json(model_json: &str) -> PyResult<String> {
+    let compiled = parse_and_compile(model_json)?;
+    let report = exact_domain_report(&compiled)
+        .into_iter()
+        .map(|violation| {
+            let mut entry = serde_json::to_value(&violation)
+                .map_err(|e| SimulationError::new_err(e.to_string()))?;
+            entry["message"] = serde_json::Value::String(violation.to_string());
+            Ok(entry)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    serde_json::to_string(&report).map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
+/// Parse an exploration result through the format's own reader.
+fn parse_exploration(result_json: &str) -> PyResult<ExplorationResult> {
+    read_exploration_result(result_json).map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
+/// Validate an exploration result document (its `format`, its `version`
+/// and its fields); raise `SimulationError` when it is not one this
+/// engine reads. The validating half of `pyraichu.read_exploration`,
+/// which builds the Python object from the text itself: Python parses a
+/// float to the nearest double, so the round trip stays exact.
+#[pyfunction]
+fn validate_exploration(result_json: &str) -> PyResult<()> {
+    parse_exploration(result_json).map(|_| ())
+}
+
+/// Reduce an exploration result to its minimal sequences through the
+/// engine's own reduction (group, filter cycles, absorb super-sequences),
+/// as a JSON array of `{events, end_cause, end_time, weight}`.
+///
+/// `weight` is a **probability** here, not a replica count: the retained
+/// sequences are disjoint events, so the weights of the sequences that
+/// collapse into one minimal sequence add up, and the total weight is the
+/// result's lower bound. Dates are 0, since the exact driver never moves
+/// the clock.
+#[pyfunction]
+fn exploration_minimal_sequences_json(result_json: &str) -> PyResult<String> {
+    let result = parse_exploration(result_json)?;
+    let minimal = analyse_sequences(result.to_sequences());
+    serde_json::to_string(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
 /// Opaque checkpoint of an [`Interactive`] session's full trajectory
 /// state (see `raichu_core::Snapshot`): produced by `Interactive.snapshot`
 /// and reinstated by `Interactive.restore`. Held as a Python object; its
@@ -630,6 +751,13 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(analyse_sequences_json, module)?)?;
     module.add_function(wrap_pyfunction!(run_sequences_json, module)?)?;
     module.add_function(wrap_pyfunction!(analyse_raw_sequences_json, module)?)?;
+    module.add_function(wrap_pyfunction!(explore_json, module)?)?;
+    module.add_function(wrap_pyfunction!(exploration_domain_json, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_exploration, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        exploration_minimal_sequences_json,
+        module
+    )?)?;
     module.add_class::<Interactive>()?;
     module.add_class::<Snapshot>()?;
     module.add_class::<FlowConfig>()?;

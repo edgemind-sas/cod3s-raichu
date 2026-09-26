@@ -53,6 +53,32 @@ deliberate departures.
 | order-dependent simultaneous effects (modeller's job) | optional non-confluence probe (`confluence_check`) | diagnoses order-dependence instead of hiding it |
 | `setDtCond` (event-location step) | explicit integrator tolerances (`rtol`, `tol_event`, …) | recorded in the run's provenance |
 
+## Sequence-tree exploration
+
+PyCATSHOO's sequence-tree explorer (user manual V1.3.7.2, sections 5.5.5,
+8.3.33 and 9.3.39) maps to `pyraichu.explore`; see the
+[sequence-tree exploration guide](../guides/sequence-tree-exploration.md).
+
+| PyCATSHOO | RAICHU | note |
+|---|---|---|
+| `setUseSeqTreeExplorer(True)`, `seqTreeExplorer()`, `exploreTree()` | `pyraichu.explore(model, target, horizon, ...)` | a driver beside Monte-Carlo, on the same model; no system-wide switch |
+| Harrison algorithm (`setAlgoHarrison(True)`) | `algorithm="exact"` (the default) | same domain (instantaneous branchings, exponential laws); probabilities computed by uniformization in nonnegative arithmetic, with a per-sequence error bound, instead of alternating closed-form sums |
+| `setHarrisonParameters(e1, e2, e3, precision)` | `rel_precision`, `max_terms` | one relative precision; a sequence that misses it is flagged `imprecise`, never reported silently |
+| `setMinProbability` (MIN_P) | `min_probability` | prunes a prefix whose probability of being completed by the horizon falls below the threshold |
+| `setMaxNbFailures` (MAX_FL), with transitions typed as faults | `max_failures`, with `"kind": "failure"` on the transition | the muscadet plugin declares the kind; a model declaring none is refused rather than counting nothing |
+| `setMaxNbBranches` (MAX_BR) | `max_branches` | counts expanded nodes; split among the root's children so the result does not depend on the thread count |
+| *(no equivalent)* | `max_length` | fired transitions per sequence |
+| `setTMax` | `horizon` | |
+| `sequences()`, every leaf, `MaxTime` ones included | `result.sequences`, the target sequences only | the rest is summarised by the bounds |
+| `curProbability()` (explored mass) | `result.lower`, `result.upper`, `result.cutoff_tallies` | a lower and an upper bound on the target probability, and the mass each cut-off discarded |
+| sampling algorithm (non-exponential laws) | *(not reproduced)* | refused by name (`algorithm="discretised"`); RAICHU's own algorithm for other laws and continuous evolution comes in a later release |
+
+On Markov models the two explorers return the same target sequences, and
+their probabilities agree within 1e-9 relative once PyCATSHOO's
+Harrison parameters are tightened below their 1e-3 defaults (section
+9.3.39.5.1). PyCATSHOO also returns a zero-probability sequence for a
+branch of rate 0 (a dormant spare); RAICHU does not branch on it.
+
 ## Deliberate departures
 
 RAICHU is not a re-implementation of PyCATSHOO's API. The main

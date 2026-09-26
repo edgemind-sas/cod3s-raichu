@@ -150,6 +150,7 @@ automaton**. `init` must be one of `states`.
 | `on_interruption` | `"reset"` \| `"resume"` \| `"continue"` | optional (default `reset`); see [below](#interruption-policy) |
 | `monitored` | bool | optional (default `false`); firing is recorded in the trajectory's [sequence](../guides/sequence-analysis.md) |
 | `cycle_group` | string | optional; failure/repair partners share it so transient cycles cancel in the sequence pipeline (paired per component) |
+| `kind` | `"failure"` \| `"repair"` | optional (default absent); the declared reliability role, see [Declared kind](#declared-kind) |
 | `effects` | array of Assignment | optional; written ONCE when the transition fires, see [Edge effects](#edge-effects) |
 | `distrib` + params | - | the occurrence distribution, flattened onto the transition (see [Distributions](#distributions)) |
 
@@ -169,6 +170,39 @@ An interrupted transition writes nothing.
 An edge effect on an attribute an equation or a sensitive function also
 writes is refused: the next evaluation would erase it. A document
 carrying the field declares the `transition_effects` feature.
+
+#### Declared kind
+
+`kind` declares what firing the transition means for reliability:
+`"failure"` (something fails) or `"repair"` (something returns to
+service). Absent, the transition has no declared role, which is the
+reading of every model written before the field existed. Any other value
+is refused at load, naming it.
+
+The role applies to the transition's **first declared target** only. An
+on-demand failure draw is one instantaneous transition with two targets,
+`["occ", "parked"]`: firing into `occ` is the failure, while a lost draw
+entering `parked` is neither a failure nor a repair. Declare the failure
+state first.
+
+The kind changes no simulated trajectory. Its reader is the
+failure-count cut-off of a sequence-tree exploration, which counts the
+fired `failure` transitions along a sequence and refuses a model that
+declares none rather than silently counting nothing. Roles are declared
+rather than inferred from state names, a convention the engine could not
+check.
+
+The muscadet plugin declares them on the failure-mode edges it emits:
+
+- an internal `ObjFM` (and `ObjFMInst`) declares its occurrence edge,
+  or its on-demand draw, `failure`, and its return edge, or its on-demand
+  return draw, `repair`, for every common-cause combination; a re-arm out
+  of a parked state declares nothing;
+- an external `ObjFM` declares the kinds on each target's mirror
+  automaton, where its sequence events live, and leaves its own automaton
+  undeclared, so one occurrence counts once per target and never twice.
+
+Feared events (`ObjEvent`) declare no kind.
 
 ### Target
 
@@ -630,6 +664,12 @@ sealed document without ever writing the list by hand.
 | `allocation` | component-level [allocations](#allocation) |
 | `unbounded_rate` | model-level [unbounded rate](#unbounded-rate) |
 | `transition_effects` | transition-level [edge effects](#edge-effects) |
+
+The transition-level [declared kind](#declared-kind) is a **baseline**
+construct and has no feature name: an engine that ignored it would
+simulate exactly the same trajectories, since only the exploration's
+failure-count cut-off reads it, and that cut-off refuses a model with no
+declared kind instead of counting nothing. A bare body may carry it.
 
 The registry names **serialized constructs**, not engine behaviour, so a
 change in how an existing construct is *interpreted* does not add a

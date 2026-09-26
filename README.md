@@ -40,6 +40,11 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
   A muscadet model then runs here by naming the engine, importing nothing:
   `system.simulate(params, engine="raichu")`. See
   [Running a muscadet model on RAICHU](docs/guides/muscadet-engine.md).
+- **Sequence-tree exploration**: the sequences leading to a feared event
+  enumerated rather than sampled, each with its probability at the
+  horizon, plus a lower and an upper bound on what the declared cut-offs
+  left out (Markov models in this release). See
+  [Sequence-tree exploration](docs/guides/sequence-tree-exploration.md).
 - **Explainability**: an optional, queryable causal journal (event →
   triggered functions → variable changes → rescheduling), zero-cost when
   disabled.

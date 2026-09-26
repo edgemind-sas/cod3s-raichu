@@ -69,6 +69,7 @@ fn clock_model(watched: bool) -> Model {
                 on_interruption: Default::default(),
                 monitored: false,
                 cycle_group: None,
+                kind: None,
                 effects: vec![],
                 distrib: Distrib::Watched,
             }],

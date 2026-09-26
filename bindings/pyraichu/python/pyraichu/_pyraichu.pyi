@@ -75,6 +75,24 @@ def run_sequences_json(
 ) -> str: ...
 def analyse_raw_sequences_json(raw_path: str) -> str: ...
 
+def explore_json(
+    model_json: str,
+    target: str,
+    horizon: float,
+    algorithm: str = "exact",
+    min_probability: float | None = None,
+    max_length: int | None = None,
+    max_failures: int | None = None,
+    max_branches: int | None = None,
+    gap_tolerance: float | None = None,
+    rel_precision: float | None = None,
+    max_terms: int | None = None,
+    threads: int | None = None,
+) -> str: ...
+def exploration_domain_json(model_json: str) -> str: ...
+def validate_exploration(result_json: str) -> None: ...
+def exploration_minimal_sequences_json(result_json: str) -> str: ...
+
 class Snapshot:
     """Opaque interactive-session checkpoint (see ``Interactive``)."""
 

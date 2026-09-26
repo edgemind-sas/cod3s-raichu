@@ -9,7 +9,7 @@ use crate::flow::CPolicy;
 use raichu_expr::{AggOp, AttrRef, BoolOp, CmpOp, Expr, PortRef, Value};
 use raichu_model::{
     Allocation, AllocationPolicy, Distrib, EquationKind, IndicatorTarget, InterruptionPolicy,
-    Model, ModelError, PortDir,
+    Model, ModelError, PortDir, TransitionKind,
 };
 use std::collections::{BTreeSet, HashMap};
 use thiserror::Error;
@@ -213,6 +213,10 @@ pub struct CTransition {
     pub monitored: bool,
     /// Cycle-pair group id (occ/rep partners share it; sequence analysis).
     pub cycle_group: Option<String>,
+    /// Declared reliability role, if any
+    /// ([`raichu_model::Transition::kind`]): it applies to the first entry
+    /// of [`CTransition::targets`] only, the declared order being kept.
+    pub kind: Option<TransitionKind>,
     /// Edge effects `target := value`, applied once when the transition
     /// fires, after its state change ([`raichu_model::Transition::effects`]).
     pub effects: Vec<(VarIdx, CExpr)>,
@@ -1186,6 +1190,7 @@ impl CompiledModel {
                         on_interruption: transition.on_interruption,
                         monitored: transition.monitored,
                         cycle_group: transition.cycle_group.clone(),
+                        kind: transition.kind,
                         effects,
                         distrib: distribution,
                     });
