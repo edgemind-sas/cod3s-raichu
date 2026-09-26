@@ -262,6 +262,21 @@ pub enum EngineError {
         /// The invalid (unknown or non-target) state name.
         state: String,
     },
+    /// Interactive control: a forced destination given by *branch index*
+    /// ([`Engine::fire_now`], [`Engine::fire_idx_to_branch`]) is not a
+    /// position in the transition's compiled target list.
+    #[error(
+        "branch {branch} is out of range for transition `{transition}` \
+         ({branches} branches)"
+    )]
+    ForcedBranchOutOfRange {
+        /// The transition whose branch was forced.
+        transition: String,
+        /// The rejected branch index.
+        branch: usize,
+        /// Number of branches the transition declares.
+        branches: usize,
+    },
     /// Interactive control: a manual firing date (`set_date`) was in the
     /// past (before the current time) or non-finite.
     #[error(
@@ -390,6 +405,77 @@ pub enum EngineError {
         /// that says this is a cycle at a numerical scale rather than a
         /// physical one.
         step: f64,
+    },
+    /// A study parameter was outside the domain the estimator is defined
+    /// on (a confidence level outside `(0, 1)`, say). Raised before the
+    /// campaign starts: a parameter that cannot produce a result must
+    /// not cost one.
+    #[error("invalid study parameter `{parameter}`: {detail}")]
+    InvalidStudyParameter {
+        /// Name of the offending parameter, as the caller spells it.
+        parameter: String,
+        /// What was expected, and what arrived.
+        detail: String,
+    },
+    /// Exact sequence-tree exploration: the model is outside the exact
+    /// (Markov) domain **before** anything is explored. It declares
+    /// continuous evolution, a watched transition its automaton can
+    /// reach, or an expression reading the simulation time. Raised by
+    /// the static domain check, so a model that cannot be explored
+    /// exactly costs nothing.
+    #[error(
+        "the model is outside the exact exploration domain: {}",
+        .reasons.join("; ")
+    )]
+    OutsideExactDomain {
+        /// Every reason found, in model order (one line each).
+        reasons: Vec<String>,
+    },
+    /// Exact sequence-tree exploration: a transition whose law is
+    /// neither instantaneous, zero delay, constant exponential nor
+    /// piecewise-constant state-dependent exponential became armed
+    /// along an explored sequence. A law that is never armed does not
+    /// block; this one was, and the sequence that armed it is named.
+    #[error(
+        "transition `{transition}` ({law}) is armed after the sequence [{}]: \
+         its law is outside the exact exploration domain (instantaneous, \
+         zero delay, or exponential with a rate constant between jumps)",
+        .sequence.join(", ")
+    )]
+    LawOutsideExactDomain {
+        /// Qualified name of the armed transition.
+        transition: String,
+        /// Its law, as a short readable label.
+        law: String,
+        /// Qualified names of the transitions fired from the initial
+        /// state to the node where it became armed, in firing order.
+        sequence: Vec<String>,
+    },
+    /// Exact sequence-tree exploration: more than `firings`
+    /// instantaneous transitions (instantaneous law or zero delay) fire
+    /// in a row along one explored sequence, with no timed step between
+    /// them. Their mass never decreases, so no probability cut-off stops
+    /// the chain: it is diagnosed as a cycle of instantaneous
+    /// transitions. Distinct from [`EngineError::InstantaneousLoop`],
+    /// which is about sensitive functions within one fixpoint; the cap
+    /// is the same, [`EngineConfig::max_fixpoint_iterations`].
+    #[error(
+        "more than {firings} instantaneous transitions fire in a row after the \
+         sequence [{}] (the last one `{transition}`): probable cycle of \
+         instantaneous or zero-delay transitions. Raise `max_fixpoint_iterations` \
+         if the chain is genuinely this long",
+        .sequence.join(", ")
+    )]
+    InstantaneousCycle {
+        /// Qualified name of the instantaneous transition that would have
+        /// fired past the cap.
+        transition: String,
+        /// Consecutive instantaneous firings allowed, which is the cap.
+        firings: usize,
+        /// Qualified names of the transitions fired from the initial
+        /// state up to the start of the instantaneous chain (the chain
+        /// itself excluded), in firing order.
+        sequence: Vec<String>,
     },
 }
 
@@ -2387,6 +2473,143 @@ impl<'m> Engine<'m> {
         self.fire_idx_inner(trans_idx, Some(forced))
     }
 
+    /// **Interactive control**: fire a chosen armed transition by index at
+    /// its scheduled date (as [`Engine::fire_idx`]), **forcing** its
+    /// destination to the target at position `branch` of the compiled
+    /// target list ([`crate::compile::CTransition::targets`], declared
+    /// order kept).
+    ///
+    /// The index form avoids the state-name lookup of
+    /// [`Engine::fire_idx_to`] and names a branch unambiguously when two
+    /// branches share a destination state. Errors with
+    /// [`EngineError::ForcedBranchOutOfRange`] when `branch` is not a
+    /// valid position; nothing is changed in that case.
+    pub fn fire_idx_to_branch(
+        &mut self,
+        trans_idx: TransIdx,
+        branch: usize,
+    ) -> Result<Event, EngineError> {
+        let forced = self.resolve_branch(trans_idx, branch)?;
+        self.fire_idx_inner(trans_idx, Some(forced))
+    }
+
+    /// **Exploration**: fire an armed transition **at the current
+    /// instant**, whatever its scheduled date, leaving the clock
+    /// unmoved. `branch` forces the destination by position in the
+    /// compiled target list (see [`Engine::fire_idx_to_branch`]); `None`
+    /// resolves it the normal way (drawn for a probabilistic
+    /// instantaneous branching).
+    ///
+    /// This is the move of a sequence-tree explorer over the embedded
+    /// jump chain: the *order* of the jumps is chosen, their dates are
+    /// not simulated. No continuous evolution takes place, since time
+    /// does not advance.
+    ///
+    /// "Armed" means date-scheduled (any date, including the `+∞` of a
+    /// zero-rate exponential, which this method does fire if asked), or
+    /// a watched transition whose guard already holds.
+    ///
+    /// The firing itself draws nothing when `branch` is given, but the
+    /// discrete step that follows re-arms the schedule, which draws the
+    /// dates (and `Exp(1)` hazard thresholds) of transitions it newly
+    /// arms, exactly as any firing does: the RNG advances then. An
+    /// explorer ignores those dates, and a [`Snapshot`] carries the RNG,
+    /// so exploration stays deterministic. The draw order is the
+    /// engine's own, so Monte-Carlo runs are unaffected.
+    ///
+    /// Errors with [`EngineError::UnknownTransition`] for an index out of
+    /// range, [`EngineError::NotFireable`] if the transition is not
+    /// armed, and [`EngineError::ForcedBranchOutOfRange`] for an invalid
+    /// `branch`; the engine is unchanged in all three cases.
+    pub fn fire_now(
+        &mut self,
+        trans_idx: TransIdx,
+        branch: Option<usize>,
+    ) -> Result<Event, EngineError> {
+        let Some(transition) = self.model.transitions.get(trans_idx) else {
+            return Err(EngineError::UnknownTransition {
+                transition: format!("<index {trans_idx}>"),
+            });
+        };
+        let forced = match branch {
+            Some(branch) => Some(self.resolve_branch(trans_idx, branch)?),
+            None => None,
+        };
+        if self.pending[trans_idx].is_some() {
+            self.fire(trans_idx, forced)
+        } else if self.is_immediate_watched(trans_idx)? {
+            self.note_watched_firing()?;
+            self.fire(trans_idx, forced)
+        } else {
+            Err(EngineError::NotFireable {
+                transition: transition.name.clone(),
+                time: self.time,
+            })
+        }
+    }
+
+    /// **Exploration**: the current occurrence rate λ (events per time
+    /// unit) of an armed exponential transition, read without sampling.
+    ///
+    /// - A fixed-rate exponential returns its rate.
+    /// - A state-dependent rate (`rate_expr`) returns λ(x) evaluated on
+    ///   the current state. When λ is piecewise constant (it reads only
+    ///   discretely updated state) this value holds until the next jump,
+    ///   which is what an exact exploration of the embedded jump chain
+    ///   needs. When λ varies continuously (it reads an integrated
+    ///   attribute or time), the value is the *instantaneous* hazard
+    ///   rate at the current instant only: the two cases are told apart
+    ///   by the compiled law, `CLaw::ExpVar { continuous, .. }` in
+    ///   [`crate::compile::CTransition::distrib`].
+    ///
+    /// A rate of zero (a dormant spare) is returned as `Some(0.0)`: the
+    /// transition is armed, it simply cannot fire from this state.
+    ///
+    /// Returns `Ok(None)` for a transition that is not armed (not
+    /// date-scheduled, including a countdown paused by a `resume`
+    /// interruption) and for every other law (delay, instantaneous,
+    /// watched, Weibull, lognormal, gamma, uniform, empirical). The law
+    /// family and, for an instantaneous branching, its branch
+    /// probabilities are read from the public compiled model
+    /// ([`crate::compile::CLaw`]), not through the engine.
+    ///
+    /// Errors with [`EngineError::UnknownTransition`] for an index out of
+    /// range, and with [`EngineError::TypeError`] when a state-dependent
+    /// rate evaluates to a non-finite or negative value.
+    pub fn armed_rate(&self, trans_idx: TransIdx) -> Result<Option<f64>, EngineError> {
+        let Some(transition) = self.model.transitions.get(trans_idx) else {
+            return Err(EngineError::UnknownTransition {
+                transition: format!("<index {trans_idx}>"),
+            });
+        };
+        if self.pending[trans_idx].is_none() {
+            return Ok(None);
+        }
+        match &transition.distrib {
+            CLaw::Exp(rate) => Ok(Some(*rate)),
+            CLaw::ExpVar { rate, .. } => self.eval_rate(trans_idx, rate).map(Some),
+            _ => Ok(None),
+        }
+    }
+
+    /// **Exploration**: the target (feared event) latched by this
+    /// trajectory, with the instant it was reached, or `None` while no
+    /// target has been reached.
+    ///
+    /// The latch is set by the first discrete step (or the
+    /// initialization) that makes a declared target state active, and
+    /// then holds: it names the *first* target reached, not the ones
+    /// active now. It is recorded only when
+    /// [`EngineConfig::stop_at_targets`] is set; otherwise this is always
+    /// `None`. [`Engine::restore`] rewinds it with the rest of the
+    /// trajectory state.
+    #[must_use]
+    pub fn reached_target(&self) -> Option<(&str, f64)> {
+        self.seq_end
+            .as_ref()
+            .map(|(name, time)| (name.as_str(), *time))
+    }
+
     /// **Interactive control**: override the scheduled firing date of an
     /// armed transition (manual date-setting). The transition must be
     /// date-scheduled (`pending`, i.e. not a watched boundary), and the
@@ -2501,6 +2724,28 @@ impl<'m> Engine<'m> {
     #[must_use]
     pub fn history(&self) -> &[Event] {
         &self.events
+    }
+
+    /// Discard the recorded history (fired events, journal, sequence
+    /// events, indicator and sample points) while keeping the trajectory
+    /// state, the schedule and the RNG untouched.
+    ///
+    /// The history is a record only: no rule of the semantics reads it
+    /// back, so discarding it changes no later firing, date or value.
+    /// A caller that drives the engine itself and keeps its own record,
+    /// such as the sequence-tree explorer, calls this after each firing
+    /// so that a [`Snapshot`] stays proportional to the model rather
+    /// than to the path length.
+    pub fn forget_history(&mut self) {
+        self.events.clear();
+        self.journal.clear();
+        self.seq_events.clear();
+        for series in &mut self.indicator_series {
+            series.points.clear();
+        }
+        for series in &mut self.sampled {
+            series.points.clear();
+        }
     }
 
     /// **Interactive control**: reset the engine to its initial state
@@ -2625,6 +2870,26 @@ impl<'m> Engine<'m> {
                 state: to.to_owned(),
             }),
         }
+    }
+
+    /// Resolve a forced destination *branch index* to the state it
+    /// designates in `trans_idx`'s compiled target list, or
+    /// [`EngineError::ForcedBranchOutOfRange`].
+    fn resolve_branch(&self, trans_idx: TransIdx, branch: usize) -> Result<StateIdx, EngineError> {
+        let Some(transition) = self.model.transitions.get(trans_idx) else {
+            return Err(EngineError::UnknownTransition {
+                transition: format!("<index {trans_idx}>"),
+            });
+        };
+        transition
+            .targets
+            .get(branch)
+            .copied()
+            .ok_or_else(|| EngineError::ForcedBranchOutOfRange {
+                transition: transition.name.clone(),
+                branch,
+                branches: transition.targets.len(),
+            })
     }
 
     /// Whether `trans_idx` is a watched transition sitting in its source

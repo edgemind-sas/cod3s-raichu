@@ -24,12 +24,16 @@ from ._pyraichu import (
     __version__,
     analyse_raw_sequences_json,
     analyse_sequences_json,
+    exploration_domain_json,
+    exploration_minimal_sequences_json,
+    explore_json,
     run_sequences_json,
     monte_carlo_json,
     required_features,
     seal_model,
     simulate_json,
     switching_loops_json,
+    validate_exploration,
     validate_model,
 )
 from .journal import Cascade, JournalQuery, TransitionHistory, AttributeChange
@@ -37,6 +41,8 @@ from .journal import Cascade, JournalQuery, TransitionHistory, AttributeChange
 __all__ = [
     "Cascade",
     "Event",
+    "Exploration",
+    "ExploredSequence",
     "Extremes",
     "Fireable",
     "FlowConfig",
@@ -56,12 +62,15 @@ __all__ = [
     "analyse_raw_sequences",
     "analyse_sequences",
     "expand_model",
+    "exploration_domain",
+    "explore",
     "run_sequences",
     "SequenceCampaign",
     "interactive",
     "load_model",
     "model_body",
     "monte_carlo",
+    "read_exploration",
     "required_features",
     "seal",
     "seal_model",
@@ -448,6 +457,261 @@ def analyse_raw_sequences(raw_path: str | Path) -> SequenceCampaign:
     return SequenceCampaign(
         cleaned=levels["cleaned"], minimal=levels["minimal"], raw_path=path, header=levels["header"]
     )
+
+
+@dataclass(frozen=True)
+class ExploredSequence:
+    """One retained sequence of an exploration: an ordered path from the
+    initial state to the target in which nothing else happens (not a
+    minimal cut sequence, which is a reduction over many such paths).
+
+    ``steps`` holds the fired transitions in firing order as indices into
+    the result's shared step table (``Exploration.steps``), so a result
+    stays proportional to the total number of fired transitions as small
+    integers. ``transitions`` and ``events`` resolve them on demand:
+    ``transitions`` lists every fired transition, each
+    ``{transition, from, to}``; ``events`` lists the monitored-state
+    entries among them, each ``{obj, attr, cycle_group}``, in the
+    vocabulary of the Monte-Carlo sequence corpus minus the date (an exact
+    exploration chooses the order of the jumps, not their dates).
+    ``probability`` is the probability that a trajectory follows exactly
+    this path and reaches the target by the horizon; ``error_bound``
+    bounds its absolute error, and ``imprecise`` is ``True`` when that
+    bound exceeds the declared relative precision.
+    """
+
+    steps: tuple[int, ...]
+    end_cause: str
+    probability: float
+    error_bound: float
+    imprecise: bool
+    _table: tuple[dict[str, Any], ...] = field(repr=False, compare=False, default=())
+
+    @property
+    def transitions(self) -> list[dict[str, str]]:
+        """Every fired transition, in firing order, each
+        ``{transition, from, to}``."""
+        return [
+            {"transition": step["transition"], "from": step["from"], "to": step["to"]}
+            for step in (self._table[i] for i in self.steps)
+        ]
+
+    @property
+    def events(self) -> list[dict[str, Any]]:
+        """The monitored-state entries, in firing order, each
+        ``{obj, attr, cycle_group}``."""
+        return [
+            dict(event)
+            for event in (self._table[i]["event"] for i in self.steps)
+            if event is not None
+        ]
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any], table: tuple[dict[str, Any], ...]) -> ExploredSequence:
+        return cls(
+            steps=tuple(raw["steps"]),
+            end_cause=raw["end_cause"],
+            probability=raw["probability"],
+            error_bound=raw["error_bound"],
+            imprecise=raw["imprecise"],
+            _table=table,
+        )
+
+    def _to_dict(self) -> dict[str, Any]:
+        return {
+            "steps": list(self.steps),
+            "end_cause": self.end_cause,
+            "probability": self.probability,
+            "error_bound": self.error_bound,
+            "imprecise": self.imprecise,
+        }
+
+
+#: Fields of an :class:`Exploration`, in the order of the
+#: ``raichu.exploration`` format; ``steps`` and ``sequences`` are
+#: converted separately.
+_EXPLORATION_FIELDS = (
+    "format",
+    "version",
+    "engine_version",
+    "model",
+    "algorithm",
+    "target",
+    "horizon",
+    "cutoffs",
+    "gap_tolerance",
+    "precision",
+    "steps",
+    "sequences",
+    "lower",
+    "upper",
+    "cutoff_tallies",
+    "inconclusive",
+    "expanded_nodes",
+    "imprecise_sequences",
+)
+
+
+@dataclass(frozen=True)
+class Exploration:
+    """The result of a sequence-tree exploration (:func:`explore`), in its
+    open format, ``raichu.exploration`` v1.
+
+    ``sequences`` are the retained :class:`ExploredSequence` s by
+    decreasing probability; ``steps`` is the table they index, one entry
+    per distinct fired transition and destination,
+    ``{transition, from, to, event}`` with ``event`` ``None`` when the
+    transition is not monitored. They are disjoint events, so ``lower``, the
+    sum of their probabilities, is a lower bound on the probability of
+    reaching ``target`` by ``horizon``; ``upper`` adds the mass every
+    cut-off discarded, and ``cutoff_tallies`` says what each one pruned
+    (``{name: {pruned_nodes, mass}}``). ``inconclusive`` is ``True`` when
+    the relative gap ``(upper - lower) / upper`` exceeds
+    ``gap_tolerance``. ``cutoffs`` and ``precision`` record the settings,
+    ``algorithm`` the driver, ``expanded_nodes`` the work done, and
+    ``imprecise_sequences`` how many probabilities are not guaranteed to
+    the declared precision.
+    """
+
+    format: str
+    version: int
+    engine_version: str
+    model: str
+    algorithm: str
+    target: str
+    horizon: float
+    cutoffs: dict[str, Any]
+    gap_tolerance: float
+    precision: dict[str, Any]
+    steps: tuple[dict[str, Any], ...]
+    sequences: list[ExploredSequence]
+    lower: float
+    upper: float
+    cutoff_tallies: dict[str, dict[str, Any]]
+    inconclusive: bool
+    expanded_nodes: int
+    imprecise_sequences: int
+
+    @classmethod
+    def _from_json(cls, text: str) -> Exploration:
+        raw = json.loads(text)
+        fields = {name: raw[name] for name in _EXPLORATION_FIELDS}
+        table = tuple(raw["steps"])
+        fields["steps"] = table
+        fields["sequences"] = [ExploredSequence._from_dict(s, table) for s in raw["sequences"]]
+        return cls(**fields)
+
+    @property
+    def relative_gap(self) -> float:
+        """``(upper - lower) / upper``, 0 when ``upper`` is 0."""
+        return (self.upper - self.lower) / self.upper if self.upper > 0 else 0.0
+
+    def to_json(self, path: str | Path | None = None) -> str:
+        """The result in the ``raichu.exploration`` format, as JSON text;
+        also written to ``path`` when one is given. :func:`read_exploration`
+        reads it back into an equal object."""
+        document = {name: getattr(self, name) for name in _EXPLORATION_FIELDS}
+        document["steps"] = list(self.steps)
+        document["sequences"] = [s._to_dict() for s in self.sequences]
+        text = json.dumps(document)
+        if path is not None:
+            Path(path).write_text(text, encoding="utf-8")
+        return text
+
+    def minimal_sequences(self) -> list[dict[str, Any]]:
+        """The minimal sequences of this result, through the engine's own
+        reduction (group, filter failure/repair cycles, absorb
+        super-sequences), as :func:`analyse_sequences` returns them.
+
+        Each ``weight`` is a **probability** here, not a replica count: the
+        retained sequences are disjoint, so the weights that collapse into
+        one minimal sequence add up, and they total ``lower``. The dates
+        are 0, since the exact driver never moves the clock, which is also
+        why an exploration is not an input to date-based post-processing.
+        """
+        return json.loads(exploration_minimal_sequences_json(self.to_json()))
+
+
+def explore(
+    model: Model,
+    target: str,
+    horizon: float,
+    *,
+    algorithm: str = "exact",
+    min_probability: float | None = None,
+    max_length: int | None = None,
+    max_failures: int | None = None,
+    max_branches: int | None = None,
+    gap_tolerance: float | None = None,
+    rel_precision: float | None = None,
+    max_terms: int | None = None,
+    threads: int | None = None,
+) -> Exploration:
+    """Explore the sequence tree of ``model`` to the feared event
+    ``target`` (a declared target), instead of drawing Monte-Carlo
+    replicas.
+
+    Returns every retained sequence reaching the target, with its
+    probability at ``horizon`` (in the model's time unit), and guaranteed
+    bounds on what the cut-offs left out. Every cut-off is optional:
+    ``min_probability`` prunes a prefix whose probability of completing by
+    the horizon falls below it, ``max_length`` bounds the fired
+    transitions of a sequence, ``max_failures`` the fired transitions of
+    declared kind ``failure``, and ``max_branches`` the expanded nodes.
+    ``gap_tolerance`` (default 0.01) is the relative gap above which the
+    result is flagged inconclusive; ``rel_precision`` and ``max_terms``
+    override the numerical precision of the sequence probabilities.
+    ``threads`` sets the worker count; the result does not depend on it.
+
+    ``algorithm="exact"`` is the only algorithm provided: the Markov
+    family (instantaneous branchings, exponential laws whose rate is
+    constant between jumps, no continuous evolution), with every
+    probability in closed form. Raises :class:`SimulationError` for an
+    invalid setting (before anything runs), for a model outside the
+    domain (see :func:`exploration_domain`), and when a law outside it
+    becomes armed, naming the transition and the sequence that armed it.
+    """
+    return Exploration._from_json(
+        explore_json(
+            model.json,
+            target,
+            horizon,
+            algorithm,
+            min_probability,
+            max_length,
+            max_failures,
+            max_branches,
+            gap_tolerance,
+            rel_precision,
+            max_terms,
+            threads,
+        )
+    )
+
+
+def read_exploration(source: str | Path) -> Exploration:
+    """Read an exploration result written by :meth:`Exploration.to_json`.
+
+    ``source`` is a path (a :class:`~pathlib.Path`, or a string that is
+    not JSON text) or the JSON text itself. Raises
+    :class:`SimulationError` for another format or a version newer than
+    this engine reads.
+    """
+    if isinstance(source, Path) or not source.lstrip().startswith("{"):
+        source = Path(source).read_text(encoding="utf-8")
+    validate_exploration(source)
+    return Exploration._from_json(source)
+
+
+def exploration_domain(model: Model) -> list[dict[str, Any]]:
+    """Screen ``model`` for the exact exploration domain without exploring
+    it: every reason found statically that it is outside (an ODE, a
+    watched transition its automaton can reach, an expression reading
+    time), each ``{kind, ..., message}``. Empty when none is found; a law
+    outside the domain (delay, Weibull, ...) is only found during a run,
+    and only when it becomes armed.
+    """
+    return json.loads(exploration_domain_json(model.json))
 
 
 def switching_loops(model: Model) -> list[dict]:

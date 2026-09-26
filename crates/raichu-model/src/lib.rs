@@ -418,6 +418,29 @@ pub enum InterruptionPolicy {
     Continue,
 }
 
+/// The declared **reliability role** of a transition: whether firing it
+/// fails something or repairs something.
+///
+/// A driver that bounds the number of failures along a sequence (the
+/// failure-count cut-off of the sequence-tree exploration) reads this
+/// declaration; it never infers the role from state names, a convention the
+/// engine could not check. The kind changes no simulated trajectory, so it
+/// is a baseline construct and requires no feature.
+///
+/// For a transition with several targets (an instantaneous branching, such
+/// as an on-demand failure draw towards `[failed, parked]`), the declared
+/// role applies to its **first declared target** only: firing into any
+/// other branch is not a failure (respectively a repair).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionKind {
+    /// Firing into the first declared target is a failure occurrence.
+    Failure,
+    /// Firing into the first declared target is a repair (a return to
+    /// service).
+    Repair,
+}
+
 /// A transition of an automaton.
 ///
 /// Maps to the paper's deterministic transitions ⟨q_src, guard, delay,
@@ -452,6 +475,13 @@ pub struct Transition {
     /// out before the feared event. `None` = not part of a cycle pair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cycle_group: Option<String>,
+    /// **Declared reliability role** (see [`TransitionKind`]): `failure`,
+    /// `repair`, or absent (the default, and the reading of every model
+    /// written before the field existed). Applies to the first declared
+    /// target only. The muscadet plugin sets it on the failure-mode edges
+    /// it emits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<TransitionKind>,
     /// **Edge effects**: assignments evaluated ONCE, when the transition
     /// fires, after its state change, in declaration order. Unlike a
     /// sensitive function's effects (a level, re-evaluated whenever what it

@@ -17,6 +17,7 @@ fn mon(name: &str, source: &str, target: &str, time: f64, group: Option<&str>) -
         on_interruption: Default::default(),
         monitored: true,
         cycle_group: group.map(Into::into),
+        kind: None,
         effects: vec![],
         distrib: Distrib::Delay { time },
     }

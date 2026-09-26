@@ -304,6 +304,7 @@ def _inst_edge(
     *,
     monitored: bool,
     cycle_group: str | None = None,
+    kind: str | None = None,
 ) -> list[dict]:
     """The two transitions of ONE instantaneous direction (cod3s
     `_build_inst_mode_automaton`, "unified per-edge inst semantics",
@@ -320,7 +321,13 @@ def _inst_edge(
       restores the mode once the condition falls.
 
     The re-arm is never monitored: it is structure, not an event of the
-    mission (cod3s masks it with a never-matching mask)."""
+    mission (cod3s masks it with a never-matching mask).
+
+    ``kind`` (``"failure"`` / ``"repair"``) is the declared reliability
+    role of the draw. It applies to the draw's FIRST target only, which is
+    ``dest``: a lost draw entering ``parked`` is neither a failure nor a
+    repair. The re-arm never carries a kind, for the same reason it is
+    never monitored."""
     draw: dict = {
         "name": dest,
         "source": source,
@@ -329,6 +336,8 @@ def _inst_edge(
         "distrib": "inst",
         "probs": [prob],
     }
+    if kind is not None:
+        draw["kind"] = kind
     if monitored:
         draw["monitored"] = True
         if cycle_group is not None:
@@ -1539,6 +1548,13 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
     # TARGET's grafted mirror instead (cod3s drops the external ObjFM's own
     # events: in rep_indep its instant occ+rep pair would always cancel).
     monitored = not external
+    # Declared reliability roles (`kind`) follow the same split: an
+    # external mode's occurrence is declared on each target's mirror, which
+    # is where its sequence events live, so declaring the mode's own
+    # automaton too would count one occurrence twice. The rep_indep reset
+    # of an external mode is structure, never a repair.
+    fm_fail_kind = None if external else "failure"
+    fm_repair_kind = None if external else "repair"
     for order in range(1, order_max + 1):
         f_law = failure_laws[order - 1]
         r_law = repair_laws[order - 1]
@@ -1618,6 +1634,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                     _inst_prob(f_law, what=f"ObjFM `{name}`"),
                     monitored=monitored,
                     cycle_group=aut_name,
+                    kind=fm_fail_kind,
                 )
             else:
                 transitions.append(
@@ -1631,6 +1648,8 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                         **_law(f_law),
                     }
                 )
+                if fm_fail_kind is not None:
+                    transitions[-1]["kind"] = fm_fail_kind
                 if failure_edge:
                     transitions[-1]["effects"] = _edge_effects(targets[0], failure_edge)
             if repair_fields is not None:
@@ -1645,6 +1664,8 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                         **repair_fields,
                     }
                 )
+                if fm_repair_kind is not None:
+                    transitions[-1]["kind"] = fm_repair_kind
                 if repair_edge:
                     transitions[-1]["effects"] = _edge_effects(targets[0], repair_edge)
             elif inst_repair:
@@ -1656,6 +1677,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                     _inst_prob(r_law, what=f"ObjFM `{name}`"),
                     monitored=monitored,
                     cycle_group=aut_name,
+                    kind=fm_repair_kind,
                 )
             automata.append(
                 {
@@ -1816,6 +1838,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 ),
                 "monitored": True,
                 "cycle_group": name,
+                "kind": "repair",
                 **_law(repair_laws[0]),
             }
         else:
@@ -1832,13 +1855,16 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 "guard": _attr_is(name, ctrl, False),
                 "monitored": True,
                 "cycle_group": name,
+                "kind": "repair",
                 "distrib": "delay",
                 "time": 0.0,
             }
         # The target mirror carries the external mode's sequence events
         # (cod3s drops the external ObjFM's own occ/rep and pairs the
         # target's `{fm}` occ/rep instead); the filter's (component,
-        # group) key makes the pair unique per (target, ObjFM).
+        # group) key makes the pair unique per (target, ObjFM). The mirror
+        # also carries the declared failure / repair kinds, for the same
+        # reason: one occurrence counts once per target.
         comp.setdefault("automata", []).append(
             {
                 "name": name,
@@ -1852,6 +1878,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                         "guard": _attr_is(name, ctrl, True),
                         "monitored": True,
                         "cycle_group": name,
+                        "kind": "failure",
                         "distrib": "delay",
                         "time": 0.0,
                     },
@@ -2016,6 +2043,7 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                     demand,
                     gamma,
                     monitored=False,
+                    kind="failure",
                 ),
             ]
             if repair_kind == "timed":
@@ -2025,6 +2053,7 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                         "source": occ,
                         "targets": [rep],
                         "guard": repair_guard,
+                        "kind": "repair",
                         **repair_law,
                     }
                 )
@@ -2043,6 +2072,7 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                     repair_guard,
                     _inst_prob(repair_law, what=f"ObjFMInst `{name}`"),
                     monitored=False,
+                    kind="repair",
                 )
             automata.append(
                 {

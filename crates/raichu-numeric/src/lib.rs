@@ -26,6 +26,12 @@
 //! All tolerances are explicit in [`SolverParams`] and recorded by the
 //! caller as provenance (validation-contract level 3).
 
+pub mod phase_type;
+
+pub use phase_type::{
+    Absorption, AbsorptionMethod, PhaseTypeAccumulator, PhaseTypeError, PhaseTypeSettings,
+};
+
 use thiserror::Error;
 
 /// A continuous system: right-hand sides plus boundary margins.

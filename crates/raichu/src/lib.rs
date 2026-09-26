@@ -16,11 +16,15 @@
 //! - [`raichu_io`]: model I/O and cod3s interop.
 //! - [`raichu_rng`]: reproducible RNG streams.
 //! - [`raichu_numeric`]: continuous evolution (milestone M1).
+//! - [`raichu_montecarlo`]: the Monte-Carlo replica driver.
+//! - [`raichu_explore`]: the sequence-tree exploration drivers (exact
+//!   exploration of the Markov family).
 //!
 //! The engine upholds standing validation / performance / observability
 //! contracts across its milestone sequence.
 
 pub use raichu_core;
+pub use raichu_explore;
 pub use raichu_expr;
 pub use raichu_io;
 pub use raichu_model;

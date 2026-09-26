@@ -35,6 +35,7 @@ fn single_law_model(distrib: Distrib) -> Model {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    kind: None,
                     effects: vec![],
                     distrib,
                 }],
@@ -213,6 +214,7 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        kind: None,
                         effects: vec![],
                         distrib: Distrib::Delay { time: 5.0 },
                     }],
@@ -229,6 +231,7 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
                         on_interruption: Default::default(),
                         monitored: false,
                         cycle_group: None,
+                        kind: None,
                         effects: vec![],
                         distrib: Distrib::Exp {
                             rate: None,
@@ -310,6 +313,7 @@ fn expvar_continuous_rate_matches_closed_form() {
                     on_interruption: Default::default(),
                     monitored: false,
                     cycle_group: None,
+                    kind: None,
                     effects: vec![],
                     distrib: Distrib::Exp {
                         rate: None,
