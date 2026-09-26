@@ -18,6 +18,7 @@ use raichu::raichu_core::{
     clean as clean_sequences, minimal_sequences, read_raw_corpus, write_raw_corpus,
     ObservedCondition, RawCorpus, RawHeader, RawObservation,
 };
+use raichu::raichu_core::{fault_tree as generate_fault_tree, FaultTreeSettings};
 use raichu::raichu_core::{
     CompiledModel, Engine, EngineConfig, FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot,
     SolverParams,
@@ -729,6 +730,43 @@ fn exploration_domain_json(model_json: &str) -> PyResult<String> {
     serde_json::to_string(&report).map_err(|e| SimulationError::new_err(e.to_string()))
 }
 
+/// Generate the fault tree explaining `top_json` (an expression over the
+/// model's states) by backward chaining, attributes held at their initial
+/// value or at `profile_json` (`[[qualified name, value], ...]`). Answers
+/// `{"tree": {top, basic_events}, "minimal_cut_sets": [[event index, ...]],
+/// "open_psa": "<document>"}`.
+#[pyfunction]
+#[pyo3(signature = (model_json, top_json, profile_json = None, max_nodes = None, cut_set_limit = 100_000, name = "fault_tree"))]
+fn fault_tree_json(
+    model_json: &str,
+    top_json: &str,
+    profile_json: Option<&str>,
+    max_nodes: Option<usize>,
+    cut_set_limit: usize,
+    name: &str,
+) -> PyResult<String> {
+    let compiled = parse_and_compile(model_json)?;
+    let top = serde_json::from_str(top_json)
+        .map_err(|e| SimulationError::new_err(format!("fault tree: the top expression: {e}")))?;
+    let profile = match profile_json {
+        None => Vec::new(),
+        Some(text) => serde_json::from_str(text)
+            .map_err(|e| SimulationError::new_err(format!("fault tree: the profile: {e}")))?,
+    };
+    let settings = FaultTreeSettings { profile, max_nodes };
+    let tree = generate_fault_tree(&compiled, &top, &settings)
+        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    let cuts = tree
+        .minimal_cut_sets(cut_set_limit)
+        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    let answer = serde_json::json!({
+        "tree": tree,
+        "minimal_cut_sets": cuts,
+        "open_psa": tree.to_open_psa(name),
+    });
+    serde_json::to_string(&answer).map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
 /// Parse an exploration result through the format's own reader.
 fn parse_exploration(result_json: &str) -> PyResult<ExplorationResult> {
     read_exploration_result(result_json).map_err(|e| SimulationError::new_err(e.to_string()))
@@ -953,6 +991,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(analyse_raw_sequences_json, module)?)?;
     module.add_function(wrap_pyfunction!(explore_json, module)?)?;
     module.add_function(wrap_pyfunction!(exploration_domain_json, module)?)?;
+    module.add_function(wrap_pyfunction!(fault_tree_json, module)?)?;
     module.add_function(wrap_pyfunction!(validate_exploration, module)?)?;
     module.add_function(wrap_pyfunction!(
         exploration_minimal_sequences_json,
