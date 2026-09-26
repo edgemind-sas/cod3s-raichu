@@ -18,12 +18,12 @@ its six multi-clause conditions carry no mode key and are shapes like
 cross-validated against PyCATSHOO in that reading.
 
 What was wrong is narrower and is what this module pins. The plugin section
-accepted ``var_prod_cond_inner_mode`` and **ignored it** -- any value, including
-the ``"or"`` that asks for the other reading, and including a value that is no
-mode at all. A model author writing the muscadet key there got their condition
-read as very nearly its own negation, with nothing refused and nothing logged.
-It is now refused above the value that states what the section already does, per
-the seam's refuse-by-value rule.
+accepted ``var_prod_cond_inner_mode`` and **ignored it**, so a model author
+writing the muscadet key there got their condition read as very nearly its own
+negation. It was then refused above the value that states the section's own
+reading. Since the authoring classes read the key with muscadet's meaning
+(``test_prod_cond_inner_mode.py``), the section now HONOURS a declared mode, and
+keeps its own reading only where none is declared.
 
 What the two routes DO share is the operand vocabulary, and that is pinned here
 too: a negated, compared or ported operand means the same thing whichever
@@ -263,30 +263,27 @@ def test_the_two_routes_agree_once_the_conventions_do(a, b):
 # --- 2. the defect: a key accepted and ignored ------------------------
 
 
+@pytest.mark.parametrize("a,b", FEEDS, ids=str)
+def test_a_declared_mode_is_honoured_with_muscadet_s_meaning(a, b):
+    """The regression this module was written for: the key was accepted and
+    dropped, then refused. It is now read, and ``"or"``, muscadet's own
+    default and what an author transcribing a library writes, means on this
+    section what it means on the muscadet route: the clauses AND-ed."""
+    fed = {A: a, B: b}
+
+    assert via_plugin(TWO_CLAUSES, "or", fed=fed) is (a and b)
+    assert via_plugin(TWO_CLAUSES, "or", fed=fed) is via_declaration(
+        TWO_CLAUSES, "or", fed=fed
+    )
+
+
 @pytest.mark.parametrize("shape", sorted(SHAPES), ids=str)
-@pytest.mark.parametrize("declared", ["or", "nonsense", ""], ids=repr)
-def test_the_plugin_section_refuses_a_mode_it_will_not_honour(declared, shape):
-    """The regression under repair: any value at all was accepted and
-    dropped, so a condition written in muscadet's convention ran as very
-    nearly its own negation.
-
-    ``"or"`` is the one that costs a wrong answer, and it is muscadet's own
-    default, so it is what a model author transcribing a library writes. The
-    others are here because the silent drop was indiscriminate: a value that
-    is no mode was accepted just as quietly, and a refusal that caught only
-    the meaningful spelling would still pass a typo through.
-
-    Run over all three entry shapes because each reaches a different
-    authoring method. A guard that sat inside the plain branch instead of
-    above the dispatch would leave a plain-only suite green while a
-    temporised or triggered output returned to the misreading, so the shape
-    axis is what pins the placement rather than the behaviour.
-
-    The message is matched on the guidance and not only on the key, because
-    a refusal that names the key without naming what to write instead is the
-    half of this fix that a reader cannot act on.
-    """
-    with pytest.raises(ValueError, match=r"var_prod_cond_inner_mode.*DIFFERENT"):
+@pytest.mark.parametrize("declared", ["nonsense", ""], ids=repr)
+def test_a_value_that_is_no_mode_is_refused_on_every_entry_shape(declared, shape):
+    """Run over all three entry shapes because each reaches a different
+    authoring method, so a check sitting in one branch would leave the other
+    two passing a typo through."""
+    with pytest.raises(ValueError, match=r"var_prod_cond_inner_mode"):
         via_plugin(TWO_CLAUSES, declared, fed={A: True, B: False}, shape=shape)
 
 
@@ -328,23 +325,20 @@ def test_a_flat_condition_conjoins_its_operands_on_this_route(a, b):
 
 
 def test_a_flat_condition_carries_the_other_mode():
-    """The measured flip, and the case a single carried value inverts.
-
-    On a flat condition the muscadet-facing route agrees with this section
-    under ``"or"`` and disagrees under ``"and"``, so ``"or"`` is the value
-    that states this reading and ``"and"`` is the one that would run the
-    condition as a disjunction. A guard keyed on the nested spelling alone
-    would bless the inverting value here and refuse the agreeing one.
-    """
+    """The measured flip. On a flat condition this section's own reading is
+    the one muscadet spells ``"or"``, so that is what a condition declaring
+    no mode is read under; ``"and"``, declared, splits the list into one
+    clause per element and reads them as a disjunction, on both routes."""
     fed = {A: True, B: False}
 
     assert via_declaration(TWO_OPERANDS_FLAT, "or", fed=fed) is via_plugin(
         TWO_OPERANDS_FLAT, None, fed=fed
     )
     assert via_plugin(TWO_OPERANDS_FLAT, "or", fed=fed) is False
-
-    with pytest.raises(ValueError, match=r"var_prod_cond_inner_mode"):
-        via_plugin(TWO_OPERANDS_FLAT, "and", fed=fed)
+    assert via_plugin(TWO_OPERANDS_FLAT, "and", fed=fed) is True
+    assert via_plugin(TWO_OPERANDS_FLAT, "and", fed=fed) is via_declaration(
+        TWO_OPERANDS_FLAT, "and", fed=fed
+    )
 
 
 @pytest.mark.parametrize("mode", ["or", "and"], ids=str)

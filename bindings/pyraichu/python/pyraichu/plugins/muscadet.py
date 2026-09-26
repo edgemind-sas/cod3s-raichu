@@ -1048,7 +1048,7 @@ def _objflow_flows_in(obj: authoring.ObjFlow, spec: dict) -> None:
 
 def _prod_cond_carried_modes(condition: Any) -> tuple[str, ...]:
     """Which ``var_prod_cond_inner_mode`` values state the reading this
-    section already has, for the condition written beside them.
+    section gives a condition that declares no mode.
 
     **Keyed on the SPELLING, and it has to be**, because the two layers
     normalise a FLAT list differently and the matching mode flips with it.
@@ -1064,25 +1064,15 @@ def _prod_cond_carried_modes(condition: Any) -> tuple[str, ...]:
     absent, or ``[]``            either
     ===========================  ==============================
 
-    The flat row is the one a single carried value gets backwards. This
-    section reads a flat list as ONE group, its operands AND-ed
-    (:meth:`~pyraichu.muscadet.ObjFlow.add_flow_out`: "a flat list is one
-    such group"), while the muscadet-facing route splits the same list into
-    one clause per element and so reaches the same answer only under
-    ``"or"``. A guard that accepted ``"and"`` everywhere would therefore
-    bless the inverting value on a flat condition and refuse the agreeing
-    one, which is the very failure it exists to catch.
+    The flat row is the one a single value gets backwards. This section
+    reads a flat list as ONE group, its operands AND-ed, while muscadet
+    splits the same list into one clause per element and so reaches the same
+    answer only under ``"or"``. Carrying ``"and"`` everywhere would therefore
+    invert a flat condition.
 
     Nothing to combine means nothing to disagree about, so an absent or
-    empty condition carries either mode: the seam refuses by value, never by
-    key (the declaration is accepted while it declares nothing), and an
-    exporter that writes gate keys unconditionally must not be refused a
-    model it would compute identically.
-
-    A MIXED list gets both modes back, not because they agree but because
-    this section refuses that shape on its own terms further down. Answering
-    here would replace a refusal naming the shape with one naming the mode,
-    which points the reader at the wrong line.
+    empty condition carries either mode, and so does a MIXED list, which the
+    authoring classes refuse on its own terms.
     """
     if not condition or not isinstance(condition, (list, tuple)):
         return declare.PROD_COND_INNER_MODES
@@ -1133,23 +1123,15 @@ _PROD_COND_UNBUILT_KEYS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _refuse_a_foreign_prod_cond_convention(
-    obj: authoring.ObjFlow, flow: dict
-) -> None:
-    """Refuse a production-condition key this section will not honour.
+def _refuse_an_unbuilt_prod_cond_key(obj: authoring.ObjFlow, flow: dict) -> None:
+    """Refuse a production-condition key this section builds nothing from.
 
-    Two shapes of refusal, one rule. ``var_prod_cond_inner_mode`` is accepted
-    while it states the reading this section already has for the condition
-    beside it (:func:`_prod_cond_carried_modes`); the rest of the family is
-    accepted while it declares nothing. Both are the seam's refuse-by-value
-    rule, and neither refuses on the key alone.
-
-    What every one of them costs when dropped instead is a condition that
-    runs as very nearly its own negation, with nothing refused and nothing
-    logged. Measured on a recorded industrial model whose six multi-clause
-    conditions carry no
-    mode and are read as the groups OR-ed: converting those would turn a
-    supply fed by either grid into one needing both.
+    Accepted while it declares nothing, refused above it: the seam's
+    refuse-by-value rule. Dropped instead, each would leave a condition
+    running unnegated or uncompared, or an output delivering the opposite of
+    what it says, with nothing refused and nothing logged.
+    ``var_prod_cond_inner_mode`` is not of this family any more: it is read,
+    see :func:`_prod_cond_inner_mode`.
     """
     where = f"ObjFlow `{obj.name}`: `flows_out` entry {flow.get('name')!r}"
     for key, guidance in _PROD_COND_UNBUILT_KEYS:
@@ -1161,36 +1143,24 @@ def _refuse_a_foreign_prod_cond_convention(
             f"entry computing the opposite of what it declares, so it is "
             f"refused: {guidance}"
         )
-    if "var_prod_cond_inner_mode" not in flow:
-        return
-    declared = flow["var_prod_cond_inner_mode"]
-    carried = _prod_cond_carried_modes(flow.get("var_prod_cond"))
-    if declared in carried:
-        return
-    reading = (
-        "reads the condition beside it as one group, its operands AND-ed"
-        if carried == ("or",)
-        else "reads the condition beside it as the groups OR-ed, each "
-        "group's operands AND-ed"
-    )
-    raise ValueError(
-        f"{where} declares `var_prod_cond_inner_mode`={declared!r}. This "
-        f"section {reading}, which muscadet spells "
-        f"{' or '.join(repr(mode) for mode in carried)} for that shape, and "
-        f"that is what it accepts here. muscadet itself carries "
-        f"{' and '.join(repr(mode) for mode in declare.PROD_COND_INNER_MODES)}"
-        f", and the other one reads the same list as very nearly its own "
-        f"negation. Two ways out, and the cheap one is usually right: rewrite "
-        f"the condition in the reading above, which is a change to this entry "
-        f"alone; or declare the component through the muscadet-facing route, "
-        f"which converts the condition but is a DIFFERENT document shape (a "
-        f"`components` entry with a `flows` section, not a "
-        f"`plugins.muscadet.objects` entry with `flows_out`), so it is a "
-        f"re-authoring of the component rather than one more key. Note that a "
-        f"`capacities` entry beside this one is unaffected either way: its "
-        f"`serve_cond_inner_mode` is read on muscadet's own convention, so a "
-        f"serve condition needs no move"
-    )
+
+
+def _prod_cond_inner_mode(flow: dict) -> str:
+    """The mode a ``flows_out`` entry's condition is read under.
+
+    A declared ``var_prod_cond_inner_mode`` is honoured with muscadet's
+    meaning, which is what the authoring classes now read. A condition that
+    declares none keeps this section's own reading, the groups OR-ed and a
+    flat list one conjunction, stated as the muscadet mode that means it for
+    that spelling (:func:`_prod_cond_carried_modes`): measured on a recorded
+    industrial model whose six multi-clause conditions carry no mode,
+    re-reading them under
+    muscadet's default would turn a supply fed by either grid into one
+    needing both.
+    """
+    if "var_prod_cond_inner_mode" in flow:
+        return flow["var_prod_cond_inner_mode"]
+    return _prod_cond_carried_modes(flow.get("var_prod_cond"))[0]
 
 
 def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
@@ -1223,7 +1193,7 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
     at its own muscadet default mean the opposite of omitting it, which is
     a trap dressed as expressivity."""
     for flow in spec.get("flows_out", []):
-        _refuse_a_foreign_prod_cond_convention(obj, flow)
+        _refuse_an_unbuilt_prod_cond_key(obj, flow)
         gate = {
             "var_fed_available_out_init": flow.get("var_fed_available_out_init"),
             "var_fed_available_out_reset": flow.get("var_fed_available_out_reset"),
@@ -1239,6 +1209,7 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 disable_law=tempo.get("disable_law"),
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
+                var_prod_cond_inner_mode=_prod_cond_inner_mode(flow),
                 **gate,
             )
         elif "trigger" in flow:
@@ -1250,6 +1221,7 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 trigger_logic=trigger.get("logic", "or"),
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
+                var_prod_cond_inner_mode=_prod_cond_inner_mode(flow),
                 **gate,
             )
         else:
@@ -1257,6 +1229,7 @@ def _objflow_flows_out(obj: authoring.ObjFlow, spec: dict) -> None:
                 name=flow["name"],
                 var_prod_default=flow.get("var_prod_default", False),
                 var_prod_cond=flow.get("var_prod_cond"),
+                var_prod_cond_inner_mode=_prod_cond_inner_mode(flow),
                 var_is_active_default=flow.get("var_is_active_default"),
                 **gate,
             )

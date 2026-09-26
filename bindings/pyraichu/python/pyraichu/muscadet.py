@@ -203,6 +203,7 @@ natively instead of widening this vocabulary.
 from __future__ import annotations
 
 import heapq
+import itertools
 import json
 import math
 import operator
@@ -458,6 +459,62 @@ SERVE_GATE_STATES = ("serving", "withheld")
 #: disjunctions, ``"and"`` a disjunction of conjunctions.
 SERVE_COND_INNER_MODES = ("or", "and")
 SERVE_COND_INNER_MODE_DEFAULT = "or"
+
+#: How a production condition combines its two levels, and muscadet's own
+#: default (``FlowDiscreteOut.var_prod_cond_inner_mode``): ``"or"`` reads
+#: the list as a conjunction of disjunctions, ``"and"`` as a disjunction of
+#: conjunctions, and a flat list is one clause per element either way.
+PROD_COND_INNER_MODES = ("or", "and")
+PROD_COND_INNER_MODE_DEFAULT = "or"
+
+#: The most conjunctions a condition may expand to when its clauses are
+#: multiplied out into the disjunctive form the expression is built in:
+#: one per choice of an operand from each clause. Exact, and small for a
+#: real condition; past this, the condition belongs in a rule guard.
+MAX_PROD_COND_GROUPS = 256
+
+
+def _prod_cond_inner_mode(flow: str, inner_mode: str) -> str:
+    """`inner_mode`, refused unless it is one of muscadet's two."""
+    if inner_mode not in PROD_COND_INNER_MODES:
+        raise ValueError(
+            f"flow `{flow}` declares `var_prod_cond_inner_mode`={inner_mode!r}; "
+            f"a production condition combines its two levels one way or the "
+            f"other, so it is "
+            f"{' or '.join(repr(mode) for mode in PROD_COND_INNER_MODES)}"
+        )
+    return inner_mode
+
+
+def prod_cond_disjunction(
+    where: str, clauses: list[list[Any]], inner_mode: str
+) -> list[list[Any]]:
+    """A production condition's clauses, in disjunctive form.
+
+    ``"and"`` clauses are ALREADY a disjunction of conjunctions and come back
+    unchanged. ``"or"`` clauses are a conjunction of disjunctions, multiplied
+    out: one conjunction per choice of a single operand from each clause.
+    """
+    if inner_mode not in PROD_COND_INNER_MODES:
+        raise ValueError(
+            f"{where} declares `var_prod_cond_inner_mode`={inner_mode!r}; a "
+            f"production condition combines its two levels one way or the "
+            f"other, so it is "
+            f"{' or '.join(repr(mode) for mode in PROD_COND_INNER_MODES)}"
+        )
+    if inner_mode == "and":
+        return [list(clause) for clause in clauses]
+    width = 1
+    for clause in clauses:
+        width *= max(len(clause), 1)
+    if width > MAX_PROD_COND_GROUPS:
+        raise ValueError(
+            f"{where} carries a production condition of {len(clauses)} "
+            f"conjoined clauses expanding to {width} disjunctions, past the "
+            f"{MAX_PROD_COND_GROUPS} this layer converts. Split the component "
+            f"or state the condition through a rule guard"
+        )
+    return [list(choice) for choice in itertools.product(*clauses)]
 
 
 #: The laws a temporised output's transition may wait on, and the one
@@ -794,6 +851,9 @@ class _FlowOut:
     # resolution would not, `negate` to deny the operand, `op`/`value` to
     # compare what it names against a threshold.
     var_prod_cond: list[Any] | list[list[Any]] = field(default_factory=list)
+    # muscadet's `var_prod_cond_inner_mode`: which level of the list above
+    # is the disjunction. See :data:`PROD_COND_INNER_MODES`.
+    var_prod_cond_inner_mode: str = PROD_COND_INNER_MODE_DEFAULT
     # muscadet `FlowOutTempo`: {"enable", "disable", "init_enable"}: a
     # disabled↔enabled automaton whose two transitions, each on its own
     # law (a delay or an exponential, in the engine's transition form),
@@ -1607,12 +1667,19 @@ class ObjFlow:
         var_is_active_default: bool | None = None,
         var_fed_available_out_init: bool | None = None,
         var_fed_available_out_reset: bool | None = None,
+        var_prod_cond_inner_mode: str = PROD_COND_INNER_MODE_DEFAULT,
     ) -> None:
         """Declare an outgoing flow, produced unconditionally
         (``var_prod_default=True``) or when the declared condition holds.
 
-        `var_prod_cond` is a list of groups, OR-ed, each group's operands
-        AND-ed, and a flat list is one such group. An operand is a bare flow
+        `var_prod_cond` is read as muscadet reads it: a list of clauses (a
+        flat list is one clause per element), combined as
+        `var_prod_cond_inner_mode` says. ``"or"``, muscadet's default, is
+        every clause holding, a clause holding when any of its operands does;
+        ``"and"`` is any clause holding, a clause holding when all of its
+        operands do. So ``[["a"], ["b"]]`` is ``a and b`` by default and
+        ``a or b`` under ``"and"``, and a flat ``["a", "b"]`` is ``a and b``
+        by default, as it always was. An operand is a bare flow
         name -- read on the INPUT side first, exactly as muscadet resolves one
         -- or the mapping carrying :data:`PROD_COND_OPERAND_KEYS`: `port` to
         select a side the default would not have picked (the transit pattern,
@@ -1631,6 +1698,9 @@ class ObjFlow:
                 name=name,
                 var_prod_default=var_prod_default,
                 var_prod_cond=list(var_prod_cond or []),
+                var_prod_cond_inner_mode=_prod_cond_inner_mode(
+                    name, var_prod_cond_inner_mode
+                ),
                 var_is_active_default=var_is_active_default,
                 var_fed_available_out_init=var_fed_available_out_init,
                 var_fed_available_out_reset=var_fed_available_out_reset,
@@ -3699,36 +3769,44 @@ class ObjFlow:
 
     # --- production conditions ------------------------------------------
 
-    def _parse_prod_cond(self, where: str, declared: Any) -> list[list[_RuleOperand]]:
-        """A declared production condition, as groups of resolved operands.
+    def _parse_prod_cond(
+        self, where: str, declared: Any, inner_mode: str = PROD_COND_INNER_MODE_DEFAULT
+    ) -> list[list[_RuleOperand]]:
+        """A declared production condition, as the groups of resolved
+        operands the expression reads: groups OR-ed, operands AND-ed.
 
-        The shape is the one this site has always read: a list of groups,
-        OR-ed, each group's operands AND-ed, and a FLAT list taken as ONE
-        conjunction. The flat reading is not a choice made here -- the layer
-        above converts muscadet's conjunctive form before it arrives, and a
-        flat list means the same conjunction under either convention
-        (``pyraichu.declare._prod_cond``).
+        The declaration is read as muscadet reads it: a list of clauses, a
+        FLAT list being one clause per element, combined as `inner_mode`
+        says (:data:`PROD_COND_INNER_MODES`), then put in disjunctive form by
+        :func:`prod_cond_disjunction`. A flat list under ``"or"`` therefore
+        comes out as the one conjunction it always was here, and the
+        expression built from it is unchanged character for character.
+
+        A MIXED list (groups beside bare operands) keeps its old reading, one
+        group whose list element no operand parser accepts, so it is refused
+        by the operand check rather than silently re-read.
         """
-        groups = (
-            declared
-            if all(isinstance(group, (list, tuple)) for group in declared)
-            else [declared]
-        )
-        parsed: list[list[_RuleOperand]] = []
-        for group in groups:
-            specs = group if isinstance(group, (list, tuple)) else [group]
+        if all(isinstance(group, (list, tuple)) for group in declared):
+            clauses = [list(group) for group in declared]
+        elif not any(isinstance(group, (list, tuple)) for group in declared):
+            clauses = [[operand] for operand in declared]
+        else:
+            clauses = [list(declared)]
+        for clause in clauses:
             # muscadet refuses this one too, and on the family it had left for
             # later: `FlowContinuousOut.check_prod_cond_shape` scopes itself to
             # the continuous classes because "the discrete classes are 1.x
             # surface with the same laxity, and tightening them belongs to its
-            # own change". This is that change, on this side. The layer above
-            # refuses it before the conversion, where the two readings of the
-            # inner mode do not even agree on what it would mean.
-            if not specs:
+            # own change". This is that change, on this side.
+            if not clause:
                 raise ValueError(
                     f"{where} carries an empty group; a group that reads "
                     "nothing says nothing about when the output produces"
                 )
+        groups = prod_cond_disjunction(where, clauses, inner_mode)
+        parsed: list[list[_RuleOperand]] = []
+        for group in groups:
+            specs = group if isinstance(group, (list, tuple)) else [group]
             parsed.append(
                 [self._parse_prod_cond_operand(where, spec) for spec in specs]
             )
@@ -5214,6 +5292,7 @@ class ObjFlow:
         var_fed_available_out_reset: bool | None = None,
         enable_law: dict[str, Any] | None = None,
         disable_law: dict[str, Any] | None = None,
+        var_prod_cond_inner_mode: str = PROD_COND_INNER_MODE_DEFAULT,
     ) -> None:
         """muscadet `FlowOutTempo`: the flow feeds while a
         disabled↔enabled automaton sits in `enabled`; the enable
@@ -5238,6 +5317,9 @@ class ObjFlow:
                 name=name,
                 var_prod_default=var_prod_default,
                 var_prod_cond=list(var_prod_cond or []),
+                var_prod_cond_inner_mode=_prod_cond_inner_mode(
+                    name, var_prod_cond_inner_mode
+                ),
                 var_fed_available_out_init=var_fed_available_out_init,
                 var_fed_available_out_reset=var_fed_available_out_reset,
                 tempo={"enable": enable, "disable": disable, "init_enable": init_enable},
@@ -5254,6 +5336,7 @@ class ObjFlow:
         var_prod_cond: list[Any] | None = None,
         var_fed_available_out_init: bool | None = None,
         var_fed_available_out_reset: bool | None = None,
+        var_prod_cond_inner_mode: str = PROD_COND_INNER_MODE_DEFAULT,
     ) -> None:
         """muscadet `FlowOutOnTrigger`: the flow feeds while a down↔up
         automaton sits in `up`, with *inhibition* logic: `up` is armed
@@ -5269,6 +5352,9 @@ class ObjFlow:
                 name=name,
                 var_prod_default=var_prod_default,
                 var_prod_cond=list(var_prod_cond or []),
+                var_prod_cond_inner_mode=_prod_cond_inner_mode(
+                    name, var_prod_cond_inner_mode
+                ),
                 var_fed_available_out_init=var_fed_available_out_init,
                 var_fed_available_out_reset=var_fed_available_out_reset,
                 trigger={
@@ -5697,7 +5783,9 @@ class ObjFlow:
                 where = (
                     f"ObjFlow `{me}`: production condition of `{flow.name}`"
                 )
-                groups = self._parse_prod_cond(where, flow.var_prod_cond)
+                groups = self._parse_prod_cond(
+                    where, flow.var_prod_cond, flow.var_prod_cond_inner_mode
+                )
                 functions.append(
                     {
                         "name": f"update_{prod_available}",

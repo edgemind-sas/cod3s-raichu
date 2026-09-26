@@ -438,8 +438,8 @@ _DISCRETE_IN = _Vocabulary(
 #: values are carried and the pair is read in three places: the vocabulary
 #: below, the conversion of :func:`_prod_cond`, and the refusal of a third
 #: spelling.
-PROD_COND_INNER_MODES = ("or", "and")
-PROD_COND_INNER_MODE_DEFAULT = "or"
+PROD_COND_INNER_MODES = authoring.PROD_COND_INNER_MODES
+PROD_COND_INNER_MODE_DEFAULT = authoring.PROD_COND_INNER_MODE_DEFAULT
 
 _DISCRETE_OUT_KEYS = {
     "name": "name",
@@ -1116,13 +1116,6 @@ MODE_LOGIC = ("all", "any")
 _TRANSFER_CLASS = authoring._TRANSFER_CLASS
 _PROFILE_CLASS = authoring._PROFILE_CLASS
 
-#: Beyond this many conjunctions, a production condition converted out of
-#: muscadet's conjunctive form is refused rather than expanded: the expansion is
-#: exact but its size is the product of the clause widths, and an expression
-#: that large is a modelling accident rather than a declaration.
-_MAX_PROD_COND_GROUPS = 256
-
-
 # --- refusals reachable from the mapping alone ------------------------------
 
 
@@ -1462,21 +1455,10 @@ def _prod_cond(
             [_prod_cond_operand(where, operand, inputs) for operand in operands]
         )
 
-    if inner_mode == "and":
-        return clauses
-
-    width = 1
-    for clause in clauses:
-        width *= max(len(clause), 1)
-    if width > _MAX_PROD_COND_GROUPS:
-        raise ComponentSpecError(
-            f"{where} carries a production condition of {len(clauses)} "
-            f"conjoined clauses expanding to {width} disjunctions, past the "
-            f"{_MAX_PROD_COND_GROUPS} this layer converts. Split the component "
-            f"or state the condition through a rule guard"
-        )
-
-    return [list(choice) for choice in itertools.product(*clauses)]
+    try:
+        return authoring.prod_cond_disjunction(where, clauses, inner_mode)
+    except ValueError as error:
+        raise ComponentSpecError(str(error)) from None
 
 
 # --- occurrence laws ---------------------------------------------------------
@@ -1743,7 +1725,11 @@ def _flow_calls(spec: dict, name: str) -> list[_Call]:
             where, keywords.get("var_prod_cond"), inputs, inner_mode
         )
         if "var_prod_cond" in keywords:
+            # Converted to the disjunctive form, which is what `"and"` states:
+            # the authoring classes read the list as muscadet does, so the
+            # form handed over says which one it is.
             keywords["var_prod_cond"] = converted
+            keywords["var_prod_cond_inner_mode"] = "and"
 
         calls.append(_Call("flows", entry.get("name", index), method, keywords))
 
