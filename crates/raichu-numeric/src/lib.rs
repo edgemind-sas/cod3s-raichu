@@ -116,6 +116,19 @@ pub struct SolverParams {
     pub tol_event: f64,
     /// Interior dense-output points scanned per step for sign changes.
     pub sub_samples: usize,
+    /// The widest spacing a study accepts between two scan points, or
+    /// `None` for the engine's own (`step / sub_samples`).
+    ///
+    /// A **floor on resolution**, never a ceiling: a step whose own
+    /// spacing is already this fine or finer is scanned exactly as
+    /// without it, so a coarser request than the engine's changes
+    /// nothing, bit for bit. A finer one adds scan points to the step,
+    /// so a margin that holds for less than the engine's spacing (a
+    /// short episode) is still bracketed. It is what a study's requested
+    /// base step (`pdmp_dt` on the reference engine) is honoured as:
+    /// this engine locates crossings rather than stepping to them, so the
+    /// request governs how narrow an episode can be and still be seen.
+    pub event_resolution: Option<f64>,
 }
 
 impl Default for SolverParams {
@@ -126,6 +139,22 @@ impl Default for SolverParams {
             max_step: 0.1,
             tol_event: 1e-10,
             sub_samples: 16,
+            event_resolution: None,
+        }
+    }
+}
+
+impl SolverParams {
+    /// Scan points for a step of length `h`: [`Self::sub_samples`], raised
+    /// just enough that no two points are further apart than
+    /// [`Self::event_resolution`] when one is set.
+    pub fn scan_points(&self, h: f64) -> usize {
+        let own = self.sub_samples.max(1);
+        match self.event_resolution {
+            Some(resolution) if resolution > 0.0 && h / (own as f64) > resolution => {
+                ((h / resolution).ceil() as usize).max(own)
+            }
+            _ => own,
         }
     }
 }
@@ -597,7 +626,7 @@ impl OdeSolver for DormandPrince45 {
                     &g0,
                     t,
                     t + h,
-                    p.sub_samples,
+                    p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
                     &mut g1,
@@ -608,7 +637,7 @@ impl OdeSolver for DormandPrince45 {
                         &mut v0,
                         t,
                         t_event,
-                        p.sub_samples,
+                        p.scan_points(h),
                         p.tol_event,
                         &mut y_scratch,
                     );
@@ -629,7 +658,7 @@ impl OdeSolver for DormandPrince45 {
                     &mut v0,
                     t,
                     t + h,
-                    p.sub_samples,
+                    p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
                 );
@@ -655,7 +684,7 @@ impl OdeSolver for DormandPrince45 {
                     &mut v0,
                     t,
                     t + h,
-                    p.sub_samples,
+                    p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
                 );
@@ -963,6 +992,79 @@ mod tests {
                 "max_step={max_step}: located t={t}, expected {expected}"
             );
         }
+    }
+
+    /// A window above the margin 1e-4 wide around the sine apex: narrower
+    /// than the default scan spacing (`max_step / sub_samples` =
+    /// 0.00625), so it falls between two scan points unless a finer
+    /// resolution is asked for.
+    fn short_episode(event_resolution: Option<f64>) -> Outcome {
+        let half_width: f64 = 5e-5;
+        let mut solver = DormandPrince45::new(SolverParams {
+            event_resolution,
+            ..SolverParams::default()
+        });
+        let mut y = vec![0.0];
+        solver
+            .integrate(
+                &mut SineCross {
+                    threshold: half_width.cos(),
+                },
+                0.0,
+                &mut y,
+                3.0,
+                &[],
+                &mut |_, _| {},
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_short_episode_is_missed_at_the_default_resolution() {
+        assert_eq!(short_episode(None), Outcome::Reached { t: 3.0 });
+    }
+
+    #[test]
+    fn a_requested_resolution_catches_the_short_episode() {
+        let expected = std::f64::consts::FRAC_PI_2 - 5e-5;
+        let Outcome::Event { index: 0, t } = short_episode(Some(2e-5)) else {
+            panic!("the episode was missed at a resolution finer than its width");
+        };
+        // Located on its rising edge, not to 1e-8: at the apex the margin's
+        // slope is only 5e-5, so the dense output's ~1e-11 error on the
+        // state becomes ~2e-7 on the date. What this test pins is that the
+        // episode is SEEN, and seen where it is.
+        assert!(
+            (t - expected).abs() < 1e-6 && t < std::f64::consts::FRAC_PI_2,
+            "t={t}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn a_coarser_request_than_the_engine_s_own_changes_nothing() {
+        // Bit for bit: the scan keeps its own points, so the step sequence,
+        // the dense output and every sample are the ones the default gives.
+        let run = |event_resolution| {
+            let mut solver = DormandPrince45::new(SolverParams {
+                event_resolution,
+                ..SolverParams::default()
+            });
+            let mut y = vec![0.0];
+            let mut seen = Vec::new();
+            let samples: Vec<f64> = (1..=20).map(|i| 0.1 * i as f64).collect();
+            let outcome = solver
+                .integrate(
+                    &mut SineCross { threshold: 0.999 },
+                    0.0,
+                    &mut y,
+                    2.0,
+                    &samples,
+                    &mut |t, y| seen.push((t.to_bits(), y[0].to_bits())),
+                )
+                .unwrap();
+            (outcome, seen, y[0].to_bits())
+        };
+        assert_eq!(run(None), run(Some(1.0)));
     }
 
     #[test]

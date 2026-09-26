@@ -294,6 +294,7 @@ def monte_carlo(
     sub_samples: int | None = None,
     stop_at_targets: bool = False,
     flow: FlowConfig | None = None,
+    event_resolution: float | None = None,
 ) -> McEstimates:
     """Estimate indicator statistics over ``nb_runs`` replicas.
 
@@ -306,6 +307,13 @@ def monte_carlo(
     ``rtol``/``atol``/``max_step``/``tol_event``/``sub_samples``
     override the ODE-backend parameters (engine defaults when omitted):
     the integration-effort knobs of the tolerance-parity experiments.
+
+    ``event_resolution`` is the widest spacing a study accepts between two
+    points of the crossing scan: a floor on resolution. A crossing that
+    holds for less than the engine's own spacing (``max_step /
+    sub_samples`` at most) is still bracketed when a finer one is asked;
+    a coarser request changes nothing, bit for bit. A non-positive or
+    non-finite value raises :class:`SimulationError`.
 
     ``stop_at_targets=True`` early-stops each trajectory at the first
     sequence target (feared event) and holds the frozen state through the
@@ -332,6 +340,7 @@ def monte_carlo(
             sub_samples,
             stop_at_targets,
             flow,
+            event_resolution,
         )
     )
     indicators = {

@@ -57,6 +57,7 @@ muscadet is the thing doing the calling.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Iterable, Mapping, Sequence
 
 from . import MODEL_ENVELOPE_KEY, Model, load_model, model_body, monte_carlo, seal
@@ -123,8 +124,8 @@ RUN_TARGETS = "targets"
 #: None of them describes the system, and none has a RAICHU counterpart that
 #: could answer them differently.
 #:
-#: Where a key changes a RESULT rather than a draw, it is not here: see
-#: :data:`_DIVERGENT_PARAMETERS`.
+#: A key that changes a RESULT rather than a draw is read, not listed here:
+#: see :data:`RESOLUTION_PARAMETER`.
 _UNREAD_PARAMETERS = (
     "time_unit",
     "rng",
@@ -135,23 +136,18 @@ _UNREAD_PARAMETERS = (
     "strict_failure_modes",
 )
 
-#: Run-parameter keys that are accepted, not read, and **would change a
-#: result** on a model that has something for them to govern. They are kept
-#: apart from the silence above on purpose: what they ask for is not a knob
-#: this engine lacks but a convention it holds differently, which is a
-#: DIVERGENCE and belongs in ``muscadet.conformance``, the registry a reader
-#: consults before choosing an engine. Stating it here as well would be a
-#: second wording of one gap; refusing it would refuse every continuous study
-#: the platform writes, and refusing it on a purely discrete one would refuse
-#: a study it governs nothing of.
-_DIVERGENT_PARAMETERS = {
-    "pdmp_dt": (
-        "the base integration step of the reference engine's PDMP solver. "
-        "RAICHU integrates its own way -- it locates a crossing rather than "
-        "sampling a fixed grid -- so the step has no counterpart to set. On a "
-        "purely discrete model it governs nothing on either engine"
-    ),
-}
+#: The run-parameter key carrying the reference solver's base integration
+#: step, and what it is honoured as here.
+#:
+#: The reference engine steps its PDMP solver on that step, so a study
+#: asking a finer one catches a shorter episode on a continuous model. This
+#: engine locates crossings rather than stepping to them, and the request is
+#: honoured as the widest spacing accepted between two points of the
+#: crossing scan (``event_resolution``, a floor): finer than the engine's
+#: own it adds scan points, coarser it changes nothing, bit for bit. On a
+#: purely discrete model it governs nothing on either engine. An explicit
+#: ``event_resolution`` keyword on the run wins.
+RESOLUTION_PARAMETER = "pdmp_dt"
 
 #: Run-parameter keys asking for something this engine does not produce. They
 #: are refused as soon as they ask, and accepted while they say nothing: a
@@ -850,16 +846,28 @@ def _instants(schedule: Any) -> list[float]:
     return sorted(instants)
 
 
-def _run_parameters(params: Any) -> tuple[int, list[float], int]:
-    """``(nb_runs, instants, seed)``, refusing what this engine cannot honour."""
+def _run_parameters(params: Any) -> tuple[int, list[float], int, float | None]:
+    """``(nb_runs, instants, seed, event_resolution)``, refusing what this
+    engine cannot honour."""
     declared = _as_mapping(params)
     for key, reason in _UNCARRIED_PARAMETERS.items():
         if declared.get(key):
             raise SystemSpecError(f"run parameter `{key}` asks for {reason}")
-    for key in (
-        tuple(_UNCARRIED_PARAMETERS) + _UNREAD_PARAMETERS + tuple(_DIVERGENT_PARAMETERS)
-    ):
+    for key in tuple(_UNCARRIED_PARAMETERS) + _UNREAD_PARAMETERS:
         declared.pop(key, None)
+    resolution = declared.pop(RESOLUTION_PARAMETER, None)
+    if resolution is not None:
+        if isinstance(resolution, bool) or not isinstance(resolution, (int, float)):
+            raise SystemSpecError(
+                f"run parameter `{RESOLUTION_PARAMETER}` is a time step, got "
+                f"{resolution!r}"
+            )
+        if not (math.isfinite(resolution) and resolution > 0):
+            raise SystemSpecError(
+                f"run parameter `{RESOLUTION_PARAMETER}` is a finite positive time "
+                f"step, got {resolution!r}"
+            )
+        resolution = float(resolution)
 
     nb_runs = int(declared.pop("nb_runs", 1) or 1)
     instants = _instants(declared.pop("schedule", None))
@@ -875,7 +883,7 @@ def _run_parameters(params: Any) -> tuple[int, list[float], int]:
             "a run declares its 'schedule': it is what says how long the "
             "trajectories are and where they are read"
         )
-    return nb_runs, instants, 0 if seed is None else int(seed)
+    return nb_runs, instants, 0 if seed is None else int(seed), resolution
 
 
 def simulate(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
@@ -917,8 +925,10 @@ def simulate(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
     """
     kwargs.pop("postpone_post_proc", None)
     targets = _target_names(kwargs.pop(RUN_TARGETS, None))
-    nb_runs, instants, seed = _run_parameters(params)
+    nb_runs, instants, seed, resolution = _run_parameters(params)
     kwargs.setdefault("stop_at_targets", bool(targets))
+    if resolution is not None:
+        kwargs.setdefault("event_resolution", resolution)
     return monte_carlo(
         build_model(spec, targets),
         nb_runs=nb_runs,

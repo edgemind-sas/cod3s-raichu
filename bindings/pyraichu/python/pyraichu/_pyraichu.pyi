@@ -55,6 +55,7 @@ def monte_carlo_json(
     sub_samples: int | None = None,
     stop_at_targets: bool = False,
     flow: FlowConfig | None = None,
+    event_resolution: float | None = None,
 ) -> str: ...
 def analyse_sequences_json(
     model_json: str,
