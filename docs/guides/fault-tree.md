@@ -8,16 +8,28 @@ static tool reads.
 ```python
 import pyraichu
 
-nok = lambda c: {"op": "state_active",
-                 "state": {"component": c, "automaton": "health", "state": "nok"}}
+def unit(name, guard=None):
+    fail = {"name": "fail", "source": "ok", "targets": ["nok"],
+            "distrib": "exp", "rate": 1e-3}
+    if guard is not None:
+        fail["guard"] = guard
+    return {"name": name, "automata": [{"name": "health", "states": ["ok", "nok"],
+                                        "init": "ok", "transitions": [fail]}]}
 
-tree = pyraichu.fault_tree(model, {"op": "bool", "bool_op": "or",
-                                   "args": [nok("B"),
-                                            {"op": "bool", "bool_op": "and",
-                                             "args": [nok("A"), nok("C")]}]})
-tree.minimal_cut_sets   # [["A.health.fail", "B.health.fail"], ...]
-tree.basic_events       # one per transition draw, with its law
-open("tree.xml", "w").write(tree.open_psa)
+def nok(component):
+    return {"op": "state_active",
+            "state": {"component": component, "automaton": "health", "state": "nok"}}
+
+# B fails only once A has; C fails on its own.
+model = pyraichu.load_model({"name": "plant", "components": [
+    unit("A"), unit("B", guard=nok("A")), unit("C")]})
+
+top = {"op": "bool", "bool_op": "or",
+       "args": [nok("B"), {"op": "bool", "bool_op": "and", "args": [nok("A"), nok("C")]}]}
+tree = pyraichu.fault_tree(model, top)
+assert tree.minimal_cut_sets == [["A.health.fail", "B.health.fail"],
+                                 ["A.health.fail", "C.health.fail"]]
+xml = tree.open_psa        # the OpenPSA document a static tool reads
 ```
 
 ## The method, and its hypothesis
