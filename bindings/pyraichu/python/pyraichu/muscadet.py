@@ -1534,6 +1534,56 @@ class _MeasurementIn:
 
 
 @dataclass
+class _MeasurementOut:
+    """The publishing side of a measurement link on a component that is
+    not a capacity: an instrument (muscadet's ``add_measurement_out``, R37).
+
+    It publishes under the very aliases a capacity uses, so an observer
+    cannot tell a republisher from a volume, and multiplies everything it
+    publishes by ``{name}_level_gain``, the endpoint a failure mode clamps
+    to make one instrument lie. The source is a capacity or a measurement
+    channel of the same component; ``None`` leaves the published level a
+    plain variable nothing refreshes."""
+
+    name: str
+    source: str | None = None
+    #: Constituents republished beside the totals, each with its level,
+    #: its fill and its share.
+    flows: list[str] = field(default_factory=list)
+    level_default: float = 0.0
+    fill_default: float = 0.0
+    ratio_default: float = 0.0
+    gain_default: float = 1.0
+
+    @property
+    def gain(self) -> str:
+        return f"{self.name}_level_gain"
+
+    @property
+    def flow_names(self) -> list[str]:
+        return list(self.flows)
+
+    @property
+    def publishes_ratios(self) -> bool:
+        """An instrument publishes a share for every constituent it names,
+        as muscadet's does: it carries what the volume behind it would."""
+        return bool(self.flows)
+
+    def published(self) -> list[tuple[str, str]]:
+        """The ``(port alias, exported attribute)`` pairs, in the order a
+        capacity lists its own: the totals, then each constituent. The
+        attribute IS the alias: the instrument holds nothing else."""
+        aliases = [_level_alias(self.name), _fill_alias(self.name)]
+        for flow in self.flows:
+            aliases += [
+                _level_alias(self.name, flow),
+                _fill_alias(self.name, flow),
+                _ratio_alias(self.name, flow),
+            ]
+        return [(alias, alias) for alias in aliases]
+
+
+@dataclass
 class _ContinuousEdge:
     """One continuous connection, as the resolution sees it: the edge
     the per-connection channels are materialised under, and the two
@@ -1625,6 +1675,7 @@ class ObjFlow:
         self.flows_continuous_out: list[_FlowContinuousOut] = []
         self.capacities: list[_Capacity] = []
         self.measurements_in: list[_MeasurementIn] = []
+        self.measurements_out: list[_MeasurementOut] = []
         self.rule_sets: list[_RuleSet] = []
         self.transfers: list[_Transfer] = []
         self.failure_modes: list[_FailureMode] = []
@@ -3496,6 +3547,62 @@ class ObjFlow:
                 "the capacity of that name"
             )
         self.measurements_in.append(_MeasurementIn(name=name, flows=list(flows or [])))
+
+    def add_measurement_out(
+        self,
+        name: str,
+        source: str | None = None,
+        flows: list[str] | None = None,
+        level_default: float = 0.0,
+        fill_default: float = 0.0,
+        ratio_default: float = 0.0,
+        gain_default: float = 1.0,
+    ) -> None:
+        """Declare a measurement this component PUBLISHES (muscadet
+        `add_measurement_out`, R37): what makes a redundant instrument set
+        expressible, an instrument being a component that can fail on its
+        own.
+
+        `source` names a capacity or a measurement channel of this same
+        component, whose level (and fill, and the constituents in `flows`
+        with their shares) is republished at every evaluation point, times
+        ``{name}_level_gain`` (created at `gain_default`): the endpoint a
+        failure mode clamps, 0 for a dead instrument, 5 for a wild one.
+        Without a source, ``{name}_level`` is a plain variable holding
+        `level_default`. The published ports are a capacity's own, so an
+        observer declares an ordinary `add_measurement_in` and is wired with
+        :meth:`System.connect_measurement`.
+
+        A continuous output's rate is not a source here: a flow publishes
+        its own rate channel (`publish_rate`), which an observer reads
+        directly."""
+        where = f"ObjFlow `{self.name}`: published measurement `{name}`"
+        if any(existing.name == name for existing in self.measurements_out):
+            raise ValueError(f"{where} is already declared")
+        if any(existing.name == name for existing in self.capacities):
+            raise ValueError(
+                f"{where} clashes with the capacity of that name, which "
+                "publishes its level under the same aliases"
+            )
+        if any(existing.name == name for existing in self.measurements_in):
+            raise ValueError(
+                f"{where} clashes with the measurement link of that name, "
+                "whose readings carry the same aliases"
+            )
+        flows = list(flows or [])
+        if len(set(flows)) != len(flows):
+            raise ValueError(f"{where} names a constituent more than once: {flows}")
+        self.measurements_out.append(
+            _MeasurementOut(
+                name=name,
+                source=source,
+                flows=flows,
+                level_default=float(level_default),
+                fill_default=float(fill_default),
+                ratio_default=float(ratio_default),
+                gain_default=float(gain_default),
+            )
+        )
 
     # --- transformation rules -------------------------------------------
 
@@ -5480,6 +5587,7 @@ class ObjFlow:
         self._build_transfers(variables, equations)
         self._build_capacities(variables, ports, equations, automata)
         self._build_measurements(variables, ports, equations)
+        self._build_measurements_out(variables, ports, equations)
 
         return {
             "name": self.name,
@@ -7172,6 +7280,105 @@ class ObjFlow:
                 )
 
 
+    def _measurement_out_readings(
+        self, publication: _MeasurementOut
+    ) -> dict[str, dict[str, Any]]:
+        """What each alias of `publication` republishes, before the gain:
+        read off its source, a capacity or a measurement channel of this
+        component, under the aliases that source publishes itself.
+
+        A share its source does not publish (a single-constituent volume,
+        or a channel whose volume is one) is the constituent's level over
+        the total, 0 on an empty source, which is what a volume publishes
+        where it does publish one."""
+        me = self.name
+        where = f"ObjFlow `{me}`: published measurement `{publication.name}`"
+        source = publication.source
+        capacity = next((c for c in self.capacities if c.name == source), None)
+        channel = next((m for m in self.measurements_in if m.name == source), None)
+        if capacity is not None:
+            held = capacity.flow_names
+            values = dict(capacity.published())
+            ratios = capacity.publishes_ratios
+        elif channel is not None:
+            held = channel.flows
+            values = {alias: alias for alias in channel.channels()}
+            ratios = channel.ratios
+        else:
+            if any(flow.name == source for flow in self.flows_continuous_out):
+                raise ValueError(
+                    f"{where} names the continuous output `{source}` as its "
+                    "source. A flow publishes its own rate channel "
+                    "(`publish_rate`), which an observer reads directly, so "
+                    "republishing it through an instrument is not carried"
+                )
+            raise ValueError(
+                f"{where} names no capacity or measurement channel of this "
+                f"component as its source: `{source}`"
+            )
+        missing = [flow for flow in publication.flows if flow not in held]
+        if missing:
+            raise ValueError(
+                f"{where} republishes the constituents {missing}, which its "
+                f"source `{source}` does not carry (it carries {list(held)})"
+            )
+
+        def read(alias: str) -> dict[str, Any]:
+            return _var(me, values[alias])
+
+        readings = {
+            _level_alias(publication.name): read(_level_alias(source)),
+            _fill_alias(publication.name): read(_fill_alias(source)),
+        }
+        for flow in publication.flows:
+            level = read(_level_alias(source, flow))
+            readings[_level_alias(publication.name, flow)] = level
+            readings[_fill_alias(publication.name, flow)] = read(
+                _fill_alias(source, flow)
+            )
+            if ratios:
+                share = read(_ratio_alias(source, flow))
+            else:
+                total = read(_level_alias(source))
+                share = {
+                    "op": "if",
+                    "cond": {"op": "cmp", "cmp": "gt", "lhs": total, "rhs": _float(0.0)},
+                    "then": {"op": "div", "lhs": level, "rhs": total},
+                    "otherwise": _float(0.0),
+                }
+            readings[_ratio_alias(publication.name, flow)] = share
+        return readings
+
+    def _build_measurements_out(
+        self, variables: list[dict], ports: list[dict], equations: list[dict]
+    ) -> None:
+        """The publishing side of each instrument: one variable per alias,
+        each exported on the out port a capacity would use, each swept as
+        its source's reading times the gain."""
+        me = self.name
+        for publication in self.measurements_out:
+            defaults = {_level_alias(publication.name): publication.level_default,
+                        _fill_alias(publication.name): publication.fill_default}
+            for flow in publication.flows:
+                defaults[_level_alias(publication.name, flow)] = publication.level_default
+                defaults[_fill_alias(publication.name, flow)] = publication.fill_default
+                defaults[_ratio_alias(publication.name, flow)] = publication.ratio_default
+            for alias, attribute in publication.published():
+                variables.append(_float_attribute(attribute, defaults[alias]))
+                ports.append({"name": f"{alias}_out", "dir": "out", "attr": attribute})
+            variables.append(_float_attribute(publication.gain, publication.gain_default))
+            if publication.source is None:
+                continue
+            gain = _var(me, publication.gain)
+            for alias, reading in self._measurement_out_readings(publication).items():
+                equations.append(
+                    {
+                        "target": alias,
+                        "kind": "explicit",
+                        "expr": {"op": "mul", "args": [gain, reading]},
+                    }
+                )
+
 class System:
     """A muscadet-style system: add components, connect flows, simulate
     through the RAICHU engine."""
@@ -7264,11 +7471,16 @@ class System:
                 f"System `{self.name}`: measurement link names unknown "
                 f"component `{missing}`"
             )
-        volume = next((c for c in held.capacities if c.name == capacity), None)
+        # The publisher is a volume or an instrument republishing one: the two
+        # publish under the same aliases, so the observer cannot tell them
+        # apart and neither can the wiring.
+        volume = next(
+            (c for c in held.capacities if c.name == capacity), None
+        ) or next((m for m in held.measurements_out if m.name == capacity), None)
         if volume is None:
             raise ValueError(
                 f"System `{self.name}`: component `{holder}` declares no "
-                f"capacity `{capacity}`"
+                f"capacity or published measurement `{capacity}`"
             )
         link = next((m for m in reader.measurements_in if m.name == channel), None)
         if link is None:
@@ -7838,6 +8050,82 @@ class System:
                     heapq.heappush(ready, successor)
         return order
 
+    def _measurement_order(self, step) -> None:
+        """Sweep the measurement readers and the instruments in the order
+        their readings flow: a reader after the publication it reads, an
+        instrument after the channel it republishes. With no instrument in
+        the model this is the readers in declaration order, as before.
+
+        A reading that feeds back into its own source through instruments
+        has no order to be swept in, and is refused naming what it joins."""
+        publisher_of = {
+            (c["to"]["component"], c["to"]["port"]): (
+                c["from"]["component"],
+                c["from"]["port"],
+            )
+            for c in self._connections
+        }
+        instruments = {
+            (name, publication.name): publication
+            for name, obj in self.comp.items()
+            for publication in obj.measurements_out
+        }
+        instrument_of_port = {
+            (name, f"{alias}_out"): key
+            for key, publication in instruments.items()
+            for name in (key[0],)
+            for alias, _ in publication.published()
+        }
+        readers = [
+            (name, link)
+            for name, obj in self.comp.items()
+            for link in obj.measurements_in
+        ]
+        done_readers: set[tuple[str, str]] = set()
+        done_instruments = {
+            key for key, publication in instruments.items() if publication.source is None
+        }
+
+        def reader_ready(name: str, link: _MeasurementIn) -> bool:
+            for variable in link.channels():
+                publisher = publisher_of.get((name, f"{variable}_in"))
+                instrument = instrument_of_port.get(publisher) if publisher else None
+                if instrument is not None and instrument not in done_instruments:
+                    return False
+            return True
+
+        def instrument_ready(key: tuple[str, str], publication: _MeasurementOut) -> bool:
+            name = key[0]
+            if any(link.name == publication.source for link in self.comp[name].measurements_in):
+                return (name, publication.source) in done_readers
+            return True
+
+        progress = True
+        while progress:
+            progress = False
+            for name, link in readers:
+                if (name, link.name) in done_readers or not reader_ready(name, link):
+                    continue
+                for variable in link.channels():
+                    step(name, variable)
+                done_readers.add((name, link.name))
+                progress = True
+            for key, publication in instruments.items():
+                if key in done_instruments or not instrument_ready(key, publication):
+                    continue
+                for _, attribute in publication.published():
+                    step(key[0], attribute)
+                done_instruments.add(key)
+                progress = True
+        stuck = [f"{n}.{link.name}" for n, link in readers if (n, link.name) not in done_readers]
+        stuck += [f"{k[0]}.{k[1]}" for k in instruments if k not in done_instruments]
+        if stuck:
+            raise ValueError(
+                f"System `{self.name}`: the measurement readings {stuck} feed "
+                "back into their own sources through republishing instruments, "
+                "so no order can sweep them"
+            )
+
     def _evaluation_order(
         self,
         components: list[dict[str, Any]],
@@ -7912,10 +8200,7 @@ class System:
                 if capacity.publishes_ratios:
                     for entry in capacity.flows:
                         step(name, f"{capacity.name}_ratio_{entry.name}")
-        for name, obj in self.comp.items():
-            for measurement in obj.measurements_in:
-                for variable in measurement.channels():
-                    step(name, variable)
+        self._measurement_order(step)
         # What multiplies a production, and what a gradient asks for:
         # neither reads the flow network, both are read by it. The
         # transfers come after the measurements, whose readings are the

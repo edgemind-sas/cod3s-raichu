@@ -177,6 +177,8 @@ DECLARATION_SECTIONS = (
     "measurements_in",
     "flows",
     "capacities",
+    # After the capacities and the channels it may republish.
+    "measurements_out",
     "failure_modes",
     "rules",
     "transfers",
@@ -202,12 +204,6 @@ SOURCE_CLS_KEY = "source_cls"
 #: whether or not the component has one, and refused as soon as they declare
 #: something.
 UNCARRIED_SECTIONS = {
-    "measurements_out": (
-        "a measurement reading the component PUBLISHES. Here a capacity "
-        "publishes its own level and `System.connect_measurement` wires it, so "
-        "there is no republisher to declare: an instrument standing between a "
-        "volume and a voter has no counterpart yet"
-    ),
     "automata": (
         "a two-state automaton declared on the component. This layer DERIVES "
         "every automaton from the declaration that needs one (a failure mode, "
@@ -648,9 +644,39 @@ AVAILABILITY_SUFFIX = "_fed_available_out"
 #: :meth:`pyraichu.muscadet.ObjFlow._build_flows_out`.
 PRODUCTION_SUFFIX = "_prod_available"
 
+#: muscadet's ``MeasurementOut`` (``add_measurement_out``, R37): an instrument
+#: republishing a capacity or a measurement channel of its own component, times
+#: a gain a failure mode clamps. Every key muscadet writes is carried.
+_MEASUREMENT_OUT = _Vocabulary(
+    carried={
+        "name": "name",
+        "source": "source",
+        "flows": "flows",
+        "level_default": "level_default",
+        "fill_default": "fill_default",
+        "ratio_default": "ratio_default",
+        "gain_default": "gain_default",
+    },
+    inert={},
+    uncarried={},
+)
+
 _MEASUREMENT_IN = _Vocabulary(
     carried={"name": "name", "flows": "flows"},
-    inert={"level_default": 0.0, "fill_default": 0.0, "combine": None},
+    # `kind`, `rate_default` and `ratio_default` arrived with muscadet 5.6.0's
+    # rate and ratio observations (R38) and are written on EVERY channel, a
+    # level one included. A level channel is what this section builds, so the
+    # three are accepted at the values a level channel carries and refused
+    # above them; a rate or a share is read here through the flow's
+    # `publish_rate` channel or the volume's ratio, not through this section.
+    inert={
+        "level_default": 0.0,
+        "fill_default": 0.0,
+        "combine": None,
+        "kind": "level",
+        "rate_default": 0.0,
+        "ratio_default": 0.0,
+    },
     uncarried=dict(
         _FUNCTION_KEYS,
         combine=(
@@ -777,6 +803,7 @@ FAILURE_MODE_CLASSES: dict[str, tuple[str, _Vocabulary]] = {
 PLAIN_SECTIONS: dict[str, tuple[str, _Vocabulary]] = {
     "measurements_in": ("add_measurement_in", _MEASUREMENT_IN),
     "capacities": ("add_capacity", _CAPACITY),
+    "measurements_out": ("add_measurement_out", _MEASUREMENT_OUT),
     "rules": ("add_rule_set", _RULE_SET),
     "transfers": ("add_transfer", _TRANSFER),
 }
