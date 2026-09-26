@@ -71,7 +71,7 @@ PyCATSHOO's sequence-tree explorer (user manual V1.3.7.2, sections 5.5.5,
 | `setTMax` | `horizon` | |
 | `sequences()`, every leaf, `MaxTime` ones included | `result.sequences`, the target sequences only | the rest is summarised by the bounds |
 | `curProbability()` (explored mass) | `result.lower`, `result.upper`, `result.cutoff_tallies` | a lower and an upper bound on the target probability, and the mass each cut-off discarded |
-| sampling algorithm (non-exponential laws) | *(not reproduced)* | refused by name (`algorithm="discretised"`); RAICHU's own algorithm for other laws and continuous evolution comes in a later release |
+| sampling algorithm (non-exponential laws) | `algorithm="discretised"`, a different method | RAICHU's own algorithm, not a reproduction of the sampling one: the next-event distribution is cut into equal-mass cells, and the result states its discretisation level and an error estimate by refinement. No numerical parity with PyCATSHOO is sought here; it is validated against closed forms, the exact algorithm and Monte-Carlo |
 
 On Markov models the two explorers return the same target sequences, and
 their probabilities agree within 1e-9 relative once PyCATSHOO's

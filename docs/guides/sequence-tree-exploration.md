@@ -6,21 +6,26 @@ recorded. A sequence no trajectory walked is absent, and the probability
 of a rare one is known only to the precision the campaign size allows.
 **Sequence-tree exploration** answers the same question by enumeration:
 starting from the initial state, it follows every possible next
-transition, computes the probability of each path in closed form, and
-stops a branch when it reaches the feared event or a declared cut-off.
+transition, computes the probability of each path, and stops a branch
+when it reaches the feared event or a declared cut-off.
 The result lists the retained sequences with their probabilities at the
 horizon, and states a **lower and an upper bound** on the probability of
 the feared event, so what the cut-offs left out is measured, not guessed.
 
-The two modes run on the same model declaration. Exploration is the one
-to use when the model lies in the Markov family (see
-[the exact domain](#the-exact-domain)), when the sequences of interest are
-rare enough that a campaign would need many replicas to see them, or when
-a result must come with guaranteed bounds rather than a confidence
-interval. Monte-Carlo remains the mode for everything outside that
-domain, for availability measures on a free-cycling system, and for
-repairable systems over horizons long enough that the tree grows faster
-than the cut-offs can bound it (see [Limits](#limits)).
+The two modes run on the same model declaration. Two exploration
+algorithms are provided. The **exact** one (the default) covers the
+Markov family (see [the exact domain](#the-exact-domain)) and computes
+every probability in closed form. The **discretised** one (see
+[The discretised algorithm](#the-discretised-algorithm)) covers every
+law the engine carries and continuous evolution, at the price of a
+discretisation error that it estimates. Exploration is the mode to use
+when the sequences of interest are rare enough that a campaign would need
+many replicas to see them, or when a result must come with bounds rather
+than a confidence interval. Monte-Carlo remains the mode for
+availability measures on a free-cycling system, for repairable systems
+over horizons long enough that the tree grows faster than the cut-offs
+can bound it, and for models whose discretised tree is too large (see
+[Limits](#limits)).
 
 Readers coming from PyCATSHOO's sequence-tree explorer will find how its
 settings map to these in the
@@ -133,7 +138,10 @@ retain is either a path that never reaches the target (absorbing state,
 or another target reached first, where a Monte-Carlo trajectory stops
 too) or a path under a pruned node, whose mass is counted in the upper
 bound. The true probability lies between the two, up to the numerical
-error bounds of the individual sequences.
+error bounds of the individual sequences. For a discretised result, the
+probabilities and both bounds are those of the discretised model, and the
+distance to the true model is the discretisation error, which the result
+estimates (see [Error estimate by refinement](#error-estimate-by-refinement)).
 
 **Cut-off tallies.** `result.cutoff_tallies` gives, for each of the four
 cut-offs, the number of nodes it pruned and the mass it added to the
@@ -220,8 +228,8 @@ thread count. Nothing is drawn: an exploration has no seed.
 
 ## The exact domain
 
-The algorithm provided in this release, `algorithm="exact"` (the
-default), covers the Markov family:
+The exact algorithm, `algorithm="exact"` (the default), covers the
+Markov family:
 
 - instantaneous transitions (`"distrib": "inst"`) and zero delays, which
   fire with no sojourn and branch over their destinations with their
@@ -254,7 +262,8 @@ transition `fm_A.fm.repair` (delay 2) is armed after the sequence [fm_A.fm.failu
 ```
 
 `exploration_domain` returns an empty list on that model: a law is only
-found when it becomes armed. A law that is never armed along the
+found when it becomes armed. Such a model is explored with
+`algorithm="discretised"` instead. A law that is never armed along the
 explored sequences does not block. The check applies to every node the
 exploration reaches, so a cut-off avoids the refusal only if it prunes
 the node before the transition is armed.
@@ -289,6 +298,188 @@ precise. The treatment of truncated trees through a lower bound and a
 neglected mass follows the practice established for GSI (Bon and
 Bouissou 1992).
 
+## The discretised algorithm
+
+`algorithm="discretised"` lifts the restriction to the Markov family. It
+covers every law the engine carries (delay, exponential with a constant
+or state-dependent rate, Weibull, lognormal, gamma, uniform, empirical),
+the interruption policies, and continuous evolution with watched
+transitions. It is RAICHU's own method: it does not reproduce
+PyCATSHOO's sampling algorithm (see the
+[concept mapping](../pycatshoo/concept-mapping.md#sequence-tree-exploration)).
+Its published analogue on piecewise-deterministic processes is the
+quadrature-based dynamic event tree (Elhareef and Yim 2026).
+
+**What is discretised.** Not each transition's own firing date, but the
+**random next event**: which armed stochastic transition fires first,
+and when. At an explored state where nothing fires at the current
+instant, every armed stochastic transition `j` is a competitor with a
+cumulative hazard `H_j` over a window that ends at the first of the next
+deterministic event, the next watched crossing and the horizon:
+
+- a law with a fixed shape contributes its cumulative hazard conditional
+  on the age it has already accrued under its interruption policy;
+- an exponential whose rate is piecewise constant contributes
+  `rate x elapsed time`;
+- one whose rate varies with continuous state contributes its hazard
+  integrated along the deterministic flow.
+
+With `H = sum of H_j`, the next event falls in the window with
+probability `M = 1 - exp(-H(window end))`. That mass is cut into `K`
+**cells of equal probability** `M / K`. Within a cell, the mass is split
+among the competitors in proportion to their hazard increments, and
+each (competitor, cell) pair of nonzero mass becomes a branch, fired at
+the instant where the cell's mass reaches its middle. One further branch
+carries the survival mass `exp(-H)` to the window end, where the
+deterministic event or the watched crossing fires; at the horizon it is
+dropped. Between branch points the engine runs deterministically, so the
+explorer never re-implements a guard, an effect or a policy.
+Instantaneous transitions, due delays and watched transitions whose
+guard holds fire first, as in the exact algorithm.
+
+Two numerical details keep the tree from growing on round-off. A window
+no wider than the event-location tolerance (`1e-10` time units by
+default), such as two delays whose dates differ by one ulp (`0.1 + 0.2`
+against `0.3`), is treated as empty: its mass, of order
+`rate x 1e-10`, goes to the survival branch, and a deterministic end
+event fires in the same branch, so the tree is the one the two dates
+would give if they coincided exactly. A branch fired at a cell's middle
+instant that turns out to lie past a watched crossing (the crossing is
+located to within the same tolerance) is fired just before the crossing
+instead. A competitor whose window hazard evaluates to NaN or to a
+negative value stops the exploration with an error naming the
+transition.
+
+Leaves that reach the target along the same ordered list of fired
+transitions, through different cells, are one sequence: their
+probabilities are summed before ranking. The probabilities, the lower
+and the upper bound are those of the **discretised model**; the cut-offs
+act on it as in the exact algorithm, except that the minimal-probability
+cut-off compares a node's mass multiplied by `K` to the power of the
+cell branchings on its path, an estimate of the whole event sequence's
+mass rather than of one cell's fragment of it.
+
+### Error estimate by refinement
+
+With `refine=True` (the default), the exploration runs at level `K`
+(`level`, default 8), then again at `2K`; the reported result is the
+`2K` one. `result.discretisation` holds `{level, refinement}`: `level`
+is `2K`, and `refinement` holds `base_level` (`K`), `base_lower`,
+`base_upper`, `error_estimate` and `truncation_dominated`.
+`result.error_estimate` is the estimate itself,
+`max(|lower_2K - lower_K|, |upper_2K - upper_K|)`.
+
+- It is an **estimate, not a bound**. When the level-`K` and level-`2K`
+  values fall on either side of the true value, their difference
+  understates the error: on a sequence of two Weibull laws where the
+  second has shape 1.5, the estimate at `K = 8` understates the error of
+  the reported level-16 value by a factor 5 (measured against the closed
+  form). Comparing two levels on a model of interest, or a Monte-Carlo
+  campaign, is the check when the figure matters.
+- It is flagged `truncation_dominated` when the two runs' gaps
+  `upper - lower` add up to half of the estimate or more: the difference
+  between the runs may then reflect what the cut-offs truncated as much
+  as the discretisation. Relax the cut-offs before reading the estimate.
+- With `refine=False`, only level `K` runs, `refinement` is `None`, and
+  `result.error_estimate` is `None`: **no estimate was made**, and the
+  numbers carry no statement about the discretisation error.
+
+### Cost
+
+A timed node has up to `K x competitors + 1` children, so the tree grows
+as about `(K x competitors)^depth` nodes, and the refined pass costs
+about `2^depth` times the base one. `max_branches` defaults to 1 000 000
+expanded nodes for each pass when it is not given; the branch cap then
+bounds the run, and a result that hits it says so through its tally and
+its gap. For long sequences, many concurrent competitors, or a
+repairable system over a long horizon, Monte-Carlo is the cheaper tool.
+
+### Example: a wear-out pair
+
+Two non-repairable components wear out: `A` fails after a Weibull time
+of shape 2 and scale 20, `B` after one of shape 1.5 and scale 30. The
+feared event is both down by `t = 10`. The model is written in the core
+schema, since the muscadet plugin carries no Weibull law.
+
+```python
+import pyraichu
+
+def unit(name, shape, scale):
+    return {"name": name, "automata": [{
+        "name": "fail", "states": ["ok", "nok"], "init": "ok",
+        "transitions": [{"name": "occ", "source": "ok", "targets": ["nok"],
+                         "distrib": "weibull", "shape": shape, "scale": scale,
+                         "monitored": True}]}]}
+
+def down(name):
+    return {"op": "state_active",
+            "state": {"component": name, "automaton": "fail", "state": "nok"}}
+
+model = pyraichu.load_model({
+    "name": "wearout_pair",
+    "components": [
+        unit("A", 2.0, 20.0),
+        unit("B", 1.5, 30.0),
+        {"name": "sys", "automata": [{
+            "name": "watch", "states": ["up", "down"], "init": "up",
+            "transitions": [{"name": "down", "source": "up", "targets": ["down"],
+                             "distrib": "inst", "probs": [],
+                             "guard": {"op": "bool", "bool_op": "and",
+                                       "args": [down("A"), down("B")]}}]}]},
+    ],
+    "targets": [{"name": "sys_down", "component": "sys",
+                 "automaton": "watch", "state": "down"}],
+})
+
+result = pyraichu.explore(model, "sys_down", horizon=10.0,
+                          algorithm="discretised")
+d = result.discretisation
+print(f"level={d['level']} (base {d['refinement']['base_level']}) "
+      f"lower={result.lower:.6e} upper={result.upper:.6e} "
+      f"estimate={result.error_estimate:.2e}")
+print(f"{len(result.sequences)} sequences, {result.expanded_nodes} nodes expanded")
+for seq in result.sequences:
+    chain = " -> ".join(f"{e['obj']}.{e['attr']}" for e in seq.events)
+    print(f"{seq.probability:.6e}  {chain}")
+```
+
+```text
+level=16 (base 8) lower=3.873273e-02 upper=3.873273e-02 estimate=2.18e-05
+2 sequences, 545 nodes expanded
+2.201363e-02  B.nok -> A.nok
+1.671909e-02  A.nok -> B.nok
+```
+
+The two components are independent, so the probability that both have
+failed by `t = 10` has the closed form
+`(1 - exp(-(10/20)^2)) x (1 - exp(-(10/30)^1.5)) = 3.872413e-02`. The
+reported value differs from it by 8.6e-06, within the estimate of
+2.18e-05. The two sequences also have closed forms, 2.201636e-02 for
+`B` then `A` and 1.670777e-02 for `A` then `B` (by quadrature of the
+first failure's density). The exact algorithm refuses the model before
+exploring anything:
+
+```text
+transition `A.fail.occ` (weibull shape 2 scale 20) is armed after the sequence []: its law is outside the exact exploration domain (instantaneous, zero delay, or exponential with a rate constant between jumps)
+```
+
+Doubling the level shrinks the estimate by about a factor 3.5 on this
+model while the node count grows about fourfold:
+
+| `level` (reported `2K`) | lower | estimate | nodes expanded |
+|---|---|---|---|
+| 2 (4) | 3.883131e-02 | 2.73e-04 | 41 |
+| 4 (8) | 3.875449e-02 | 7.68e-05 | 145 |
+| 8 (16) | 3.873273e-02 | 2.18e-05 | 545 |
+| 16 (32) | 3.872655e-02 | 6.18e-06 | 2 113 |
+
+For Rust users: the discretised algorithm runs the engine in a
+deferred-draw mode, selected by a new public field of `EngineConfig`,
+`stochastic_dates` (default: dates drawn when a transition is armed, the
+Monte-Carlo semantics, unchanged). Adding a public field is why this
+release is 0.46.0 rather than a patch: a struct literal written without
+`..Default::default()` must add it.
+
 ## Relation to minimal cut sequences
 
 An explored sequence and a minimal cut sequence are different objects.
@@ -317,13 +508,16 @@ sequence add up, and the weights total `result.lower`.
 An exploration result is **not** a valid input to any post-processing
 that replays dated trajectories (reading the state of the model at
 chosen instants, for example). The exact exploration chooses the order
-of the jumps and never their dates: its events carry no time, and the
-dates in the reduced sequences are 0.
+of the jumps and never their dates, and a discretised sequence merges
+cells fired at different instants: in both cases the events carry no
+time, and the dates in the reduced sequences are 0.
 
 ## The result format
 
 An `Exploration` is saved and read back in its own open format,
-`raichu.exploration` version 1, as a single JSON document:
+`raichu.exploration`, as a single JSON document. An exact result is
+written at version 1 and a discretised one at version 2, the version
+that introduced the discretised algorithm:
 
 ```python
 result.to_json("exploration.json")          # also returns the text
@@ -335,7 +529,10 @@ The top-level fields are `format`, `version`, `engine_version`, `model`,
 `algorithm`, `target`, `horizon`, `cutoffs`, `gap_tolerance`,
 `precision`, `steps`, `sequences`, `lower`, `upper`, `cutoff_tallies`,
 `inconclusive`, `expanded_nodes` and `imprecise_sequences`, with the
-meanings given above.
+meanings given above. A discretised result adds `discretisation`,
+`{level, refinement}` (see
+[Error estimate by refinement](#error-estimate-by-refinement)); an exact
+result omits the field, so its document is unchanged.
 
 `steps` is the step table: one entry per distinct step occurring in a
 retained sequence, `{transition, from, to, event}`, where `event` is the
@@ -360,20 +557,27 @@ does not depend on the thread count. Each entry of `sequences` holds
 
 A sequence's transitions are its step indices resolved through the
 table, and its events are the non-null `event` of those steps. A reader
-refuses another `format`, a `version` above the one it knows, and a
-sequence referring to an index outside the table; a later version may
-add fields, which a version-1 reader ignores. The
+refuses another `format`, a `version` above the one it knows (a reader
+of RAICHU 0.45.0 knows version 1 only, so it refuses a discretised
+document by its version), a document whose `algorithm` its `version`
+predates (a `discretised` result declaring version 1, which no writer
+produces), and a sequence referring to an index outside the table; a
+later version may add fields, which an earlier reader ignores. The
 format is distinct from the [raw sequence corpus](../reference/sequence-format.md)
 of a Monte-Carlo campaign, whose sequences carry replica counts and
 dates.
 
 ## Limits
 
-- **Markov family only in this release.** A model with an ODE, a
-  reachable watched transition, time-dependent expressions, or a law
-  other than instantaneous or constant-rate exponential that becomes
-  armed, is refused. `algorithm="discretised"`, which will cover the
-  other laws and continuous evolution, is refused by name.
+- **The exact algorithm covers the Markov family only.** A model with an
+  ODE, a reachable watched transition, time-dependent expressions, or a
+  law other than instantaneous or constant-rate exponential that becomes
+  armed, is refused by it; `algorithm="discretised"` explores such a
+  model.
+- **The discretised algorithm reports an estimate, not a bound, of its
+  own error**, and its tree grows as `(K x competitors)^depth`: for long
+  sequences or many concurrent competitors, Monte-Carlo is the cheaper
+  tool (see [Cost](#cost)).
 - **Repairable systems over long horizons need cut-offs.** Each repair
   reopens the tree, and the number of sequences grows quickly with the
   horizon. Declare `min_probability` or `max_length`, read the tallies,
@@ -405,6 +609,11 @@ dates.
 - Collet, J. and Renault, I. (1997). Path probability evaluation with
   repeated rates. *Annual Reliability and Maintainability Symposium*,
   184-187. DOI [10.1109/rams.1997.571703](https://doi.org/10.1109/rams.1997.571703).
+- Elhareef, M. H. and Yim, M.-S. (2026). Quadrature based dynamic event
+  tree construction using FMU-driven piecewise deterministic Markov
+  process for dynamic probabilistic risk assessment. *Annals of Nuclear
+  Energy* 239, 112620.
+  DOI [10.1016/j.anucene.2026.112620](https://doi.org/10.1016/j.anucene.2026.112620).
 - Harrison, P. G. (1990). Laplace transform inversion and passage-time
   distributions in Markov processes. *Journal of Applied Probability*
   27(1), 74-87. DOI [10.2307/3214596](https://doi.org/10.2307/3214596).

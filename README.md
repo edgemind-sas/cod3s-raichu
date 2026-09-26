@@ -43,7 +43,9 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
 - **Sequence-tree exploration**: the sequences leading to a feared event
   enumerated rather than sampled, each with its probability at the
   horizon, plus a lower and an upper bound on what the declared cut-offs
-  left out (Markov models in this release). See
+  left out: exact probabilities for Markov models, and a discretised
+  algorithm with an error estimate for other laws and continuous
+  evolution. See
   [Sequence-tree exploration](docs/guides/sequence-tree-exploration.md).
 - **Explainability**: an optional, queryable causal journal (event →
   triggered functions → variable changes → rescheduling), zero-cost when
