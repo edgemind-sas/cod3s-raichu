@@ -736,34 +736,44 @@ level channel carries (`"level"`, 0) and refused above them.
 ## A machine that moves a mixture, and the section it is declared in
 
 muscadet 5.4.0 added `add_mixture_in` (R51), and its read-back writes a
-`mixtures` section on **every** flow component, `[]` included. The key is
-therefore read the way `automata` is: **accepted while
-it declares nothing**, refused as soon as it declares something. A reader
-refusing it by name would refuse the whole corpus at the first component it
-meets, ventilated or not, which is what a refusal keyed on the *presence* of a
-key always costs.
+`mixtures` section on **every** flow component, `[]` included. A document
+that declares no group builds exactly the model it built before the section
+existed, and that is pinned: the two documents build the same body, byte for
+byte.
 
-A document that declares no group builds exactly the model it built before the
-section existed, and that is pinned rather than intended: the two documents
-build the same body, byte for byte.
-
-A **non-empty** group is refused, by the name of its section, and the refusal
-is not a spelling gap waiting to be closed. A group is one volumetric rate `R`
-for several constituents, the split being fixed by the composition of the
-volume drawn from and by nothing the group declares:
+A **non-empty** group is carried. A group is one volumetric rate `R` for
+several constituents, the split being fixed by the composition of the volume
+drawn from and by nothing the group declares:
 
 ```text
 out_f  =  R . m_f / sum_g ( m_g . w_g )
 ```
 
-Every rate this layer carries is a rate **per flow**: a rule's `cons`, a
-capacity's `serve_rate`, a source's `rate`. Reading a group of two
-constituents as two independent demands would give the model two degrees of
-freedom where the physics has one, which is the very model R51 exists to
-refuse, so accepting it in silence would return a trajectory and a wrong one.
-The refusal names the component and the section, says what the seam does not
-carry, and says what stands in its place: today, nothing but the reference
-engine.
+so the volume extracted, `sum_f out_f . w_f`, is exactly `R`. Two things make
+it hold, and the second is the one a shortcut misses.
+
+- **What the group asks.** When the model is generated, each group is bound to
+  the one capacity of the one producer its flows arrive from, and each of its
+  inputs asks `R . m_f / S`, read off that volume's integrated contents and
+  declared weights (`S` is the weighted occupied volume). A group whose flows
+  arrive from two producers, or two capacities, or from a producer serving the
+  same outputs to somebody else, is refused by the group's name, as muscadet
+  refuses it; so is a flow a rule of the consumer also consumes.
+- **What the volume serves.** A volume drawn by a group serves each constituent
+  exactly the composed request, what merely transits entering the composition
+  first (muscadet's `draw_from_capacity`, the branch serving a mixture). The
+  pooled rule a mixed volume otherwise follows, transit passed straight on and
+  only the excess drawn at the composition, gives the right answer while the
+  inflows cover the requests and the wrong one as soon as the stock has to
+  supply: measured, it holds the supply-open trajectory and breaks the
+  supply-cut one and the weighted invariant. The group is therefore a demand
+  in its own right, not per-flow demands that happen to be in proportion.
+
+Measured against muscadet's own closed forms for a room of `V` receiving air
+at `Q` and hydrogen at `q` under one extractor at `R = Q`: the share follows
+`q/(Q+q) . [1 - (V/(V+qt))^((Q+q)/q)]` with the supply open and
+`x0 . exp(-R t / M0)` with it cut, and the extracted volume is `R` at a
+hydrogen weight of 2.
 
 ## What replaces `cod3s.ComponentInstance.to_bkd_raichu`
 

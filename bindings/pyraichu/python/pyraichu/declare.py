@@ -179,6 +179,8 @@ DECLARATION_SECTIONS = (
     "capacities",
     # After the capacities and the channels it may republish.
     "measurements_out",
+    # After the continuous inputs a group draws.
+    "mixtures",
     "failure_modes",
     "rules",
     "transfers",
@@ -209,19 +211,6 @@ UNCARRIED_SECTIONS = {
         "every automaton from the declaration that needs one (a failure mode, "
         "a capacity bound, a temporised or triggered output, a guarded rule "
         "set) and declares none of its own"
-    ),
-    "mixtures": (
-        "a group of continuous inputs drawn TOGETHER at one volumetric rate "
-        "(muscadet's `add_mixture_in`, R51): a machine displacing a VOLUME of "
-        "whatever the volume it draws from holds, what leaves per constituent "
-        "being fixed by the composition of that volume rather than declared. "
-        "Every rate this layer carries is a rate PER FLOW -- a rule's `cons`, "
-        "a capacity's `serve_rate`, a source's `rate` -- so a group of two "
-        "constituents read here would become two independent demands, which is "
-        "two degrees of freedom where the physics has one and is the very "
-        "model R51 exists to refuse. Nothing stands in its place: a model that "
-        "ventilates belongs on the reference engine until this layer carries "
-        "the group"
     ),
 }
 
@@ -661,6 +650,15 @@ _MEASUREMENT_OUT = _Vocabulary(
     uncarried={},
 )
 
+#: muscadet's ``MixtureIn`` (``add_mixture_in``, R51): continuous inputs drawn
+#: together at ONE volumetric rate, the split per constituent fixed by the
+#: composition of the volume drawn from. Every key muscadet writes is carried.
+_MIXTURE_IN = _Vocabulary(
+    carried={"name": "name", "flows": "flows", "flow_rate": "flow_rate"},
+    inert={},
+    uncarried={},
+)
+
 _MEASUREMENT_IN = _Vocabulary(
     carried={"name": "name", "flows": "flows"},
     # `kind`, `rate_default` and `ratio_default` arrived with muscadet 5.6.0's
@@ -804,6 +802,7 @@ PLAIN_SECTIONS: dict[str, tuple[str, _Vocabulary]] = {
     "measurements_in": ("add_measurement_in", _MEASUREMENT_IN),
     "capacities": ("add_capacity", _CAPACITY),
     "measurements_out": ("add_measurement_out", _MEASUREMENT_OUT),
+    "mixtures": ("add_mixture_in", _MIXTURE_IN),
     "rules": ("add_rule_set", _RULE_SET),
     "transfers": ("add_transfer", _TRANSFER),
 }

@@ -906,6 +906,11 @@ class _FlowContinuousIn:
     #: model is generated. It is read last of the three, so a conduit or
     #: a rule set on the same flow takes precedence over it.
     demand_expr: dict[str, Any] | None = None
+    #: What a mixture group asks on this input, ``R . m_f / S`` read off the
+    #: volume the group draws from: set by
+    #: :meth:`System._resolve_mixture_groups` when the model is generated,
+    #: and kept apart from `demand_expr`, which stays the caller's.
+    mixture_demand: dict[str, Any] | None = None
     #: A declared time profile scaling what this input asks for, or
     #: ``None``. The counterpart of the output's, and the same shape: a
     #: demand that varies with the clock is as ordinary as a production
@@ -1410,6 +1415,12 @@ class _Capacity:
     #: way round.
     serve_cond_inner_mode: str = SERVE_COND_INNER_MODE_DEFAULT
     hysteresis: float = DEFAULT_HYSTERESIS
+    #: Whether a mixture group draws this volume (muscadet's R51): set by
+    #: :meth:`System._resolve_mixture_groups` when the model is generated,
+    #: never declared. A volume drawn as a mixture serves each held flow
+    #: the composed request it was asked, what merely transits entering
+    #: the composition first.
+    serves_mixture: bool = False
 
     @property
     def flow_names(self) -> list[str]:
@@ -1636,6 +1647,17 @@ class _FailureMode:
     repair: _Effects = field(default_factory=_Effects)
 
 
+@dataclass
+class _MixtureIn:
+    """Continuous inputs a component draws together, at ONE volumetric rate
+    (muscadet's ``add_mixture_in``, R51). What each flow then carries is
+    fixed by the composition of the volume drawn from, not declared."""
+
+    name: str
+    flows: list[str]
+    flow_rate: float
+
+
 class _MixtureSource(NamedTuple):
     """Where a mixture-fed input comes from: the supplier, its output, the
     mixed volume serving it, and whether that volume has a way in for the
@@ -1676,6 +1698,7 @@ class ObjFlow:
         self.capacities: list[_Capacity] = []
         self.measurements_in: list[_MeasurementIn] = []
         self.measurements_out: list[_MeasurementOut] = []
+        self.mixtures: list[_MixtureIn] = []
         self.rule_sets: list[_RuleSet] = []
         self.transfers: list[_Transfer] = []
         self.failure_modes: list[_FailureMode] = []
@@ -3255,6 +3278,12 @@ class ObjFlow:
         = -req t`` for a constant ``a``)."""
         me = self.name
         capability = _var(me, f"{flow}_capability_out")
+        if capacity.serves_mixture:
+            # Drawn by a mixture group: the request is already composed
+            # (``R . m_f / S``), and what transits enters the composition
+            # rather than passing straight on (muscadet 5.6.0,
+            # `draw_from_capacity`, the branch serving a mixture).
+            return _min([capability, _var(me, f"{flow}_demand_out")])
         share = {
             "op": "mul",
             "args": [
@@ -3603,6 +3632,52 @@ class ObjFlow:
                 gain_default=float(gain_default),
             )
         )
+
+    def add_mixture_in(self, name: str, flows: list[str], flow_rate: float) -> None:
+        """Declare continuous inputs drawn TOGETHER at one volumetric rate
+        (muscadet `add_mixture_in`, R51): a ventilation extractor, a pump on
+        a line carrying a mixture.
+
+        `flow_rate` is ONE rate for the whole group and a VOLUME per unit of
+        time: what leaves the volume drawn from per constituent is
+        ``flow_rate . m_f / sum_g (m_g . w_g)``, fixed by that volume's
+        composition and weights, so the volume extracted is exactly
+        `flow_rate`. The flows must already be declared as continuous
+        inputs; which volume composes for the group is settled when the
+        model is generated, from the connections, and refused by name when
+        the group's flows do not all arrive from one capacity of one
+        producer serving nobody else."""
+        where = f"ObjFlow `{self.name}`: mixture group `{name}`"
+        if any(existing.name == name for existing in self.mixtures):
+            raise ValueError(f"{where} is already declared")
+        flows = [flows] if isinstance(flows, str) else list(flows or [])
+        if not flows:
+            raise ValueError(f"{where} draws no flow")
+        declared = {flow.name for flow in self.flows_continuous_in}
+        missing = [flow for flow in flows if flow not in declared]
+        if missing:
+            raise ValueError(
+                f"{where} draws {missing}, which this component declares as no "
+                "continuous input (declare the inputs first)"
+            )
+        grouped = {flow for group in self.mixtures for flow in group.flows}
+        twice = [flow for flow in flows if flow in grouped]
+        if twice or len(set(flows)) != len(flows):
+            raise ValueError(
+                f"{where} draws a flow another group, or itself, already draws: "
+                f"{twice or flows}"
+            )
+        if (
+            isinstance(flow_rate, bool)
+            or not isinstance(flow_rate, (int, float))
+            or not math.isfinite(flow_rate)
+            or flow_rate < 0
+        ):
+            raise ValueError(
+                f"{where} declares `flow_rate`={flow_rate!r}; it is one finite, "
+                "non-negative volume per unit of time for the whole group"
+            )
+        self.mixtures.append(_MixtureIn(name=name, flows=flows, flow_rate=float(flow_rate)))
 
     # --- transformation rules -------------------------------------------
 
@@ -6488,6 +6563,8 @@ class ObjFlow:
                 base = self._conduit_crossing(conduit)
             elif flow_name in rule_demand:
                 base = _sum(rule_demand[flow_name])
+            elif continuous_in.mixture_demand is not None:
+                base = continuous_in.mixture_demand
             elif continuous_in.demand_expr is not None:
                 base = continuous_in.demand_expr
             elif self._passes_through(flow_name):
@@ -8983,6 +9060,98 @@ class System:
                 return True
         return False
 
+    def _resolve_mixture_groups(self, edges: list[_ContinuousEdge]) -> None:
+        """Bind every mixture group to the one volume that composes for it
+        (muscadet's `resolve_mixture_groups`, R51), and write what the group
+        asks on each of its inputs: ``R . m_f / S``, ``S`` being the volume's
+        weighted occupied volume, read off its integrated contents.
+
+        Refused by name, as muscadet refuses them: a group whose flows do not
+        all arrive from ONE capacity of ONE producer, a producer serving the
+        group's flows to anybody else, and a flow a rule of the consumer also
+        consumes. Recomputed from scratch at every generation, so a model
+        generated twice binds the same way."""
+        for obj in self.comp.values():
+            for capacity in obj.capacities:
+                capacity.serves_mixture = False
+            for flow in obj.flows_continuous_in:
+                flow.mixture_demand = None
+        for consumer, obj in self.comp.items():
+            for group in obj.mixtures:
+                where = f"System `{self.name}`: mixture group `{consumer}.{group.name}`"
+                feeding = {
+                    flow: [e for e in edges if e.consumer == consumer and e.flow_in == flow]
+                    for flow in group.flows
+                }
+                producers = {e.producer for found in feeding.values() for e in found}
+                if any(len(found) != 1 for found in feeding.values()) or len(producers) != 1:
+                    raise ValueError(
+                        f"{where}: its flows must all arrive from one capacity of "
+                        f"one producer, and they arrive from "
+                        f"{ {f: [e.producer for e in found] for f, found in feeding.items()} }"
+                    )
+                producer = producers.pop()
+                supplier = self.comp[producer]
+                outputs = {flow: found[0].flow_out for flow, found in feeding.items()}
+                held = [supplier._capacity_of(out) for out in outputs.values()]
+                names = {c.name if c is not None else None for c in held}
+                if len(names) != 1 or None in names:
+                    raise ValueError(
+                        f"{where}: its flows must all arrive from one capacity of "
+                        f"one producer, and `{producer}` holds them in "
+                        f"{sorted(n or 'no capacity' for n in names)}"
+                    )
+                capacity = held[0]
+                others = [
+                    e for e in edges
+                    if e.producer == producer
+                    and e.flow_out in outputs.values()
+                    and e.consumer != consumer
+                ]
+                if others:
+                    raise ValueError(
+                        f"{where}: `{producer}` also serves "
+                        f"{sorted({e.consumer for e in others})} out of the outputs "
+                        "the group draws, and a volume drawn as a mixture composes "
+                        "for one group"
+                    )
+                consumed = {
+                    flow for rule_set in obj.rule_sets for flow in rule_set.consumed()
+                }
+                ruled = sorted(set(group.flows) & consumed)
+                if ruled:
+                    raise ValueError(
+                        f"{where}: {ruled} are consumed by a rule of `{consumer}` "
+                        "too, and an input has one demand"
+                    )
+                capacity.serves_mixture = True
+                occupied = _sum(
+                    [
+                        {
+                            "op": "mul",
+                            "args": [
+                                _var(producer, _content_attribute(capacity.name, entry.name)),
+                                _float(entry.weight),
+                            ],
+                        }
+                        for entry in capacity.flows
+                    ]
+                )
+                for flow, out in outputs.items():
+                    share = {
+                        "op": "div",
+                        "lhs": _var(producer, _content_attribute(capacity.name, out)),
+                        "rhs": occupied,
+                    }
+                    demand = {
+                        "op": "if",
+                        "cond": {"op": "cmp", "cmp": "gt", "lhs": occupied, "rhs": _float(0.0)},
+                        "then": {"op": "mul", "args": [_float(group.flow_rate), share]},
+                        "otherwise": _float(0.0),
+                    }
+                    target = next(f for f in obj.flows_continuous_in if f.name == flow)
+                    target.mixture_demand = demand
+
     def generate(
         self, foreign: list[dict[str, Any]] | None = None
     ) -> tuple[list[dict[str, Any]], list[dict[str, str]] | None]:
@@ -9007,6 +9176,7 @@ class System:
         surfaces cannot answer one model differently."""
         edges = self._continuous_edges()
         self._validate_rules(edges)
+        self._resolve_mixture_groups(edges)
         reading: dict[str, set[str]] = {}
         for edge in edges:
             reading.setdefault(edge.producer, set()).add(edge.flow_out)
