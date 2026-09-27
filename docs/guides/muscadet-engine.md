@@ -40,7 +40,7 @@ an application does when it pins its engines rather than discovering them:
 
 <!-- skip -->
 ```python
-from pyraichu.muscadet_engine import register
+from pyraichu.muscadet.engine import register
 register()
 ```
 
@@ -96,7 +96,7 @@ name against the declaration before the engine is reached, so a typo is
 refused rather than run; what reaches RAICHU is a name to translate into what
 it actually stops at, an automaton and a state, which the two engines spell
 differently. The translation is read off the event's own declaration
-(`pyraichu.declare.event_automaton` and `event_occurrence_state`), so an event
+(`pyraichu.muscadet.declare.event_automaton` and `event_occurrence_state`), so an event
 that renamed its automaton or its occurrence state is honoured under the new
 names.
 
@@ -119,7 +119,7 @@ unavailability, 0.1 / 0.6 = 0.167, so a free-cycling campaign cannot approach
 | free-cycling | 0.000 | 0.154 | 0.162 | 0.174 | 0.169 |
 | with a target | 0.000 | 0.386 | 0.624 | 0.910 | 0.991 |
 
-`pyraichu.muscadet_engine.build_model` takes the same keyword, and not only
+`pyraichu.muscadet.engine.build_model` takes the same keyword, and not only
 the run does. A study reading sequences needs the **model** twice: once for
 the campaign and once for `pyraichu.analyse_sequences`, which the seam has no
 kind of run for. Building it once is what lets both calls see the same targets:
@@ -127,7 +127,7 @@ kind of run for. Building it once is what lets both calls see the same targets:
 <!-- skip -->
 ```python
 from pyraichu import analyse_sequences
-from pyraichu.muscadet_engine import build_model
+from pyraichu.muscadet.engine import build_model
 
 model = build_model(muscadet.system_spec(system), targets=["EVT_LOSS"])
 cuts = analyse_sequences(model, nb_runs=2000, t_max=50.0, seed=4242)
@@ -143,10 +143,10 @@ and whoever drives the session decides what it means.
 
 `pyraichu.muscadet` used to be a second authoring interface, mirroring
 muscadet's idioms over RAICHU. It is now the **internal adapter**: the
-declaration is read by `pyraichu.declare.build_document`, built through that
+declaration is read by `pyraichu.muscadet.declare.build_document`, built through that
 layer, and a modeller never names it. Nothing new enters it; an alignment
 between the two vocabularies lands in the declaration reader or in
-`pyraichu.muscadet_engine`, never in the mirror.
+`pyraichu.muscadet.engine`, never in the mirror.
 
 "Nothing new" is about the **authoring surface**, not about what the adapter
 emits. Changing the model a declaration compiles to is what the adapter is

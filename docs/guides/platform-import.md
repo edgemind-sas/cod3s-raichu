@@ -46,7 +46,7 @@ reading of a **declaration**.
 
 ## Getting at the model without running it
 
-`pyraichu.muscadet_engine.build_model` is the translation, reachable
+`pyraichu.muscadet.engine.build_model` is the translation, reachable
 without simulating anything: hand it a declaration
 (`muscadet.declare.system_spec` of a live system) and it answers the
 model RAICHU would run, sequence targets included.
@@ -54,14 +54,14 @@ model RAICHU would run, sequence targets included.
 <!-- skip -->
 ```python
 import muscadet.declare
-from pyraichu.muscadet_engine import build_model
+from pyraichu.muscadet.engine import build_model
 
 declaration = muscadet.declare.system_spec(system)
 model = build_model(declaration, ["doors_unsecured"])
 ```
 
 Anything the declaration carries and this reader cannot build raises a
-typed `pyraichu.declare.ComponentSpecError` or `SystemSpecError` naming
+typed `pyraichu.muscadet.declare.ComponentSpecError` or `SystemSpecError` naming
 the component and the key: a model that loads is a model whose semantics
 are covered.
 

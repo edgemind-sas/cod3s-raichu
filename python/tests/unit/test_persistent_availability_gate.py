@@ -24,7 +24,7 @@ no fixpoint (muscadet documents the hang) and the model is refused.
 
 **Two routes, one question.** The platform's flatter vocabulary reaches
 the engine through `pyraichu.plugins`, a muscadet DECLARATION through
-`pyraichu.declare`, and the control travels on both -- the reference
+`pyraichu.muscadet.declare`, and the control travels on both -- the reference
 corpus carries 27 persistent gates, all of them on a declaration. The
 second half of this suite asks the declaration route the same three
 questions, and adds the writer only a declaration has: a failure mode
@@ -36,7 +36,7 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 from pyraichu.plugins import expand_model
 
 RATE = 1e-3
@@ -322,7 +322,7 @@ class TestAGateTheComponentsOwnModeDerivesIsRefused:
 def test_the_rebuild_refuses_an_attribute_changed_on_both_sides():
     """Carrying a changed attribute over a rebuild that changed it too would
     drop one of the two changes without a word."""
-    from pyraichu.plugins.muscadet import _carry_grafts
+    from pyraichu.muscadet.plugin import _carry_grafts
 
     declared = {"name": "g", "kind": "bool", "init": {"kind": "bool", "value": True}}
     placeholder = {"name": "C", "attributes": [dict(declared, init={"kind": "bool", "value": False})]}

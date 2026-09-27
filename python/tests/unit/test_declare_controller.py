@@ -43,7 +43,7 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 from conftest import CROSSING_TOL, settled
 
 # --- the reference document -------------------------------------------

@@ -4,12 +4,12 @@ A two-state component -- a failure mode, or a standalone event -- is declared
 in cod3s' own vocabulary: the keyword arguments ``cod3s.ObjMode2S`` /
 ``ObjFMExp`` / ``ObjFMDelay`` / ``ObjFMInst`` / ``ObjEvent`` take, spelled in
 data. This module is the one translation from that wire to the objects
-:mod:`pyraichu.plugins.muscadet` expands, and it holds the whole of the law
+:mod:`pyraichu.muscadet.plugin` expands, and it holds the whole of the law
 matrix: three occurrence kinds on each of the two directions, the three
 behaviours, the per-common-cause-order parameter vectors, and the on-demand
 draw.
 
-Its caller is :mod:`pyraichu.declare`, which reads a muscadet system
+Its caller is :mod:`pyraichu.muscadet.declare`, which reads a muscadet system
 declaration and hands each two-state component's wire through here rather than
 writing a second, lesser expansion of the same semantics. It lives apart from
 that reader because the two vocabularies are not the same one: ``declare``
@@ -209,9 +209,9 @@ def failure_mode_object(fm: dict) -> dict:
     """The muscadet-plugin object a cod3s failure-mode declaration means.
 
     The one translation from the cod3s mode wire to
-    :mod:`pyraichu.plugins.muscadet`: a muscadet system declaration carries
+    :mod:`pyraichu.muscadet.plugin`: a muscadet system declaration carries
     that vocabulary for a standalone mode -- it is the mode class's own
-    constructor keywords either way -- and :mod:`pyraichu.declare` reads it
+    constructor keywords either way -- and :mod:`pyraichu.muscadet.declare` reads it
     through here rather than writing a second, lesser expansion of its own.
 
     What the caller owes is a normalised mapping: the ``cls`` the class table
@@ -469,7 +469,7 @@ _EVENT_LOGIC = ("all", "any")
 
 #: The keys an event carries beside its name and its condition, each spelled
 #: the way ``cod3s.ObjEvent.__init__`` takes it and read by
-#: :func:`pyraichu.plugins.muscadet._expand_objevent` under the same name.
+#: :func:`pyraichu.muscadet.plugin._expand_objevent` under the same name.
 _EVENT_KEYS = (
     "inner_logic",
     "outer_logic",
@@ -489,7 +489,7 @@ def event_object(ev: dict) -> dict:
     The sibling of :func:`failure_mode_object`, and here for the same reason:
     a muscadet system declaration carries that vocabulary for a standalone
     event -- it is ``cod3s.ObjEvent``'s own constructor keywords either way --
-    and :mod:`pyraichu.declare` reads it through here rather than writing a
+    and :mod:`pyraichu.muscadet.declare` reads it through here rather than writing a
     second, lesser expansion.
 
     Named apart from :func:`failure_mode_object` rather than folded into it:

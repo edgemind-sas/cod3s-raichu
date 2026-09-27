@@ -33,7 +33,7 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 
 #: The three detections the alarm votes over, and the alarm itself.
 DETECTIONS = ("det_a", "det_b", "det_c")

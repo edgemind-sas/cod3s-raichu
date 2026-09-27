@@ -31,7 +31,7 @@ import math
 
 import pytest
 
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
 from conftest import TOL, sampled
 

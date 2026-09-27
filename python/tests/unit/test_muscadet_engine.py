@@ -35,8 +35,8 @@ import types
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
-import pyraichu.muscadet_engine as engine
+import pyraichu.muscadet.declare as declare
+import pyraichu.muscadet.engine as engine
 
 # --- the declaration, in muscadet's own vocabulary ---------------------
 #
@@ -191,7 +191,7 @@ def test_the_distribution_advertises_the_engine():
         for entry in distribution.entry_points
         if entry.group == "muscadet.engines"
     }
-    assert advertised == {engine.ENGINE_NAME: "pyraichu.muscadet_engine:register"}
+    assert advertised == {engine.ENGINE_NAME: "pyraichu.muscadet.engine:register"}
 
 
 def test_registering_hands_muscadet_both_runners():
@@ -230,7 +230,7 @@ def test_importing_pyraichu_does_not_import_muscadet():
     one has imported half the package already.
     """
     probe = (
-        "import sys, pyraichu, pyraichu.muscadet_engine, pyraichu.declare;"
+        "import sys, pyraichu, pyraichu.muscadet.engine, pyraichu.muscadet.declare;"
         "assert 'muscadet' not in sys.modules, sorted(sys.modules)"
     )
     subprocess.run([sys.executable, "-c", probe], check=True)
@@ -1280,7 +1280,7 @@ def test_build_model_takes_the_same_vocabulary_and_writes_the_section():
 
 
 def test_a_target_is_resolved_through_the_names_the_event_renamed():
-    """Read through `pyraichu.declare.event_automaton` and the event's own
+    """Read through `pyraichu.muscadet.declare.event_automaton` and the event's own
     `occ_state_name`, not through the defaults: a modeller who renamed the
     occurrence state would otherwise get a target on a state no automaton
     holds, and a campaign that stops at nothing."""

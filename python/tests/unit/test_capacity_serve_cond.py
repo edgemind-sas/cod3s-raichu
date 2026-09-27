@@ -38,9 +38,9 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
-import pyraichu.muscadet_engine as engine
+import pyraichu.muscadet.engine as engine
 from conftest import CROSSING_TOL, TOL, sampled
 
 #: The running example, in the units the feature states it in: a source of

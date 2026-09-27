@@ -640,7 +640,7 @@ def test_a_continuous_flow_leaving_the_plugin_is_refused():
 )
 def test_a_continuous_section_reads_the_declaration_vocabulary(key, entry, message):
     """The six sections read muscadet's own declaration vocabulary through
-    `pyraichu.declare.entry_call`, which is the ONE place a section entry
+    `pyraichu.muscadet.declare.entry_call`, which is the ONE place a section entry
     is classified. A key that entry point refuses is refused here with the
     same reason, and the message names the object and the entry."""
     document = {

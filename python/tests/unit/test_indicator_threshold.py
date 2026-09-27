@@ -35,8 +35,8 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.muscadet_engine as engine
-from pyraichu.declare import SystemSpecError
+import pyraichu.muscadet.engine as engine
+from pyraichu.muscadet.declare import SystemSpecError
 from test_declare_capacity import a_tank
 from test_muscadet_engine import FLOW, an_event, rbd_declaration
 

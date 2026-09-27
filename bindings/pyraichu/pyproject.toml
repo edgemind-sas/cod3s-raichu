@@ -31,7 +31,7 @@ Repository = "https://github.com/edgemind-sas/raichu"
 # RAICHU imports nothing: installing pyraichu IS the registration, and the
 # choice of engine is a setting rather than a line of code.
 [project.entry-points."muscadet.engines"]
-raichu = "pyraichu.muscadet_engine:register"
+raichu = "pyraichu.muscadet.engine:register"
 
 [tool.maturin]
 # The Rust extension is exposed as the private module `pyraichu._pyraichu`;

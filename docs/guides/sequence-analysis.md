@@ -39,7 +39,7 @@ campaigns.
 
 A study written in muscadet says the same thing by naming the event on the
 **run** rather than on the model: `system.simulate(params, engine="raichu",
-targets=["EVT_LOSS"])`, and `pyraichu.muscadet_engine.build_model(spec,
+targets=["EVT_LOSS"])`, and `pyraichu.muscadet.engine.build_model(spec,
 targets=[...])` for the model this page's `analyse_sequences` takes. One
 system is run twice, free-cycling for its availability figures and
 first-occurrence for its sequences, which is why a target is a parameter of
