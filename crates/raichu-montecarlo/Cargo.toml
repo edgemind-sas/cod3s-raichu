@@ -18,6 +18,11 @@ thiserror.workspace = true
 [dev-dependencies]
 raichu-model.workspace = true
 serde_json.workspace = true
+divan.workspace = true
+
+[[bench]]
+name = "confidence"
+harness = false
 
 [lints]
 workspace = true

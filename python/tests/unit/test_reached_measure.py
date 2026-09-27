@@ -39,3 +39,4 @@ def test_an_indicator_left_after_being_reached_stays_reached():
     assert indicator.mean == [0.0, 1.0, 0.0]
     assert indicator.reached_mean == [0.0, 1.0, 1.0]
     assert indicator.reached_std == [0.0, 0.0, 0.0]
+    assert indicator.reached_ci.low[1] <= 1.0 <= indicator.reached_ci.high[1]

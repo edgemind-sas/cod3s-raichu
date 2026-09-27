@@ -2,6 +2,9 @@
 
 __version__: str
 
+#: Confidence level applied when a study states none (0.95).
+DEFAULT_CONFIDENCE: float
+
 class ModelError(Exception): ...
 class SimulationError(Exception): ...
 
@@ -28,6 +31,7 @@ class FlowConfig:
 
 def validate_model(model_json: str) -> None: ...
 def switching_loops_json(model_json: str) -> str: ...
+def unfed_triggers_json(model_json: str) -> str: ...
 def simulate_json(
     model_json: str,
     t_max: float,
@@ -48,6 +52,7 @@ def monte_carlo_json(
     seed: int = 0,
     threads: int | None = None,
     quantiles: list[float] | None = None,
+    confidence: float | None = None,
     rtol: float | None = None,
     atol: float | None = None,
     max_step: float | None = None,
@@ -79,8 +84,15 @@ def run_sequences_json(
 def analyse_raw_sequences_json(
     raw_path: str, condition: tuple[str, str, float] | None = None
 ) -> str: ...
-def analyse_raw_sequences_json(
-    raw_path: str, condition: tuple[str, str, float] | None = None
+def importance_json(
+    model_json: str,
+    nb_runs: int,
+    t_max: float,
+    instants: list[float],
+    target: str | None = None,
+    seed: int = 0,
+    threads: int | None = None,
+    flow: FlowConfig | None = None,
 ) -> str: ...
 
 def explore_json(

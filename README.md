@@ -26,6 +26,11 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
 - **A rich occurrence-law library**: exponential (with an optional
   state-dependent rate), Weibull, lognormal, gamma, uniform,
   deterministic/delay and empirical laws behind a single interface.
+- **Estimates that state their precision**: every Monte-Carlo estimator
+  carries a confidence interval at a level the study declares (Wilson
+  for a probability, central-limit otherwise), so a reported figure
+  never leaves the campaign size to be guessed at, and never closes on
+  a point when every replica happened to agree.
 - **Reproducibility by construction**: an explicit, splittable RNG; a
   master seed derives independent per-replica substreams; any single
   trajectory replays bit-for-bit and Monte-Carlo results are
@@ -40,6 +45,10 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
   A muscadet model then runs here by naming the engine, importing nothing:
   `system.simulate(params, engine="raichu")`. See
   [Running a muscadet model on RAICHU](docs/guides/muscadet-engine.md).
+- **Native RAMS post-processing**: feared events as targets, **minimal
+  cut sequences** reduced from a recorded campaign, and the classical
+  **importance measures** (Birnbaum, Fussell-Vesely, criticality) per
+  component, computed from that one campaign.
 - **Sequence-tree exploration**: the sequences leading to a feared event
   enumerated rather than sampled, each with its probability at the
   horizon, plus a lower and an upper bound on what the declared cut-offs

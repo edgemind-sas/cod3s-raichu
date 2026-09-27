@@ -5,7 +5,7 @@
 
 use raichu_core::{CompiledModel, FlowConfig};
 use raichu_model::{Automaton, Component, Distrib, Indicator, IndicatorTarget, Model, Transition};
-use raichu_montecarlo::{run, McConfig};
+use raichu_montecarlo::{run, McConfig, DEFAULT_CONFIDENCE};
 
 /// The `test_pyc_system_003` model: one component, `ok → nok` at rate
 /// λ = 1/5, no repair. Closed forms: P(nok at t) = 1 − e^{−λt};
@@ -73,6 +73,7 @@ fn estimates_match_closed_forms_within_confidence() {
         samples: schedule(),
         threads: None,
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),
@@ -135,6 +136,7 @@ fn nb_occurrences_counts_repeated_entries_exactly() {
         samples: vec![2.0, 4.0, 9.0, 14.0],
         threads: None,
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),
@@ -181,6 +183,7 @@ fn stop_at_targets_latches_the_measures() {
         samples: vec![2.0, 4.0, 9.0, 14.0],
         threads: None,
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),
@@ -198,6 +201,7 @@ fn stop_at_targets_latches_the_measures() {
             stop_at_targets: true,
             flow: FlowConfig::default(),
             quantiles: vec![],
+            confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             ..base
         },
@@ -231,6 +235,7 @@ fn stop_at_targets_with_infinite_horizon_covers_the_schedule() {
         samples: vec![10.0, 20.0],
         threads: None,
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: true,
         flow: FlowConfig::default(),
@@ -258,6 +263,7 @@ fn nb_occurrences_includes_an_entry_at_the_sample_instant() {
         samples: vec![3.0, 5.0],
         threads: None,
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),
@@ -282,6 +288,7 @@ fn one_thread_and_many_threads_give_identical_bytes() {
         samples: schedule(),
         threads: Some(1),
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),
@@ -292,6 +299,7 @@ fn one_thread_and_many_threads_give_identical_bytes() {
         &McConfig {
             threads: Some(8),
             quantiles: vec![],
+            confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             ..base
         },
@@ -381,6 +389,7 @@ fn one_thread_and_many_threads_agree_through_the_flow_resolution() {
         samples: schedule(),
         threads: Some(1),
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),
@@ -391,6 +400,7 @@ fn one_thread_and_many_threads_agree_through_the_flow_resolution() {
         &McConfig {
             threads: Some(8),
             quantiles: vec![],
+            confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             ..base
         },
@@ -428,6 +438,7 @@ fn same_seed_reproduces_and_other_seed_differs() {
         samples: schedule(),
         threads: None,
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),

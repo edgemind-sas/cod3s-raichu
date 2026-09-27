@@ -90,6 +90,80 @@ law (`enable_law={"distrib": "exp", "rate": r}`, and likewise
     running rather than as an error. Wire the trigger, or declare the
     output with `add_flow_out` if it is not a standby at all.
 
+`unfed_triggers(model)` names that missing wire from the model alone,
+before anything is simulated, so the redundancy that is always running
+does not have to be spotted in a figure that looks good:
+
+```python
+import pyraichu
+
+class Main(mu.ObjFlow):
+    def add_flows(self):
+        self.add_flow_out(name="cooling", var_prod_default=True)
+
+class Backup(mu.ObjFlow):
+    def add_flows(self):
+        self.add_flow_out_on_trigger(
+            name="cooling", trigger_logic="and", var_prod_default=True)
+
+standby = mu.System("standby")
+standby.add_component(Main, "PumpA")
+standby.add_component(Backup, "PumpB")
+# standby.connect_trigger("PumpA", "PumpB", "cooling")   <- the forgotten line
+
+for found in pyraichu.unfed_triggers(standby.build_model()):
+    print(found["message"])
+```
+
+Each entry carries the ports to wire, the automaton and the state their
+emptiness seals so the finding can be checked rather than trusted, and a
+ready-phrased `message`. It **warns and never refuses**: the model above
+still loads and still runs, which is the point, since a trigger nothing
+feeds is a valid model and only, almost always, an oversight.
+
+What is reported is narrow for the same reason. A guard is reported only
+when the emptiness settles it exactly, so a condition that also reads
+something moving is silent; and the deliberate way to declare an output
+that is always on is `add_flow_out`, which declares no trigger port and
+so costs no warning at every compilation.
+
+!!! warning "A rule threshold on an input you forget to wire"
+
+    A trigger is not the only spelling of the fault. Write on a rule set
+    *"if what the grid carries is below 4, run"*, forget the wire that
+    carries it, and the sum over the empty input answers zero: the rule
+    is entered at the initial instant and never left, so the component
+    delivers for ever and the campaign reads an availability the model
+    does not have.
+
+    That one is reported too. The guard there thresholds
+    `P.E_capability_in`, the attribute derived from the input, so the
+    diagnostic **crosses that definition** to reach the port and names
+    the port, which is the thing you can wire.
+
+!!! note "What it answers about, and what it does not"
+
+    Crossing a definition needs it to be the **only** one: exactly one
+    explicit equation writing the attribute, and nothing else. An
+    attribute an ODE integrates, a sensitive function assigns or two
+    writers share moves, and the fold stops at it rather than guess. So
+    a rule condition on a **boolean** input (`add_flow_in`) is *not*
+    reported: `{flow}_fed_in` is assigned by a sensitive function.
+
+    There is nothing there to report, either. A boolean input nothing
+    feeds reads its declared `var_in_default`, `False` unless you say
+    otherwise, so the rule it guards stays **shut** for ever rather
+    than armed for ever, and the component starves instead of
+    delivering. That is the pessimistic direction, already in front of
+    you in the results.
+
+    And the seal has to flatter the result. A rule that declares a
+    `cons` on the flow it thresholds is sealed by the same missing wire
+    and stays silent: entered, it cannot draw, so it produces zero. That
+    is the pessimistic direction, and it is already in front of you in
+    the results as a component that makes nothing. Only the mode that
+    raises a quantity it would otherwise hold at zero is worth a line.
+
 ## Plugins: the same objects as data
 
 The same high-level objects can be expressed as **pure JSON**, in a

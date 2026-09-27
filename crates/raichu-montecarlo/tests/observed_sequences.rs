@@ -10,7 +10,9 @@ use raichu_core::{
 };
 use raichu_expr::CmpOp;
 use raichu_model::Model;
-use raichu_montecarlo::{run_sequences, run_sequences_observed, McConfig, SequenceObservation};
+use raichu_montecarlo::{
+    run_sequences, run_sequences_observed, McConfig, SequenceObservation, DEFAULT_CONFIDENCE,
+};
 
 /// Two repairable components and a feared event reached the instant both
 /// are down, plus an indicator on whether `A` is down: the value it reads
@@ -57,6 +59,7 @@ fn config(threads: Option<usize>) -> McConfig {
         samples: Vec::new(),
         threads,
         quantiles: Vec::new(),
+        confidence: DEFAULT_CONFIDENCE,
         ode: SolverParams::default(),
         stop_at_targets: false,
         flow: Default::default(),

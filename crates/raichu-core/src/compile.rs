@@ -486,6 +486,15 @@ pub struct CompiledModel {
     /// anyway (see [`crate::loops`]). Never a refusal: the loop is
     /// legitimate, the missing band is what is not.
     pub switching_loops: Vec<crate::loops::SwitchingLoop>,
+    /// Unfed triggers found in this model: a mode sealed for the whole
+    /// run by an in port no connection reaches.
+    ///
+    /// Carried and computed on the same terms as `switching_loops`, and
+    /// kept apart from it because the two answer different questions:
+    /// a loop is a mode with no fixpoint, this is a mode with no choice
+    /// (see [`crate::triggers`]). Never a refusal either: the model is
+    /// valid and runs, it is only almost always an oversight.
+    pub unfed_triggers: Vec<crate::triggers::UnfedTrigger>,
     /// Indices of watched transitions (monitored during continuous
     /// evolution, never date-scheduled).
     pub watched: Vec<TransIdx>,
@@ -1488,6 +1497,7 @@ impl CompiledModel {
             var_index,
             automaton_index,
             switching_loops: Vec::new(),
+            unfed_triggers: Vec::new(),
         };
         // Structural diagnostics come last, on the finished tables. A
         // warning and never a refusal: the loop itself is legitimate, and
@@ -1495,6 +1505,14 @@ impl CompiledModel {
         // library caller pays nothing and an application sees it.
         compiled.switching_loops = crate::loops::switching_loops(&compiled);
         for found in &compiled.switching_loops {
+            tracing::warn!(model = %compiled.name, "{}", found.describe());
+        }
+        // Same route, same rule, and the authored model rather than the
+        // tables: the wire that is missing has a name only up there, the
+        // resolution to indices having replaced every port by the list of
+        // attributes behind it.
+        compiled.unfed_triggers = crate::triggers::unfed_triggers(model);
+        for found in &compiled.unfed_triggers {
             tracing::warn!(model = %compiled.name, "{}", found.describe());
         }
         Ok(compiled)

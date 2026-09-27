@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ._pyraichu import (
+    DEFAULT_CONFIDENCE,
     MODEL_ENVELOPE_KEY,
     MODEL_FORMAT_REVISION,
     FlowConfig,
@@ -28,12 +29,14 @@ from ._pyraichu import (
     fault_tree_json,
     exploration_minimal_sequences_json,
     explore_json,
+    importance_json,
     run_sequences_json,
     monte_carlo_json,
     required_features,
     seal_model,
     simulate_json,
     switching_loops_json,
+    unfed_triggers_json,
     validate_exploration,
     validate_model,
 )
@@ -43,12 +46,17 @@ __all__ = [
     "FaultTree",
     "fault_tree",
     "Cascade",
+    "ComponentImportance",
+    "ConfidenceInterval",
+    "Cut",
+    "DEFAULT_CONFIDENCE",
     "Event",
     "Exploration",
     "ExploredSequence",
     "Extremes",
     "Fireable",
     "FlowConfig",
+    "ImportanceAnalysis",
     "IndicatorEstimate",
     "Interactive",
     "JournalQuery",
@@ -67,6 +75,7 @@ __all__ = [
     "expand_model",
     "exploration_domain",
     "explore",
+    "importance",
     "run_sequences",
     "Observation",
     "SequenceCampaign",
@@ -81,6 +90,7 @@ __all__ = [
     "seal_model",
     "simulate",
     "switching_loops",
+    "unfed_triggers",
 ]
 
 
@@ -233,6 +243,49 @@ def _series_dict(raw_series: list[dict[str, Any]]) -> dict[str, list[tuple[float
 
 
 @dataclass(frozen=True)
+class ConfidenceInterval:
+    """Bounds of one estimator, with the level and construction that
+    produced them.
+
+    ``method`` is ``"wilson"`` for an estimator that is a probability by
+    declaration (a state indicator, or a boolean attribute), ``"normal"``
+    for a general mean (cumulated sojourn, occurrence count), and
+    ``"undefined"`` when fewer than two replicas made any interval
+    impossible. ``level`` is the study parameter the run declared, kept
+    here so a figure is never reported without the precision it is
+    claimed at.
+
+    ``constant_sample`` marks, instant by instant, where every replica
+    returned the same value. No dispersion was observed there, so the
+    bound is the one the *frequency* of a departure establishes,
+    ``z**2 / (n + z**2)``, and not one built on an observed spread. The
+    construction named by ``method`` is unchanged: a draw without
+    dispersion is not a declaration of type.
+    """
+
+    level: float
+    method: str
+    low: list[float]
+    high: list[float]
+    constant_sample: list[bool]
+
+    def half_width(self, index: int = 0) -> float:
+        """Half the width of the interval at one schedule instant: the
+        ``±`` a report prints next to the estimate."""
+        return 0.5 * (self.high[index] - self.low[index])
+
+
+def _interval(raw: dict[str, Any]) -> ConfidenceInterval:
+    return ConfidenceInterval(
+        level=raw["level"],
+        method=raw["method"],
+        low=raw["low"],
+        high=raw["high"],
+        constant_sample=raw["constant_sample"],
+    )
+
+
+@dataclass(frozen=True)
 class Extremes:
     """The smallest and the largest value a measure took across the
     replicas, at each schedule instant (the ``min`` and ``max`` statistics)."""
@@ -249,15 +302,19 @@ class IndicatorEstimate:
     instants: list[float]
     mean: list[float]
     std: list[float]
+    ci: ConfidenceInterval
     sojourn_mean: list[float]
     sojourn_std: list[float]
+    sojourn_ci: ConfidenceInterval
     nb_occurrences_mean: list[float]
     nb_occurrences_std: list[float]
+    nb_occurrences_ci: ConfidenceInterval
     #: Probability of having been active at least once by each instant (the
     #: RAMS "had value" measure): the first-entry distribution, which stays
     #: at 1 on a trajectory after the indicator falls back.
     reached_mean: list[float]
     reached_std: list[float]
+    reached_ci: ConfidenceInterval
     extremes: Extremes
     sojourn_extremes: Extremes
     nb_occurrences_extremes: Extremes
@@ -273,12 +330,14 @@ class McEstimates:
     indicators: dict[str, IndicatorEstimate]
     nb_runs: int
     seed: int
+    confidence: float
     engine_version: str
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
             f"McEstimates({self.nb_runs} runs, seed={self.seed}, "
-            f"{len(self.indicators)} indicators)"
+            f"{len(self.indicators)} indicators, "
+            f"CI at {self.confidence:.0%})"
         )
 
 
@@ -290,6 +349,7 @@ def monte_carlo(
     seed: int = 0,
     threads: int | None = None,
     quantiles: list[float] | None = None,
+    confidence: float | None = None,
     rtol: float | None = None,
     atol: float | None = None,
     max_step: float | None = None,
@@ -306,6 +366,15 @@ def monte_carlo(
     value. ``quantiles`` (e.g. ``[0.25, 0.75]``) adds nearest-rank
     quantile series on both the sampled value and the cumulated
     sojourn. The GIL is released while the replicas run.
+
+    ``confidence`` is the confidence level of the interval every
+    estimator carries, a **study parameter** in ``(0, 1)``: state
+    ``0.99`` and the whole result is reported at 99 %. Omitted, it is
+    :data:`DEFAULT_CONFIDENCE` (0.95). The level applied comes back on
+    :attr:`McEstimates.confidence` and on every
+    :class:`ConfidenceInterval`, so a figure never travels without the
+    precision it is claimed at. A level outside ``(0, 1)`` raises
+    :class:`SimulationError` before the replicas run.
 
     ``rtol``/``atol``/``max_step``/``tol_event``/``sub_samples``
     override the ODE-backend parameters (engine defaults when omitted):
@@ -336,6 +405,7 @@ def monte_carlo(
             seed,
             threads,
             quantiles,
+            confidence,
             rtol,
             atol,
             max_step,
@@ -352,12 +422,16 @@ def monte_carlo(
             instants=e["instants"],
             mean=e["mean"],
             std=e["std"],
+            ci=_interval(e["ci"]),
             sojourn_mean=e["sojourn_mean"],
             sojourn_std=e["sojourn_std"],
+            sojourn_ci=_interval(e["sojourn_ci"]),
             nb_occurrences_mean=e["nb_occurrences_mean"],
             nb_occurrences_std=e["nb_occurrences_std"],
+            nb_occurrences_ci=_interval(e["nb_occurrences_ci"]),
             reached_mean=e["reached_mean"],
             reached_std=e["reached_std"],
+            reached_ci=_interval(e["reached_ci"]),
             extremes=Extremes(**e["extremes"]),
             sojourn_extremes=Extremes(**e["sojourn_extremes"]),
             nb_occurrences_extremes=Extremes(**e["nb_occurrences_extremes"]),
@@ -371,6 +445,7 @@ def monte_carlo(
         indicators=indicators,
         nb_runs=raw["nb_runs"],
         seed=raw["seed"],
+        confidence=raw["confidence"],
         engine_version=raw["engine_version"],
     )
 
@@ -917,6 +992,166 @@ def fault_tree(
     )
 
 
+@dataclass(frozen=True)
+class Cut:
+    """One minimal cut set of the feared event."""
+
+    #: The basic events, as ``component.state`` qualified names.
+    events: list[str]
+    #: How many trajectories reached the feared event through this cut.
+    weight: float
+
+
+@dataclass(frozen=True)
+class ComponentImportance:
+    """The importance measures of one component over the schedule.
+
+    Every list is indexed like :attr:`ImportanceAnalysis.instants`.
+    """
+
+    component: str
+    #: The monitored failure states the cut structure attributes to it.
+    events: list[str]
+    #: ``q_i(t)``: probability that at least one of those states is active.
+    unavailability: list[float]
+    #: Probability that the system is *critical* for this component: it
+    #: fails if the component fails and holds if the component holds.
+    birnbaum: list[float]
+    #: The share of the feared-event probability that passes through a cut
+    #: containing this component.
+    fussell_vesely: list[float]
+    #: ``birnbaum · unavailability / q_cuts``.
+    criticality: list[float]
+    #: The feared-event probability with this component certainly failed.
+    q_system_failed: list[float]
+    #: The feared-event probability with this component made perfect.
+    q_system_intact: list[float]
+
+    def risk_achievement(self, analysis: ImportanceAnalysis) -> list[float]:
+        """Risk-achievement worth, ``q_system_failed / q_cuts``.
+
+        A ratio, so it is derived rather than reported: its denominator
+        legitimately reaches zero (a campaign where the feared event never
+        occurred), and that case reads better as an explicit ``inf`` here
+        than as a ``null`` on the wire.
+        """
+        return [
+            f / q if q > 0 else math.inf
+            for f, q in zip(self.q_system_failed, analysis.q_cuts)
+        ]
+
+    def risk_reduction(self, analysis: ImportanceAnalysis) -> list[float]:
+        """Risk-reduction worth, ``q_cuts / q_system_intact``."""
+        return [
+            q / i if i > 0 else math.inf
+            for q, i in zip(analysis.q_cuts, self.q_system_intact)
+        ]
+
+
+@dataclass(frozen=True)
+class ImportanceAnalysis:
+    """Native importance measures of one feared event."""
+
+    #: The feared event, as a ``component.state`` qualified name.
+    target: str
+    #: The instants every series is sampled at, ascending.
+    instants: list[float]
+    #: The feared-event probability as the trajectories recorded it.
+    q_target: list[float]
+    #: The same probability as the reconstructed cut structure has it. A
+    #: gap with :attr:`q_target` says the cut corpus is incomplete: a path
+    #: no replica walked cannot be in it.
+    q_cuts: list[float]
+    #: The minimal cut sets, heaviest first.
+    cuts: list[Cut]
+    #: Per-component measures, keyed by component name. Insertion order
+    #: is the ranking, most important first (descending Fussell-Vesely at
+    #: the last instant), so ``list(components)`` reads as the answer to
+    #: "where do I invest".
+    components: dict[str, ComponentImportance]
+    #: Trajectory weight the analysis rests on (one per replica).
+    nb_runs: float
+    #: Engine version that produced it.
+    engine_version: str
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return (
+            f"ImportanceAnalysis(target={self.target!r}, "
+            f"{len(self.cuts)} cuts, {len(self.components)} components)"
+        )
+
+
+def importance(
+    model: Model,
+    nb_runs: int,
+    t_max: float,
+    instants: list[float],
+    target: str | None = None,
+    seed: int = 0,
+    threads: int | None = None,
+    flow: FlowConfig | None = None,
+) -> ImportanceAnalysis:
+    """Native importance measures: which component carries the risk.
+
+    Runs one sequence-recording Monte-Carlo campaign and reduces it to the
+    per-component **Birnbaum**, **Fussell-Vesely** and **criticality**
+    series at ``instants``, together with the minimal cut sets they were
+    computed on.
+
+    The support is RAICHU's native minimal sequences. Truncated at the
+    first feared event they are the minimal cut sets, hence the structure
+    function; left to run to the horizon the same trajectories replay the
+    state of every failure mode at any instant. Both measures then follow
+    from their definitions, with no independence assumed between
+    components and no rare-event approximation: Birnbaum is the pivotal
+    difference ``P(Φ(D ∪ E_i)) − P(Φ(D \\ E_i))``, Fussell-Vesely the
+    share of system failures whose realized cut passes through the
+    component.
+
+    ``target`` names the feared event among the model's declared targets;
+    a model with exactly one may leave it out. ``flow`` is a
+    :class:`FlowConfig` overriding the convergence policy of the
+    continuous flow resolution for every replica.
+
+    A campaign in which the feared event never occurred returns an empty
+    analysis with ``q_target`` and ``q_cuts`` at zero, saying why.
+    """
+    raw = json.loads(
+        importance_json(
+            model.json, nb_runs, t_max, instants, target, seed, threads, flow
+        )
+    )
+    analysis = ImportanceAnalysis(
+        target=f"{raw['target']['obj']}.{raw['target']['attr']}",
+        instants=raw["instants"],
+        q_target=raw["q_target"],
+        q_cuts=raw["q_cuts"],
+        cuts=[
+            Cut(
+                events=[f"{e['obj']}.{e['attr']}" for e in cut["events"]],
+                weight=cut["weight"],
+            )
+            for cut in raw["cuts"]
+        ],
+        components={
+            c["component"]: ComponentImportance(
+                component=c["component"],
+                events=c["events"],
+                unavailability=c["unavailability"],
+                birnbaum=c["birnbaum"],
+                fussell_vesely=c["fussell_vesely"],
+                criticality=c["criticality"],
+                q_system_failed=c["q_system_failed"],
+                q_system_intact=c["q_system_intact"],
+            )
+            for c in raw["components"]
+        },
+        nb_runs=raw["nb_runs"],
+        engine_version=raw["engine_version"],
+    )
+    return analysis
+
+
 def switching_loops(model: Model) -> list[dict]:
     """Switching loops of ``model``, found without simulating it.
 
@@ -941,6 +1176,77 @@ def switching_loops(model: Model) -> list[dict]:
     catches the same thing after the wait rather than before it.
     """
     return json.loads(switching_loops_json(model.json))
+
+
+def unfed_triggers(model: Model) -> list[dict]:
+    """Trigger inputs of ``model`` that nothing feeds, found without
+    simulating it.
+
+    An in port aggregates what reaches it, and an aggregation over
+    nothing still answers: ``any`` and ``sum`` answer false and zero,
+    ``all`` answers the vacuous truth. A guard reading a port no
+    connection reaches is therefore **pinned** from the initial instant
+    to the end of the run, and the automaton it drives settles into one
+    state with no transition out of it. A cold standby delivers while its
+    trigger input is *absent*, so a forgotten wire arms it at ``t = 0``
+    and for ever: the run terminates normally, the journal says nothing,
+    and the campaign returns an availability that is too good.
+
+    A **warning and never a refusal**: such a model is valid, the
+    semantics is settled and the engines agree on it. It is only, almost
+    always, an oversight. What is reported is narrow for that reason: a
+    guard is pinned only when it folds to a constant exactly, so a guard
+    that also reads a clock or a moving attribute is silent, and the way
+    to declare an always-on output on purpose is to declare no trigger at
+    all, which is silent too.
+
+    A guard rarely reads the port itself: an authoring layer puts a
+    derived attribute in between, and a muscadet rule set thresholds
+    ``P.E_capability_in`` rather than ``P.E_in``. The fold therefore
+    **crosses a definition** to reach the port, on one condition: the
+    attribute must have exactly one writer and that writer must be an
+    explicit equation. An attribute an ODE integrates, a sensitive
+    function assigns or two writers share moves, and the fold stops at
+    it; an attribute *nothing* writes is the opposite case and is read as
+    the constant it is.
+
+    And the seal has to **flatter the result**. Crossing definitions
+    reaches modes sealed the pessimistic way round -- a rule that
+    consumes the flow nothing feeds cannot draw, so it produces zero,
+    which the results already show -- and those stay silent. A mode is
+    reported when some quantity reading it is nothing while the automaton
+    is elsewhere and not nothing once it is pinned there.
+
+    How far it reaches is decided by whoever writes the guards and the
+    definitions behind them. On :mod:`pyraichu.muscadet`, two
+    constructors put a port within reach: ``add_flow_out_on_trigger``,
+    inside the guard, and ``add_rule_set`` on a **continuous** condition,
+    through the equation of the input it thresholds. The same rule set on
+    a boolean condition stays out of reach, ``{flow}_fed_in`` being
+    assigned by a sensitive function.
+
+    Out of reach, and with nothing there to report. A boolean in-flow
+    answers for its own emptiness: muscadet gives it a declared
+    out-of-connection value (``var_in_default``, false unless stated) and
+    :mod:`pyraichu.muscadet` writes it into the aggregating expression, so
+    an in-flow nothing feeds reads **unfed** rather than the vacuous truth
+    of ``all``. A mode guarded on it is sealed shut for ever instead of
+    armed for ever, the component starves, and a component producing
+    nothing is what the results already show. That is the pessimistic
+    direction this diagnostic deliberately keeps quiet on, so the frontier
+    is one of reach and not a gap left to close.
+
+    Each entry carries ``ports`` (the in ports to wire), ``automaton``
+    and ``state`` (the mode their emptiness seals) so the finding can be
+    checked rather than trusted, and a ready-phrased ``message``. The
+    cure is to connect that input, or to drop the guard and state the
+    mode unconditionally. The guard rather than the trigger: what the
+    emptiness seals may be a rule condition, and a rule has no trigger
+    port to take away. Its sibling is :func:`switching_loops`, which
+    runs on the same schedule and answers a different question: a loop is
+    a mode with no fixpoint, this is a mode with no choice.
+    """
+    return json.loads(unfed_triggers_json(model.json))
 
 
 def simulate(
