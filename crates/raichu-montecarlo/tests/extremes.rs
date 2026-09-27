@@ -11,7 +11,7 @@
 
 use raichu_core::{CompiledModel, FlowConfig};
 use raichu_model::Model;
-use raichu_montecarlo::{run, McConfig, McEstimates};
+use raichu_montecarlo::{run, McConfig, McEstimates, DEFAULT_CONFIDENCE};
 
 /// A state entered at a date drawn uniformly on `[1, 3]`, never left.
 fn uniform_entry() -> Model {
@@ -43,6 +43,7 @@ fn estimate(nb_runs: u64, threads: usize) -> McEstimates {
             samples: vec![0.5, 2.0, 4.0],
             threads: Some(threads),
             quantiles: vec![],
+            confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             stop_at_targets: false,
             flow: FlowConfig::default(),

@@ -117,6 +117,19 @@ class TestLocateEngine:
             oenv.engine_candidates(None, [str(tmp_path / "nowhere*")])
         assert "nowhere*" in str(excinfo.value)
 
+    def test_an_unreadable_version_is_refused_rather_than_assumed(
+        self, oenv, tmp_path
+    ):
+        """A distribution whose version cannot be read is not certified.
+
+        The floor is the whole point of locating the engine rather than
+        installing it, so an engine nobody can put a number on must stop
+        the build instead of riding through as "probably fine"."""
+        module_dir = self._make_tree(tmp_path / "pycatshoo_mute", "1.3.8.0")
+        with pytest.raises(oenv.OracleEnvError) as excinfo:
+            oenv.check_engine_floor(module_dir, None, "1.3.8.0")
+        assert "1.3.8.0" in str(excinfo.value)
+
     def test_engine_below_floor_is_refused_naming_the_version(
         self, oenv, tmp_path
     ):

@@ -13,7 +13,7 @@ use raichu_model::{
     AttrKind, Attribute, Automaton, Component, Distrib, Equation, EquationKind, Indicator,
     IndicatorTarget, Model, Transition,
 };
-use raichu_montecarlo::{run, McConfig};
+use raichu_montecarlo::{run, McConfig, DEFAULT_CONFIDENCE};
 
 fn single_law_model(distrib: Distrib) -> Model {
     Model {
@@ -75,6 +75,7 @@ fn assert_model_matches_cdf(model: &Model, instants: &[f64], cdf: impl Fn(f64) -
         samples: instants.to_vec(),
         threads: None,
         quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),
@@ -175,6 +176,7 @@ fn quantiles_of_bernoulli_state_follow_the_probability() {
         samples: vec![3.466, 11.513],
         threads: None,
         quantiles: vec![0.25, 0.75],
+        confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
         flow: FlowConfig::default(),

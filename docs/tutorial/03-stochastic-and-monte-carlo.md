@@ -123,7 +123,10 @@ see [Numerical tuning](../guides/numerical-tuning.md).
   counts as having failed;
 - **`extremes` / `sojourn_extremes` / `nb_occurrences_extremes` /
   `reached_extremes`**: the smallest and the largest value each measure
-  took across the replicas at each instant (`.min`, `.max`).
+  took across the replicas at each instant (`.min`, `.max`);
+- **`ci` / `sojourn_ci` / `nb_occurrences_ci` / `reached_ci`**: the
+  **confidence interval** on each of those means, at the level the run
+  declares.
 
 ```python
 est = pyraichu.monte_carlo(
@@ -135,12 +138,18 @@ print("P(down by 100) :", round(down.mean[0], 3))
 print("mean downtime  :", round(down.sojourn_mean[0], 1))
 print("median downtime:", round(down.sojourn_quantiles[0.5][0], 1))
 print("90th pct        :", round(down.sojourn_quantiles[0.9][0], 1))
+print(f"P is in [{down.ci.low[0]:.3f}, {down.ci.high[0]:.3f}] "
+      f"at {down.ci.level:.0%}")
 ```
 
-Because these are estimates from a finite sample, treat them as such:
-the `std` and the replica count give the standard error. The
-[reproducibility guide](../guides/reproducibility.md) covers seeding and
-confidence.
+Because these are estimates from a finite sample, treat them as such.
+`std` describes how spread out the *replicas* are; the interval
+describes how well the *campaign* pinned the number down, which is the
+one that says whether 5 000 replicas were enough. Its level is a
+parameter of the run (`confidence=0.99`), and it comes back with the
+result. See [Confidence intervals](../guides/confidence-intervals.md),
+and the [reproducibility guide](../guides/reproducibility.md) for
+seeding.
 
 ## Reproducible by construction
 

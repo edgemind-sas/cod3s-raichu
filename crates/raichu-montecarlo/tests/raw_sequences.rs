@@ -9,7 +9,7 @@ use raichu_core::{
     RawHeader, RawSequencesError, SolverParams, RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
 };
 use raichu_model::Model;
-use raichu_montecarlo::{run_sequences, McConfig};
+use raichu_montecarlo::{run_sequences, McConfig, DEFAULT_CONFIDENCE};
 
 /// Two repairable components on exponential laws, their failure and repair
 /// monitored as cycle pairs, and a feared event reached the instant both are
@@ -52,6 +52,7 @@ fn config(threads: Option<usize>) -> McConfig {
         samples: Vec::new(),
         threads,
         quantiles: Vec::new(),
+        confidence: DEFAULT_CONFIDENCE,
         ode: SolverParams::default(),
         stop_at_targets: false,
         flow: Default::default(),

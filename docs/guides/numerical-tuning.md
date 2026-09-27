@@ -303,6 +303,14 @@ A reserve floor -- serve while the level is above a threshold -- is a
 switching loop by construction, the discharge being what moves the level
 it reads, and the band is what gives that cycle a physical period.
 
+`unfed_triggers(model)` is its sibling: same schedule, same rule of a
+warning and never a refusal, and a different question. A loop is a mode
+with no fixpoint; an unfed trigger is a mode with **no choice**, sealed
+for the whole run by an in port no connection reaches. That one costs
+nothing at run time and shows up only as a figure that is too good, so
+it has no run-time counterpart to fall back on: see
+[muscadet & plugins](muscadet-and-plugins.md).
+
 ## Choosing a setting
 
 - **Keep the defaults** for correctness-critical work, small models, or

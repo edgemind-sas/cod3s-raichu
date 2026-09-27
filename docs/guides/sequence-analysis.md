@@ -161,6 +161,22 @@ where an event can occur repeatedly.
     **without** measure cumulated exposure. The two differ by orders of
     magnitude on repairable systems.
 
+## From cut sequences to importance measures
+
+The minimal cut sequences are also the support of the **importance
+measures**: which component contributes most to the feared event, and
+where investment pays. Dropped to sets they are the minimal cut sets,
+hence the structure function of the system, and the same campaign replays
+the state of every failure mode at any instant. See [importance
+measures](importance-measures.md).
+
+```python
+analysis = pyraichu.importance(model, nb_runs=2000, t_max=100.0,
+                               instants=[50.0, 100.0], seed=42)
+for name, component in analysis.components.items():
+    print(name, component.birnbaum[-1], component.fussell_vesely[-1])
+```
+
 ## Native model, without plugins
 
 Sequence recording works on hand-written models too: set

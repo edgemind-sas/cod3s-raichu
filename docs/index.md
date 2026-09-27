@@ -34,6 +34,11 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
 - **A rich distribution library.** Exponential (with state-dependent rates),
   Weibull, lognormal, gamma, uniform, empirical, deterministic delay:
   each validated against its closed form.
+- **Estimates that state their precision.** Every Monte-Carlo estimator
+  carries a confidence interval, at a level the study declares rather
+  than a constant: a reported probability says how well the campaign
+  pinned it down. See
+  [Confidence intervals](guides/confidence-intervals.md).
 - **Answers "why".** An optional causal journal records why a transition
   did or did not fire, who changed an attribute, and the full consequence
   chain of an event. See [Causal journal](guides/causal-journal.md).
@@ -108,7 +113,9 @@ print(len(result.events), "events")
 
 estimates = pyraichu.monte_carlo(model, nb_runs=2000, t_max=200.0,
                                  seed=1, samples=[20.0 * k for k in range(11)])
-print("unavailability:", round(estimates.indicators["P_failed"].mean[-1], 3))
+failed = estimates.indicators["P_failed"]
+print("unavailability:", round(failed.mean[-1], 3),
+      f"+/- {failed.ci.half_width(-1):.3f} at {failed.ci.level:.0%}")
 ```
 
 ## Where to go next
@@ -118,8 +125,8 @@ print("unavailability:", round(estimates.indicators["P_failed"].mean[-1], 3))
 - **[Model schema reference](reference/model-schema.md)**: every field,
   distribution and expression operator.
 - **[Advanced guides](guides/reproducibility.md)**: reproducibility,
-  numerical tuning, the causal journal, sequence analysis, the muscadet
-  authoring layer, platform import, parallelism.
+  confidence intervals, numerical tuning, the causal journal, sequence
+  analysis, the muscadet authoring layer, platform import, parallelism.
 - **[Benchmarks](benchmarks/cross-validation.md)**: RAICHU measured,
   honestly, against an established C++ engine.
 

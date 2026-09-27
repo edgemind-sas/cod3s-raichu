@@ -16,7 +16,7 @@
 
 use raichu_core::{CompiledModel, FlowConfig};
 use raichu_model::Model;
-use raichu_montecarlo::{run, McConfig, McEstimates};
+use raichu_montecarlo::{run, McConfig, McEstimates, DEFAULT_CONFIDENCE};
 
 /// One automaton `off -> on -> off`, the entry and the exit on the given
 /// laws, observed on its `on` state.
@@ -50,6 +50,7 @@ fn estimate(model: &Model, nb_runs: u64, samples: Vec<f64>, threads: usize) -> M
             samples,
             threads: Some(threads),
             quantiles: vec![],
+            confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             stop_at_targets: false,
             flow: FlowConfig::default(),
@@ -107,8 +108,9 @@ fn the_probability_of_having_reached_it_is_the_first_entry_law() {
         let error = (p * (1.0 - p) / runs as f64).sqrt();
         let got = indicator.reached_mean[k];
         assert!((got - p).abs() < 5.0 * error, "t={t}: {got} against {p}");
-        // A probability's sample deviation.
+        // A probability's sample deviation, and a Wilson interval around it.
         assert!((indicator.reached_std[k] - (got * (1.0 - got)).sqrt()).abs() < 1e-3);
+        assert!(indicator.reached_ci.low[k] <= got && got <= indicator.reached_ci.high[k]);
         // The value's own mean is far below: the repairs bring it back.
         assert!(indicator.mean[k] < got);
     }

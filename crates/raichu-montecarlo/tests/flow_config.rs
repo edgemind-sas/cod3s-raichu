@@ -14,7 +14,7 @@
 
 use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError, FlowConfig};
 use raichu_model::Model;
-use raichu_montecarlo::{run, run_sequences, McConfig};
+use raichu_montecarlo::{run, run_sequences, McConfig, DEFAULT_CONFIDENCE};
 
 /// One supply, one consumer, one proportional split, and a demand that
 /// **collapses when it is served** (`d = 6 - 1.5*a`).
@@ -96,6 +96,7 @@ fn mc_config(flow: FlowConfig) -> McConfig {
         samples: vec![0.0, 1.0],
         threads: Some(1),
         quantiles: Vec::new(),
+        confidence: DEFAULT_CONFIDENCE,
         ode: raichu_core::SolverParams::default(),
         stop_at_targets: false,
         flow,

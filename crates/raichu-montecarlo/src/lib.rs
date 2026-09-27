@@ -20,10 +20,22 @@
 //! (time-integral of the indicator value up to the instant: for 0/1
 //! state indicators this is the classic cumulated-sojourn estimator,
 //! the sojourn-time measure).
+//!
+//! Every one of those means also carries a **confidence interval** at
+//! the level the study declares ([`McConfig::confidence`]): see
+//! [`confidence`] for what is computed and why.
+
+pub mod confidence;
+
+pub use confidence::{
+    constant_sample_bounds, is_valid_level, normal_bounds, normal_quantile,
+    unobserved_frequency_bound, wilson_bounds, z_of, ConfidenceInterval, Departure, IntervalMethod,
+    DEFAULT_CONFIDENCE,
+};
 
 use raichu_core::{
-    CompiledModel, Engine, EngineConfig, EngineError, FlowConfig, IndicatorSeries, Sequence,
-    SolverParams,
+    importance, target_events, CIndicator, CIndicatorTarget, CompiledModel, Engine, EngineConfig,
+    EngineError, FlowConfig, ImportanceAnalysis, IndicatorSeries, Sequence, SolverParams,
 };
 use raichu_expr::Value;
 use serde::Serialize;
@@ -46,6 +58,16 @@ pub struct McConfig {
     /// sampled value and the cumulated sojourn, nearest-rank across
     /// replicas (M4; quantile stats, e.g. P25/P75).
     pub quantiles: Vec<f64>,
+    /// Confidence level of the intervals reported on every estimator,
+    /// strictly inside `(0, 1)`.
+    ///
+    /// A **study parameter**: a campaign that has to answer to a
+    /// regulator at 99 % states 0.99 here and the whole result is
+    /// reported at 99 %, level included ([`ConfidenceInterval::level`]).
+    /// [`DEFAULT_CONFIDENCE`] is the conventional value, offered as a
+    /// starting point and never assumed by a reader. A level outside
+    /// `(0, 1)` is refused before the campaign runs.
+    pub confidence: f64,
     /// Numerical parameters of the ODE backend for every replica
     /// (engine defaults unless overridden: the knob of the
     /// tolerance-parity experiments; recorded as provenance upstream).
@@ -109,16 +131,26 @@ pub struct IndicatorEstimate {
     pub mean: Vec<f64>,
     /// Sample standard deviation (ddof = 1) at each instant.
     pub std: Vec<f64>,
+    /// Confidence interval on [`Self::mean`], at the level the study
+    /// declared. Wilson when the indicator is a probability by
+    /// declaration (a state, or a boolean attribute), normal otherwise.
+    /// Where every replica returned the same value it is the frequency
+    /// bound instead of a point: see [`confidence`].
+    pub ci: ConfidenceInterval,
     /// Mean cumulated sojourn (time-integral of the value) up to each
     /// instant.
     pub sojourn_mean: Vec<f64>,
     /// Sample standard deviation of the cumulated sojourn.
     pub sojourn_std: Vec<f64>,
+    /// Confidence interval on [`Self::sojourn_mean`].
+    pub sojourn_ci: ConfidenceInterval,
     /// Mean number of occurrences (state entries / rising edges) up to each
     /// instant: the RAMS `nb-occurrences` measure.
     pub nb_occurrences_mean: Vec<f64>,
     /// Sample standard deviation of the occurrence count.
     pub nb_occurrences_std: Vec<f64>,
+    /// Confidence interval on [`Self::nb_occurrences_mean`].
+    pub nb_occurrences_ci: ConfidenceInterval,
     /// Probability that the indicator has been active at least once by each
     /// instant: the RAMS `had-value` measure. Per trajectory it is 1 from
     /// the first occurrence on (an active initial value included) and stays
@@ -127,6 +159,9 @@ pub struct IndicatorEstimate {
     pub reached_mean: Vec<f64>,
     /// Sample standard deviation of the reached indicator.
     pub reached_std: Vec<f64>,
+    /// Confidence interval on [`Self::reached_mean`]: a proportion, so
+    /// Wilson whatever the indicator's own kind.
+    pub reached_ci: ConfidenceInterval,
     /// Extremes of the sampled value over the replicas.
     pub extremes: Extremes,
     /// Extremes of the cumulated sojourn.
@@ -151,6 +186,11 @@ pub struct McEstimates {
     pub nb_runs: u64,
     /// Master seed.
     pub seed: u64,
+    /// Confidence level every interval of this result was computed at:
+    /// provenance, on the same footing as the seed and the replica
+    /// count. A result states its precision *and* the level that
+    /// precision is claimed at.
+    pub confidence: f64,
     /// Engine version.
     pub engine_version: String,
 }
@@ -204,6 +244,33 @@ fn nb_occurrences_at(points: &[(f64, Value)], instant: f64) -> f64 {
 /// One replica's samples: `[indicator][instant] → (value, sojourn, nb_occ)`.
 type ReplicaSamples = Vec<Vec<(f64, f64, f64)>>;
 
+/// Whether the sampled value of this indicator is a `{0, 1}` draw **by
+/// declaration**, which makes its mean a probability and its interval a
+/// binomial one.
+///
+/// Read off the model, never off the observed sample: an integer
+/// indicator that happened to stay in `{0, 1}` over one campaign is not
+/// a probability, and calling it one would make the reported precision
+/// depend on the draw.
+fn is_declared_binary(model: &CompiledModel, indicator: &CIndicator) -> bool {
+    match indicator.target {
+        // 1.0 in the state, 0.0 out of it: binary by construction.
+        CIndicatorTarget::State(_, _) => true,
+        // An attribute is binary exactly when it is declared `bool`;
+        // the initial value carries that declared kind (validation
+        // refuses an initial value of another kind).
+        CIndicatorTarget::Var(var) => model
+            .var_init
+            .get(var)
+            .is_some_and(|value| matches!(value, Value::Bool(_))),
+        // The truth of a threshold, whatever the kind of what it
+        // compares: binary by declaration, and the reason the variant
+        // exists -- its mean is a probability and its sojourn a duration,
+        // where the raw attribute's sojourn is an area.
+        CIndicatorTarget::Predicate(_, _, _) => true,
+    }
+}
+
 fn run_replica(
     model: &CompiledModel,
     config: &McConfig,
@@ -252,6 +319,18 @@ fn run_replica(
 /// order, so the estimates are bit-identical for any thread count.
 pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, EngineError> {
     use rayon::prelude::*;
+
+    // Before the replicas: a level that cannot produce an interval must
+    // not cost a campaign first.
+    if !is_valid_level(config.confidence) {
+        return Err(EngineError::InvalidStudyParameter {
+            parameter: "confidence".to_owned(),
+            detail: format!(
+                "a confidence level is a probability strictly inside (0, 1), got {}",
+                config.confidence
+            ),
+        });
+    }
 
     let compute = || -> Result<Vec<ReplicaSamples>, EngineError> {
         (0..config.nb_runs)
@@ -366,17 +445,55 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
                 values: sojourn_rows,
             });
         }
+        // Confidence intervals: closed forms over the sums already
+        // reduced above, so they cost O(instants) arithmetic and never
+        // revisit a replica.
+        let level = config.confidence;
+        // The declared kind decides both the construction and, where a
+        // campaign observed no dispersion at all, the size of the
+        // departure it failed to observe: a 0/1 indicator keeps its
+        // sojourn inside `[0, t]`, a free-valued one does not.
+        let binary = is_declared_binary(model, indicator);
+        let ci = if binary {
+            ConfidenceInterval::on_proportion(level, config.nb_runs, &mean)
+        } else {
+            ConfidenceInterval::on_mean(level, config.nb_runs, &mean, &std, Departure::attribute())
+        };
+        let sojourn_departure = if binary {
+            Departure::sojourn(&config.samples)
+        } else {
+            Departure::integral(&config.samples)
+        };
+        let sojourn_ci = ConfidenceInterval::on_mean(
+            level,
+            config.nb_runs,
+            &sojourn_mean,
+            &sojourn_std,
+            sojourn_departure,
+        );
+        let nb_occurrences_ci = ConfidenceInterval::on_mean(
+            level,
+            config.nb_runs,
+            &nb_occurrences_mean,
+            &nb_occurrences_std,
+            Departure::count(),
+        );
+        let reached_ci = ConfidenceInterval::on_proportion(level, config.nb_runs, &reached_mean);
         indicators.push(IndicatorEstimate {
             name: indicator.name.clone(),
             instants: config.samples.clone(),
             mean,
             std,
+            ci,
             sojourn_mean,
             sojourn_std,
+            sojourn_ci,
             nb_occurrences_mean,
             nb_occurrences_std,
+            nb_occurrences_ci,
             reached_mean,
             reached_std,
+            reached_ci,
             extremes,
             sojourn_extremes,
             nb_occurrences_extremes,
@@ -390,18 +507,22 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
         indicators,
         nb_runs: config.nb_runs,
         seed: config.seed,
+        confidence: config.confidence,
         engine_version: env!("CARGO_PKG_VERSION").to_owned(),
     })
 }
 
 /// Run `nb_runs` **sequence-recording** replicas and collect their raw
-/// per-trajectory sequences, in replica order (deterministic). Each replica
-/// runs with sequence recording on and target early-stop; a trajectory that
-/// reaches no target still contributes its (target-less) sequence. Feed the
-/// result to [`raichu_core::analyse`] for the minimal-sequence corpus.
-pub fn run_sequences(
+/// per-trajectory sequences, in replica order (deterministic).
+///
+/// `stop_at_targets` decides the regime: on, each trajectory ends at the
+/// first feared event, which is the corpus minimal-sequence analysis is
+/// defined on; off, it keeps evolving to the horizon, which is what a
+/// measure read at an instant *beyond* the feared event needs.
+fn collect_sequences(
     model: &CompiledModel,
     config: &McConfig,
+    stop_at_targets: bool,
 ) -> Result<Vec<Sequence>, EngineError> {
     use rayon::prelude::*;
 
@@ -412,7 +533,7 @@ pub fn run_sequences(
                 let engine_config = EngineConfig {
                     t_max: config.t_max,
                     sequences: true,
-                    stop_at_targets: true,
+                    stop_at_targets,
                     seed: config.seed,
                     rng_stream: replica,
                     ode: config.ode.clone(),
@@ -435,6 +556,21 @@ pub fn run_sequences(
             .install(compute)?,
     };
     Ok(per.into_iter().flatten().collect())
+}
+
+/// Run `nb_runs` **sequence-recording** replicas and collect their raw
+/// per-trajectory sequences, in replica order (deterministic). Each replica
+/// runs with sequence recording on and target early-stop; a trajectory that
+/// reaches no target still contributes its (target-less) sequence. Feed the
+/// result to [`raichu_core::analyse`] for the minimal-sequence corpus.
+///
+/// Reports sequences rather than estimators, so it produces no interval
+/// and ignores [`McConfig::confidence`].
+pub fn run_sequences(
+    model: &CompiledModel,
+    config: &McConfig,
+) -> Result<Vec<Sequence>, EngineError> {
+    collect_sequences(model, config, true)
 }
 
 /// One quantity a sequence campaign reads on every trajectory: the value of
@@ -579,4 +715,91 @@ fn observed_number(value: Value) -> f64 {
         Value::Int(i) => i as f64,
         Value::Float(x) => x,
     }
+}
+
+/// Native **importance measures** of one feared event: run a
+/// sequence-recording campaign and reduce it to the per-component
+/// Birnbaum, Fussell-Vesely and criticality series over
+/// [`McConfig::samples`].
+///
+/// `target` names the feared event among the model's declared targets; a
+/// model with exactly one may leave it out. The campaign runs
+/// **free-running** (no target early-stop), because a measure read at an
+/// instant is a statement about the state of the system at that instant,
+/// and a trajectory frozen at its first feared event stops producing one.
+/// The minimal-sequence corpus the cut structure comes from is recovered
+/// by truncating each trajectory at that first occurrence, which is the
+/// same thing the early stop would have recorded: one campaign, both
+/// halves of the answer.
+///
+/// See [`raichu_core::importance`] for what the measures mean and what
+/// they assume.
+pub fn run_importance(
+    model: &CompiledModel,
+    config: &McConfig,
+    target: Option<&str>,
+) -> Result<ImportanceAnalysis, EngineError> {
+    // `target_events` keeps the declaration order, so the position of the
+    // chosen event is also the index of its `CTarget`.
+    let declared = target_events(model);
+    let chosen = match target {
+        Some(name) => declared
+            .iter()
+            .position(|(declared_name, _)| declared_name == name)
+            .ok_or_else(|| EngineError::TypeError {
+                time: 0.0,
+                detail: format!(
+                    "no feared event named `{name}`; the model declares {}",
+                    named_targets(&declared)
+                ),
+            })?,
+        None if declared.len() == 1 => 0,
+        None => {
+            return Err(EngineError::TypeError {
+                time: 0.0,
+                detail: format!(
+                    "the model declares {} feared events ({}): name the one to measure",
+                    declared.len(),
+                    named_targets(&declared)
+                ),
+            })
+        }
+    };
+    let event = &declared[chosen].1;
+    // A target whose entry is not recorded never appears in a trajectory,
+    // so the analysis would find no cut and report an empty ranking with
+    // nothing saying why. Refuse instead, naming what is missing.
+    let declared_target = &model.targets[chosen];
+    let recorded = model.automata[declared_target.automaton]
+        .transitions
+        .iter()
+        .any(|&index| {
+            let transition = &model.transitions[index];
+            transition.monitored && transition.targets.contains(&declared_target.state)
+        });
+    if !recorded {
+        return Err(EngineError::TypeError {
+            time: 0.0,
+            detail: format!(
+                "the feared event `{}` is never recorded in a sequence: the transition \
+                 entering its state needs `\"monitored\": true`",
+                event.name()
+            ),
+        });
+    }
+    let raw = collect_sequences(model, config, false)?;
+    Ok(importance(&raw, event, &config.samples))
+}
+
+/// The declared feared events, for an error message that names the
+/// choices instead of only refusing.
+fn named_targets(declared: &[(String, raichu_core::BasicEvent)]) -> String {
+    if declared.is_empty() {
+        return "none".to_owned();
+    }
+    declared
+        .iter()
+        .map(|(name, _)| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

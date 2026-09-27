@@ -8000,6 +8000,21 @@ class System:
             for flow in obj.flows_continuous_in:
                 port_ref = {"component": name, "port": f"{flow.name}_in"}
                 connected = bool(in_edges.get((name, flow.name)))
+                # A DECLARED supply replaces the aggregation: an input
+                # nobody feeds reads `var_in_default`, and no sum over a
+                # port answers that. Declaring nothing is the other case
+                # and is not the same one: the input then reads zero,
+                # which is exactly what the sum over its empty port
+                # answers, so the two spellings carry the same number and
+                # only one of them says WHERE the number comes from.
+                #
+                # Writing the constant there would erase the port from
+                # the document, and with it the only thing that tells a
+                # forgotten wire from a deliberate boundary value. That
+                # is what `unfed_triggers` reads to name the wire, and it
+                # is why the boolean inputs above keep their aggregation
+                # under the same condition.
+                declared = flow.var_in_default != 0.0
                 releases = (name, flow.name) in releasing
                 if releases:
                     # The share of what was offered the rule accepts: its
@@ -8088,17 +8103,15 @@ class System:
                         {
                             "target": target,
                             "kind": "explicit",
-                            # Unconnected, the input supplies its
-                            # declared constant and nothing else.
                             "expr": (
-                                {
+                                _float(flow.var_in_default)
+                                if declared and not connected
+                                else {
                                     "op": "port_agg",
                                     "port": port_ref,
                                     "agg": "sum",
                                     "channel": channel,
                                 }
-                                if connected
-                                else _float(flow.var_in_default)
                             ),
                         }
                     )
@@ -8301,7 +8314,8 @@ class System:
 
         def unconnected_inputs(suffix: str) -> None:
             """An input no producer feeds appears in no producer's band,
-            and its constant still has to be swept."""
+            and what it reads still has to be swept: its declared
+            constant, or the aggregation over its empty port."""
             for name, obj in self.comp.items():
                 for flow in obj.flows_continuous_in:
                     if not in_edges.get((name, flow.name)):
@@ -8342,9 +8356,9 @@ class System:
                 step(name, f"{pair.name}_requested")
 
         # 1. Capability, along the flow. An input no producer feeds
-        # supplies a constant, and a rule set may read it: swept first,
-        # so a scale never sizes itself on a constant the same pass has
-        # not reached.
+        # supplies a fixed quantity, and a rule set may read it: swept
+        # first, so a scale never sizes itself on a value the same pass
+        # has not reached.
         unconnected_inputs("capability_in")
         for name, obj in self.comp.items():
             for flow in obj.flows_continuous_in:

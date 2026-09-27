@@ -29,11 +29,15 @@ pub mod compile;
 pub mod engine;
 pub mod fault_tree;
 pub mod flow;
+pub mod importance;
 pub mod loops;
 pub mod raw_sequences;
 pub mod sequence;
+pub mod triggers;
 
-pub use compile::{CompileError, CompiledModel, MarginIndex, WatchedIdx};
+pub use compile::{
+    CIndicator, CIndicatorTarget, CompileError, CompiledModel, MarginIndex, WatchedIdx,
+};
 pub use engine::{
     DeferredProbe, DeferredTransition, DropReason, Engine, EngineConfig, EngineError, Event,
     Fireable, FireableKind, FlowConfig, FlowStall, HazardSample, IndicatorSeries, JournalRecord,
@@ -44,6 +48,9 @@ pub use fault_tree::{
     fault_tree, BasicLaw, FaultTree, FaultTreeError, FaultTreeSettings, FtNode, GateOp, TreeEvent,
 };
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
+pub use importance::{
+    importance, target_events, BasicEvent, ComponentImportance, Cut, ImportanceAnalysis,
+};
 pub use loops::{switching_loops, SwitchingLoop};
 pub use raichu_numeric::{SolverParams, SolverStats};
 pub use raw_sequences::{
@@ -52,3 +59,4 @@ pub use raw_sequences::{
     RAW_SEQUENCES_VERSION,
 };
 pub use sequence::{analyse, clean, filter_cycles, group_sequences, minimal_sequences};
+pub use triggers::{unfed_triggers, UnfedTrigger};

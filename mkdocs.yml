@@ -57,10 +57,12 @@ nav:
   - Raw sequence corpus format: reference/sequence-format.md
   - Advanced guides:
       - Reproducibility: guides/reproducibility.md
+      - Confidence intervals: guides/confidence-intervals.md
       - Numerical tuning: guides/numerical-tuning.md
       - Causal journal: guides/causal-journal.md
       - Sequence analysis: guides/sequence-analysis.md
       - Sequence-tree exploration: guides/sequence-tree-exploration.md
+      - Importance measures: guides/importance-measures.md
       - Fault trees: guides/fault-tree.md
       - muscadet & plugins: guides/muscadet-and-plugins.md
       - Running a muscadet model: guides/muscadet-engine.md

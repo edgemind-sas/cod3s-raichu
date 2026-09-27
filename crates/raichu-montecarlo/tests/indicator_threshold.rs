@@ -25,7 +25,7 @@ use raichu_model::{
     AttrKind, Attribute, Automaton, Component, Distrib, Equation, EquationKind, Indicator,
     IndicatorTarget, Model, ModelError, Transition,
 };
-use raichu_montecarlo::{run, McConfig};
+use raichu_montecarlo::{run, McConfig, DEFAULT_CONFIDENCE};
 
 /// What the tank holds while it holds anything. The H2 showcase's own
 /// figure, so the product below is the very number that was reported as
@@ -142,6 +142,7 @@ fn campaign(model: &Model) -> raichu_montecarlo::McEstimates {
             samples,
             threads: None,
             quantiles: vec![],
+            confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             stop_at_targets: false,
             flow: FlowConfig::default(),
@@ -407,6 +408,7 @@ fn campaign_on(model: &Model, samples: Vec<f64>) -> raichu_montecarlo::McEstimat
             samples,
             threads: None,
             quantiles: vec![],
+            confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             stop_at_targets: false,
             flow: FlowConfig::default(),

@@ -32,8 +32,9 @@ use raichu::raichu_expr::{AttrRef, CmpOp};
 use raichu::raichu_model::Model;
 use raichu::raichu_model::{Indicator, IndicatorTarget};
 use raichu::raichu_montecarlo::{
-    run as mc_run, run_sequences as mc_run_sequences,
+    run as mc_run, run_importance as mc_run_importance, run_sequences as mc_run_sequences,
     run_sequences_observed as mc_run_sequences_observed, McConfig, SequenceObservation,
+    DEFAULT_CONFIDENCE,
 };
 
 create_exception!(
@@ -181,6 +182,34 @@ fn switching_loops_json(model_json: &str) -> PyResult<String> {
     serde_json::to_string(&found).map_err(|e| ModelError::new_err(e.to_string()))
 }
 
+/// Unfed triggers of a model, as JSON: a mode sealed for the whole run
+/// by an in port no connection reaches.
+///
+/// A warning and never a refusal. The model is valid and it runs; an
+/// aggregation over an empty port answers, so the mode is decided by the
+/// missing wire rather than by the model, and what it arms, a cold
+/// standby or a rule that produces, delivers from the initial instant
+/// and for ever.
+#[pyfunction]
+fn unfed_triggers_json(model_json: &str) -> PyResult<String> {
+    let compiled = parse_and_compile(model_json)?;
+    // Read off the compiled model, like the loops next door: the search
+    // already ran once, at compile time.
+    let found: Vec<_> = compiled
+        .unfed_triggers
+        .iter()
+        .map(|trigger| {
+            serde_json::json!({
+                "ports": trigger.ports,
+                "automaton": trigger.automaton,
+                "state": trigger.state,
+                "message": trigger.describe(),
+            })
+        })
+        .collect();
+    serde_json::to_string(&found).map_err(|e| ModelError::new_err(e.to_string()))
+}
+
 /// Feature names an authored model document requires, derived from the
 /// constructs it contains (never from a declaration).
 ///
@@ -269,8 +298,13 @@ fn simulate_json(
 /// when omitted): the knobs of the tolerance-parity experiments. `flow`
 /// is an optional [`FlowConfig`] overriding the convergence policy of
 /// the continuous flow resolution, applied to every replica.
+///
+/// `confidence` is the confidence level of the interval every estimator
+/// carries, a study parameter in `(0, 1)`; omitted, it is
+/// `DEFAULT_CONFIDENCE` (0.95). The level applied is reported back with
+/// the result, so an artefact never leaves it to be assumed.
 #[pyfunction]
-#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false, flow = None, event_resolution = None))]
+#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, confidence = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false, flow = None, event_resolution = None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn monte_carlo_json(
     py: Python<'_>,
@@ -281,6 +315,7 @@ fn monte_carlo_json(
     seed: u64,
     threads: Option<usize>,
     quantiles: Option<Vec<f64>>,
+    confidence: Option<f64>,
     rtol: Option<f64>,
     atol: Option<f64>,
     max_step: Option<f64>,
@@ -325,6 +360,7 @@ fn monte_carlo_json(
             samples,
             threads,
             quantiles: quantiles.unwrap_or_default(),
+            confidence: confidence.unwrap_or(DEFAULT_CONFIDENCE),
             ode,
             stop_at_targets,
             flow,
@@ -364,6 +400,8 @@ fn analyse_sequences_json(
             samples: Vec::new(),
             threads,
             quantiles: Vec::new(),
+            // Reports sequences, not estimators: no interval is produced.
+            confidence: DEFAULT_CONFIDENCE,
             ode: SolverParams::default(),
             stop_at_targets: false,
             flow,
@@ -504,6 +542,7 @@ fn run_sequences_json(
             samples: Vec::new(),
             threads,
             quantiles: Vec::new(),
+            confidence: DEFAULT_CONFIDENCE,
             ode: SolverParams::default(),
             stop_at_targets: false,
             flow,
@@ -582,6 +621,55 @@ fn analyse_raw_sequences_json(
         levels["header"] = serde_json::to_value(&corpus.header)
             .map_err(|e| SimulationError::new_err(e.to_string()))?;
         Ok(levels.to_string())
+    })
+}
+
+/// Native **importance measures**: run `nb_runs` sequence-recording
+/// replicas and return the JSON of the per-component Birnbaum,
+/// Fussell-Vesely and criticality series at `instants`, plus the minimal
+/// cut sets they were computed on.
+///
+/// `target` names the feared event among the model's declared targets; a
+/// model with exactly one may leave it out. One campaign answers both
+/// halves: the cut structure comes from the trajectories truncated at the
+/// feared event, the probabilities from the same trajectories left to run
+/// to the horizon.
+///
+/// `flow` is an optional [`FlowConfig`] overriding the convergence
+/// policy of the continuous flow resolution, applied to every replica.
+#[pyfunction]
+#[pyo3(signature = (model_json, nb_runs, t_max, instants, target = None, seed = 0, threads = None, flow = None))]
+#[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
+fn importance_json(
+    py: Python<'_>,
+    model_json: &str,
+    nb_runs: u64,
+    t_max: f64,
+    instants: Vec<f64>,
+    target: Option<String>,
+    seed: u64,
+    threads: Option<usize>,
+    flow: Option<FlowConfig>,
+) -> PyResult<String> {
+    let compiled = parse_and_compile(model_json)?;
+    let flow = flow_policy(flow);
+    py.detach(|| {
+        let config = McConfig {
+            nb_runs,
+            seed,
+            t_max,
+            samples: instants,
+            threads,
+            quantiles: Vec::new(),
+            // Reports importance measures, not estimators: no interval is produced.
+            confidence: DEFAULT_CONFIDENCE,
+            ode: SolverParams::default(),
+            stop_at_targets: false,
+            flow,
+        };
+        let analysis = mc_run_importance(&compiled, &config, target.as_deref())
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        serde_json::to_string(&analysis).map_err(|e| SimulationError::new_err(e.to_string()))
     })
 }
 
@@ -974,6 +1062,7 @@ impl Interactive {
 fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", raichu::VERSION)?;
     module.add("MODEL_ENVELOPE_KEY", raichu::raichu_model::ENVELOPE_KEY)?;
+    module.add("DEFAULT_CONFIDENCE", DEFAULT_CONFIDENCE)?;
     module.add(
         "MODEL_FORMAT_REVISION",
         raichu::raichu_model::FORMAT_REVISION,
@@ -982,6 +1071,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("SimulationError", py.get_type::<SimulationError>())?;
     module.add_function(wrap_pyfunction!(validate_model, module)?)?;
     module.add_function(wrap_pyfunction!(switching_loops_json, module)?)?;
+    module.add_function(wrap_pyfunction!(unfed_triggers_json, module)?)?;
     module.add_function(wrap_pyfunction!(required_features, module)?)?;
     module.add_function(wrap_pyfunction!(seal_model, module)?)?;
     module.add_function(wrap_pyfunction!(simulate_json, module)?)?;
@@ -989,6 +1079,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(analyse_sequences_json, module)?)?;
     module.add_function(wrap_pyfunction!(run_sequences_json, module)?)?;
     module.add_function(wrap_pyfunction!(analyse_raw_sequences_json, module)?)?;
+    module.add_function(wrap_pyfunction!(importance_json, module)?)?;
     module.add_function(wrap_pyfunction!(explore_json, module)?)?;
     module.add_function(wrap_pyfunction!(exploration_domain_json, module)?)?;
     module.add_function(wrap_pyfunction!(fault_tree_json, module)?)?;
