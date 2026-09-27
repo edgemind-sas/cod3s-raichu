@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-light.svg">
+    <img src="docs/assets/logo.svg" alt="RAICHU" width="360">
+  </picture>
+</p>
+
 # RAICHU
 
 **R**ust **A**utomata **InC**redibly **H**ybrid **U**nleashed: a native,

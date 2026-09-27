@@ -1,0 +1,58 @@
+/* EdgeMind palette: navy primary, orange accent (the logo's own colours). */
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #1f416d;
+  --md-primary-fg-color--light: #3a5d8a;
+  --md-primary-fg-color--dark: #142c4a;
+  --md-accent-fg-color: #ef7b26;
+  --md-accent-fg-color--transparent: rgba(239, 123, 38, 0.1);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #1f416d;
+  --md-primary-fg-color--light: #3a5d8a;
+  --md-primary-fg-color--dark: #142c4a;
+  --md-accent-fg-color: #ef7b26;
+  --md-accent-fg-color--transparent: rgba(239, 123, 38, 0.1);
+  /* Links read on the dark background. */
+  --md-typeset-a-color: #8fb3e0;
+}
+
+/* The header logo is a wordmark, wider than the default square slot. */
+.md-header__button.md-logo img {
+  height: 1.3rem;
+  width: auto;
+}
+
+/* The wordmark at the top of the home page. */
+.raichu-hero {
+  display: block;
+  margin: 0.5rem 0 1.5rem;
+  max-width: 22rem;
+  width: 70%;
+}
+
+/* A chart is as wide as the text column and keeps its aspect. */
+.md-typeset img.figure {
+  display: block;
+  margin: 1rem auto;
+  max-width: 100%;
+  height: auto;
+}
+
+/* The home page shows the wordmark; its textual title stays for readers
+   and search, visually hidden. */
+.md-typeset h1.raichu-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* `display: block` above outranks mkdocs-material's own hiding of the
+   variant drawn for the other colour scheme: restate it. */
+[data-md-color-scheme="default"] .md-typeset img[src$="#only-dark"],
+[data-md-color-scheme="slate"] .md-typeset img[src$="#only-light"] {
+  display: none;
+}

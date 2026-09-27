@@ -11,16 +11,20 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
+  logo: assets/logo-light.svg
+  favicon: assets/favicon.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: amber
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: amber
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Light mode
@@ -32,8 +36,14 @@ theme:
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - tables
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.details
   - pymdownx.tabbed:
       alternate_style: true
@@ -42,6 +52,9 @@ markdown_extensions:
       check_paths: true
   - pymdownx.arithmatex:
       generic: true
+
+extra_css:
+  - stylesheets/extra.css
 
 extra_javascript:
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
@@ -83,6 +96,7 @@ nav:
 # corpus incl. the EDF PDFs, and the pre-restructure root pages) are
 # excluded from the published site: never rendered.
 exclude_docs: |
+  /figures/
   brainstorms/
   plans/
   pycatshoo-legacy/
