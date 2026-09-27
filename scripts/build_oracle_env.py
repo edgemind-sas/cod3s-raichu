@@ -371,13 +371,83 @@ def install_muscadet(clone: Path, venv: Path) -> None:
     precedence over ``sys.path``, so an editable oracle would silently
     answer capability probes from whatever tree the finder recorded
     instead of the pinned one.
+
+    The install bypasses every cache. The clone keeps one path across
+    tags, and an installer that keys its built-wheel cache on that path
+    hands back the wheel of the PREVIOUS tag: moving the pin from 5.6.0 to
+    5.7.0 once rebuilt an environment named after 5.7.0 that imported
+    5.6.0. :func:`check_installed_muscadet` is what catches it if a
+    future installer finds another way to reuse a stale build.
     """
     python = venv / "bin" / "python"
     if _uv_available():
-        _run(["uv", "pip", "install", "--python", str(python), str(clone)])
+        _run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--reinstall",
+                "--refresh",
+                "--python",
+                str(python),
+                str(clone),
+            ]
+        )
     else:
         _run([str(python), "-m", "ensurepip"])
-        _run([str(python), "-m", "pip", "install", str(clone)])
+        _run(
+            [
+                str(python),
+                "-m",
+                "pip",
+                "install",
+                "--force-reinstall",
+                "--no-cache-dir",
+                str(clone),
+            ]
+        )
+
+
+_VERSION_LINE = re.compile(r"""^__version__\s*=\s*["']([^"']+)["']""", re.MULTILINE)
+
+
+def clone_muscadet_version(clone: Path) -> str:
+    """The version the clone declares, read from ``muscadet/version.py``."""
+    version_file = clone / "muscadet" / "version.py"
+    try:
+        text = version_file.read_text()
+    except OSError as exc:
+        raise OracleEnvError(f"cannot read {version_file}: {exc}") from exc
+    match = _VERSION_LINE.search(text)
+    if match is None:
+        raise OracleEnvError(f"no __version__ in {version_file}")
+    return match.group(1)
+
+
+def check_installed_muscadet(expected: str, installed: str) -> None:
+    """Refuse an environment whose muscadet is not the clone's.
+
+    The record states the TAG the clone was moved to; the oracle runs
+    what the venv IMPORTS. The two parted once without a word (see
+    :func:`install_muscadet`), so the build compares them and names both.
+    """
+    if installed != expected:
+        raise OracleEnvError(
+            f"the environment imports muscadet {installed}, but the clone "
+            f"declares {expected}: the install reused a stale build. "
+            f"Remove the venv and rebuild."
+        )
+
+
+def installed_muscadet_version(venv: Path) -> str:
+    """The muscadet version the venv imports, isolated from the caller."""
+    python = venv / "bin" / "python"
+    result = _run(
+        [str(python), "-I", "-c", "import muscadet; print(muscadet.__version__)"],
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
 def write_record(
@@ -471,6 +541,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     check_engine_floor(engine_module_dir, engine_version, config["pycatshoo_floor"])
     install_muscadet(paths["clone"], paths["venv"])
+    check_installed_muscadet(
+        clone_muscadet_version(paths["clone"]),
+        installed_muscadet_version(paths["venv"]),
+    )
     write_record(paths, config, sha, interpreter, engine_module_dir, engine_version)
 
     print("oracle environment rebuilt:")
