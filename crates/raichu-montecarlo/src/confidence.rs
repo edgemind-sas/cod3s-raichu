@@ -102,7 +102,7 @@
 //! get a conservative bound. Either way the alternative is a width of
 //! zero, which claims a precision no campaign can buy.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Confidence level applied when a study states none: the conventional
 /// two-sided 95 %.
@@ -114,7 +114,7 @@ use serde::Serialize;
 pub const DEFAULT_CONFIDENCE: f64 = 0.95;
 
 /// How the bounds of a [`ConfidenceInterval`] were obtained.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntervalMethod {
     /// Wilson score interval on a binomial proportion: the estimator is
@@ -137,7 +137,7 @@ pub enum IntervalMethod {
 ///
 /// The level and the construction travel with the bounds: an artefact
 /// that carries this carries everything needed to read it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfidenceInterval {
     /// Confidence level these bounds were computed at, in `(0, 1)`: the
     /// study parameter, recorded rather than assumed.

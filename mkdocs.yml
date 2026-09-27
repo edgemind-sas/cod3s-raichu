@@ -55,6 +55,7 @@ nav:
       - 4. Going hybrid: tutorial/04-going-hybrid.md
   - Model schema reference: reference/model-schema.md
   - Raw sequence corpus format: reference/sequence-format.md
+  - Quantification envelope format: reference/quantification-format.md
   - Advanced guides:
       - Reproducibility: guides/reproducibility.md
       - Confidence intervals: guides/confidence-intervals.md
