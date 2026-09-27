@@ -13,7 +13,6 @@ raichu-model.workspace = true
 raichu-expr.workspace = true
 raichu-rng.workspace = true
 raichu-core.workspace = true
-raichu-io.workspace = true
 raichu-montecarlo.workspace = true
 raichu-numeric.workspace = true
 raichu-explore.workspace = true
