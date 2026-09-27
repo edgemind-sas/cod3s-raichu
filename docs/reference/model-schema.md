@@ -782,6 +782,33 @@ Enumerations:
 - **CmpOp** (`cmp`): `eq`, `ne`, `lt`, `le`, `gt`, `ge`
 - **StateRef**: `{ "component", "automaton", "state" }`
 
+## The simulation cycle
+
+A trajectory advances through one cycle, whose steps are the inference rules
+of the formal semantics (Desgeorges et al. 2021) that RAICHU implements, over a
+piecewise-deterministic Markov process (Davis 1984):
+
+```mermaid
+flowchart LR
+    I([Initialization]) --> S["Scheduling<br/>schDT, schST, schWT"]
+    S --> C["Continuous evolution<br/>evolC"]
+    C --> D["Discrete evolution<br/>evolT, evolA"]
+    D --> U["Update<br/>updateMT, updateIT"]
+    U --> S
+    C -->|horizon reached| E([End])
+```
+
+| Rule | Step |
+|---|---|
+| `schDT` | schedule a deterministic transition at its delay |
+| `schST` | schedule a stochastic transition at a date drawn from its law |
+| `schWT` | schedule a watched transition at the predicted boundary crossing |
+| `evolC` | integrate the continuous state up to the next scheduled date |
+| `evolT` | fire the earliest transition |
+| `evolA` | run the sensitive functions it triggers, to a fixpoint |
+| `updateMT` | reschedule a modifiable transition whose rate changed (cumulative hazard) |
+| `updateIT` | drop an interruptible transition whose guard became false |
+
 ## Simulation configuration
 
 A compiled model is consumed by several entry points, each with its own
@@ -824,3 +851,14 @@ continuous flow resolution, as one object rather than four more
 keywords. Every knob left unset keeps the engine default, so omitting
 `flow` and passing `FlowConfig()` are the same run
 ([Numerical tuning](../guides/numerical-tuning.md)).
+
+## References
+
+- Davis, M. H. A. (1984). Piecewise-deterministic Markov processes: a
+  general class of non-diffusion stochastic models. *Journal of the Royal
+  Statistical Society, Series B* 46(3), 353-376.
+  DOI [10.1111/j.2517-6161.1984.tb01308.x](https://doi.org/10.1111/j.2517-6161.1984.tb01308.x).
+- Desgeorges, L., Piriou, P.-Y., Lemattre, T. and Chraibi, H. (2021).
+  Formalism and semantics of PyCATSHOO: a simulator of distributed
+  stochastic hybrid automata. *Reliability Engineering & System Safety*
+  208, 107384. DOI [10.1016/j.ress.2020.107384](https://doi.org/10.1016/j.ress.2020.107384).

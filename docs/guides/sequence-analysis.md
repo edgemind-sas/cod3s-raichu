@@ -98,6 +98,14 @@ probabilities. The result is seed-reproducible bit-for-bit.
 
 The pipeline behind the call:
 
+```mermaid
+flowchart LR
+    R["1. record"] --> G["2. group"]
+    G --> C["3. cancel repairs"]
+    C --> M["4. absorb"]
+    M --> O(["minimal cut<br/>sequences"])
+```
+
 1. **Record**: each trajectory logs its *monitored* transitions (the
    plugin marks failure/repair and event transitions automatically) and
    stops at the first target.

@@ -50,6 +50,32 @@ of the feature:
   **basic event** (the draw of its law) AND its source state being reached AND
   its guard holding.
 
+One step of the chaining, applied recursively from the top expression down:
+
+```mermaid
+flowchart TD
+    S["state reached"] --> O{{OR}}
+    O --> I["initial state"]
+    O --> T["entered by a transition"]
+    T --> A{{AND}}
+    A --> BE(["basic event:<br/>its draw"])
+    A --> SR["source state reached"]
+    A --> G["guard holds"]
+```
+
+On the example, the tree it generates, whose two minimal cut sets are read off
+the two AND gates:
+
+```mermaid
+flowchart TD
+    TOP{{"OR: top"}} --> G1{{AND}}
+    TOP --> G2{{AND}}
+    G1 --> B(["B.health.fail"])
+    G1 --> A1(["A.health.fail"])
+    G2 --> A2(["A.health.fail"])
+    G2 --> C(["C.health.fail"])
+```
+
 A loop back to a state already being explained further up the same branch
 adds no new way in, so a repair loop is handled rather than truncated: `nok`
 is reached from `ok`, `ok` is initial, and the repair back to `ok` never
@@ -66,7 +92,7 @@ in the OpenPSA file).
 
 | field | content |
 |---|---|
-| `top` | the top gate, nested: `{"node": "gate", "gate": "and" \| "or" \| "at_least", "k": …, "children": […]}`, `{"node": "basic", "event": index}` or `{"node": "constant", "value": bool}` |
+| `top` | the top gate, nested: `{"node": "gate", "gate": …, "k": …, "children": […]}` with `"gate"` one of `"and"`, `"or"`, `"at_least"`; `{"node": "basic", "event": index}`; or `{"node": "constant", "value": bool}` |
 | `basic_events` | one entry per transition draw: `name`, `component`, `automaton`, `transition`, `target` and its `law` with the law's parameters; `event` in `top` indexes this list |
 | `minimal_cut_sets` | each a sorted list of basic-event names, ordered by size then name |
 | `open_psa` | the OpenPSA document (see [The file](#the-file)) |
@@ -156,6 +182,15 @@ factor `p P1 / P`, and the risk achievement and reduction worths `P1 / P` and
 `P / P0`. A ratio whose denominator is zero is `None`: the reduction worth of
 an event whose removal removes the whole risk is infinite.
 
+```mermaid
+flowchart LR
+    N["normalise"] --> M["split into<br/>modules"]
+    M --> D["decision diagram<br/>per module"]
+    D --> R(["probability,<br/>importance,<br/>cut sets"])
+    M -->|module too large| K["cut sets<br/>under cutoffs"]
+    K --> U(["estimate and<br/>guaranteed bound"])
+```
+
 **The method**, from the published algorithms: the tree is normalised
 (negations pushed down to the events, constants propagated, duplicate
 arguments removed, gates of one connective coalesced, identical gates shared),
@@ -228,10 +263,10 @@ manner of MOCUS as Rauzy (2003) reworked it, under three cutoffs:
 `max_order` (the largest order kept), `min_cut_probability` (the smallest
 probability kept) and `max_cut_sets` (the most kept: past it the least probable
 are dropped and the probability cutoff raised), plus `max_expansions`, a budget
-on the partial sets explored. The retained sets are quantified three ways
-(Rauzy 2020): the rare-event approximation (their probabilities summed), the
-min-cut upper bound `1 - Π(1 - p(C))`, and the pivotal upper bound, computed on
-their decision diagram, generally the tightest. The module's probability is
+on the partial sets explored. The retained sets are quantified three ways: the
+rare-event approximation (their probabilities summed), the min-cut upper bound
+`1 - Π(1 - p(C))` (Esary and Proschan 1963), and the pivotal upper bound,
+computed on their decision diagram, generally the tightest. The module's probability is
 the pivotal bound. Each module records the three in `provenance`.
 
 **Direction of error, stated rather than hidden.** The three estimators bound
@@ -280,3 +315,30 @@ exponential law is written `exponential` over the system mission time, a
 Weibull law `Weibull`, an on-demand branch a probability; a law OpenPSA has no
 time-to-failure expression for (delay, log-normal, gamma, uniform, empirical)
 is carried as attributes of its event.
+
+## References
+
+- Dutuit, Y. and Rauzy, A. (1996). A linear-time algorithm to find modules
+  of fault trees. *IEEE Transactions on Reliability* 45(3), 422-425.
+  DOI [10.1109/24.537011](https://doi.org/10.1109/24.537011).
+- Dutuit, Y. and Rauzy, A. (2001). Efficient algorithms to assess component
+  and gate importance in fault tree analysis. *Reliability Engineering &
+  System Safety* 72(2), 213-222.
+  DOI [10.1016/s0951-8320(01)00004-7](https://doi.org/10.1016/s0951-8320(01)00004-7).
+- Earthperson, A., Aras, E., Salem Farag, A. et al. (2026).
+  *openpra-org/aralia-fault-tree-dataset*. Zenodo.
+  DOI [10.5281/zenodo.20160659](https://doi.org/10.5281/zenodo.20160659).
+- Esary, J. D. and Proschan, F. (1963). Coherent structures of non-identical
+  components. *Technometrics* 5(2), 191-209.
+  DOI [10.1080/00401706.1963.10490075](https://doi.org/10.1080/00401706.1963.10490075).
+- Rauzy, A. (1993). New algorithms for fault trees analysis. *Reliability
+  Engineering & System Safety* 40(3), 203-211.
+  DOI [10.1016/0951-8320(93)90060-c](https://doi.org/10.1016/0951-8320(93)90060-c).
+- Rauzy, A. (2003). Toward an efficient implementation of the MOCUS
+  algorithm. *IEEE Transactions on Reliability* 52(2), 175-180.
+  DOI [10.1109/tr.2003.813160](https://doi.org/10.1109/tr.2003.813160).
+- Rauzy, A. (2008). Some disturbing facts about depth-first left-most
+  variable ordering heuristics for binary decision diagrams. *Proceedings of
+  the Institution of Mechanical Engineers, Part O: Journal of Risk and
+  Reliability* 222(4), 573-582.
+  DOI [10.1243/1748006xjrr174](https://doi.org/10.1243/1748006xjrr174).

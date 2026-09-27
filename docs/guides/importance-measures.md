@@ -22,6 +22,15 @@ The station loses its supply if `pump_A` fails, or if **both** `pump_B`
 and `pump_C` do: two minimal cuts of different sizes, the smallest
 diagram where the answer is not obvious.
 
+```mermaid
+flowchart LR
+    IN(( )) --> PA[pump_A]
+    PA --> PB[pump_B]
+    PA --> PC[pump_C]
+    PB --> OUT(( ))
+    PC --> OUT
+```
+
 ```python
 import pyraichu
 
@@ -176,3 +185,12 @@ post-processing is as visible as it will ever be, 32 000 replicas of a
   muscadet plugin does the annotation; a hand-written model needs
   `"monitored": true` and a shared `"cycle_group"` on the occ/rep pair,
   exactly as for [sequence analysis](sequence-analysis.md#native-model-without-plugins).
+
+## References
+
+- Birnbaum, Z. W. (1968). *On the importance of different components in a
+  multicomponent system*. Technical report.
+  DOI [10.21236/ad0670563](https://doi.org/10.21236/ad0670563).
+- Fussell, J. B. (1975). How to hand-calculate system reliability and
+  safety characteristics. *IEEE Transactions on Reliability* R-24(3),
+  169-174. DOI [10.1109/tr.1975.5215142](https://doi.org/10.1109/tr.1975.5215142).

@@ -32,6 +32,15 @@ to every step wider than it, and the short episode is bracketed; setting it
 coarser than the engine's own spacing changes nothing, bit for bit. Through
 the muscadet route, a study's `pdmp_dt` arrives as this keyword.
 
+The scan and the location, on one step of the Dormand-Prince 4(5) solver
+(Dormand and Prince 1980), whose dense output (Hairer, Nørsett and Wanner
+1987) gives the trajectory between the step's ends:
+
+![A crossing located inside one solver step: scan points, the bracketing pair, the bisected crossing](../assets/figures/guide-event-location-light.svg#only-light){ .figure }
+![A crossing located inside one solver step: scan points, the bracketing pair, the bisected crossing](../assets/figures/guide-event-location-dark.svg#only-dark){ .figure }
+
+*Figure produced by `docs/figures/guide_event_location.py`.*
+
 ## A fast profile
 
 Consider a deterministic thermostat: a heater cycles on a room whose
@@ -320,3 +329,12 @@ it has no run-time counterpart to fall back on: see
   accuracy is ample.
 - Always record the setting: it rides in the run's provenance, so a
   result is never ambiguous about how it was computed.
+
+## References
+
+- Dormand, J. R. and Prince, P. J. (1980). A family of embedded Runge-Kutta
+  formulae. *Journal of Computational and Applied Mathematics* 6(1), 19-26.
+  DOI [10.1016/0771-050x(80)90013-3](https://doi.org/10.1016/0771-050x(80)90013-3).
+- Hairer, E., Nørsett, S. P. and Wanner, G. (1987). *Solving Ordinary
+  Differential Equations I*. Springer Series in Computational Mathematics,
+  Springer. DOI [10.1007/978-3-662-12607-3](https://doi.org/10.1007/978-3-662-12607-3).

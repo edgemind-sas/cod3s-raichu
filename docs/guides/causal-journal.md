@@ -13,6 +13,21 @@ result = pyraichu.simulate(model, t_max=15.0, journal=True)
 query = pyraichu.JournalQuery(result.journal)
 ```
 
+What one event sets off, as the journal records it:
+
+```mermaid
+flowchart LR
+    E["transition fired"] --> F["sensitive functions"]
+    F --> V["attribute writes"]
+    V -->|trigger| F
+    V --> R["transitions scheduled,<br/>rescheduled or dropped"]
+```
+
+Every record carries its cause, so the chain can be walked either way: from an
+event to its consequences (`cascade_after`), from an attribute back to its
+writers (`who_changed`), from a transition that did not fire to what stopped it
+(`why_not_fired`).
+
 Below, three questions on two small models.
 
 ## "Why didn't it fire?"

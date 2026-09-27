@@ -13,6 +13,17 @@ back. The envelope's fields are specified in the
 each engine has its own guide for what it does beyond this common
 question (see [Further reading](#further-reading)).
 
+```mermaid
+flowchart LR
+    ST(["Study<br/>target, horizon, seed"]) --> Q["quantify"]
+    Q -->|monte_carlo| MC["Monte-Carlo<br/>simulation"]
+    Q -->|exact| EX["exact<br/>exploration"]
+    Q -->|discretised| DI["discretised<br/>exploration"]
+    MC --> ENV(["one envelope"])
+    EX --> ENV
+    DI --> ENV
+```
+
 ## Choosing an engine
 
 | Method | Engine | Covers | States |
@@ -161,6 +172,14 @@ prob = disc.probability
 print(f"[{prob.low:.6f}, {prob.high:.6f}], error estimate {prob.error_estimate:.1e}")
 assert abs(prob.low - closed_form) <= prob.error_estimate
 ```
+
+The four answers side by side, each with the uncertainty it states (the
+discretised bounds widened by the error estimate), against the closed form:
+
+![One study answered by Monte-Carlo simulation, exact and discretised exploration, against the closed form](../assets/figures/guide-quantification-engines-light.svg#only-light){ .figure }
+![One study answered by Monte-Carlo simulation, exact and discretised exploration, against the closed form](../assets/figures/guide-quantification-engines-dark.svg#only-dark){ .figure }
+
+*Figure produced by `docs/figures/guide_quantification_engines.py`.*
 
 ## Provenance and detail
 
