@@ -58,9 +58,10 @@ a ``pyraichu.plugins.muscadet`` object -- an ``ObjFM`` or an ``ObjEvent`` for
 the mode, an ``ObjCtrl`` for the controller -- expanded ONCE THE FLOW
 COMPONENTS EXIST, which is :func:`build_document`'s scale and not
 :func:`build_system`'s. Those are also the objects a COD3S Platform study's
-modes, events and controllers are translated into, so the two corpora share
-one expansion instead of this reader carrying a second
-and lesser one.
+modes, events and controllers become, and they get there THROUGH this reader:
+muscadet builds the system from the export, and what this module reads is that
+system's declaration. One expansion for every corpus, rather than a second and
+lesser one per route.
 
 **The order is the whole difficulty, and it is not guessable.**
 :data:`DECLARATION_SECTIONS` writes it down once. It is neither alphabetical nor
@@ -828,9 +829,10 @@ PLAIN_SECTIONS: dict[str, tuple[str, _Vocabulary]] = {
 # several components, its condition may read a variable or an automaton state of
 # any component of the model, and its effects WRITE the attributes they name.
 # That is the muscadet plugin's ``ObjFM`` object (:mod:`pyraichu.plugins.
-# muscadet`), which is what a platform study's modes already expand to, so this
-# reader translates a declaration into one rather than inventing a lesser third
-# path. :func:`build_document` is where the two meet.
+# muscadet`), which is what a platform study's modes expand to as well, having
+# reached it through this very reader, so a declaration is translated into one
+# rather than through a lesser path of its own. :func:`build_document` is where
+# the three shapes meet.
 #
 # **A third family shares the kind, and shares almost nothing else.** A
 # ``cod3s.ObjEvent`` is also a two-state component of ``system.comp``, and it
@@ -839,7 +841,7 @@ PLAIN_SECTIONS: dict[str, tuple[str, _Vocabulary]] = {
 # declaration is a condition over arbitrary components of the system with the
 # comparison it is tested by. It expands to the plugin's ``ObjEvent`` object,
 # which is what a platform study's events and its multi-clause indicators
-# already become -- so here too the translation is shared rather than doubled.
+# become as well -- so here too the translation is shared rather than doubled.
 
 #: The parameter variable each occurrence law is bound to, per direction, as
 #: the cod3s mode classes name them. RAICHU bakes the value and has no
@@ -2999,8 +3001,9 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
     caller comparing what the two engines were handed reads this rather than a
     trajectory. What comes out is a ``pyraichu.plugins.muscadet`` ``ObjFM``,
     ``ObjFMInst`` or ``ObjEvent`` object, which is the same object a COD3S
-    Platform study's modes and events are translated into -- one expansion for
-    the two corpora rather than a second, lesser one written here.
+    Platform study's modes and events become once muscadet has built the export
+    into a system -- one expansion for every corpus rather than a second,
+    lesser one written here.
 
     Parameters
     ----------
@@ -3015,7 +3018,7 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
         left in muscadet's spelling and refused downstream, which is what a
         caller reading a mode out of its document gets.
     """
-    from .importers.cod3s_platform import (
+    from .mode_objects import (
         TranslationError,
         event_object,
         failure_mode_object,
@@ -3387,9 +3390,9 @@ def controller_object(spec: Any, name: Any = None) -> dict:
     The translation, in one place and reachable without building anything: a
     caller comparing what the two engines were handed reads this rather than a
     trajectory. What comes out is a ``pyraichu.plugins.muscadet`` ``ObjCtrl``
-    object, which is the same object a COD3S Platform study's controllers are
-    translated into -- one expansion for the two corpora rather than a second,
-    lesser one written here.
+    object, which is the same object a COD3S Platform study's controllers
+    become once muscadet has built the export into a system -- one expansion for
+    every corpus rather than a second, lesser one written here.
 
     Parameters
     ----------
@@ -4334,8 +4337,9 @@ def build_document(
 
     Both are expanded through :mod:`pyraichu.plugins.muscadet`, whose ``ObjFM``
     and ``ObjCtrl`` objects are what a COD3S Platform study's modes and
-    controllers already become: one expansion for the two corpora, rather than
-    a second and lesser one written for this reader alone.
+    controllers become as well, its export having been built into a system by
+    muscadet first: one expansion for every corpus, rather than a second and
+    lesser one per route.
 
     Parameters
     ----------

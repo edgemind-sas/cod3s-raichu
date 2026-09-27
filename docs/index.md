@@ -46,9 +46,10 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
   Monte-Carlo campaign yields the **minimal cut sequences** (the ordered,
   irreducible failure chains leading to it) plus first-occurrence
   indicators. See [Sequence analysis](guides/sequence-analysis.md).
-- **Imports platform studies.** Models and studies exported from a COD3S
-  platform instance translate directly into runnable RAICHU models. See
-  [Platform import](guides/platform-import.md).
+- **Runs platform studies.** Models and studies exported from a COD3S
+  platform instance run here through muscadet, whose importer reads the
+  export and whose system declaration is what this engine takes. See
+  [Running a COD3S-platform study](guides/platform-import.md).
 
 ## Install
 

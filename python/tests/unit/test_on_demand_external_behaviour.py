@@ -29,7 +29,7 @@ What is pinned here:
 
 import pyraichu
 import pytest
-from pyraichu.importers import translate_study
+from pyraichu.mode_objects import event_object, failure_mode_object
 from pyraichu.plugins import expand_model
 
 #: The solicitation the draw fires on: a demand clock that rises at 2.0
@@ -100,46 +100,35 @@ def _topology(targets):
     }
 
 
-def _study(failure_mode):
-    return {
-        "name": "on_demand_external",
-        "failure_modes": [failure_mode],
-        "events": [
-            {
-                "cls": "ObjEvent",
-                "name": "ER",
-                "cond": [[{"obj": "E1", "attr": "failed", "ope": "==", "value": True}]],
-                "tempo_occ": 0.0,
-                "tempo_not_occ": 0.0,
-                "enabled": True,
-            }
-        ],
-        "targets": [{"name": "ER", "enabled": True}],
-        "indicators": [
-            {
-                "component": "^ER$",
-                "attr_name": "^occ$",
-                "attr_type": "ST",
-                "stats": ["mean"],
-                "measure": "sojourn-time",
-                "enabled": True,
-            }
-        ],
-        "simulation": {"nb_runs": 10, "schedule": [{"instant": 10.0}]},
-    }
+#: The feared event the run observes, in the cod3s wire a declaration
+#: carries it in, plus the state indicator that watches its automaton.
+FEARED_EVENT = {
+    "cls": "ObjEvent",
+    "name": "ER",
+    "cond": [[{"obj": "E1", "attr": "failed", "ope": "==", "value": True}]],
+    "tempo_occ": 0.0,
+    "tempo_not_occ": 0.0,
+}
+FEARED_EVENT_INDICATOR = {
+    "name": "ER_occ",
+    "target": "state",
+    "component": "ER",
+    "automaton": "ev",
+    "state": "occ",
+}
 
 
 def _spec(failure_mode):
-    """The plugin spec the importer emits for one failure mode."""
-    objects, _indicators, _simulation, _measures = translate_study(_study(failure_mode))
-    return next(o for o in objects if o["type"] != "ObjEvent")
+    """The plugin object the translation emits for one failure mode."""
+    return failure_mode_object(failure_mode)
 
 
 def _model(failure_mode):
-    objects, indicators, _simulation, _measures = translate_study(_study(failure_mode))
     model = _topology(failure_mode["targets"])
-    model["plugins"]["muscadet"]["objects"].extend(objects)
-    model["indicators"].extend(indicators)
+    model["plugins"]["muscadet"]["objects"].extend(
+        [failure_mode_object(failure_mode), event_object(FEARED_EVENT)]
+    )
+    model["indicators"].append(dict(FEARED_EVENT_INDICATOR))
     return model
 
 

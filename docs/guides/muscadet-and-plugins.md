@@ -924,8 +924,9 @@ number the grammar carries is an attribute of the model
 declaration, an indicator can name a threshold, and an `ObjFM` can move
 one or blind an output.
 
-Models exported from a COD3S platform instance translate directly into
-these objects: see [Importing platform studies](platform-import.md).
+Models exported from a COD3S platform instance become these very
+objects, muscadet's importer having built the export into a system first:
+see [Running a COD3S-platform study](platform-import.md).
 
 ## Which to use
 
