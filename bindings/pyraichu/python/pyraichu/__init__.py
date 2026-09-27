@@ -880,12 +880,12 @@ def explore(
       ``refine=False`` no estimate is made. ``max_branches`` defaults to
       1 000 000 expanded nodes per pass when omitted.
 
-    ``level`` and ``refine=False`` apply to the discretised algorithm only,
-    ``rel_precision`` and ``max_terms`` to the exact one only; passing one
-    to the other algorithm raises. Raises :class:`SimulationError` for an
+    ``level`` and ``refine=False`` apply to discretised exploration only,
+    ``rel_precision`` and ``max_terms`` to exact exploration only; passing
+    one to the other method raises. Raises :class:`SimulationError` for an
     unknown algorithm or an invalid setting (before anything runs), for a
-    model outside the algorithm's domain (see :func:`exploration_domain`
-    for the exact one), and, in the exact algorithm, when a law outside
+    model outside the method's domain (see :func:`exploration_domain`
+    for exact exploration), and, in exact exploration, when a law outside
     its domain becomes armed, naming the transition and the sequence that
     armed it.
     """

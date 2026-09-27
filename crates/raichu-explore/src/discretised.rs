@@ -172,7 +172,7 @@ impl DiscretisedSettings {
 }
 
 /// Explore the sequence tree of `model` to the target `settings.target`
-/// with the discretised algorithm (see the module documentation).
+/// by discretised exploration (see the module documentation).
 ///
 /// Every sequence probability is a probability of the discretised model;
 /// the per-sequence `error_bound` is 0 and the discretisation error is

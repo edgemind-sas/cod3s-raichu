@@ -852,7 +852,7 @@ fn observed_number(value: Value) -> f64 {
 /// same thing the early stop would have recorded: one campaign, both
 /// halves of the answer.
 ///
-/// See [`raichu_analysis::importance`] for what the measures mean and what
+/// See [`mod@raichu_analysis::importance`] for what the measures mean and what
 /// they assume.
 pub fn run_importance(
     model: &CompiledModel,

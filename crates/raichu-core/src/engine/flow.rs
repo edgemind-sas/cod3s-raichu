@@ -283,7 +283,7 @@ struct ActiveSet {
 
 /// Sweeps the **numeric** level of one resolution may spend once its
 /// active set has settled: the constant half of the two-level budget of
-/// [`Engine::resolve_flows`].
+/// `Engine::resolve_flows`.
 ///
 /// It is a constant because nothing in the compiled network sizes it: the
 /// active set is finite and its budget counts edges, whereas the
@@ -321,7 +321,7 @@ pub const FLOW_SWEEP_BUDGET: usize = 64;
 /// size above could hold.
 ///
 /// The relaxation is **not** applied from the first sweep. The cold-start
-/// sequence of [`Engine::resolve_flows`] descends, and damping a
+/// sequence of `Engine::resolve_flows` descends, and damping a
 /// descending sequence buys nothing while costing every well-behaved
 /// network a factor on its sweep count. It is latched on the first
 /// two-cycle detection and never released within a resolution; it is a
@@ -349,7 +349,7 @@ pub const FLOW_RELAXATION: f64 = 0.5;
 /// sweep that confirms it.
 ///
 /// The same figure bounds the segment restarts of
-/// [`Engine::advance_continuous`] at one instant, for the same reason: at
+/// `Engine::advance_continuous` at one instant, for the same reason: at
 /// most that many distinct class changes can be located there before the
 /// boundary is chattering rather than moving.
 ///

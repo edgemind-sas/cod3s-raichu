@@ -1,6 +1,6 @@
 //! # raichu-fta: fault-tree quantification
 //!
-//! A fault tree, generated from a model by [`raichu_core::fault_tree`] or
+//! A fault tree, generated from a model by [`fn@raichu_core::fault_tree`] or
 //! read from the OpenPSA model-exchange format, gets its top-event
 //! probability, its minimal cut sets and the importance of each basic
 //! event.

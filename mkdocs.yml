@@ -64,6 +64,7 @@ nav:
       - Interactive simulation: guides/interactive-simulation.md
       - Sequence analysis: guides/sequence-analysis.md
       - Sequence-tree exploration: guides/sequence-tree-exploration.md
+      - Quantifying a study: guides/quantification.md
       - Importance measures: guides/importance-measures.md
       - Fault trees: guides/fault-tree.md
       - muscadet & plugins: guides/muscadet-and-plugins.md
