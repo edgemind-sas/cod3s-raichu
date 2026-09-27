@@ -66,7 +66,7 @@ nav:
       - Fault trees: guides/fault-tree.md
       - muscadet & plugins: guides/muscadet-and-plugins.md
       - Running a muscadet model: guides/muscadet-engine.md
-      - Platform import: guides/platform-import.md
+      - COD3S-platform studies: guides/platform-import.md
       - Parallelism: guides/parallelism.md
   - Benchmarks:
       - Cross-validation: benchmarks/cross-validation.md

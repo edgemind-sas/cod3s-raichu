@@ -1,99 +1,79 @@
-# Importing COD3S-platform studies
+# Running a COD3S-platform study
 
 Models authored on a COD3S platform instance are persisted as **two
 artefacts**: a *model export* (the topology, component instances of KB
 templates, connections, per-instance overrides) and a *study* (the
 dynamics: failure modes, feared events, indicators, Monte-Carlo
-parameters). `pyraichu.importers.cod3s_platform` fuses both into one
-runnable RAICHU model.
+parameters).
 
-## Where the artefacts come from
-
-- **Model export**: the platform's model *export* action (or a database
-  dump of the model document): a JSON carrying `model.elements`
-  (components + connections) and the embedded knowledge base
-  (`kb_embedded`, or `kb` in raw dumps). Both versioned exports and raw
-  dumps are accepted.
-- **Study**: the study description used by the platform's run
-  machinery (a `study.yaml`, parsed to a dict): `failure_modes`,
-  `events`, `targets`, `indicators`, `simulation`.
-
-The pair recorded alongside an existing platform run is ideal: you can
-then compare RAICHU's results against that run's recorded outputs.
+**RAICHU does not read that pair.** One library does, muscadet, whose
+importer owns the platform's KB vocabulary; what RAICHU reads is the
+**system declaration** of the system muscadet builds from it. A platform
+export therefore reaches this engine the way any muscadet model does, and
+[Running a muscadet model on RAICHU](muscadet-engine.md) is the whole of
+the story:
 
 <!-- skip -->
 ```python
-import json, yaml
-from pyraichu.importers import translate
-import pyraichu
+import yaml
+from cod3s.scripts.study_runner import run_study
+from muscadet.builders import PlatformExportBuilder
 
-export = json.load(open("model_export.json"))
-study = yaml.safe_load(open("study.yaml"))
-
-t = translate(export, study)          # → Translation(model, simulation, measures)
-model = pyraichu.load_model(t.model)
-
-est = pyraichu.monte_carlo(
-    model,
-    nb_runs=t.simulation["nb_runs"],
-    t_max=t.simulation["samples"][-1],
-    samples=t.simulation["samples"],
-    seed=t.simulation.get("seed", 0),
-    stop_at_targets=True,             # match the study's target semantics
+run_study(
+    system_builder=PlatformExportBuilder("model_export.json"),
+    study=yaml.safe_load(open("study.yaml")),
+    results_dir="./results",
 )
-cuts = pyraichu.analyse_sequences(
-    model, nb_runs=t.simulation["nb_runs"],
-    t_max=t.simulation["samples"][-1], seed=t.simulation.get("seed", 0))
 ```
 
-`translate_export(export)` alone gives the topology-only model;
-`Translation.measures` lists the study's requested measures per
-indicator (`nb-occurrences`, `sojourn-time`).
+`run_study` composes the system from the export and the study's failure
+modes, events, indicators and targets, then runs it on the engine the
+study selects. RAICHU is selected the same way as anywhere else, by name.
 
-## What the translator understands
+## Why there is no importer here
 
-**Model export** (versioned exports *and* raw platform DB dumps):
+There used to be a second reader of the same pair inside `pyraichu`, so
+one document had two readings and nothing said when they parted. They
+did part, in ways a run never announced: a continuous port read as a
+discrete boolean because that reader knew no flow family; a condition
+clause naming no object read without a guard; an on-demand occurrence
+routed to an expander that only built the internal behaviour. Each was a
+model quietly different from the one the analyst described.
 
-- KB component templates → `ObjFlow` objects: `input_logic`
-  (`or` / `and` / integer k-of-n) on inputs, `prod_cond` DNF
-  (outer-OR of inner-AND groups, references to in- or out-flows of the
-  same component) on outputs;
-- per-instance attribute overrides, in both the current role vocabulary
-  (`logic_in`, `prod_init`) and the legacy one (`logic`, `init`), with
-  the platform's decimal-string k-of-n votes (`"2"`) and strict boolean
-  coercion (`"false"` is false);
-- UUID-keyed connections, resolved to component/port pairs.
+One reader is the fix, and the one kept is the one the platform itself
+runs. What RAICHU owns is what it can answer for: the engine, and the
+reading of a **declaration**.
 
-**Study**:
+## Getting at the model without running it
 
-- `failure_modes`: the native `ObjMode2S` wire the production translator
-  emits, and the legacy `ObjFMExp` / `ObjFMDelay` / `ObjFMInst`
-  dialects, including per-order common-cause parameter lists; a **zero
-  exponential rate marks an inactive order** (dropped, as the platform
-  does), and an active failure with an inactive repair yields a
-  non-repairable mode (absorbing failure state). The whole 3x3 law
-  matrix is read on both directions (`exp`, `delay`, and the on-demand
-  `inst` draw), under the three behaviours (`internal`, `external`,
-  `external_rep_indep`) and in any combination: an on-demand occurrence
-  under an external behaviour draws on the rising edge of "solicited
-  **and** every target of the combination at rest";
-- `events`: `ObjEvent` feared events; the study's `targets` list flags
-  them as sequence-analysis targets;
-- `indicators`: state indicators on the declared events, with their
-  requested measures;
-- `simulation`: `nb_runs`, `schedule` (flattened to `samples`), `seed`,
-  `time_unit`, passed through in `Translation.simulation`.
+`pyraichu.muscadet_engine.build_model` is the translation, reachable
+without simulating anything: hand it a declaration
+(`muscadet.declare.system_spec` of a live system) and it answers the
+model RAICHU would run, sequence targets included.
+
+<!-- skip -->
+```python
+import muscadet.declare
+from pyraichu.muscadet_engine import build_model
+
+declaration = muscadet.declare.system_spec(system)
+model = build_model(declaration, ["doors_unsecured"])
+```
+
+Anything the declaration carries and this reader cannot build raises a
+typed `pyraichu.declare.ComponentSpecError` or `SystemSpecError` naming
+the component and the key: a model that loads is a model whose semantics
+are covered.
 
 ## Matching the study's measures
 
 Platform studies that declare `targets` are **first-occurrence
 campaigns**: each trajectory stops at the feared event, and the recorded
-indicators latch from the hit to the horizon. To reproduce those
-numbers, run the Monte-Carlo with `stop_at_targets=True` (as in the
-snippet above): see
-[Sequence analysis](sequence-analysis.md#first-occurrence-indicators)
-for the two semantics. `Translation.measures` tells you which measure
-each indicator carries:
+indicators latch from the hit to the horizon. To reproduce those numbers,
+run the Monte-Carlo with `stop_at_targets=True`: see
+[Sequence analysis](sequence-analysis.md#first-occurrence-indicators) for
+the two semantics. Each study indicator carries its own `measure`, and the
+declaration carries it too:
 
 - `nb-occurrences` → `IndicatorEstimate.nb_occurrences_mean` / `_std`
   (with targets: the probability the event occurred by each instant);
@@ -112,27 +92,8 @@ largest value that measure took across the replicas at each instant.
 ## Converting the outputs
 
 RAICHU's results map line-for-line onto the platform's artefacts. The
-indicator table (one row per measure × statistic × instant):
-
-<!-- skip -->
-```python
-rows = []
-for name, measures in t.measures.items():
-    ind = est.indicators[name]
-    series = {"nb-occurrences": (ind.nb_occurrences_mean, ind.nb_occurrences_std),
-              "sojourn-time": (ind.sojourn_mean, ind.sojourn_std)}
-    for measure in measures:
-        means, stds = series[measure]
-        for instant, mean, std in zip(ind.instants, means, stds):
-            rows.append({"name": f"{name}_{measure}", "measure": measure,
-                         "stat": "mean", "instant": instant, "values": mean})
-            rows.append({"name": f"{name}_{measure}", "measure": measure,
-                         "stat": "stddev", "instant": instant, "values": std})
-```
-
-And the minimal sequences, in the platform's sequence-artefact shape
-(`weight` is the trajectory count; divide by `nb_runs` for the
-probability):
+minimal sequences, in the platform's sequence-artefact shape (`weight` is
+the trajectory count; divide by `nb_runs` for the probability):
 
 <!-- skip -->
 ```python
@@ -151,34 +112,7 @@ artefact = {
 
 !!! note "Naming drifts when diffing against recorded runs"
     Older platform runs may write common-cause suffixes without index
-    separators (`occ__cc_12` for RAICHU's `occ__cc_1_2`) and prefix the
-    failure-mode component with the factorized target name: normalise
-    both before comparing sequence sets.
-
-## Fail fast, never silently wrong
-
-Anything outside this scope raises a typed `TranslationError` with the
-offending artefact in the message: a tempo/on-trigger flow type, a
-`negate` flag, an unknown attribute role, a malformed logic override, a
-missing required key. The translator refuses to guess: a model that
-translates is a model whose semantics are covered.
-
-One refusal comes from the model as a whole rather than from a single
-artefact, and it is raised when the model is expanded: an availability
-gate the platform declared **persistent** (`fed_available_reset` off, so
-the gate keeps its last value instead of falling back to its own at
-every step) and that a **held** failure effect writes. RAICHU has no
-per-variable reset to switch off, and a held effect carries the rest
-state its mode declares, so such a gate would come back up on repair
-instead of latching. A persistent gate no mode writes is built as
-declared: nothing restores it and nothing writes it.
-
-<!-- skip -->
-```python
-from pyraichu.importers import TranslationError
-
-try:
-    t = translate(export, study)
-except TranslationError as error:
-    print("unsupported construct:", error)
-```
+    separators (`occ__cc_12` for RAICHU's `occ__cc_1_2`). A failure-mode
+    component is named after its factorized target (`PLC_X__…__fail`)
+    while the study names the mode alone: match by suffix. Normalise both
+    before comparing sequence sets.
