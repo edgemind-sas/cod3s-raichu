@@ -120,6 +120,14 @@ def fault_tree_json(
     cut_set_limit: int = 100_000,
     name: str = "fault_tree",
 ) -> str: ...
+def fault_tree_quantify_json(
+    open_psa: str,
+    top: str | None = None,
+    mission_time: float | None = None,
+    max_bdd_nodes: int = 10_000_000,
+    cut_set_limit: int = 100_000,
+    cut_sets: bool = True,
+) -> str: ...
 def validate_exploration(result_json: str) -> None: ...
 def exploration_minimal_sequences_json(result_json: str) -> str: ...
 

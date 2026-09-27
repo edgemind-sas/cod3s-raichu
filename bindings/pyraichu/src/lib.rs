@@ -29,6 +29,7 @@ use raichu::raichu_explore::{
     ExactSettings, ExplorationResult, Precision,
 };
 use raichu::raichu_expr::{AttrRef, CmpOp};
+use raichu::raichu_fta::{quantify as quantify_tree, read_open_psa, QuantifySettings};
 use raichu::raichu_model::Model;
 use raichu::raichu_model::{Indicator, IndicatorTarget};
 use raichu::raichu_montecarlo::{
@@ -855,6 +856,55 @@ fn fault_tree_json(
     serde_json::to_string(&answer).map_err(|e| SimulationError::new_err(e.to_string()))
 }
 
+/// Quantify the fault tree an OpenPSA document defines, exactly: the
+/// top-event probability at `mission_time`, every basic event's
+/// importance, and the minimal cut sets when the tree is coherent and
+/// they number at most `cut_set_limit` (not extracted at all when
+/// `cut_sets` is false). `top` names the top gate when the
+/// document has several unreferenced ones. Answers the quantification
+/// with `"tree"` (the document's name) and `"events"` (the basic-event
+/// names, which the indices of the result refer to).
+#[pyfunction]
+#[pyo3(signature = (open_psa, top = None, mission_time = None, max_bdd_nodes = 10_000_000, cut_set_limit = 100_000, cut_sets = true))]
+fn fault_tree_quantify_json(
+    py: Python<'_>,
+    open_psa: &str,
+    top: Option<&str>,
+    mission_time: Option<f64>,
+    max_bdd_nodes: usize,
+    cut_set_limit: usize,
+    cut_sets: bool,
+) -> PyResult<String> {
+    let settings = QuantifySettings {
+        mission_time,
+        max_bdd_nodes,
+        cut_set_limit,
+        cut_sets,
+    };
+    // The GIL is released while the tree is read and quantified.
+    let (tree, result) = py
+        .detach(|| {
+            let tree = read_open_psa(open_psa, top)?;
+            let result = quantify_tree(&tree, &settings)?;
+            Ok::<_, raichu::raichu_fta::FtaError>((tree, result))
+        })
+        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    // Serialised straight to text: the cut-set count is a u128, which a
+    // `serde_json::Value` cannot hold past u64 (`json!` would panic).
+    #[derive(serde::Serialize)]
+    struct Answer<'a> {
+        tree: &'a str,
+        events: Vec<&'a str>,
+        result: &'a raichu::raichu_fta::Quantification,
+    }
+    let answer = Answer {
+        tree: &tree.name,
+        events: tree.events.iter().map(|e| e.name.as_str()).collect(),
+        result: &result,
+    };
+    serde_json::to_string(&answer).map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
 /// Parse an exploration result through the format's own reader.
 fn parse_exploration(result_json: &str) -> PyResult<ExplorationResult> {
     read_exploration_result(result_json).map_err(|e| SimulationError::new_err(e.to_string()))
@@ -1083,6 +1133,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(explore_json, module)?)?;
     module.add_function(wrap_pyfunction!(exploration_domain_json, module)?)?;
     module.add_function(wrap_pyfunction!(fault_tree_json, module)?)?;
+    module.add_function(wrap_pyfunction!(fault_tree_quantify_json, module)?)?;
     module.add_function(wrap_pyfunction!(validate_exploration, module)?)?;
     module.add_function(wrap_pyfunction!(
         exploration_minimal_sequences_json,

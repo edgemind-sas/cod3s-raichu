@@ -3,7 +3,10 @@
 `pyraichu.fault_tree` generates the fault tree explaining why a **top
 expression** over the model's states can become true, and hands it back as a
 tree, as its minimal cut sets, and as an OpenPSA model-exchange document a
-static tool reads.
+static tool reads. `pyraichu.quantify` then computes the tree's exact
+top-event probability, the importance of each basic event and its minimal cut
+sets, for a generated tree or for any OpenPSA document (see
+[Quantification](#quantification)).
 
 ```python
 import pyraichu
@@ -101,6 +104,91 @@ The method explains a value becoming **true** through states being entered,
 so every expression it crosses has to be monotone in the states. A state read
 under a negation, or inside arithmetic that is not a vote, is refused with the
 expression named, and so is a transition whose rate reads a state.
+
+## Quantification
+
+`tree.quantify(mission_time=...)`, or `pyraichu.quantify(document)` on an
+OpenPSA text or file, computes the tree **exactly** with binary decision
+diagrams. Each basic event's probability is its law's cumulative distribution
+at the mission time, with no repair: the laws are the engine's own, so a
+generated tree is quantified with the distributions the simulator draws from.
+
+```python
+result = tree.quantify(mission_time=1000.0)
+
+import math
+p = 1.0 - math.exp(-1e-3 * 1000.0)       # every unit fails at 1e-3
+exact = p * (1.0 - (1.0 - p) ** 2)        # A . (B + C)
+assert abs(result.probability - exact) < 1e-14
+assert result.method == "bdd" and result.exact
+assert result.minimal_cut_sets == tree.minimal_cut_sets
+assert result.cut_set_count == 2
+
+by_name = {i.name: i for i in result.importance}
+# A is in both cut sets, B and C in one each.
+assert by_name["A.health.fail"].birnbaum > by_name["C.health.fail"].birnbaum
+```
+
+What the result carries:
+
+| Field | Meaning |
+|---|---|
+| `probability` | the top-event probability at the mission time |
+| `method`, `exact` | `"bdd"`, and `True`: no cutoff, no bound |
+| `coherent` | whether the top is monotone in every basic event |
+| `minimal_cut_sets`, `cut_set_count` | the sets, by size then name, and their exact number |
+| `cut_sets_omitted` | why the sets are not listed, when they are not |
+| `importance` | per basic event, see below |
+| `provenance` | the variable-ordering heuristic, and per module its variables in diagram order and its diagram size |
+
+With `P` the top probability, `p` the event's, `P1` and `P0` the top
+probability with the event certain and impossible, each
+`BasicEventImportance` gives Birnbaum's `P1 - P0`, the critical importance
+factor `p (P1 - P0) / P`, Fussell-Vesely in the convention of PSA codes
+`(P - P0) / P` (the fraction of the risk removed by making the event
+impossible, equal to the critical factor in exact arithmetic), the diagnostic
+factor `p P1 / P`, and the risk achievement and reduction worths `P1 / P` and
+`P / P0`. A ratio whose denominator is zero is `None`: the reduction worth of
+an event whose removal removes the whole risk is infinite.
+
+**The method**, from the published algorithms: the tree is normalised
+(negations pushed down to the events, constants propagated, duplicate
+arguments removed, gates of one connective coalesced, identical gates shared),
+split into independent modules in linear time (Dutuit and Rauzy 1996), and each
+module gets its own reduced ordered diagram (Rauzy 1993), its variables in
+depth-first left-most order. The probability is read bottom-up over the
+modules; every event's Birnbaum importance comes from one backward pass per
+diagram, chained through the modules (Dutuit and Rauzy 2001); the minimal cut
+sets are the minimal solutions of each diagram (Rauzy 1993), counted exactly on
+the diagrams and listed when their number is at most `cut_set_limit`.
+
+**Scale, measured** on synthetic PSA-shaped trees (redundant trains sharing
+support systems, a vote over systems), one core: 750 basic events in 0.02 s,
+2 040 in 0.5 s, 4 850 in 12 s (5.3 million diagram nodes). Extracting the
+minimal cut sets is by far the costliest step (2 040 events take 9.5 s with
+it), and neither the probability nor the importance measures need it:
+`cut_sets=False` skips it. A tree without that structure, a flat union of
+random cut sets sharing their events, is the known worst case for decision
+diagrams: no variable order is reliably good on it (Rauzy 2008), and 60 cut
+sets of order 3 over 50 events already give a diagram of 2.3 million nodes.
+
+**What it does not do, and says:** a diagram that outgrows `max_bdd_nodes`
+raises `SimulationError` naming the budget (an approximate engine for very
+large trees, by cut sets under cutoffs with bounds, is planned next); a tree
+whose top keeps a negation after simplification is quantified exactly, its
+importance measures included, but its minimal cut sets, which would be prime
+implicants, are not computed, and `cut_sets_omitted` says so.
+
+**Reading OpenPSA:** the gates, basic events, house events and parameters of
+the document; the connectives `and`, `or`, `not`, `atleast`, `nand`, `nor`,
+`iff`, `imply`, `cardinality` and a two-argument `xor` (an n-ary one is read
+as parity by some tools and as "exactly one" by others, so it is refused);
+numbers and arithmetic over them, `exponential` and unshifted `Weibull` over
+the system mission time. Any other expression is refused with its element
+named rather than read approximately, and so are `define-substitution` and
+`define-CCF-group`, since quantifying without them would change the result, a
+parameter that reaches itself, a name defined twice, and an `event` reference
+several definitions could answer.
 
 ## The file
 
