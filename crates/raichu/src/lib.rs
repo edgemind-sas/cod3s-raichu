@@ -22,6 +22,10 @@
 //!   exploration of the Markov family).
 //! - [`raichu_fta`]: fault-tree quantification (exact top-event
 //!   probability, minimal cut sets, importance measures, OpenPSA).
+//! - [`raichu_quantify`]: the quantification contract, one study
+//!   answered by Monte-Carlo simulation, exact exploration or
+//!   discretised exploration in one result envelope
+//!   (`raichu.quantification`).
 //!
 //! The engine upholds standing validation / performance / observability
 //! contracts across its milestone sequence.
@@ -34,6 +38,7 @@ pub use raichu_fta;
 pub use raichu_model;
 pub use raichu_montecarlo;
 pub use raichu_numeric;
+pub use raichu_quantify;
 pub use raichu_rng;
 
 /// Engine version (single source of truth: the workspace `Cargo.toml`,

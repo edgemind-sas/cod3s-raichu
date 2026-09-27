@@ -10,12 +10,13 @@ members = [
     "crates/raichu-numeric",
     "crates/raichu-explore",
     "crates/raichu-fta",
+    "crates/raichu-quantify",
     "crates/raichu",
     "bindings/pyraichu",
 ]
 
 [workspace.package]
-version = "0.59.0"
+version = "0.60.0"
 edition = "2021"
 rust-version = "1.83"
 license = "MIT"
@@ -25,21 +26,25 @@ description = "RAICHU: native Rust engine for hybrid (PDMP) simulation of comple
 
 [workspace.dependencies]
 # Internal crates
-raichu-model = { path = "crates/raichu-model", version = "0.59.0" }
-raichu-expr = { path = "crates/raichu-expr", version = "0.59.0" }
-raichu-rng = { path = "crates/raichu-rng", version = "0.59.0" }
-raichu-core = { path = "crates/raichu-core", version = "0.59.0" }
-raichu-analysis = { path = "crates/raichu-analysis", version = "0.59.0" }
-raichu-montecarlo = { path = "crates/raichu-montecarlo", version = "0.59.0" }
-raichu-numeric = { path = "crates/raichu-numeric", version = "0.59.0" }
-raichu-explore = { path = "crates/raichu-explore", version = "0.59.0" }
-raichu-fta = { path = "crates/raichu-fta", version = "0.59.0" }
-raichu = { path = "crates/raichu", version = "0.59.0" }
+raichu-model = { path = "crates/raichu-model", version = "0.60.0" }
+raichu-expr = { path = "crates/raichu-expr", version = "0.60.0" }
+raichu-rng = { path = "crates/raichu-rng", version = "0.60.0" }
+raichu-core = { path = "crates/raichu-core", version = "0.60.0" }
+raichu-analysis = { path = "crates/raichu-analysis", version = "0.60.0" }
+raichu-montecarlo = { path = "crates/raichu-montecarlo", version = "0.60.0" }
+raichu-numeric = { path = "crates/raichu-numeric", version = "0.60.0" }
+raichu-explore = { path = "crates/raichu-explore", version = "0.60.0" }
+raichu-fta = { path = "crates/raichu-fta", version = "0.60.0" }
+raichu-quantify = { path = "crates/raichu-quantify", version = "0.60.0" }
+raichu = { path = "crates/raichu", version = "0.60.0" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+
+# Content hash of a model document (quantification provenance)
+sha2 = "0.10"
 
 # Errors & logging
 thiserror = "2"

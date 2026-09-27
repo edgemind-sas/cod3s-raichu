@@ -39,7 +39,7 @@ use raichu_core::{
     IndicatorSeries, Sequence, SolverParams,
 };
 use raichu_expr::Value;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Monte-Carlo run parameters.
 #[derive(Debug, Clone)]
@@ -88,7 +88,7 @@ pub struct McConfig {
 }
 
 /// A quantile series over the schedule instants.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QuantileSeries {
     /// Quantile order in (0, 1).
     pub q: f64,
@@ -99,7 +99,7 @@ pub struct QuantileSeries {
 /// The smallest and the largest value a measure took across the replicas,
 /// at each schedule instant: what a study asks with the `min` and `max`
 /// statistics.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Extremes {
     /// Smallest value over the replicas at each instant.
     pub min: Vec<f64>,
@@ -122,7 +122,7 @@ impl Extremes {
 }
 
 /// Estimates of one indicator over the schedule.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndicatorEstimate {
     /// Indicator name.
     pub name: String,
@@ -179,7 +179,7 @@ pub struct IndicatorEstimate {
 }
 
 /// Full Monte-Carlo result with provenance.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McEstimates {
     /// Per-indicator estimates.
     pub indicators: Vec<IndicatorEstimate>,
@@ -277,6 +277,21 @@ fn run_replica(
     config: &McConfig,
     replica: u64,
 ) -> Result<ReplicaSamples, EngineError> {
+    replica_samples(model, config, replica, false).map(|(samples, _)| samples)
+}
+
+/// One replica's samples, plus how it ended when `record_end` is set.
+///
+/// `record_end` switches the engine's sequence record on, which is the
+/// only place a finished run states its end cause; the record observes
+/// the trajectory and never changes it, so the samples are the ones
+/// [`run_replica`] reads.
+fn replica_samples(
+    model: &CompiledModel,
+    config: &McConfig,
+    replica: u64,
+    record_end: bool,
+) -> Result<(ReplicaSamples, Option<ReplicaEnd>), EngineError> {
     let engine_config = EngineConfig {
         t_max: config.t_max,
         samples: config.samples.clone(),
@@ -284,12 +299,18 @@ fn run_replica(
         rng_stream: replica,
         ode: config.ode.clone(),
         // Early stop only: this driver reads `samples` / `indicators` and
-        // never the per-trajectory trace, so it must not pay for recording it.
+        // never the per-trajectory trace, so it must not pay for recording it
+        // unless the caller asked how each replica ended.
         stop_at_targets: config.stop_at_targets,
+        sequences: record_end,
         flow: config.flow.clone(),
         ..EngineConfig::default()
     };
     let result = Engine::new(model, engine_config)?.run()?;
+    let end = result.sequence.map(|sequence| ReplicaEnd {
+        end_cause: sequence.end_cause,
+        end_time: sequence.end_time,
+    });
     let per_indicator = result
         .samples
         .iter()
@@ -311,7 +332,7 @@ fn run_replica(
             },
         )
         .collect();
-    Ok(per_indicator)
+    Ok((per_indicator, end))
 }
 
 /// Run the Monte-Carlo estimation.
@@ -321,17 +342,7 @@ fn run_replica(
 pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, EngineError> {
     use rayon::prelude::*;
 
-    // Before the replicas: a level that cannot produce an interval must
-    // not cost a campaign first.
-    if !is_valid_level(config.confidence) {
-        return Err(EngineError::InvalidStudyParameter {
-            parameter: "confidence".to_owned(),
-            detail: format!(
-                "a confidence level is a probability strictly inside (0, 1), got {}",
-                config.confidence
-            ),
-        });
-    }
+    check_level(config)?;
 
     let compute = || -> Result<Vec<ReplicaSamples>, EngineError> {
         (0..config.nb_runs)
@@ -339,8 +350,18 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
             .map(|replica| run_replica(model, config, replica))
             .collect()
     };
-    let replicas = match config.threads {
-        None => compute()?,
+    let replicas = in_pool(config.threads, compute)?;
+    Ok(reduce(model, config, &replicas))
+}
+
+/// Run `compute` on the default rayon pool, or on a pool of `threads`
+/// workers when one is asked for.
+fn in_pool<T: Send>(
+    threads: Option<usize>,
+    compute: impl FnOnce() -> Result<T, EngineError> + Send,
+) -> Result<T, EngineError> {
+    match threads {
+        None => compute(),
         Some(threads) => rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
@@ -348,9 +369,107 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
                 time: 0.0,
                 detail: format!("thread-pool construction failed: {e}"),
             })?
-            .install(compute)?,
-    };
+            .install(compute),
+    }
+}
 
+/// Refuse a confidence level that cannot produce an interval, before the
+/// replicas: it must not cost a campaign first.
+fn check_level(config: &McConfig) -> Result<(), EngineError> {
+    if is_valid_level(config.confidence) {
+        return Ok(());
+    }
+    Err(EngineError::InvalidStudyParameter {
+        parameter: "confidence".to_owned(),
+        detail: format!(
+            "a confidence level is a probability strictly inside (0, 1), got {}",
+            config.confidence
+        ),
+    })
+}
+
+/// How one replica ended: the first declared target it reached, or none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplicaEnd {
+    /// Name of the first target (feared event) the replica reached,
+    /// `None` when it reached none by the horizon.
+    pub end_cause: Option<String>,
+    /// Instant the target was reached, or the horizon when none was.
+    pub end_time: f64,
+}
+
+/// A stop-at-targets campaign: its estimates, and how each replica ended.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetCampaign {
+    /// The estimates, equal to [`run`] with
+    /// [`McConfig::stop_at_targets`] on and the same configuration
+    /// otherwise.
+    pub estimates: McEstimates,
+    /// One entry per replica, in replica order.
+    pub ends: Vec<ReplicaEnd>,
+}
+
+impl TargetCampaign {
+    /// Number of replicas whose first target reached is `target`.
+    #[must_use]
+    pub fn count_reached(&self, target: &str) -> u64 {
+        self.ends
+            .iter()
+            .filter(|end| end.end_cause.as_deref() == Some(target))
+            .count() as u64
+    }
+}
+
+/// Run one **stop-at-targets** campaign and report, beside its estimates,
+/// how each replica ended.
+///
+/// Every trajectory stops at the first declared target it reaches, as
+/// [`run`] does with [`McConfig::stop_at_targets`] on, whatever that
+/// field says: the estimates are byte-identical to that call, and the end
+/// causes are what counting "which feared event came first, by the
+/// horizon" needs, without inferring it from an indicator or running a
+/// second campaign. A model declaring no target yields no end cause.
+///
+/// # Errors
+/// As [`run`].
+pub fn run_to_targets(
+    model: &CompiledModel,
+    config: &McConfig,
+) -> Result<TargetCampaign, EngineError> {
+    use rayon::prelude::*;
+
+    let config = McConfig {
+        stop_at_targets: true,
+        ..config.clone()
+    };
+    check_level(&config)?;
+    let config = &config;
+    let compute = || -> Result<Vec<(ReplicaSamples, Option<ReplicaEnd>)>, EngineError> {
+        (0..config.nb_runs)
+            .into_par_iter()
+            .map(|replica| replica_samples(model, config, replica, true))
+            .collect()
+    };
+    let per = in_pool(config.threads, compute)?;
+    let (replicas, ends): (Vec<ReplicaSamples>, Vec<Option<ReplicaEnd>>) = per.into_iter().unzip();
+    let ends = ends
+        .into_iter()
+        .map(|end| {
+            end.unwrap_or(ReplicaEnd {
+                end_cause: None,
+                end_time: config.t_max,
+            })
+        })
+        .collect();
+    Ok(TargetCampaign {
+        estimates: reduce(model, config, &replicas),
+        ends,
+    })
+}
+
+/// The serial, replica-ordered reduction of a campaign's samples into
+/// its estimates (the determinism contract of the crate docs).
+fn reduce(model: &CompiledModel, config: &McConfig, replicas: &[ReplicaSamples]) -> McEstimates {
     let n_indicators = model.indicators.len();
     let n_instants = config.samples.len();
     let n = config.nb_runs as f64;
@@ -375,7 +494,7 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
             let (mut oc_sum, mut oc_sum_sq) = (0.0, 0.0);
             // A 0/1 draw, so its sum is also the sum of its squares.
             let mut reached_sum = 0.0;
-            for replica in &replicas {
+            for replica in replicas {
                 let (value, sojourn, nb_occ) = replica[idx][k];
                 sum += value;
                 sum_sq += value * value;
@@ -504,13 +623,13 @@ pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, Engi
         });
     }
 
-    Ok(McEstimates {
+    McEstimates {
         indicators,
         nb_runs: config.nb_runs,
         seed: config.seed,
         confidence: config.confidence,
         engine_version: env!("CARGO_PKG_VERSION").to_owned(),
-    })
+    }
 }
 
 /// Run `nb_runs` **sequence-recording** replicas and collect their raw

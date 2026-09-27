@@ -1,0 +1,25 @@
+[package]
+name = "raichu-quantify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Quantification contract: one study answered by Monte-Carlo simulation, exact exploration or discretised exploration, in one result envelope"
+
+[dependencies]
+raichu-core.workspace = true
+raichu-model.workspace = true
+raichu-montecarlo.workspace = true
+raichu-explore.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+raichu-expr.workspace = true
+
+[lints]
+workspace = true
