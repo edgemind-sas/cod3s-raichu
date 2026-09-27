@@ -13,7 +13,6 @@
 //! - [`raichu_expr`]: serializable expression trees (guards, effects,
 //!   ODE right-hand sides).
 //! - [`raichu_core`]: scheduler and simulation cycle.
-//! - [`raichu_io`]: model I/O and cod3s interop.
 //! - [`raichu_rng`]: reproducible RNG streams.
 //! - [`raichu_numeric`]: continuous evolution (milestone M1).
 //! - [`raichu_montecarlo`]: the Monte-Carlo replica driver.
@@ -29,7 +28,6 @@ pub use raichu_core;
 pub use raichu_explore;
 pub use raichu_expr;
 pub use raichu_fta;
-pub use raichu_io;
 pub use raichu_model;
 pub use raichu_montecarlo;
 pub use raichu_numeric;
