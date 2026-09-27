@@ -90,6 +90,8 @@ fn the_bridge_gives_its_closed_form_and_its_four_cut_sets() {
     assert!(result.coherent);
     assert_eq!(result.method, "bdd");
     assert!(result.exact);
+    assert_eq!(result.upper_bound, Some(result.probability));
+    assert!(result.warnings.is_empty());
 }
 
 #[test]
@@ -241,6 +243,7 @@ fn a_diagram_over_its_budget_is_refused_by_name() {
     let top = Formula::at_least(3, (0..6).map(e).collect());
     let settings = QuantifySettings {
         max_bdd_nodes: 4,
+        engine: raichu_fta::Engine::Exact,
         ..Default::default()
     };
     let err = quantify(&tree(events, top), &settings).unwrap_err();

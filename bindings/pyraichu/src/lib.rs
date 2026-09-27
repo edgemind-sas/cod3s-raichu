@@ -29,7 +29,9 @@ use raichu::raichu_explore::{
     ExactSettings, ExplorationResult, Precision,
 };
 use raichu::raichu_expr::{AttrRef, CmpOp};
-use raichu::raichu_fta::{quantify as quantify_tree, read_open_psa, QuantifySettings};
+use raichu::raichu_fta::{
+    quantify as quantify_tree, read_open_psa, Engine as FtaEngine, QuantifySettings,
+};
 use raichu::raichu_model::Model;
 use raichu::raichu_model::{Indicator, IndicatorTarget};
 use raichu::raichu_montecarlo::{
@@ -868,7 +870,8 @@ fn fault_tree_json(
 /// with `"tree"` (the document's name) and `"events"` (the basic-event
 /// names, which the indices of the result refer to).
 #[pyfunction]
-#[pyo3(signature = (open_psa, top = None, mission_time = None, max_bdd_nodes = 10_000_000, cut_set_limit = 100_000, cut_sets = true))]
+#[pyo3(signature = (open_psa, top = None, mission_time = None, max_bdd_nodes = 10_000_000, cut_set_limit = 100_000, cut_sets = true, engine = "auto", max_order = None, min_cut_probability = 0.0, max_cut_sets = 1_000_000, max_expansions = 100_000_000))]
+#[allow(clippy::too_many_arguments)]
 fn fault_tree_quantify_json(
     py: Python<'_>,
     open_psa: &str,
@@ -877,12 +880,37 @@ fn fault_tree_quantify_json(
     max_bdd_nodes: usize,
     cut_set_limit: usize,
     cut_sets: bool,
+    engine: &str,
+    max_order: Option<usize>,
+    min_cut_probability: f64,
+    max_cut_sets: usize,
+    max_expansions: u64,
 ) -> PyResult<String> {
+    let engine = match engine {
+        "auto" => FtaEngine::Auto,
+        "exact" => FtaEngine::Exact,
+        "cut_sets" => FtaEngine::CutSets,
+        other => {
+            return Err(SimulationError::new_err(format!(
+                "fault tree: engine `{other}` is not one of auto, exact, cut_sets"
+            )))
+        }
+    };
+    if !(0.0..=1.0).contains(&min_cut_probability) {
+        return Err(SimulationError::new_err(format!(
+            "fault tree: min_cut_probability {min_cut_probability} is outside [0, 1]"
+        )));
+    }
     let settings = QuantifySettings {
         mission_time,
         max_bdd_nodes,
         cut_set_limit,
         cut_sets,
+        engine,
+        max_order,
+        min_cut_probability,
+        max_cut_sets,
+        max_expansions,
     };
     // The GIL is released while the tree is read and quantified.
     let (tree, result) = py

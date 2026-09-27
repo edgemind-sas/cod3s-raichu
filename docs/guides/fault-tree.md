@@ -109,7 +109,9 @@ expression named, and so is a transition whose rate reads a state.
 
 `tree.quantify(mission_time=...)`, or `pyraichu.quantify(document)` on an
 OpenPSA text or file, computes the tree **exactly** with binary decision
-diagrams. Each basic event's probability is its law's cumulative distribution
+diagrams, and falls back to its cut sets under cutoffs, with a guaranteed
+upper bound, for any part too large for them (see
+[Very large trees](#very-large-trees)). Each basic event's probability is its law's cumulative distribution
 at the mission time, with no repair: the laws are the engine's own, so a
 generated tree is quantified with the distributions the simulator draws from.
 
@@ -134,12 +136,15 @@ What the result carries:
 | Field | Meaning |
 |---|---|
 | `probability` | the top-event probability at the mission time |
-| `method`, `exact` | `"bdd"`, and `True`: no cutoff, no bound |
+| `method`, `exact` | `"bdd"`, `"cut_sets"` or `"bdd+cut_sets"`, and whether the number is exact |
+| `upper_bound` | a guaranteed upper bound on the top probability, equal to it when exact |
+| `warnings` | what deserves attention before trusting the number; empty when exact |
 | `coherent` | whether the top is monotone in every basic event |
-| `minimal_cut_sets`, `cut_set_count` | the sets, by size then name, and their exact number |
+| `minimal_cut_sets`, `cut_set_count` | the sets, by size then name, and their number |
+| `cut_sets_complete` | whether they are all of them (no cutoff removed any) |
 | `cut_sets_omitted` | why the sets are not listed, when they are not |
 | `importance` | per basic event, see below |
-| `provenance` | the variable-ordering heuristic, and per module its variables in diagram order and its diagram size |
+| `provenance` | the engine and cutoffs asked for, the variable-ordering heuristic, and per module its method, variables in order, diagram size and, for the cut-set engine, its estimators and neglected mass |
 
 With `P` the top probability, `p` the event's, `P1` and `P0` the top
 probability with the event certain and impossible, each
@@ -162,7 +167,7 @@ diagram, chained through the modules (Dutuit and Rauzy 2001); the minimal cut
 sets are the minimal solutions of each diagram (Rauzy 1993), counted exactly on
 the diagrams and listed when their number is at most `cut_set_limit`.
 
-**Scale, measured** on synthetic PSA-shaped trees (redundant trains sharing
+**Scale of the exact engine, measured** on synthetic PSA-shaped trees (redundant trains sharing
 support systems, a vote over systems), one core: 750 basic events in 0.02 s,
 2 040 in 0.5 s, 4 850 in 12 s (5.3 million diagram nodes). Extracting the
 minimal cut sets is by far the costliest step (2 040 events take 9.5 s with
@@ -172,12 +177,74 @@ random cut sets sharing their events, is the known worst case for decision
 diagrams: no variable order is reliably good on it (Rauzy 2008), and 60 cut
 sets of order 3 over 50 events already give a diagram of 2.3 million nodes.
 
-**What it does not do, and says:** a diagram that outgrows `max_bdd_nodes`
-raises `SimulationError` naming the budget (an approximate engine for very
-large trees, by cut sets under cutoffs with bounds, is planned next); a tree
-whose top keeps a negation after simplification is quantified exactly, its
-importance measures included, but its minimal cut sets, which would be prime
-implicants, are not computed, and `cut_sets_omitted` says so.
+**Non-coherent trees:** a tree whose top keeps a negation after
+simplification is quantified exactly, its importance measures included, but
+its minimal cut sets, which would be prime implicants, are not computed, and
+`cut_sets_omitted` says so. The cut-set engine below refuses a negation.
+
+### Very large trees
+
+Each independent module is first given its exact diagram. When that outgrows
+`max_bdd_nodes`, the default `engine="auto"` quantifies **that module** from
+its cut sets instead, and the others stay exact; `engine="exact"` raises
+`SimulationError` rather, and `engine="cut_sets"` uses cut sets everywhere.
+
+```python
+import random
+
+rng = random.Random(3)
+cuts = "".join(
+    "<and>" + "".join(f'<basic-event name="E{i}"/>' for i in rng.sample(range(30), 3)) + "</and>"
+    for _ in range(40))
+events = "".join(
+    f'<define-basic-event name="E{i}"><float value="{rng.uniform(1e-4, 1e-2)}"/></define-basic-event>'
+    for i in range(30))
+flat = f'<opsa-mef><define-gate name="T"><or>{cuts}</or></define-gate>{events}</opsa-mef>'
+
+exact = pyraichu.quantify(flat, engine="exact", max_bdd_nodes=50_000_000)
+approx = pyraichu.quantify(flat, max_bdd_nodes=1_000)     # too small: falls back
+assert approx.method == "cut_sets" and not approx.exact
+assert exact.probability <= approx.probability <= approx.upper_bound
+assert approx.warnings                                     # it says it fell back
+```
+
+**The cut-set engine** extracts the module's minimal cut sets top-down, in the
+manner of MOCUS as Rauzy (2003) reworked it, under three cutoffs:
+`max_order` (the largest order kept), `min_cut_probability` (the smallest
+probability kept) and `max_cut_sets` (the most kept: past it the least probable
+are dropped and the probability cutoff raised), plus `max_expansions`, a budget
+on the partial sets explored. The retained sets are quantified three ways
+(Rauzy 2020): the rare-event approximation (their probabilities summed), the
+min-cut upper bound `1 - Π(1 - p(C))`, and the pivotal upper bound, computed on
+their decision diagram, generally the tightest. The module's probability is
+the pivotal bound. Each module records the three in `provenance`.
+
+**Direction of error, stated rather than hidden.** The three estimators bound
+the retained sets from above; the cutoffs remove sets, which pushes the other
+way. RAICHU adds what the reference tools do not: every set a cutoff loses
+contains a partial set that was pruned, and the probability bound that decided
+the pruning also bounds everything below it. Their sum, the **neglected mass**,
+added to the retained sets' bound, gives `upper_bound`, a **guaranteed** upper
+bound on the top event, whatever the cutoffs, for a coherent tree. The bounds
+use the independence of parts with disjoint supports, which is what keeps them
+useful on real structures. When the neglected mass exceeds the estimate,
+`warnings` says so: the estimate may then be far too optimistic.
+
+**Measured**, one core, on event-tree-shaped trees (initiating events and
+pairs of two-train safety systems sharing support systems, cut sets of order
+3 to 5):
+
+| Basic events | Exact | Cut sets, `min_cut_probability=1e-12` |
+|---|---|---|
+| 430 | 2.4294e-5, 0.1 s | 2.4457e-5, bound 2.4562e-5, 1.0 s |
+| 1 860 | over 50 million nodes after 19 s | 4.544e-5, bound 5.373e-5, 10 s (`max_cut_sets` reached) |
+| 6 120 | not attempted | 1.025e-4, bound 2.567e-4, 18 s (`max_cut_sets` reached) |
+
+On a flat union of random order-3 cut sets, the exact engine's worst case,
+1 000 events and 3 000 cut sets take 0.3 s. On trees whose probability is
+spread over astronomically many high-order cut sets (a vote over systems each
+redundant four times), no cutoff keeps the essential: the exact engine is the
+one that works there, and `auto` picks it while it fits.
 
 **Reading OpenPSA:** the gates, basic events, house events and parameters of
 the document; the connectives `and`, `or`, `not`, `atleast`, `nand`, `nor`,

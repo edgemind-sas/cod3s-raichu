@@ -179,3 +179,52 @@ def test_the_provenance_records_the_variable_order():
     assert provenance["variable_order"] == "depth_first_left_most"
     variables = [v for m in provenance["modules"] for v in m["variables"]]
     assert "A.health.fail" in variables
+
+
+def union_of_triples(n_events=30, n_cuts=40, seed=3):
+    """A flat union of random order-3 cut sets: the exact engine's worst case."""
+    import random
+
+    rng = random.Random(seed)
+    cuts = "".join(
+        "<and>"
+        + "".join(f'<basic-event name="E{i}"/>' for i in rng.sample(range(n_events), 3))
+        + "</and>"
+        for _ in range(n_cuts)
+    )
+    events = "".join(
+        f'<define-basic-event name="E{i}"><float value="{rng.uniform(1e-4, 1e-2)}"/>'
+        "</define-basic-event>"
+        for i in range(n_events)
+    )
+    return f'<opsa-mef><define-gate name="T"><or>{cuts}</or></define-gate>{events}</opsa-mef>'
+
+
+def test_a_module_over_the_budget_falls_back_to_its_cut_sets():
+    document = union_of_triples()
+    exact = pyraichu.quantify(document, engine="exact", max_bdd_nodes=50_000_000)
+    approximate = pyraichu.quantify(document, max_bdd_nodes=1_000)
+    assert exact.exact and exact.warnings == []
+    assert not approximate.exact
+    assert approximate.method == "cut_sets"
+    assert approximate.upper_bound >= exact.probability
+    assert approximate.probability >= exact.probability * (1 - 1e-12)
+    assert any("outgrew max_bdd_nodes" in w for w in approximate.warnings)
+    with pytest.raises(pyraichu.SimulationError, match="max_bdd_nodes"):
+        pyraichu.quantify(document, engine="exact", max_bdd_nodes=1_000)
+
+
+def test_cutoffs_trade_precision_for_a_certified_bound():
+    document = union_of_triples()
+    exact = pyraichu.quantify(document, engine="exact", max_bdd_nodes=50_000_000).probability
+    loose = pyraichu.quantify(document, engine="cut_sets", min_cut_probability=1e-6)
+    assert not loose.cut_sets_complete
+    assert loose.upper_bound >= exact
+    module = loose.provenance["modules"][0]
+    assert module["neglected"] > 0
+    assert module["pivotal_upper_bound"] <= module["mincut_upper_bound"] <= module["rare_event"]
+
+
+def test_an_unknown_engine_is_refused():
+    with pytest.raises(pyraichu.SimulationError, match="engine `fast`"):
+        pyraichu.quantify(union_of_triples(), engine="fast")
