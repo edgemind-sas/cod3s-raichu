@@ -127,6 +127,11 @@ def fault_tree_quantify_json(
     max_bdd_nodes: int = 10_000_000,
     cut_set_limit: int = 100_000,
     cut_sets: bool = True,
+    engine: str = "auto",
+    max_order: int | None = None,
+    min_cut_probability: float = 0.0,
+    max_cut_sets: int = 1_000_000,
+    max_expansions: int = 100_000_000,
 ) -> str: ...
 def validate_exploration(result_json: str) -> None: ...
 def quantify_json(

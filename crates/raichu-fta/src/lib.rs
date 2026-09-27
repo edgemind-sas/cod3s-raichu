@@ -5,20 +5,27 @@
 //! probability, its minimal cut sets and the importance of each basic
 //! event.
 //!
-//! This crate is the **exact** engine: reduced ordered binary decision
-//! diagrams (Rauzy 1993), one per independent module (Dutuit and Rauzy
-//! 1996), with the importance measures read off the diagrams (Dutuit and
-//! Rauzy 2001) and the minimal cut sets extracted into a zero-suppressed
-//! diagram (Rauzy 1993). The methods are implemented from these
-//! publications. A result always says which method produced it and
-//! records the variable order the diagrams were built in, since their size
-//! depends on it.
+//! Two engines, chosen per independent module:
 //!
-//! What the exact engine does not do, and says so rather than
-//! approximating: a diagram that outgrows its declared budget is an error
-//! naming the budget; the minimal cut sets of a non-coherent tree (one
-//! whose top is not monotone in its events) are not computed, although
-//! its probability and importance measures are, exactly.
+//! - the **exact** one: reduced ordered binary decision diagrams (Rauzy
+//!   1993), one per module (Dutuit and Rauzy 1996), importance measures
+//!   read off the diagrams (Dutuit and Rauzy 2001), minimal cut sets
+//!   extracted into a zero-suppressed diagram (Rauzy 1993);
+//! - the **cut-set** one, for a module whose diagram outgrows its budget:
+//!   minimal cut sets extracted top-down under order, probability and
+//!   count cutoffs (Rauzy 2003), quantified by the rare-event
+//!   approximation, the min-cut upper bound and the pivotal upper bound
+//!   (Rauzy 2020), with a guaranteed upper bound that adds the mass the
+//!   cutoffs neglected.
+//!
+//! The methods are implemented from these publications. A result says
+//! which engine produced each module, whether the number is exact, a
+//! guaranteed upper bound, the variable order the diagrams were built in,
+//! and warnings when a cutoff bit.
+//!
+//! The minimal cut sets of a non-coherent tree (one whose top is not
+//! monotone in its events) are not computed, although its probability and
+//! importance measures are, exactly; the cut-set engine refuses it.
 //!
 //! ```
 //! use raichu_fta::{quantify, BasicEvent, Formula, Law, QuantifySettings, Tree};
@@ -44,6 +51,7 @@
 //! # Ok::<(), raichu_fta::FtaError>(())
 //! ```
 
+mod approx;
 mod dd;
 mod from_core;
 mod law;
@@ -54,7 +62,8 @@ mod tree;
 pub use law::Law;
 pub use open_psa::{read_open_psa, write_open_psa};
 pub use quantify::{
-    quantify, EventImportance, ModuleRecord, Provenance, Quantification, QuantifySettings,
+    quantify, CutoffRecord, Engine, EventImportance, ModuleRecord, Provenance, Quantification,
+    QuantifySettings,
 };
 pub use tree::{BasicEvent, Formula, GateDef, Tree};
 
@@ -117,6 +126,9 @@ pub enum FtaError {
     /// The mission time is not a finite non-negative number.
     #[error("fault tree: mission time {0} is not a finite non-negative number")]
     BadMissionTime(f64),
+    /// The engine asked for cannot take a non-coherent formula.
+    #[error("fault tree: {0}")]
+    NonCoherent(String),
     /// A decision diagram outgrew the declared budget.
     #[error("fault tree: {0}")]
     TooLarge(String),

@@ -28,6 +28,12 @@
 //!    minimal solutions of each module's diagram, their exact number
 //!    counted on the diagrams, and the sets themselves enumerated when
 //!    that number fits the declared limit.
+//! 6. **A module too large for its diagram** (with [`Engine::Auto`], the
+//!    default) is quantified from its cut sets under cutoffs instead
+//!    ([`crate::approx`]): its value is the pivotal upper bound of the
+//!    retained sets (Rauzy 2020), and a guaranteed upper bound adds the
+//!    mass the cutoffs neglected. The other modules stay exact; the result
+//!    says which were not, and carries the bound.
 
 use std::collections::HashMap;
 
@@ -52,6 +58,32 @@ pub struct QuantifySettings {
     /// usually the costliest step by far, and neither the probability nor
     /// the importance measures need it.
     pub cut_sets: bool,
+    /// Which engine quantifies each module.
+    pub engine: Engine,
+    /// Cut-set engine: the largest cut-set order kept (`None`: no limit).
+    pub max_order: Option<usize>,
+    /// Cut-set engine: the smallest cut-set probability kept.
+    pub min_cut_probability: f64,
+    /// Cut-set engine: the most cut sets kept per module; past it the
+    /// least probable are dropped and the probability cutoff raised.
+    pub max_cut_sets: usize,
+    /// Cut-set engine: the most partial cut sets expanded per module;
+    /// past it, what remains open is neglected (and counted in the bound).
+    pub max_expansions: u64,
+}
+
+/// Which engine quantifies a module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Engine {
+    /// The exact diagram, and the cut-set engine for a module whose
+    /// diagram outgrows `max_bdd_nodes`.
+    Auto,
+    /// The exact diagram only: a module that outgrows the budget is an
+    /// error.
+    Exact,
+    /// The cut-set engine for every module.
+    CutSets,
 }
 
 impl Default for QuantifySettings {
@@ -61,6 +93,11 @@ impl Default for QuantifySettings {
             max_bdd_nodes: 10_000_000,
             cut_set_limit: 100_000,
             cut_sets: true,
+            engine: Engine::Auto,
+            max_order: None,
+            min_cut_probability: 0.0,
+            max_cut_sets: 1_000_000,
+            max_expansions: 100_000_000,
         }
     }
 }
@@ -97,12 +134,18 @@ pub struct EventImportance {
     pub risk_reduction_worth: Option<f64>,
 }
 
-/// One module's diagram, recorded with the order it was built in.
+/// One module, recorded with the order it was quantified in.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ModuleRecord {
     /// `M0` is the top; a submodule appears in its parent's variables
     /// under this name.
     pub name: String,
+    /// `"bdd"` (its exact diagram) or `"cut_sets"` (its cut sets under
+    /// cutoffs).
+    pub method: &'static str,
+    /// Whether its probability is exact: its own method is, and so is
+    /// every submodule it reads.
+    pub exact: bool,
     /// The variables, in diagram order: basic-event names and submodule
     /// names.
     pub variables: Vec<String>,
@@ -111,10 +154,40 @@ pub struct ModuleRecord {
     pub bdd_nodes: usize,
     /// Nodes its construction created, intermediate results included.
     pub nodes_created: usize,
-    /// Its probability.
+    /// Its probability: exact, or the pivotal upper bound of its retained
+    /// cut sets.
     pub probability: f64,
+    /// A guaranteed upper bound on its probability; `None` when none can
+    /// be certified (a non-monotone module reading an approximated one).
+    pub upper_bound: Option<f64>,
     /// Whether its function is monotone in its variables.
     pub monotone: bool,
+    /// Cut-set engine: how many minimal cut sets it retained.
+    pub retained_cut_sets: Option<u128>,
+    /// Cut-set engine: an upper bound on the probability of what the
+    /// cutoffs neglected, capped at 1.
+    pub neglected: Option<f64>,
+    /// Cut-set engine: the rare-event approximation of the retained sets.
+    pub rare_event: Option<f64>,
+    /// Cut-set engine: the min-cut upper bound of the retained sets.
+    pub mincut_upper_bound: Option<f64>,
+    /// Cut-set engine: the pivotal upper bound of the retained sets.
+    pub pivotal_upper_bound: Option<f64>,
+    /// Cut-set engine: partial cut sets expanded.
+    pub expansions: Option<u64>,
+}
+
+/// The cutoffs a quantification ran under.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct CutoffRecord {
+    /// The largest cut-set order kept.
+    pub max_order: Option<usize>,
+    /// The smallest cut-set probability kept.
+    pub min_probability: f64,
+    /// The most cut sets kept per module.
+    pub max_cut_sets: usize,
+    /// The most partial cut sets expanded per module.
+    pub max_expansions: u64,
 }
 
 /// How the numbers were produced.
@@ -122,6 +195,10 @@ pub struct ModuleRecord {
 pub struct Provenance {
     /// The variable-ordering heuristic.
     pub variable_order: &'static str,
+    /// The engine asked for.
+    pub engine: Engine,
+    /// The cut-set engine's cutoffs (used only by modules it quantified).
+    pub cutoffs: CutoffRecord,
     /// Every module, top first.
     pub modules: Vec<ModuleRecord>,
     /// Nodes of all module BDDs together.
@@ -137,33 +214,50 @@ pub struct Provenance {
 /// A quantified tree.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Quantification {
-    /// The top-event probability at the mission time.
+    /// The top-event probability at the mission time: exact, or, when a
+    /// module fell back to its cut sets, computed with that module's
+    /// pivotal upper bound.
     pub probability: f64,
-    /// The method that produced it.
+    /// `"bdd"`, `"cut_sets"`, or `"bdd+cut_sets"` when the modules used
+    /// both; [`Provenance::modules`] says which used which.
     pub method: &'static str,
-    /// Whether the probability is exact (no cutoff, no bound). Always true
-    /// for the decision-diagram method.
+    /// Whether the probability is exact (no cutoff, no bound).
     pub exact: bool,
+    /// A guaranteed upper bound on the top-event probability: equal to
+    /// the probability when exact; `None` when none can be certified.
+    pub upper_bound: Option<f64>,
     /// The instant the laws were read at.
     pub mission_time: Option<f64>,
     /// Whether the top is monotone in every basic event.
     pub coherent: bool,
     /// Every basic event's importance, in the tree's event order.
     pub importance: Vec<EventImportance>,
-    /// The exact number of minimal cut sets (saturating at `u128::MAX`);
-    /// `None` for a non-coherent tree or when they were not requested.
+    /// The number of minimal cut sets found (saturating at `u128::MAX`),
+    /// exact when [`Quantification::cut_sets_complete`]; `None` for a
+    /// non-coherent tree, or when they were not requested or not
+    /// extracted.
     pub cut_set_count: Option<u128>,
+    /// Whether no cutoff removed any cut set: the probability may still be
+    /// a bound (a module quantified from its cut sets), but the sets are
+    /// all of them.
+    pub cut_sets_complete: bool,
     /// The minimal cut sets, each a sorted list of event indices, by size
     /// then lexicographically; `None` when omitted, with the reason in
     /// [`Quantification::cut_sets_omitted`].
     pub minimal_cut_sets: Option<Vec<Vec<usize>>>,
     /// Why the minimal cut sets are not listed.
     pub cut_sets_omitted: Option<String>,
+    /// What deserves attention before trusting the number: a module that
+    /// fell back to its cut sets, a cutoff that bit, a neglected mass
+    /// larger than the estimate. Empty for an exact result.
+    pub warnings: Vec<String>,
     /// How the numbers were produced.
     pub provenance: Provenance,
 }
 
-/// Quantify `tree` exactly.
+/// Quantify `tree`: exactly, or, for a module too large for its diagram,
+/// from its cut sets under cutoffs with a guaranteed upper bound (see
+/// [`QuantifySettings::engine`]).
 ///
 /// Runs on a thread of its own with a large stack (1 GiB of address
 /// space, committed as used): the diagram operations
@@ -222,6 +316,8 @@ fn constant_result(
         probability: p,
         method: "bdd",
         exact: true,
+        upper_bound: Some(p),
+        cut_sets_complete: true,
         mission_time: settings.mission_time,
         coherent: true,
         importance,
@@ -230,8 +326,16 @@ fn constant_result(
             .cut_sets
             .then(|| if value { vec![Vec::new()] } else { Vec::new() }),
         cut_sets_omitted: (!settings.cut_sets).then(|| "not requested".to_owned()),
+        warnings: Vec::new(),
         provenance: Provenance {
             variable_order: VARIABLE_ORDER,
+            engine: settings.engine,
+            cutoffs: CutoffRecord {
+                max_order: settings.max_order,
+                min_probability: settings.min_cut_probability,
+                max_cut_sets: settings.max_cut_sets,
+                max_expansions: settings.max_expansions,
+            },
             modules: Vec::new(),
             bdd_nodes: 0,
             zbdd_nodes: 0,
@@ -575,7 +679,7 @@ impl Graph {
 }
 
 // ---------------------------------------------------------------------
-// Per-module diagrams.
+// Per-module results.
 // ---------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -584,14 +688,36 @@ enum Key {
     Module(u32),
 }
 
-struct ModuleDiagram {
+/// One module quantified, by its exact diagram or by its cut sets under
+/// cutoffs.
+struct ModuleResult {
     node: u32,
-    bdd: Bdd,
-    root: u32,
     keys: Vec<Key>,
-    level_p: Vec<f64>,
-    prob: Vec<f64>,
+    method: &'static str,
+    /// Its probability: exact, or the pivotal upper bound of its retained
+    /// cut sets.
+    value: f64,
+    /// A guaranteed upper bound on its probability, when one can be
+    /// certified.
+    upper: Option<f64>,
+    /// Whether `value` is exact: its own method is, and so is every
+    /// submodule it reads.
+    exact: bool,
     monotone: bool,
+    /// `∂value / ∂p(level)`.
+    gradient: Vec<f64>,
+    /// Which levels its function depends on.
+    support: Vec<bool>,
+    diagram: Option<(Bdd, u32)>,
+    retained: Option<crate::dd::Zbdd>,
+    truncated: bool,
+    neglected: Option<f64>,
+    estimators: Option<(f64, f64, f64)>,
+    expansions: Option<u64>,
+    /// Why this module's number deserves attention, if it does.
+    warnings: Vec<String>,
+    bdd_nodes: usize,
+    nodes_created: usize,
 }
 
 struct Quantifier<'a> {
@@ -620,63 +746,75 @@ impl<'a> Quantifier<'a> {
         let n_events = self.tree.events.len();
         let is_module = self.graph.modules(root, n_events);
         // Bottom-up: ascending node ids put every submodule before its
-        // parent.
-        // An unreachable node is never a module: its dates stay at zero.
+        // parent. An unreachable node is never a module: its dates stay
+        // at zero.
         let module_nodes: Vec<u32> = (0..=root).filter(|&g| is_module[g as usize]).collect();
-        let mut module_p: HashMap<u32, f64> = HashMap::new();
-        // A module whose diagram reduced to a terminal is that constant in
-        // its parent, never a variable: a variable standing for a
-        // tautology would make its parent's cut sets carry the empty set
-        // beside real ones.
+        // A module that reduced to a terminal is that constant in its
+        // parent, never a variable: a variable standing for a tautology
+        // would make its parent's cut sets carry the empty set beside real
+        // ones.
         let mut constant: HashMap<u32, bool> = HashMap::new();
-        let mut all: Vec<ModuleDiagram> = Vec::new();
+        let mut done: HashMap<u32, ModuleResult> = HashMap::new();
+        let mut order: Vec<u32> = Vec::new();
         let mut used = 0usize;
         for &m in &module_nodes {
-            let budget = self.settings.max_bdd_nodes.saturating_sub(used).max(2);
-            let diagram = self.diagram(m, &is_module, &module_p, &constant, budget)?;
-            used += diagram.bdd.len();
-            module_p.insert(m, diagram.prob[diagram.root as usize]);
-            if diagram.root <= crate::dd::ONE {
-                constant.insert(m, diagram.root == crate::dd::ONE);
+            let result = self.module(m, &is_module, &constant, &done, &mut used)?;
+            // A function of no variable is a constant, whatever its inputs'
+            // methods; a truncated family is not (what was cut may hold).
+            if !result.truncated
+                && result.support.iter().all(|s| !s)
+                && (result.value == 1.0 || result.value == 0.0)
+            {
+                constant.insert(m, result.value == 1.0);
             }
-            all.push(diagram);
+            done.insert(m, result);
+            order.push(m);
         }
-        let top = module_p.get(&root).copied().unwrap_or(0.0);
 
         // The live modules: the root, and every module its live parent's
-        // function still depends on. A module its parent absorbed (in
-        // `e + e.M`, say) takes part in nothing: not in the cut sets, not
-        // in the coherence of the top.
+        // function still depends on. A module its parent absorbed takes
+        // part in nothing: not in the cut sets, not in the coherence of the
+        // top.
         let mut live: std::collections::HashSet<u32> = std::collections::HashSet::from([root]);
-        for diagram in all.iter().rev() {
-            if !live.contains(&diagram.node) {
+        for m in order.iter().rev() {
+            if !live.contains(m) {
                 continue;
             }
-            let support = diagram.bdd.support(diagram.root, diagram.keys.len());
-            for (level, key) in diagram.keys.iter().enumerate() {
+            let result = &done[m];
+            for (level, key) in result.keys.iter().enumerate() {
                 if let Key::Module(n) = key {
-                    if support[level] {
+                    // A cut-set module reads a submodule through its bounds
+                    // even when no retained set holds it: pruned partials
+                    // did, and their mass used its upper bound.
+                    if result.support[level] || result.method == "cut_sets" {
                         live.insert(*n);
                     }
                 }
             }
         }
-        let diagrams: Vec<ModuleDiagram> =
-            all.into_iter().filter(|d| live.contains(&d.node)).collect();
+        let mut results: Vec<ModuleResult> = order
+            .iter()
+            .filter(|m| live.contains(*m))
+            .filter_map(|m| done.remove(m))
+            .collect();
+        let Some(top_result) = results.iter().find(|r| r.node == root) else {
+            return Err(FtaError::Invalid(
+                "internal: the top module is missing".to_owned(),
+            ));
+        };
+        let top = top_result.value;
+        let upper_bound = top_result.upper;
 
         // Top-down derivatives through the modules.
         let mut derivative: HashMap<u32, f64> = HashMap::from([(root, 1.0)]);
         let mut birnbaum = vec![0.0; n_events];
-        for diagram in diagrams.iter().rev() {
-            let d = derivative.get(&diagram.node).copied().unwrap_or(0.0);
-            let b = diagram
-                .bdd
-                .birnbaum(diagram.root, &diagram.level_p, &diagram.prob);
-            for (level, key) in diagram.keys.iter().enumerate() {
+        for result in results.iter().rev() {
+            let d = derivative.get(&result.node).copied().unwrap_or(0.0);
+            for (level, key) in result.keys.iter().enumerate() {
                 match *key {
-                    Key::Event(e) => birnbaum[e as usize] += d * b[level],
+                    Key::Event(e) => birnbaum[e as usize] += d * result.gradient[level],
                     Key::Module(n) => {
-                        *derivative.entry(n).or_insert(0.0) += d * b[level];
+                        *derivative.entry(n).or_insert(0.0) += d * result.gradient[level];
                     }
                 }
             }
@@ -688,22 +826,50 @@ impl<'a> Quantifier<'a> {
             .map(|(event, q)| measures(event, *q, top, birnbaum[event]))
             .collect();
 
-        let coherent = diagrams.iter().all(|d| d.monotone);
-        let names: HashMap<u32, String> = diagrams
+        let exact = results.iter().all(|r| r.exact);
+        let truncated = results.iter().any(|r| r.truncated);
+        let retained_counts: HashMap<u32, u128> = results
+            .iter()
+            .filter_map(|r| {
+                r.retained
+                    .as_ref()
+                    .map(|z| (r.node, z.weighted_count(&vec![1; r.keys.len()])))
+            })
+            .collect();
+        let coherent = results.iter().all(|r| r.monotone);
+        let method = if results.iter().all(|r| r.method == "bdd") {
+            "bdd"
+        } else if results.iter().all(|r| r.method == "cut_sets") {
+            "cut_sets"
+        } else {
+            "bdd+cut_sets"
+        };
+        let names: HashMap<u32, String> = results
             .iter()
             .rev()
             .enumerate()
-            .map(|(i, d)| (d.node, format!("M{i}")))
+            .map(|(i, r)| (r.node, format!("M{i}")))
+            .collect();
+        let warnings: Vec<String> = results
+            .iter()
+            .rev()
+            .flat_map(|r| {
+                let name = names.get(&r.node).cloned().unwrap_or_default();
+                r.warnings
+                    .iter()
+                    .map(move |w| format!("module {name}: {w}"))
+            })
             .collect();
         let mut zbdd_nodes = 0usize;
         let mut zbdd_created = 0usize;
         let (cut_set_count, minimal_cut_sets, cut_sets_omitted) = if !self.settings.cut_sets {
             (None, None, Some("not requested".to_owned()))
         } else if coherent {
-            let (count, sets, omitted, (size, created)) = self.cut_sets(&diagrams, root, used)?;
+            let (count, sets, omitted, (size, created)) =
+                self.cut_sets(&mut results, root, used)?;
             zbdd_nodes = size;
             zbdd_created = created;
-            (Some(count), sets, omitted)
+            (count, sets, omitted)
         } else {
             (
                 None,
@@ -716,12 +882,14 @@ impl<'a> Quantifier<'a> {
                 ),
             )
         };
-        let modules = diagrams
+        let modules = results
             .iter()
             .rev()
-            .map(|d| ModuleRecord {
-                name: names.get(&d.node).cloned().unwrap_or_default(),
-                variables: d
+            .map(|r| ModuleRecord {
+                name: names.get(&r.node).cloned().unwrap_or_default(),
+                method: r.method,
+                exact: r.exact,
+                variables: r
                     .keys
                     .iter()
                     .map(|k| match k {
@@ -734,25 +902,42 @@ impl<'a> Quantifier<'a> {
                             .unwrap_or_else(|| "absorbed".to_owned()),
                     })
                     .collect(),
-                bdd_nodes: d.bdd.size(d.root),
-                nodes_created: d.bdd.len(),
-                probability: d.prob[d.root as usize],
-                monotone: d.monotone,
+                bdd_nodes: r.bdd_nodes,
+                nodes_created: r.nodes_created,
+                probability: r.value,
+                upper_bound: r.upper,
+                monotone: r.monotone,
+                retained_cut_sets: retained_counts.get(&r.node).copied(),
+                neglected: r.neglected.map(|n| n.min(1.0)),
+                rare_event: r.estimators.map(|e| e.0),
+                mincut_upper_bound: r.estimators.map(|e| e.1),
+                pivotal_upper_bound: r.estimators.map(|e| e.2),
+                expansions: r.expansions,
             })
             .collect();
         Ok(Quantification {
             probability: top,
-            method: "bdd",
-            exact: true,
+            method,
+            exact,
+            upper_bound,
             mission_time: self.settings.mission_time,
             coherent,
             importance,
             cut_set_count,
+            cut_sets_complete: !truncated,
+            warnings,
             minimal_cut_sets,
             cut_sets_omitted,
             provenance: Provenance {
                 variable_order: VARIABLE_ORDER,
-                bdd_nodes: diagrams.iter().map(|d| d.bdd.size(d.root)).sum(),
+                engine: self.settings.engine,
+                cutoffs: CutoffRecord {
+                    max_order: self.settings.max_order,
+                    min_probability: self.settings.min_cut_probability,
+                    max_cut_sets: self.settings.max_cut_sets,
+                    max_expansions: self.settings.max_expansions,
+                },
+                bdd_nodes: results.iter().map(|r| r.bdd_nodes).sum(),
                 modules,
                 zbdd_nodes,
                 nodes_created: used + zbdd_created,
@@ -760,14 +945,15 @@ impl<'a> Quantifier<'a> {
         })
     }
 
-    fn diagram(
+    /// Quantify module `m`, its submodules already done.
+    fn module(
         &self,
         m: u32,
         is_module: &[bool],
-        module_p: &HashMap<u32, f64>,
         constant: &HashMap<u32, bool>,
-        budget: usize,
-    ) -> Result<ModuleDiagram, FtaError> {
+        done: &HashMap<u32, ModuleResult>,
+        used: &mut usize,
+    ) -> Result<ModuleResult, FtaError> {
         // Variable order: depth-first left-most, first encounter.
         let mut keys: Vec<Key> = Vec::new();
         let mut level_of: HashMap<Key, u32> = HashMap::new();
@@ -781,26 +967,236 @@ impl<'a> Quantifier<'a> {
             &mut level_of,
             &mut seen,
         );
+        let sub = |n: &u32| done.get(n);
         let level_p: Vec<f64> = keys
             .iter()
             .map(|k| match k {
                 Key::Event(e) => self.probability[*e as usize].unwrap_or(0.0),
-                Key::Module(n) => module_p.get(n).copied().unwrap_or(0.0),
+                Key::Module(n) => sub(n).map_or(0.0, |r| r.value),
             })
             .collect();
-        let mut bdd = Bdd::new(budget);
-        let mut memo: HashMap<u32, u32> = HashMap::new();
-        let root = self.build(m, m, is_module, constant, &level_of, &mut bdd, &mut memo)?;
-        let prob = bdd.probabilities(&level_p);
-        let monotone = bdd.is_monotone(root);
-        Ok(ModuleDiagram {
+        // Upper bounds of the variables: exact for events, certified for
+        // submodules when they could be.
+        let level_u: Option<Vec<f64>> = keys
+            .iter()
+            .map(|k| match k {
+                Key::Event(e) => Some(self.probability[*e as usize].unwrap_or(0.0)),
+                Key::Module(n) => sub(n).and_then(|r| r.upper),
+            })
+            .collect();
+        let inputs_exact = keys.iter().all(|k| match k {
+            Key::Event(_) => true,
+            Key::Module(n) => sub(n).is_some_and(|r| r.exact),
+        });
+
+        let exact_attempt = match self.settings.engine {
+            Engine::CutSets => None,
+            Engine::Exact | Engine::Auto => {
+                let budget = self.settings.max_bdd_nodes.saturating_sub(*used).max(2);
+                let mut bdd = Bdd::new(budget);
+                let mut memo: HashMap<u32, u32> = HashMap::new();
+                match self.build(m, m, is_module, constant, &level_of, &mut bdd, &mut memo) {
+                    Ok(root) => Some((bdd, root)),
+                    Err(FtaError::TooLarge(_)) if self.settings.engine == Engine::Auto => None,
+                    Err(e) => return Err(e),
+                }
+            }
+        };
+        if let Some((bdd, root)) = exact_attempt {
+            *used += bdd.len();
+            let prob = bdd.probabilities(&level_p);
+            let value = prob[root as usize];
+            let gradient = bdd.birnbaum(root, &level_p, &prob);
+            let monotone = bdd.is_monotone(root);
+            let upper = if inputs_exact {
+                Some(value)
+            } else if monotone {
+                // Monotone: evaluating on upper bounds of the inputs bounds
+                // the output.
+                level_u.map(|u| bdd.probabilities(&u)[root as usize])
+            } else {
+                None
+            };
+            return Ok(ModuleResult {
+                node: m,
+                support: bdd.support(root, keys.len()),
+                keys,
+                method: "bdd",
+                value,
+                upper,
+                exact: inputs_exact,
+                monotone,
+                gradient,
+                bdd_nodes: bdd.size(root),
+                nodes_created: bdd.len(),
+                diagram: Some((bdd, root)),
+                retained: None,
+                truncated: false,
+                neglected: None,
+                estimators: None,
+                expansions: None,
+                warnings: Vec::new(),
+            });
+        }
+
+        // The cut-set engine: coherent modules only.
+        let formula = self.local_formula(m, is_module, constant, &level_of)?;
+        let certified = level_u.is_some();
+        let p_extract = level_u.unwrap_or_else(|| level_p.clone());
+        let cutoffs = crate::approx::Cutoffs {
+            max_order: self.settings.max_order,
+            min_probability: self.settings.min_cut_probability,
+            max_cut_sets: self.settings.max_cut_sets,
+            max_expansions: self.settings.max_expansions,
+        };
+        let extracted = crate::approx::extract(&formula, &p_extract, &cutoffs);
+        // The retained family is already bounded by `max_cut_sets`; the
+        // node budget that sent the module here does not apply to it.
+        let mut zbdd = crate::dd::Zbdd::new(usize::MAX);
+        let family = zbdd.family_of(&extracted.sets)?;
+        let family = zbdd.minimal(family)?;
+        zbdd.root = family;
+        let (pivotal, gradient) = zbdd.pivotal(family, &level_p);
+        let rare_event = zbdd.rare_event(family, &level_p);
+        let mcub = 1.0
+            - zbdd
+                .sets()
+                .iter()
+                .map(|set| 1.0 - set.iter().map(|l| level_p[*l as usize]).product::<f64>())
+                .product::<f64>();
+        let upper = certified.then(|| {
+            let (pivotal_u, _) = zbdd.pivotal(family, &p_extract);
+            let mcub_u = 1.0
+                - zbdd
+                    .sets()
+                    .iter()
+                    .map(|set| 1.0 - set.iter().map(|l| p_extract[*l as usize]).product::<f64>())
+                    .product::<f64>();
+            (pivotal_u.min(mcub_u) + extracted.neglected).min(1.0)
+        });
+        let mut warnings = Vec::new();
+        if self.settings.engine == Engine::Auto {
+            warnings.push(format!(
+                "its exact diagram outgrew max_bdd_nodes ({}): quantified from its \
+                 cut sets under cutoffs",
+                self.settings.max_bdd_nodes
+            ));
+        }
+        if extracted.count_reached {
+            warnings.push(format!(
+                "max_cut_sets ({}) was reached: the least probable cut sets were \
+                 dropped and the probability cutoff raised",
+                self.settings.max_cut_sets
+            ));
+        }
+        if extracted.expansions_exhausted {
+            warnings.push(format!(
+                "max_expansions ({}) ran out: what remained open is only bounded",
+                self.settings.max_expansions
+            ));
+        }
+        if extracted.neglected > pivotal {
+            warnings.push(format!(
+                "the neglected mass ({:.3e}) exceeds the retained estimate \
+                 ({pivotal:.3e}): the estimate may be far too optimistic; lower the \
+                 cutoffs or raise max_cut_sets",
+                extracted.neglected
+            ));
+        }
+        Ok(ModuleResult {
+            warnings,
             node: m,
-            bdd,
-            root,
+            support: zbdd.support(family, keys.len()),
             keys,
-            level_p,
-            prob,
-            monotone,
+            method: "cut_sets",
+            value: pivotal,
+            upper,
+            exact: false,
+            monotone: true,
+            gradient,
+            bdd_nodes: 0,
+            nodes_created: zbdd.len(),
+            diagram: None,
+            truncated: extracted.truncated,
+            neglected: Some(extracted.neglected),
+            estimators: Some((rare_event, mcub, pivotal)),
+            expansions: Some(extracted.expansions),
+            retained: Some(zbdd),
+        })
+    }
+
+    /// Module `m` as a formula over its own variables, for the cut-set
+    /// engine; a negated event is refused, since the engine's bounds hold
+    /// for coherent formulas only.
+    fn local_formula(
+        &self,
+        m: u32,
+        is_module: &[bool],
+        constant: &HashMap<u32, bool>,
+        level_of: &HashMap<Key, u32>,
+    ) -> Result<crate::approx::LocalFormula, FtaError> {
+        use crate::approx::{Arg, Kind};
+        let mut index: HashMap<u32, u32> = HashMap::new();
+        let mut gates: Vec<(Kind, Vec<Arg>)> = Vec::new();
+        // Post-order, iteratively: a gate is emitted once its children are.
+        let mut stack: Vec<(u32, bool)> = vec![(m, false)];
+        while let Some((g, expanded)) = stack.pop() {
+            if index.contains_key(&g) {
+                continue;
+            }
+            let (op, args) = &self.graph.nodes[g as usize];
+            if !expanded {
+                stack.push((g, true));
+                for arg in args {
+                    if let Lit::Node(c) = *arg {
+                        let submodule = c != m && is_module[c as usize];
+                        if !submodule && !index.contains_key(&c) {
+                            stack.push((c, false));
+                        }
+                    }
+                }
+                continue;
+            }
+            let mut local = Vec::with_capacity(args.len());
+            for arg in args {
+                local.push(match *arg {
+                    Lit::Var(e, true) => Arg::Level(level_of[&Key::Event(e)]),
+                    Lit::Var(e, false) => {
+                        let name = &self.tree.events[e as usize].name;
+                        return Err(if self.settings.engine == Engine::Auto {
+                            FtaError::TooLarge(format!(
+                                "a module holding the negated event `{name}` outgrew \
+                                 max_bdd_nodes, and the cut-set engine it would fall \
+                                 back to only bounds coherent formulas; raise \
+                                 max_bdd_nodes"
+                            ))
+                        } else {
+                            FtaError::NonCoherent(format!(
+                                "the cut-set engine only bounds coherent formulas, \
+                                 and a module holds the negated event `{name}`; use \
+                                 the exact engine"
+                            ))
+                        });
+                    }
+                    Lit::Node(c) if c != m && is_module[c as usize] => match constant.get(&c) {
+                        Some(v) => Arg::Const(*v),
+                        None => Arg::Level(level_of[&Key::Module(c)]),
+                    },
+                    Lit::Node(c) => Arg::Gate(index[&c]),
+                    Lit::Const(v) => Arg::Const(v),
+                });
+            }
+            let kind = match op {
+                GOp::And => Kind::And,
+                GOp::Or => Kind::Or,
+                GOp::AtLeast(k) => Kind::AtLeast(*k),
+            };
+            index.insert(g, gates.len() as u32);
+            gates.push((kind, local));
+        }
+        Ok(crate::approx::LocalFormula {
+            root: index[&m],
+            gates,
         })
     }
 
@@ -879,15 +1275,18 @@ impl<'a> Quantifier<'a> {
         Ok(id)
     }
 
+    /// The minimal cut sets across the modules: each module's family (its
+    /// diagram's minimal solutions, or its retained cut sets), counted
+    /// through the modules and expanded when the count fits the limit.
     #[allow(clippy::type_complexity)]
     fn cut_sets(
         &self,
-        diagrams: &[ModuleDiagram],
+        results: &mut [ModuleResult],
         root: u32,
         used: usize,
     ) -> Result<
         (
-            u128,
+            Option<u128>,
             Option<Vec<Vec<usize>>>,
             Option<String>,
             (usize, usize),
@@ -898,16 +1297,37 @@ impl<'a> Quantifier<'a> {
         let mut counts: HashMap<u32, u128> = HashMap::new();
         let mut zbdd_nodes = 0usize;
         let mut zbdd_created = 0usize;
-        for diagram in diagrams {
-            let budget = self
-                .settings
-                .max_bdd_nodes
-                .saturating_sub(used + zbdd_created)
-                .max(2);
-            let zbdd = diagram.bdd.minimal_solutions(diagram.root, budget)?;
-            zbdd_nodes += zbdd.size();
-            zbdd_created += zbdd.len();
-            let weight: Vec<u128> = diagram
+        for result in results.iter_mut() {
+            let family = match (&result.diagram, result.retained.take()) {
+                (Some((bdd, diagram_root)), _) => {
+                    let budget = self
+                        .settings
+                        .max_bdd_nodes
+                        .saturating_sub(used + zbdd_created)
+                        .max(2);
+                    let zbdd = match bdd.minimal_solutions(*diagram_root, budget) {
+                        Ok(zbdd) => zbdd,
+                        // The probability is already in hand: under `auto`
+                        // a cut-set family over the budget is omitted, not
+                        // a reason to lose the whole result.
+                        Err(FtaError::TooLarge(why)) if self.settings.engine == Engine::Auto => {
+                            return Ok((
+                                None,
+                                None,
+                                Some(format!("the minimal cut sets were not extracted: {why}")),
+                                (zbdd_nodes, zbdd_created),
+                            ));
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    zbdd_created += zbdd.len();
+                    zbdd
+                }
+                (None, Some(retained)) => retained,
+                (None, None) => continue,
+            };
+            zbdd_nodes += family.size();
+            let weight: Vec<u128> = result
                 .keys
                 .iter()
                 .map(|k| match k {
@@ -915,14 +1335,14 @@ impl<'a> Quantifier<'a> {
                     Key::Module(n) => counts.get(n).copied().unwrap_or(0),
                 })
                 .collect();
-            counts.insert(diagram.node, zbdd.weighted_count(&weight));
-            families.insert(diagram.node, (diagram.keys.clone(), zbdd));
+            counts.insert(result.node, family.weighted_count(&weight));
+            families.insert(result.node, (result.keys.clone(), family));
         }
         let count = counts.get(&root).copied().unwrap_or(0);
         let limit = self.settings.cut_set_limit;
         if count > limit as u128 {
             return Ok((
-                count,
+                Some(count),
                 None,
                 Some(format!(
                     "{count} minimal cut sets, more than the limit of {limit}; \
@@ -932,8 +1352,8 @@ impl<'a> Quantifier<'a> {
             ));
         }
         let mut expanded: HashMap<u32, Vec<Vec<usize>>> = HashMap::new();
-        for diagram in diagrams {
-            let Some((keys, zbdd)) = families.get(&diagram.node) else {
+        for result in results.iter() {
+            let Some((keys, zbdd)) = families.get(&result.node) else {
                 continue;
             };
             let mut family: Vec<Vec<usize>> = Vec::new();
@@ -965,10 +1385,10 @@ impl<'a> Quantifier<'a> {
             for set in &mut family {
                 set.sort_unstable();
             }
-            expanded.insert(diagram.node, family);
+            expanded.insert(result.node, family);
         }
         let mut sets = expanded.remove(&root).unwrap_or_default();
         sets.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
-        Ok((count, Some(sets), None, (zbdd_nodes, zbdd_created)))
+        Ok((Some(count), Some(sets), None, (zbdd_nodes, zbdd_created)))
     }
 }

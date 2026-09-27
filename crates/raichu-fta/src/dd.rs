@@ -384,6 +384,7 @@ pub(crate) fn fold_balanced(
 }
 
 /// A zero-suppressed decision diagram: a family of sets of levels.
+#[derive(Clone)]
 pub(crate) struct Zbdd {
     nodes: Vec<Node>,
     unique: FastMap<Node, u32>,
@@ -394,7 +395,8 @@ pub(crate) struct Zbdd {
 }
 
 impl Zbdd {
-    fn new(budget: usize) -> Self {
+    /// An empty family store that refuses to grow past `budget` nodes.
+    pub(crate) fn new(budget: usize) -> Self {
         Self {
             nodes: vec![TERMINAL, TERMINAL],
             unique: FastMap::default(),
@@ -475,6 +477,127 @@ impl Zbdd {
         };
         self.without_memo.insert((p, q), id);
         Ok(id)
+    }
+
+    /// The family of `sets`, each a strictly increasing list of levels.
+    /// Sorted lexicographically, the sets starting with the smallest level
+    /// form one contiguous block: that block goes high (without the level),
+    /// the rest low, so each set is visited once per level it holds.
+    pub(crate) fn family_of(&mut self, sets: &[Vec<u32>]) -> Result<u32, FtaError> {
+        let mut slices: Vec<&[u32]> = sets.iter().map(Vec::as_slice).collect();
+        slices.sort_unstable();
+        slices.dedup();
+        let has_empty = slices.first().is_some_and(|s| s.is_empty());
+        let start = usize::from(has_empty);
+        self.build_family(&slices[start..], has_empty)
+    }
+
+    /// `sets` sorted, none empty; `has_empty` adds the empty set.
+    fn build_family(&mut self, sets: &[&[u32]], has_empty: bool) -> Result<u32, FtaError> {
+        let Some(first) = sets.first() else {
+            return Ok(if has_empty { ONE } else { ZERO });
+        };
+        let level = first[0];
+        let end = sets.partition_point(|s| s[0] == level);
+        let tails: Vec<&[u32]> = sets[..end].iter().map(|s| &s[1..]).collect();
+        // Sorted tails put an empty one (the set {level} itself) first.
+        let tail_empty = tails.first().is_some_and(|t| t.is_empty());
+        let high = self.build_family(&tails[usize::from(tail_empty)..], tail_empty)?;
+        let low = self.build_family(&sets[end..], has_empty)?;
+        self.make(level, low, high)
+    }
+
+    /// The minimal sets of the family `f`: those containing no other set
+    /// of it (Rauzy's minimal-solution operator, on a ZBDD).
+    pub(crate) fn minimal(&mut self, f: u32) -> Result<u32, FtaError> {
+        let mut memo = FastMap::default();
+        self.minimal_memo(f, &mut memo)
+    }
+
+    fn minimal_memo(&mut self, f: u32, memo: &mut FastMap<u32, u32>) -> Result<u32, FtaError> {
+        if f <= ONE {
+            return Ok(f);
+        }
+        if let Some(&id) = memo.get(&f) {
+            return Ok(id);
+        }
+        let node = self.nodes[f as usize];
+        let low = self.minimal_memo(node.low, memo)?;
+        let high = self.minimal_memo(node.high, memo)?;
+        let high = self.without(high, low)?;
+        let id = self.make(node.level, low, high)?;
+        memo.insert(f, id);
+        Ok(id)
+    }
+
+    /// The pivotal upper bound of the union of the family `root` (Rauzy
+    /// 2020, definition 13.1.5): on the decomposition on the top variable
+    /// `E`, `PUB = p(E) P1 + P0 - p(E) P1 P0`, with `P1` the bound of the
+    /// sets holding `E` (without it) and `P0` of the others. Returns the
+    /// bound and its partial derivative with respect to each level's
+    /// probability, by one forward and one backward pass.
+    pub(crate) fn pivotal(&self, root: u32, p: &[f64]) -> (f64, Vec<f64>) {
+        let n = self.nodes.len();
+        let mut value = vec![0.0; n];
+        value[ONE as usize] = 1.0;
+        for (id, node) in self.nodes.iter().enumerate().skip(2) {
+            if id as u32 > root {
+                break;
+            }
+            let q = p[node.level as usize];
+            let a = value[node.high as usize];
+            let b = value[node.low as usize];
+            value[id] = q * a + b - q * a * b;
+        }
+        let mut gradient = vec![0.0; p.len()];
+        let mut adjoint = vec![0.0; n];
+        adjoint[root as usize] = 1.0;
+        for id in (2..=root as usize).rev() {
+            let w = adjoint[id];
+            if w == 0.0 {
+                continue;
+            }
+            let node = self.nodes[id];
+            let q = p[node.level as usize];
+            let a = value[node.high as usize];
+            let b = value[node.low as usize];
+            gradient[node.level as usize] += w * a * (1.0 - b);
+            adjoint[node.high as usize] += w * q * (1.0 - b);
+            adjoint[node.low as usize] += w * (1.0 - q * a);
+        }
+        (value[root as usize], gradient)
+    }
+
+    /// The rare-event approximation: the sum over the family of each set's
+    /// probability.
+    pub(crate) fn rare_event(&self, root: u32, p: &[f64]) -> f64 {
+        let mut out = vec![0.0; self.nodes.len()];
+        out[ONE as usize] = 1.0;
+        for (id, node) in self.nodes.iter().enumerate().skip(2) {
+            if id as u32 > root {
+                break;
+            }
+            out[id] = out[node.low as usize] + p[node.level as usize] * out[node.high as usize];
+        }
+        out[root as usize]
+    }
+
+    /// Which levels appear in the family `root`.
+    pub(crate) fn support(&self, root: u32, levels: usize) -> Vec<bool> {
+        let mut out = vec![false; levels];
+        let mut seen = vec![false; self.nodes.len()];
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if id <= ONE || seen[id as usize] {
+                continue;
+            }
+            seen[id as usize] = true;
+            let node = self.nodes[id as usize];
+            out[node.level as usize] = true;
+            stack.push(node.low);
+            stack.push(node.high);
+        }
+        out
     }
 
     /// `Σ over sets of Π weight(level)`, saturating: the number of cut
