@@ -213,7 +213,7 @@ from types import MappingProxyType
 from types import SimpleNamespace
 from typing import Any, Mapping, NamedTuple, Type
 
-from . import (
+from .. import (
     Model,
     SimulationResult,
     McEstimates,
@@ -222,7 +222,7 @@ from . import (
     seal,
     simulate,
 )
-from .indicators import GENERATED_INDICATORS
+from ..indicators import GENERATED_INDICATORS
 
 __all__ = ["DEFAULT_HYSTERESIS", "ObjFlow", "System"]
 
@@ -1344,7 +1344,7 @@ def _content_attribute(capacity: str, flow: str | None = None) -> str:
     ``{c}_qty`` and ``{c}_qty_{f}`` (``muscadet.capacity``). An indicator
     is named against the variable muscadet created, so a reader
     translating one reaches this function
-    (:func:`pyraichu.declare.capacity_content_variables`) rather than
+    (:func:`pyraichu.muscadet.declare.capacity_content_variables`) rather than
     restating the spelling and drifting the day it changes."""
     return f"{capacity}_content" if flow is None else f"{capacity}_content_{flow}"
 
@@ -1355,7 +1355,7 @@ def _publishes_ratios(flows: Any) -> bool:
 
     A module-level rule and not only a property of the declaration,
     because the reader that translates an observation has to answer the
-    same question off a document (:func:`pyraichu.declare.
+    same question off a document (:func:`pyraichu.muscadet.declare.
     capacity_absent_variables`): muscadet publishes ``{c}_ratio_{f}`` on
     every volume, so on a single-constituent one the name exists there and
     not here, and what says so is exactly this rule."""
@@ -1698,7 +1698,7 @@ class ObjFlow:
 
     def _init_declarations(self) -> None:
         """Empty declaration lists, in one place: the serialized entry
-        point (`pyraichu.plugins.muscadet`) builds an `ObjFlow` without
+        point (`pyraichu.muscadet.plugin`) builds an `ObjFlow` without
         running `__init__`, and must not have to know the list of
         lists."""
         self.flows_in: list[_FlowIn] = []
@@ -1712,7 +1712,7 @@ class ObjFlow:
         self.rule_sets: list[_RuleSet] = []
         self.transfers: list[_Transfer] = []
         self.failure_modes: list[_FailureMode] = []
-        # Decoration a declaration may carry (`pyraichu.declare`). It reaches
+        # Decoration a declaration may carry (`pyraichu.muscadet.declare`). It reaches
         # no generated model: it is held so a declaration survives a round
         # trip through a live component rather than losing what a platform
         # export knows about the instance.
@@ -5959,7 +5959,7 @@ class ObjFlow:
                 # latching. Refused by name: a divergence a study has no
                 # way of noticing is worse than a model it cannot run. A
                 # mode declared BESIDE the component is latched instead
-                # (`pyraichu.plugins.muscadet.
+                # (`pyraichu.muscadet.plugin.
                 # _latch_held_writes_on_persistent_gates`), writing the
                 # gate on its own edges; a mode declared inside it has no
                 # automaton of its own to carry them.
@@ -7527,7 +7527,7 @@ class System:
         self, spec: dict[str, Any], classes: dict[str, type] | None = None
     ) -> ObjFlow:
         """Build a component from a declaration held in DATA and register
-        it (`pyraichu.declare`).
+        it (`pyraichu.muscadet.declare`).
 
         The counterpart of :meth:`add_component`, and deliberately beside
         it rather than folded into it: that one instantiates a class and
@@ -7540,7 +7540,7 @@ class System:
         ``failure_modes``, ``rules`` and ``transfers``, plus ``cls`` and
         ``params`` naming a component class and its own declaration.
         Anything the vocabulary cannot carry is refused by name, before
-        anything is built. See :func:`pyraichu.declare.check_spec` to
+        anything is built. See :func:`pyraichu.muscadet.declare.check_spec` to
         validate a batch without building any of them."""
         from . import declare
 
@@ -9260,7 +9260,7 @@ class System:
         `foreign` names components of the SAME model this system did not
         build: none when :meth:`build_dict` writes the whole document, and
         the rest of the model when the serialized plugin path
-        (`pyraichu.plugins.muscadet`) drives this system over a document
+        (`pyraichu.muscadet.plugin`) drives this system over a document
         that also carries controllers, failure-mode objects or hand-written
         components. They receive no continuous material, since they declare
         no flow this layer resolves, but the evaluation order **closes over

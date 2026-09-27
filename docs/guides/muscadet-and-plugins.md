@@ -217,7 +217,7 @@ disjunctions, `"and"` a disjunction of conjunctions), which is also what
 the authoring classes read by default.
 
 Its **continuous** sections read muscadet's own declaration vocabulary,
-key for key: the vocabulary `pyraichu.declare` reads, so a key one entry
+key for key: the vocabulary `pyraichu.muscadet.declare` reads, so a key one entry
 point accepts and the other refuses does not exist.
 
 | Section | Declares |
@@ -948,3 +948,22 @@ in the same model. The one boundary is the continuous network, which is
 resolved over the components the plugin declares: a continuous connection
 crossing into a hand-written component is refused, naming it, because the
 quantity it carries would be accounted for nowhere.
+
+## Where the layer lives
+
+The whole muscadet layer is one package, `pyraichu.muscadet`:
+
+| Module | What it holds |
+|---|---|
+| `pyraichu.muscadet` | the builder: `System`, `ObjFlow` and the rest of this page |
+| `pyraichu.muscadet.plugin` | the plugin that expands a `plugins.muscadet` section |
+| `pyraichu.muscadet.declare` | the reader of a muscadet system declaration |
+| `pyraichu.muscadet.engine` | RAICHU as an engine of muscadet ([Running a muscadet model on RAICHU](muscadet-engine.md)) |
+
+Three of them used to live elsewhere, and their old paths still import for
+one release: `pyraichu.plugins.muscadet`, `pyraichu.declare` and
+`pyraichu.muscadet_engine`. Each is the same module object as its new path,
+private names included, and importing it emits a `DeprecationWarning`
+naming the path to use instead. The plugin is still registered under
+`"muscadet"`, and the `muscadet.engines` entry point now names
+`pyraichu.muscadet.engine:register`.

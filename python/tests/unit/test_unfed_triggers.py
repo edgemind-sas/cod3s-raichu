@@ -38,7 +38,7 @@ of that crossing are measured in this file:
 """
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
 from conftest import sampled
 from test_muscadet_unconnected_trigger import (

@@ -28,7 +28,7 @@ import pytest
 import pyraichu
 import pyraichu.muscadet as mu
 from conftest import CROSSING_TOL, TOL
-from pyraichu.plugins.muscadet import MuscadetPlugin
+from pyraichu.muscadet.plugin import MuscadetPlugin
 
 # --- shared shapes -----------------------------------------------------
 

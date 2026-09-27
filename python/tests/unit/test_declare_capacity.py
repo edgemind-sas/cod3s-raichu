@@ -9,8 +9,8 @@ in ``{c}_qty`` and ``{c}_qty_{f}``, this layer in ``{c}_content`` and
 Two readings answer that, both pure and both answering a DOCUMENT, so a caller
 sorts one before building anything:
 
-- :func:`pyraichu.declare.capacity_content_variables`, the translation;
-- :func:`pyraichu.declare.capacity_absent_variables`, the three muscadet
+- :func:`pyraichu.muscadet.declare.capacity_content_variables`, the translation;
+- :func:`pyraichu.muscadet.declare.capacity_absent_variables`, the three muscadet
   variables this layer has no attribute of, each with what stands in its place.
 
 The inventory the second one rests on was measured on 2026-09-15 against a live
@@ -30,7 +30,7 @@ doing it.
 
 import pytest
 
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 
 
 def a_tank(name="TANK", capacity="tank", flows=("q",)):

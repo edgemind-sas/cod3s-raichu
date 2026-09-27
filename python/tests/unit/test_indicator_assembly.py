@@ -7,7 +7,7 @@ write indicators into it:
   section), where a continuous construct makes the whole flow network be
   rebuilt at the end of the expansion, and the rebuild re-emits one
   indicator per observable variable it generated;
-* the **declaration** route (`pyraichu.muscadet_engine.build_model` over a
+* the **declaration** route (`pyraichu.muscadet.engine.build_model` over a
   `muscadet.declare.system_spec`), which builds the document first and
   merges the declared indicators into it afterwards.
 
@@ -45,9 +45,9 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
-import pyraichu.muscadet_engine as engine
+import pyraichu.muscadet.engine as engine
 import test_declare_controller as controllers
 from pyraichu.indicators import GENERATED_INDICATORS
 

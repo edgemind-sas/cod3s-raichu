@@ -37,7 +37,7 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 
 # --- the reference document -------------------------------------------
 #

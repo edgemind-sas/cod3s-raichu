@@ -24,7 +24,7 @@ What it pins, beyond the flows that come out:
 
 import pytest
 
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
 
 from test_declare_vocabulary import HEAT_PUMP

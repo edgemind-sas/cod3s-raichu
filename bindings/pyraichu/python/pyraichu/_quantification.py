@@ -1,0 +1,319 @@
+"""The quantification contract's Python entry point: :class:`Study`,
+:class:`Quantification` and :func:`quantify`.
+
+Everything here is re-exported by :mod:`pyraichu`, which is where it is
+documented and imported from (``pyraichu.quantify``, ``pyraichu.Study``, ...);
+this module only keeps the package's ``__init__`` to a readable size.
+"""
+
+from __future__ import annotations
+
+import inspect
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from . import (
+    Exploration,
+    FaultTree,
+    FaultTreeQuantification,
+    McEstimates,
+    Model,
+    _mc_estimates,
+    _quantify_fault_tree,
+)
+from ._pyraichu import SimulationError, quantify_json, validate_quantification
+
+__all__ = [
+    "QUANTIFICATION_METHODS",
+    "Quantification",
+    "Study",
+    "TargetProbability",
+    "quantify",
+    "read_quantification",
+]
+
+
+#: The quantification methods :func:`quantify` provides for a study, in the
+#: order the documentation presents them.
+QUANTIFICATION_METHODS: tuple[str, ...] = ("monte_carlo", "exact", "discretised")
+
+
+@dataclass(frozen=True)
+class Study:
+    """The question a quantification answers, stated once for every
+    method: the probability that ``target`` is the first declared target
+    (feared event) reached by ``horizon``.
+
+    ``instants`` are the reporting instants of the Monte-Carlo detailed
+    result (ascending, within ``[0, horizon]``; the horizon alone when
+    omitted) and ``seed`` its master seed: the exploration methods ignore
+    both and their results do not record them. ``threads`` sets the worker
+    count; no result depends on it.
+    """
+
+    target: str
+    horizon: float
+    instants: tuple[float, ...] | None = None
+    seed: int = 0
+    threads: int | None = None
+
+    def _to_json(self) -> str:
+        return json.dumps(
+            {
+                "target": self.target,
+                "horizon": float(self.horizon),
+                "instants": None
+                if self.instants is None
+                else [float(t) for t in self.instants],
+                "seed": self.seed,
+                "threads": self.threads,
+            },
+            default=_json_value,
+        )
+
+
+@dataclass(frozen=True)
+class TargetProbability:
+    """The probability of a study's target, with the uncertainty its
+    method can state.
+
+    ``kind`` is ``"confidence_interval"`` for Monte-Carlo simulation:
+    ``estimate`` is ``reached / replicas`` and ``[low, high]`` its interval
+    at ``level``, built by ``interval_method`` (``"wilson"``, the estimate
+    being a proportion). It is ``"bounds"`` for the explorations:
+    ``[low, high]`` are the guaranteed lower and upper bounds (on the
+    discretised model for a discretised exploration), ``inconclusive``
+    flags a gap above the declared tolerance, and ``error_estimate`` is the
+    discretisation error estimate by refinement (an estimate, not a bound;
+    ``None`` for an exact exploration and when no refinement was made).
+    Fields that do not apply to a kind are ``None``.
+    """
+
+    kind: str
+    low: float
+    high: float
+    estimate: float | None = None
+    reached: int | None = None
+    replicas: int | None = None
+    level: float | None = None
+    interval_method: str | None = None
+    inconclusive: bool | None = None
+    error_estimate: float | None = None
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> TargetProbability:
+        if raw["kind"] == "confidence_interval":
+            return cls(
+                kind=raw["kind"],
+                low=raw["low"],
+                high=raw["high"],
+                estimate=raw["estimate"],
+                reached=raw["reached"],
+                replicas=raw["replicas"],
+                level=raw["level"],
+                interval_method=raw["method"],
+            )
+        if raw["kind"] == "bounds":
+            return cls(
+                kind=raw["kind"],
+                low=raw["lower"],
+                high=raw["upper"],
+                inconclusive=raw["inconclusive"],
+                error_estimate=raw.get("error_estimate"),
+            )
+        raise SimulationError(
+            f"probability kind {raw['kind']!r} is not known to this engine"
+        )
+
+
+@dataclass(frozen=True)
+class Quantification:
+    """The answer to a :class:`Study` (:func:`quantify`), whatever the
+    method: the ``raichu.quantification`` envelope, version 1.
+
+    ``method`` and ``settings`` are the method and the settings it
+    applied, defaults resolved. The provenance follows: ``engine_version``,
+    the ``model`` name and ``model_hash`` (``sha256:`` and the SHA-256 of
+    the sealed model as canonical JSON, comparable between results of the
+    same engine version), ``target`` and ``horizon``, and ``instants`` and
+    ``seed`` only for a method that uses them (``None`` otherwise).
+    ``probability`` is the probability that ``target`` is the first
+    declared target reached by ``horizon``, with its uncertainty, and
+    ``detail`` the method's own result, unchanged: :class:`McEstimates`
+    for Monte-Carlo simulation, :class:`Exploration` for the explorations.
+    """
+
+    format: str
+    version: int
+    method: str
+    settings: dict[str, Any]
+    engine_version: str
+    model: str
+    model_hash: str
+    target: str
+    horizon: float
+    instants: tuple[float, ...] | None
+    seed: int | None
+    probability: TargetProbability
+    detail: McEstimates | Exploration
+    _text: str = field(default="", init=False, compare=False, repr=False)
+
+    @classmethod
+    def _from_json(cls, text: str) -> Quantification:
+        raw = json.loads(text)
+        provenance = raw["provenance"]
+        detail = raw["detail"]
+        if "monte_carlo" in detail:
+            parsed: McEstimates | Exploration = _mc_estimates(detail["monte_carlo"])
+        else:
+            parsed = Exploration._from_json(json.dumps(detail["exploration"]))
+        instants = provenance.get("instants")
+        quantification = cls(
+            format=raw["format"],
+            version=raw["version"],
+            method=raw["method"]["name"],
+            settings=raw["method"]["settings"],
+            engine_version=provenance["engine_version"],
+            model=provenance["model"],
+            model_hash=provenance["model_hash"],
+            target=provenance["target"],
+            horizon=provenance["horizon"],
+            instants=None if instants is None else tuple(instants),
+            seed=provenance.get("seed"),
+            probability=TargetProbability._from_dict(raw["probability"]),
+            detail=parsed,
+        )
+        # The engine's own text, set only here: an object derived from this
+        # one (``dataclasses.replace``) or built by hand does not carry it,
+        # and cannot claim a document it was not read from.
+        object.__setattr__(quantification, "_text", text)
+        return quantification
+
+    def to_json(self, path: str | Path | None = None) -> str:
+        """The envelope as JSON text, exactly as the engine wrote it; also
+        written to ``path`` when one is given. :func:`read_quantification`
+        reads it back into an equal object.
+
+        Only an object the engine produced, or :func:`read_quantification`
+        read, holds that text: one built by hand or derived with
+        ``dataclasses.replace`` raises :class:`SimulationError` rather than
+        write a document that does not describe it."""
+        if not self._text:
+            raise SimulationError(
+                "this Quantification was not produced by the engine or read from "
+                "an envelope, so it holds no envelope text to write"
+            )
+        if path is not None:
+            Path(path).write_text(self._text, encoding="utf-8")
+        return self._text
+
+
+def read_quantification(source: str | Path) -> Quantification:
+    """Read a quantification envelope written by
+    :meth:`Quantification.to_json`.
+
+    ``source`` is a path (a :class:`~pathlib.Path`, or a string that is not
+    JSON text) or the JSON text itself. Raises :class:`SimulationError` for
+    another format, a version newer than this engine reads, or an envelope
+    whose method, probability and detail do not belong together.
+    """
+    if isinstance(source, Path) or not source.lstrip().startswith("{"):
+        source = Path(source).read_text(encoding="utf-8")
+    validate_quantification(source)
+    return Quantification._from_json(source)
+
+
+def _json_value(value: Any) -> Any:
+    """A numpy scalar or array (or anything with ``tolist``/``item``) as
+    the plain value ``json.dumps`` writes, as the other entry points accept
+    them through the extension."""
+    for convert in ("tolist", "item"):
+        if hasattr(value, convert):
+            return getattr(value, convert)()
+    raise TypeError(f"{type(value).__name__} is not a JSON value")
+
+
+def _quantify_study(
+    model: Model, study: Study, method: str, settings: dict[str, Any]
+) -> Quantification:
+    return Quantification._from_json(
+        quantify_json(
+            model.json,
+            study._to_json(),
+            method,
+            json.dumps(settings, default=_json_value),
+        )
+    )
+
+
+# The keywords of the fault-tree path, read off its own signature so the
+# two cannot drift apart.
+_FAULT_TREE_OPTIONS = frozenset(inspect.signature(_quantify_fault_tree).parameters) - {"tree"}
+
+
+def quantify(
+    tree: Model | FaultTree | str | Path,
+    study: Study | None = None,
+    *,
+    method: str | None = None,
+    **options: Any,
+) -> Quantification | FaultTreeQuantification:
+    """Quantify a study on a model, or a fault tree.
+
+    **A study on a model**, ``quantify(model, study, method=...,
+    **settings)``: the one entry point to RAICHU's three engines. ``study``
+    is a :class:`Study` (the feared event, the horizon, and for Monte-Carlo
+    the reporting instants and the seed); ``method`` is one of
+    :data:`QUANTIFICATION_METHODS`:
+
+    - ``"monte_carlo"``, Monte-Carlo simulation: ``nb_runs`` (required),
+      ``confidence`` (default 0.95), ``quantiles``. One campaign stopped at
+      the targets; the probability is the proportion of replicas whose
+      first target reached is the study's, with a Wilson interval.
+    - ``"exact"``, exact exploration (the Markov family):
+      ``min_probability``, ``max_length``, ``max_failures``,
+      ``max_branches``, ``gap_tolerance``, ``rel_precision``,
+      ``max_terms``, as :func:`explore` takes them.
+    - ``"discretised"``, discretised exploration: the same cut-offs,
+      ``gap_tolerance``, ``level`` and ``refine``.
+
+    Returns a :class:`Quantification`. An unknown method, or a setting that
+    belongs to another method, raises :class:`SimulationError` naming the
+    valid ones before anything runs; so does an unknown target. The GIL is
+    released while the engine runs.
+
+    **A fault tree**, ``quantify(tree, top=..., mission_time=...,
+    max_bdd_nodes=..., cut_set_limit=..., cut_sets=..., engine=...,
+    max_order=..., min_cut_probability=..., max_cut_sets=...,
+    max_expansions=...)``: ``tree`` is a :class:`FaultTree`, an OpenPSA
+    document as text, or the path of one, quantified with binary decision
+    diagrams, a module too large for them falling back to its cut sets
+    under cutoffs with a guaranteed upper bound (``engine``, default
+    ``"auto"``); see :class:`FaultTreeQuantification` for what comes back. The first argument
+    decides which: a :class:`Model` is a study, anything else a fault tree.
+    The first parameter keeps the name ``tree`` it had when this function
+    quantified fault trees only, so a keyword call still works.
+    """
+    if isinstance(tree, Model):
+        if not isinstance(study, Study):
+            raise TypeError(
+                "quantify(model, study, method=...) takes a pyraichu.Study as "
+                f"its second argument, got {type(study).__name__}"
+            )
+        if method is None:
+            raise SimulationError(
+                "quantify(model, study) needs a method; the methods are "
+                + ", ".join(f"`{name}`" for name in QUANTIFICATION_METHODS)
+            )
+        return _quantify_study(tree, study, method, options)
+    if study is not None or method is not None:
+        raise TypeError(
+            "a study and a method apply to a pyraichu.Model; a fault tree is "
+            "quantified with quantify(tree, top=..., mission_time=...)"
+        )
+    unknown = sorted(set(options) - _FAULT_TREE_OPTIONS)
+    if unknown:
+        raise TypeError(f"quantify() got an unexpected keyword argument {unknown[0]!r}")
+    return _quantify_fault_tree(tree, **options)

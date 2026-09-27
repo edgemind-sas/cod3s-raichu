@@ -50,7 +50,7 @@ on a machine that has no PyCATSHOO.
 
 import pytest
 
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
 from conftest import sampled
 

@@ -192,7 +192,16 @@ def _apply_model_level(
         model[key] = value
 
 
-# Built-in plugins.
-from . import muscadet as _muscadet  # noqa: E402  (registry side effect)
+# Built-in plugins. The muscadet plugin lives in `pyraichu.muscadet.plugin`
+# and registers itself under "muscadet" when it finishes loading.
+from ..muscadet import plugin as _muscadet  # noqa: E402,F401  (registry side effect)
 
-PLUGINS["muscadet"] = _muscadet.MuscadetPlugin()
+
+def __getattr__(name: str) -> Any:
+    """Resolve the deprecated submodule `pyraichu.plugins.muscadet` on
+    attribute access, as the eager import used to leave it bound."""
+    if name == "muscadet":
+        import importlib
+
+        return importlib.import_module(f"{__name__}.muscadet")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

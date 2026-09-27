@@ -2,7 +2,7 @@
 
 This directory holds the tests that exercise RAICHU **on its own**: the
 engine through its Python binding, the `pyraichu.muscadet` authoring
-layer, `pyraichu.declare` and the plugins. They need no PyCATSHOO oracle,
+layer, `pyraichu.muscadet.declare` and the plugins. They need no PyCATSHOO oracle,
 no recorded reference trajectory and no client corpus, so a failure here
 reads as an internal regression and nothing else. The cross-validation
 suite lives apart, under `python/tests/validation/`, where a failure

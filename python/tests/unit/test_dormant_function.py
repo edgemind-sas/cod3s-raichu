@@ -32,10 +32,10 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
 from pyraichu import plugins
-from pyraichu.declare import PRODUCTION_SUFFIX
+from pyraichu.muscadet.declare import PRODUCTION_SUFFIX
 
 FLOW = "is_ok"
 SERVICE = "svc"
@@ -395,7 +395,7 @@ def test_the_same_flow_without_the_condition_is_not_refused():
 
 # --- the same arbitration, on the plugin route --------------------------
 #
-# `pyraichu.plugins.muscadet` is the OTHER way a model reaches this engine
+# `pyraichu.muscadet.plugin` is the OTHER way a model reaches this engine
 # (the platform export), and it carries flow specs rather than mode objects
 # into `finalize_model`. The question is the same and has to be asked where
 # each route can see both halves of it.

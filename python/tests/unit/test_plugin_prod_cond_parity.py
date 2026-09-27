@@ -5,7 +5,7 @@ The serialized plugin's ``flows_out`` section is this layer's OWN vocabulary,
 and it reads a production condition in disjunctive form: the groups OR-ed, each
 group's operands AND-ed, exactly as
 :meth:`~pyraichu.muscadet.ObjFlow.add_flow_out` documents. The muscadet-facing
-route (``pyraichu.declare``, a component's ``flows`` section) reads the same
+route (``pyraichu.muscadet.declare``, a component's ``flows`` section) reads the same
 list under ``var_prod_cond_inner_mode``, whose muscadet default ``"or"`` means
 the OPPOSITE, ``all(any(...))``, and converts it.
 
@@ -41,7 +41,7 @@ import json
 import pytest
 
 import pyraichu
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 
 #: The board's two inputs and the signal whose production they condition.
 A = "a"

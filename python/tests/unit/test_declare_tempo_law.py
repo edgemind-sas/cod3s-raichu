@@ -28,9 +28,9 @@ import math
 
 import pytest
 
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
-import pyraichu.muscadet_engine as engine
+import pyraichu.muscadet.engine as engine
 
 
 def a_relay(enable: dict, disable: dict | None = None) -> dict:

@@ -35,7 +35,7 @@ looks like.
 
 import pytest
 
-import pyraichu.declare as declare
+import pyraichu.muscadet.declare as declare
 import pyraichu.muscadet as mu
 from conftest import held_at, settled
 
