@@ -1,4 +1,7 @@
-# RAICHU
+# RAICHU { .raichu-title }
+
+![RAICHU](assets/logo.svg#only-light){ .raichu-hero }
+![RAICHU](assets/logo-light.svg#only-dark){ .raichu-hero }
 
 **RAICHU** (*Rust Automata Integrating Continuous & Hazard, Unified*)
 is a native, open-source **Rust** engine for the **hybrid simulation of

@@ -142,6 +142,18 @@ print(f"P is in [{down.ci.low[0]:.3f}, {down.ci.high[0]:.3f}] "
       f"at {down.ci.level:.0%}")
 ```
 
+A curve makes the difference between the estimate and its precision
+visible. The repairable pump of the [home page](../index.md) (failure
+rate λ = 0.01, repair rate μ = 0.1) has an exact unavailability,
+U(t) = λ/(λ+μ) · (1 − e^{−(λ+μ)t}), rising to 1/11 ≈ 0.091. Estimated
+over 2 000 replicas at 101 instants, the mean wanders around it and the
+95 % band holds it:
+
+![Monte-Carlo unavailability of a repairable pump, its 95 % confidence band, and the exact curve](../assets/figures/tutorial-unavailability-light.svg#only-light){ .figure }
+![Monte-Carlo unavailability of a repairable pump, its 95 % confidence band, and the exact curve](../assets/figures/tutorial-unavailability-dark.svg#only-dark){ .figure }
+
+*Figure produced by `docs/figures/tutorial_unavailability.py`.*
+
 Because these are estimates from a finite sample, treat them as such.
 `std` describes how spread out the *replicas* are; the interval
 describes how well the *campaign* pinned the number down, which is the
