@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use crate::engine::{SeqEvent, Sequence};
+use raichu_core::{SeqEvent, Sequence};
 
 /// Ordered `(obj, attr)` signature of a sequence: the identity used for
 /// grouping and subsequence inclusion (times and cycle groups excluded).

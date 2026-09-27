@@ -86,15 +86,15 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::compile::CompiledModel;
-use crate::engine::Sequence;
 use crate::sequence::analyse;
+use raichu_core::compile::CompiledModel;
+use raichu_core::Sequence;
 
 /// One **basic event** of the cut structure: a monitored failure state,
 /// named by its owning component and the state entered.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct BasicEvent {
-    /// Owning component (the `obj` of a recorded [`crate::SeqEvent`]).
+    /// Owning component (the `obj` of a recorded [`raichu_core::SeqEvent`]).
     pub obj: String,
     /// The monitored state entered (the `attr` of a recorded event).
     pub attr: String,
@@ -193,7 +193,7 @@ pub struct ImportanceAnalysis {
 /// A target names an automaton state; a recorded sequence names the
 /// component and the state entered. This is the bridge: the component is
 /// read off a transition of the target's automaton, so the pair is
-/// exactly what a [`crate::SeqEvent`] would carry when the feared event
+/// exactly what a [`raichu_core::SeqEvent`] would carry when the feared event
 /// occurs. A target on an automaton with no transition is unreachable
 /// and is reported under its qualified automaton name.
 #[must_use]
@@ -626,7 +626,7 @@ pub fn importance(raw: &[Sequence], target: &BasicEvent, instants: &[f64]) -> Im
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::SeqEvent;
+    use raichu_core::SeqEvent;
 
     /// Build a raw trajectory: `events` are `(obj, attr, time)`, each in a
     /// cycle group named after its `obj`, which is the shape the muscadet

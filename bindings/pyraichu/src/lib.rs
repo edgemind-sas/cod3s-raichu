@@ -13,8 +13,8 @@
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use raichu::raichu_core::analyse as analyse_sequences;
-use raichu::raichu_core::{
+use raichu::raichu_analysis::analyse as analyse_sequences;
+use raichu::raichu_analysis::{
     clean as clean_sequences, minimal_sequences, read_raw_corpus, write_raw_corpus,
     ObservedCondition, RawCorpus, RawHeader, RawObservation,
 };

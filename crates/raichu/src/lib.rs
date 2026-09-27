@@ -13,6 +13,8 @@
 //! - [`raichu_expr`]: serializable expression trees (guards, effects,
 //!   ODE right-hand sides).
 //! - [`raichu_core`]: scheduler and simulation cycle.
+//! - [`raichu_analysis`]: analyses of a recorded sequence corpus
+//!   (minimal-sequence reduction, raw corpus format, importance measures).
 //! - [`raichu_rng`]: reproducible RNG streams.
 //! - [`raichu_numeric`]: continuous evolution (milestone M1).
 //! - [`raichu_montecarlo`]: the Monte-Carlo replica driver.
@@ -24,6 +26,7 @@
 //! The engine upholds standing validation / performance / observability
 //! contracts across its milestone sequence.
 
+pub use raichu_analysis;
 pub use raichu_core;
 pub use raichu_explore;
 pub use raichu_expr;

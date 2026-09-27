@@ -49,7 +49,7 @@ use std::io::{BufRead, Write};
 use raichu_expr::CmpOp;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{SeqEvent, Sequence};
+use raichu_core::{SeqEvent, Sequence};
 
 /// The `format` of a raw sequence corpus.
 pub const RAW_SEQUENCES_FORMAT: &str = "raichu.sequences";

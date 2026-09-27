@@ -258,3 +258,40 @@ The thermostat holds the room in its 15-20 band.
 For the full modelling vocabulary, start at the
 [tutorial](../tutorial/01-first-model.md); for every field, the
 [schema reference](../reference/model-schema.md).
+
+## Rust paths
+
+This section concerns the Rust crates only; the Python package `pyraichu`
+is unaffected. It lists the Rust paths a RAICHU release moved, so code
+written against an earlier release can be updated line by line.
+
+### 0.58.0: the empty `raichu-io` crate is removed
+
+The crate held no code, so nothing reachable through `raichu::raichu_io`
+disappears with it. Remove the dependency and the `use`.
+
+### 0.59.0: corpus analyses move to `raichu-analysis`
+
+The analyses that read a recorded sequence corpus left `raichu-core` for a
+new crate, `raichu-analysis`. The module names and every item in them are
+unchanged; only the crate changes. The records themselves (`Sequence`,
+`SeqEvent`, `Provenance`) stay in `raichu-core`, since the engine writes
+them. Add `raichu-analysis` to `[dependencies]` (or go through the umbrella
+crate, which re-exports it as `raichu::raichu_analysis`).
+
+| Before 0.59.0 | From 0.59.0 |
+|---|---|
+| `raichu_core::sequence::*` | `raichu_analysis::sequence::*` |
+| `raichu_core::raw_sequences::*` | `raichu_analysis::raw_sequences::*` |
+| `raichu_core::importance::*` | `raichu_analysis::importance::*` |
+| `raichu_core::{analyse, clean, filter_cycles, group_sequences, minimal_sequences}` | `raichu_analysis::{analyse, clean, filter_cycles, group_sequences, minimal_sequences}` |
+| `raichu_core::{read_raw_corpus, read_raw_sequences, write_raw_corpus, write_raw_sequences}` | `raichu_analysis::{read_raw_corpus, read_raw_sequences, write_raw_corpus, write_raw_sequences}` |
+| `raichu_core::{ObservedCondition, RawCorpus, RawHeader, RawObservation, RawSequencesError}` | `raichu_analysis::{ObservedCondition, RawCorpus, RawHeader, RawObservation, RawSequencesError}` |
+| `raichu_core::{RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION}` | `raichu_analysis::{RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION}` |
+| `raichu_core::{importance, target_events, BasicEvent, ComponentImportance, Cut, ImportanceAnalysis}` | `raichu_analysis::{importance, target_events, BasicEvent, ComponentImportance, Cut, ImportanceAnalysis}` |
+| `raichu::raichu_core::<any of the above>` | `raichu::raichu_analysis::<same name>` |
+
+`raichu_montecarlo::run_importance` now returns
+`raichu_analysis::ImportanceAnalysis`: the same type under its new path.
+The formats are unchanged: a `raichu.sequences` corpus written by an
+earlier release reads back identically, and every result is bit-identical.
