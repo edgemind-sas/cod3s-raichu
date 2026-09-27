@@ -19,6 +19,8 @@
 //! - [`raichu_montecarlo`]: the Monte-Carlo replica driver.
 //! - [`raichu_explore`]: the sequence-tree exploration drivers (exact
 //!   exploration of the Markov family).
+//! - [`raichu_fta`]: fault-tree quantification (exact top-event
+//!   probability, minimal cut sets, importance measures, OpenPSA).
 //!
 //! The engine upholds standing validation / performance / observability
 //! contracts across its milestone sequence.
@@ -26,6 +28,7 @@
 pub use raichu_core;
 pub use raichu_explore;
 pub use raichu_expr;
+pub use raichu_fta;
 pub use raichu_io;
 pub use raichu_model;
 pub use raichu_montecarlo;
