@@ -129,7 +129,30 @@ first. Each `ExploredSequence` carries:
   that probability, and whether it exceeds the declared relative
   precision (see [Numerical method](#numerical-method)).
 
-**Bounds.** The retained sequences are disjoint events: a trajectory
+**Bounds.** The tree the exploration walks, on the example, with the two ways
+a branch ends:
+
+```mermaid
+flowchart TD
+    S(("initial")) -->|A fails| A["A down"]
+    S -->|B fails| B["B down"]
+    A -->|B fails| T1["both down"]
+    A -->|A repaired| S2(("initial"))
+    B -->|A fails| T2["both down"]
+    B -->|B repaired| S3(("initial"))
+    S2 -.-> P1["cut off"]
+    S3 -.-> P2["cut off"]
+    classDef target fill:#1f416d,color:#fff,stroke:#1f416d
+    classDef pruned fill:none,stroke:#ef7b26,stroke-dasharray:4 3
+    class T1,T2 target
+    class P1,P2 pruned
+```
+
+A branch reaching the target is a retained sequence and its probability goes
+to the lower bound; a branch a cut-off stops puts the probability of its
+prefix into the upper bound only.
+
+The retained sequences are disjoint events: a trajectory
 follows one path of the jump chain, never two. Their probabilities
 therefore add up, and `result.lower`, their sum, is a lower bound on the
 probability of reaching the target by the horizon. `result.upper` adds
@@ -187,7 +210,13 @@ adds a sojourn, so adding it to the upper bound is sound. Raising the
 threshold retains fewer sequences and widens the gap: on the example, at
 `min_probability=1e-4` the exploration retains 12 sequences instead of
 30, the probability cut-off discards 1.37e-3, and the relative gap of
-1.9 % raises the inconclusive flag.
+1.9 % raises the inconclusive flag. Over a range of thresholds (this time
+with no length cut-off), the two bounds close on the probability:
+
+![Lower and upper bounds of the exploration against the probability cut-off](../assets/figures/guide-exploration-bounds-light.svg#only-light){ .figure }
+![Lower and upper bounds of the exploration against the probability cut-off](../assets/figures/guide-exploration-bounds-dark.svg#only-dark){ .figure }
+
+*Figure produced by `docs/figures/guide_exploration_bounds.py`.*
 
 **Maximal length** counts every fired transition, instantaneous ones and
 the final transition into the target included. In the example, the

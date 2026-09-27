@@ -7,6 +7,20 @@ many threads ran it.
 
 ## The model
 
+```mermaid
+flowchart LR
+    SEED(["master seed"]) --> S0["substream 0"] --> R0["replica 0"]
+    SEED --> S1["substream 1"] --> R1["replica 1"]
+    SEED --> SN["substream n"] --> RN["replica n"]
+    R0 --> RED["reduction<br/>in replica order"]
+    R1 --> RED
+    RN --> RED
+    RED --> EST(["estimates"])
+```
+
+The replicas run on any thread, in any order; what they draw and the order
+they are summed in do not depend on it.
+
 - Replicas are distributed over a work-stealing thread pool; the
   **single-trajectory engine stays single-threaded and deterministic**,
   so each replica is itself reproducible (see

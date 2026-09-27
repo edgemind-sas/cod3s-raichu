@@ -137,7 +137,13 @@ print(f"nothing observed in 500 replicas: P <= {ko.ci.high[0]:.4f}")
 ```
 
 Wilson bounds also stay inside `[0, 1]` at every sample size, which the
-textbook interval does not.
+textbook interval does not. Both constructions on 500 replicas, as the
+number that reached the event grows from zero:
+
+![Wilson and textbook 95 % intervals on a rare proportion, 500 replicas](../assets/figures/guide-confidence-wilson-light.svg#only-light){ .figure }
+![Wilson and textbook 95 % intervals on a rare proportion, 500 replicas](../assets/figures/guide-confidence-wilson-dark.svg#only-dark){ .figure }
+
+*Figure produced by `docs/figures/guide_confidence_wilson.py`.*
 
 ## When every replica said the same thing
 
@@ -248,3 +254,9 @@ schedule:
 The interval column does not move with the replica count: it is the same
 work whatever the campaign size, which is why the share only falls as
 studies grow.
+
+## References
+
+- Wilson, E. B. (1927). Probable inference, the law of succession, and
+  statistical inference. *Journal of the American Statistical Association*
+  22(158), 209-212. DOI [10.1080/01621459.1927.10502953](https://doi.org/10.1080/01621459.1927.10502953).
