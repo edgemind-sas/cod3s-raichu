@@ -141,3 +141,37 @@ class TestPlan:
         assert plan["venv"] == tmp_path / "venv-muscadet-5.6.0"
         assert plan["clone"] == tmp_path / "muscadet"
         assert plan["record"] == tmp_path / "oracle-env.json"
+
+
+class TestInstalledMuscadet:
+    """The venv must import the version the clone declares, not a cached one."""
+
+    def test_the_clone_version_is_read_from_version_py(self, oenv, tmp_path):
+        (tmp_path / "muscadet").mkdir()
+        (tmp_path / "muscadet" / "version.py").write_text('__version__ = "5.7.0"\n')
+        assert oenv.clone_muscadet_version(tmp_path) == "5.7.0"
+
+    def test_a_clone_without_a_version_is_refused(self, oenv, tmp_path):
+        (tmp_path / "muscadet").mkdir()
+        (tmp_path / "muscadet" / "version.py").write_text("VERSION = 1\n")
+        with pytest.raises(oenv.OracleEnvError, match="no __version__"):
+            oenv.clone_muscadet_version(tmp_path)
+
+    def test_a_matching_install_is_accepted(self, oenv):
+        oenv.check_installed_muscadet("5.7.0", "5.7.0")
+
+    def test_a_stale_install_is_refused_naming_both(self, oenv):
+        with pytest.raises(oenv.OracleEnvError) as excinfo:
+            oenv.check_installed_muscadet("5.7.0", "5.6.0")
+        assert "5.6.0" in str(excinfo.value)
+        assert "5.7.0" in str(excinfo.value)
+
+    def test_the_install_bypasses_the_cache(self, oenv, tmp_path, monkeypatch):
+        commands = []
+        monkeypatch.setattr(oenv, "_uv_available", lambda: True)
+        monkeypatch.setattr(
+            oenv, "_run", lambda command, **kw: commands.append(command)
+        )
+        oenv.install_muscadet(tmp_path / "clone", tmp_path / "venv")
+        assert "--reinstall" in commands[0]
+        assert "--refresh" in commands[0]
