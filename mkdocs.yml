@@ -60,6 +60,7 @@ nav:
       - Confidence intervals: guides/confidence-intervals.md
       - Numerical tuning: guides/numerical-tuning.md
       - Causal journal: guides/causal-journal.md
+      - Interactive simulation: guides/interactive-simulation.md
       - Sequence analysis: guides/sequence-analysis.md
       - Sequence-tree exploration: guides/sequence-tree-exploration.md
       - Importance measures: guides/importance-measures.md

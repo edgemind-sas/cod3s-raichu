@@ -46,8 +46,8 @@ deliberate departures.
 |---|---|---|
 | one system per process (singleton) | any number of engines per process | deliberate departure |
 | `simulate({nb_runs, seed, schedule})` | `monte_carlo(model, nb_runs, t_max, seed, samples)` | per-replica RNG substreams; estimates byte-identical for 1 or N threads |
-| interactive simulation | `simulate(...)` + the causal journal | single trajectories are deterministic and replayable |
-| indicators as `"comp.attr"` strings | typed indicator objects (`target: attribute\|state`) | means, std, quantiles (value + sojourn) |
+| interactive simulation | [`interactive(model, ...)`](../guides/interactive-simulation.md): `fireable` / `fire(name, to=)` / `step` / `set_date` / `snapshot` / `restore` | a forced branch replaces the random draw; a snapshot is an exact undo |
+| indicators as `"comp.attr"` strings | typed indicator objects (`target: attribute\|state\|predicate`) | mean, std, quantiles, extremes and confidence intervals on the value, sojourn, occurrences and first reach |
 | trace levels | the structured [causal journal](../guides/causal-journal.md) | queryable: `why_not_fired` / `who_changed` / `cascade_after` |
 | silent hang on instantaneous loops | typed errors (fixpoint-iteration cap, Zeno guard) | fail loudly, not silently |
 | order-dependent simultaneous effects (modeller's job) | optional non-confluence probe (`confluence_check`) | diagnoses order-dependence instead of hiding it |

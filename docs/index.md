@@ -46,10 +46,24 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
   Monte-Carlo campaign yields the **minimal cut sequences** (the ordered,
   irreducible failure chains leading to it) plus first-occurrence
   indicators. See [Sequence analysis](guides/sequence-analysis.md).
+- **Exact where sampling is not enough.** The sequences leading to a
+  feared event can be enumerated rather than sampled, each with its
+  probability and a bound on what the cut-offs left out; the fault tree
+  of a feared event is generated with its minimal cut sets and written
+  as OpenPSA; importance measures (Birnbaum, Fussell-Vesely,
+  criticality) come from one campaign. See
+  [Sequence-tree exploration](guides/sequence-tree-exploration.md),
+  [Fault trees](guides/fault-tree.md) and
+  [Importance measures](guides/importance-measures.md).
+- **Step through a trajectory by hand.** An interactive session fires
+  the transition you choose, forces the branch it takes, and undoes. See
+  [Interactive simulation](guides/interactive-simulation.md).
 - **Runs platform studies.** Models and studies exported from a COD3S
   platform instance run here through muscadet, whose importer reads the
   export and whose system declaration is what this engine takes. See
-  [Running a COD3S-platform study](guides/platform-import.md).
+  [Running a COD3S-platform study](guides/platform-import.md); a
+  muscadet model runs here by naming the engine, see
+  [Running a muscadet model](guides/muscadet-engine.md).
 
 ## Install
 
@@ -68,7 +82,7 @@ Intel Macs are not built for: use the source build below there.
 
 **From source**: RAICHU is a Rust workspace with a Python binding
 built by [maturin](https://www.maturin.rs). Prerequisites: Rust stable,
-Python ≥ 3.10.
+Python ≥ 3.9.
 
 ```bash
 git clone https://github.com/edgemind-sas/cod3s-raichu raichu && cd raichu
@@ -126,8 +140,12 @@ print("unavailability:", round(failed.mean[-1], 3),
 - **[Model schema reference](reference/model-schema.md)**: every field,
   distribution and expression operator.
 - **[Advanced guides](guides/reproducibility.md)**: reproducibility,
-  confidence intervals, numerical tuning, the causal journal, sequence
-  analysis, the muscadet authoring layer, platform import, parallelism.
+  confidence intervals, numerical tuning, the causal journal, interactive
+  simulation, sequence analysis, sequence-tree exploration, importance
+  measures, fault trees, the muscadet authoring layer, running a muscadet
+  model, platform import, parallelism.
+- **[Raw sequence corpus format](reference/sequence-format.md)**: the
+  file a sequence campaign writes, for auditing or another tool.
 - **[Benchmarks](benchmarks/cross-validation.md)**: RAICHU measured,
   honestly, against an established C++ engine.
 

@@ -193,7 +193,7 @@ each became:
 **`var_prod_cond_inner_mode` is the one that changed a number rather than
 stopping a run**, and it is worth its own paragraph. muscadet writes a
 production condition as a list of groups, and this key says how the two levels
-combine. It swaps *both* at once (`muscadet/flow.py`, `prod_cond_holds`):
+combine. It swaps *both* at once (`muscadet/flow.py`, `prod_cond_holds`, in the muscadet repository):
 
 | Declared | muscadet evaluates | This layer reads it as |
 |---|---|---|
@@ -232,7 +232,7 @@ feed channel alone, and builds the expression it always built.
 
 A production condition is groups of operands, and an operand is either a bare
 flow name or a mapping. muscadet writes the mapping form on **every** flow
-operand it hands back (`muscadet/declare.py`, `_prod_cond_spec`), because the
+operand it hands back (`muscadet/declare.py`, `_prod_cond_spec`, in the muscadet repository), because the
 condition it stores is resolved and has to be walked back into a declaration;
 this layer reads the five keys that walk-back writes, and no others.
 
@@ -364,8 +364,8 @@ What is worth knowing about the shape:
   expands the modes onto it. `build_system` answers the flow graph alone and
   refuses a document carrying modes rather than dropping them.
 
-Both of muscadet's compromise examples run and answer what PyCATSHOO answers:
-`examples/isimu/power_plant`, whose cascade holds availability gates down, and
+Both of muscadet's compromise examples (in the muscadet repository) run and
+answer what PyCATSHOO answers: `examples/isimu/power_plant`, whose cascade holds availability gates down, and
 `examples/isimu/cyber_3comp`, whose middle stage **starts a dormant output**,
 which is the next section.
 

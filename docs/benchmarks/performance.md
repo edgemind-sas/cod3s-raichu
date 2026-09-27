@@ -19,6 +19,14 @@ and the modelling language differ.
 Measured on an AMD Ryzen AI 9 HX 370 (24 hardware threads), Linux 6.17,
 PyCATSHOO 1.4.1.0, RAICHU 0.1.0; single process on both sides.
 
+!!! note "Measured on RAICHU 0.1.0"
+    The table has not been re-measured since. A later side-by-side run on
+    the 40 timed cross-validation fixtures (2026-09-23, RAICHU 0.33) found
+    RAICHU faster on all 40 against PyCATSHOO, with a median time ratio of
+    0.25; those fixtures are small and chosen to isolate one behaviour
+    each, so they do not replace this table. Reproduce the table locally
+    with the `benchmarks/` driver before quoting a figure.
+
 | model | runs | PyCATSHOO C++ | PyCATSHOO Python | RAICHU 1 thread | RAICHU multi-thread |
 |---|---:|---:|---:|---:|---:|
 | `pure_exp` | 10 000 | 0.076 s | 0.077 s | 0.013 s | 0.003 s |
