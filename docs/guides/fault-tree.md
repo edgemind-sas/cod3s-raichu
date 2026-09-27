@@ -54,7 +54,36 @@ appears in the tree.
 
 The gates are simplified as they are built: constants propagated,
 single-child gates collapsed, nested gates of one connective merged. A vote is
-written `sum(if(state, 1, 0)) >= k` and becomes an `atleast` gate.
+written `sum(if(state, 1, 0)) >= k` and becomes an `at_least` gate (`atleast`
+in the OpenPSA file).
+
+## The result
+
+`fault_tree` returns a `FaultTree` with four fields:
+
+| field | content |
+|---|---|
+| `top` | the top gate, nested: `{"node": "gate", "gate": "and" \| "or" \| "at_least", "k": …, "children": […]}`, `{"node": "basic", "event": index}` or `{"node": "constant", "value": bool}` |
+| `basic_events` | one entry per transition draw: `name`, `component`, `automaton`, `transition`, `target` and its `law` with the law's parameters; `event` in `top` indexes this list |
+| `minimal_cut_sets` | each a sorted list of basic-event names, ordered by size then name |
+| `open_psa` | the OpenPSA document (see [The file](#the-file)) |
+
+```python
+assert tree.top["gate"] == "or"
+assert [e["name"] for e in tree.basic_events] == ["A.health.fail", "B.health.fail", "C.health.fail"]
+```
+
+Three keywords bound the work and name the output:
+
+- `max_nodes` (default 1 000 000): the tree is refused once it outgrows that
+  many nodes, rather than exhausting the memory on a model whose explanation
+  explodes;
+- `cut_set_limit` (default 100 000): the same guard on the cut-set expansion;
+- `name` (default `"fault_tree"`): the name of the `define-fault-tree` in the
+  OpenPSA document.
+
+Either limit being reached raises `SimulationError` naming it: raise it, or
+explain a narrower top expression.
 
 ## What it is not
 

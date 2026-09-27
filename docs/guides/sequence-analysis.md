@@ -132,6 +132,37 @@ assert again.minimal == campaign.minimal
 The raw corpus holds one line per trajectory, dates included, so it is the
 level to audit a campaign on, to filter, or to hand to another tool.
 
+### Observing a value, and reducing under a condition
+
+A campaign can also read chosen attributes at chosen instants on every
+trajectory, and reduce only the trajectories whose reading satisfies a
+condition. An `Observation(name, component, attribute, time)` records the
+value; a `SequenceCondition(observation, op, value)` keeps a trajectory when
+that value compares to `value` as `op` says (`==`, `!=`, `<`, `<=`, `>`,
+`>=`). A boolean reads `0` or `1`:
+
+```python
+# The paths to the feared event among trajectories where A still delivered at t = 50.
+conditioned = pyraichu.run_sequences(
+    model, nb_runs=2000, t_max=100.0, seed=42, raw_path="conditioned.jsonl",
+    observations=[pyraichu.Observation("A_at_50", "A", "flow", 50.0)],
+    condition=pyraichu.SequenceCondition("A_at_50", "==", 1.0),
+)
+report = conditioned.condition
+assert report["kept_trajectories"] <= report["total_trajectories"] == 2000
+
+# The corpus keeps every trajectory, so it answers another condition later.
+other = pyraichu.analyse_raw_sequences(
+    "conditioned.jsonl", condition=pyraichu.SequenceCondition("A_at_50", "==", 0.0))
+assert (other.condition["kept_trajectories"] + report["kept_trajectories"]
+        == report["total_trajectories"])
+```
+
+Observing changes no trajectory: the same seed gives the same corpus,
+observations added. The exact reading rules (a trajectory stopped earlier, an
+instant past the horizon) are in the
+[corpus format reference](../reference/sequence-format.md#observations).
+
 ## First-occurrence indicators
 
 The Monte-Carlo estimator has the matching measures. By default

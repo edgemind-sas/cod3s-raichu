@@ -656,6 +656,17 @@ wraps a body with it, which is how an authoring layer (and the plugin
 expansion, through the model-level key `evaluation_order`) emits a
 sealed document without ever writing the list by hand.
 
+The Python helpers, all in `pyraichu`:
+
+| name | does |
+|---|---|
+| `required_features(body_json)` | the feature list the body needs, derived by the engine |
+| `seal(document, extra_features=())` | wraps a dict in the envelope when it needs one, keeping any feature it already declares |
+| `seal_model(model_json)` | the same on a JSON string, bare or already enveloped |
+| `model_body(document)` | the body of a document in either shape |
+| `MODEL_ENVELOPE_KEY` | `"raichu_model"`, the key that marks an envelope |
+| `MODEL_FORMAT_REVISION` | the envelope revision this engine writes |
+
 ### Feature registry
 
 | feature | construct |
@@ -689,9 +700,21 @@ in the same release, which is what keeps the one feature name honest.
 - `target: "predicate"` → `"attr": VarRef`, `"cmp"` (one of `eq`, `ne`,
   `lt`, `le`, `gt`, `ge`), `"value"` (a [Value](#attribute))
 
-Estimators are computed by `monte_carlo`: mean, standard deviation,
-nearest-rank quantiles, and the cumulated **sojourn** (time-integral) of
-the observed value.
+Estimators are computed by `monte_carlo`, per schedule instant, on four
+measures of the observed value:
+
+| measure | fields | what it is |
+|---|---|---|
+| value | `mean`, `std`, `ci`, `quantiles`, `extremes` | the value at the instant |
+| sojourn | `sojourn_mean`, `sojourn_std`, `sojourn_ci`, `sojourn_quantiles`, `sojourn_extremes` | its cumulated time-integral since `t = 0` |
+| occurrences | `nb_occurrences_mean`, `nb_occurrences_std`, `nb_occurrences_ci`, `nb_occurrences_extremes` | how many times it entered the state or condition, up to the instant |
+| reached | `reached_mean`, `reached_std`, `reached_ci`, `reached_extremes` | the probability of having been active at least once by the instant; unlike the value, it never comes back down |
+
+`quantiles` are nearest-rank and computed only when requested
+(`quantiles=[…]`); `extremes` hold the smallest and largest
+value across the replicas (`min`, `max`); every `ci` is a confidence
+interval at the run's `confidence` level
+([Confidence intervals](../guides/confidence-intervals.md)).
 
 ### A threshold is a different quantity, not a filter
 
@@ -761,20 +784,38 @@ Enumerations:
 
 ## Simulation configuration
 
-Two entry points consume a model (see the tutorial for usage):
+A compiled model is consumed by several entry points, each with its own
+guide:
 
-`simulate(model, t_max, seed=0, rng_stream=0, samples=None,
-journal=False, confluence_check=False, flow=None)`: one trajectory;
+| entry point | answers | guide |
+|---|---|---|
+| `simulate` | one trajectory | [tutorial](../tutorial/01-first-model.md) |
+| `monte_carlo` | indicator estimates over replicas | [tutorial](../tutorial/03-stochastic-and-monte-carlo.md) |
+| `interactive` | a trajectory stepped by hand | [Interactive simulation](../guides/interactive-simulation.md) |
+| `run_sequences` / `analyse_sequences` | the sequences leading to a feared event | [Sequence analysis](../guides/sequence-analysis.md) |
+| `explore` | the exact sequence tree, with probability bounds | [Sequence-tree exploration](../guides/sequence-tree-exploration.md) |
+| `importance` | component importance measures | [Importance measures](../guides/importance-measures.md) |
+| `fault_tree` | the fault tree and its minimal cut sets | [Fault trees](../guides/fault-tree.md) |
+
+The two run entry points take:
+
+`simulate(model, t_max=inf, journal=False, confluence_check=False,
+samples=None, seed=0, rng_stream=0, flow=None,
+max_transition_firings=None, max_flow_restarts=None)`: one trajectory;
 returns events, indicator series, dense `samples`, optional `journal`,
-and `provenance`.
+and `provenance`. The two `max_*` budgets stop a limit cycle
+([Numerical tuning](../guides/numerical-tuning.md#when-a-run-never-ends)).
 
 `monte_carlo(model, nb_runs, t_max, samples, seed=0, threads=None,
-quantiles=None, rtol=None, atol=None, max_step=None, tol_event=None,
-sub_samples=None, stop_at_targets=False, flow=None)`: parallel replicas;
-returns per-indicator estimates. Replica *r* uses RNG substream *r*; the
-reduction is index-ordered, so results are byte-identical for any
-`threads`. The `rtol` / `atol` / `max_step` / `tol_event` /
-`sub_samples` keywords set the ODE integration effort
+quantiles=None, confidence=None, rtol=None, atol=None, max_step=None,
+tol_event=None, sub_samples=None, stop_at_targets=False, flow=None,
+event_resolution=None)`: parallel replicas; returns per-indicator
+estimates. Replica *r* uses RNG substream *r*; the reduction is
+index-ordered, so results are byte-identical for any `threads`.
+`confidence` is the level of every interval
+([Confidence intervals](../guides/confidence-intervals.md)); the `rtol` /
+`atol` / `max_step` / `tol_event` / `sub_samples` / `event_resolution`
+keywords set the ODE integration effort and the shortest episode seen
 ([Numerical tuning](../guides/numerical-tuning.md)).
 
 `flow` takes a `FlowConfig(sweep_budget=None, active_set_budget=None,

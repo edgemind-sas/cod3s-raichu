@@ -8,6 +8,8 @@ Policy:
   HTML comment is illustrative and not executed (use sparingly).
 - ```json fenced blocks preceded by an ``<!-- model -->`` comment are
   loaded with ``pyraichu.load_model`` (must be valid models).
+- A page runs in a fresh temporary directory, so an example that writes
+  a file (a raw corpus, an exploration) leaves nothing in the checkout.
 
 This harness depends only on ``pyraichu`` (no PyCATSHOO), so it is safe
 to ship and to run in CI.
@@ -46,7 +48,8 @@ def _page_id(p: Path) -> str:
 
 
 @pytest.mark.parametrize("page", PAGES, ids=_page_id)
-def test_doc_page_examples_run(page: Path):
+def test_doc_page_examples_run(page: Path, tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     text = page.read_text()
     namespace: dict = {}
     ran = 0

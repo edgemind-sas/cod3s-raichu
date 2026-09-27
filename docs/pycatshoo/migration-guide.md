@@ -244,9 +244,12 @@ The thermostat holds the room in its 15-20 band.
 
 - **No callbacks in the loop.** PyCATSHOO's condition and equation
   *methods* are Python, called by the engine during the run. RAICHU's
-  guards and equations are **expression trees** evaluated natively: the
-  reason the [hybrid benchmark](../benchmarks/performance.md) is so much
-  faster.
+  guards and equations are **expression trees** evaluated natively, so a
+  model written in PyCATSHOO's Python style loses its interpreter cost
+  (×23 on the [hybrid benchmark](../benchmarks/performance.md)). Against a
+  PyCATSHOO model compiled in C++, the comparison depends on the accuracy
+  each engine is run at: see
+  [Accuracy-cost parity](../benchmarks/accuracy-cost-parity.md).
 - **Build-time validation.** An unknown state or a malformed distribution is a
   precise `ModelError` at `load_model`, not a crash mid-run.
 - **The model is inspectable data.** `model.json` is the whole model;
