@@ -167,6 +167,21 @@ diagram, chained through the modules (Dutuit and Rauzy 2001); the minimal cut
 sets are the minimal solutions of each diagram (Rauzy 1993), counted exactly on
 the diagrams and listed when their number is at most `cut_set_limit`.
 
+**Measured on real trees:** the Aralia collection (43 published fault
+trees, 25 to 1 567 basic events, openpra-org's republication under CC BY-SA
+4.0, doi:10.5281/zenodo.20160659). With the default settings, 40 of the 41
+published top-event probabilities are reproduced to their six significant
+digits, all by the exact engine, most in under a second and the slowest in
+7 s; 36 minimal cut set counts match exactly, up to 1.06e8 sets. Of the
+three disagreements, das9204's published probability is inconsistent with
+the file's own data (all events at 0.01, smallest cut set of order 7, so the
+probability cannot exceed 2.4e-11, not 6.1e-8), jbd9601's count repeats the
+next tree's, and edf9206's count (7.16e9 against 3.86e8, the probability
+agreeing to 2e-7) is unresolved. Two trees are beyond both engines today:
+das9701 (992 NOT gates, over 50 million nodes) and nus9601 (1 567 events, no
+published reference), where the cut-set engine returns only a guaranteed
+bound of about 5.2e-5 and says so.
+
 **Scale of the exact engine, measured** on synthetic PSA-shaped trees (redundant trains sharing
 support systems, a vote over systems), one core: 750 basic events in 0.02 s,
 2 040 in 0.5 s, 4 850 in 12 s (5.3 million diagram nodes). Extracting the
