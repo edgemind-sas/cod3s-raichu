@@ -66,6 +66,12 @@ nav:
       - 2. Connecting components: tutorial/02-connecting-components.md
       - 3. Stochastic & Monte-Carlo: tutorial/03-stochastic-and-monte-carlo.md
       - 4. Going hybrid: tutorial/04-going-hybrid.md
+  - Examples:
+      - Overview: examples/index.md
+      - Heated tank: examples/heated-tank.md
+      - Heated room: examples/heated-room.md
+      - Two-out-of-three pumps: examples/two-out-of-three.md
+      - Hydrogen installation: examples/h2-installation.md
   - Model schema reference: reference/model-schema.md
   - Raw sequence corpus format: reference/sequence-format.md
   - Quantification envelope format: reference/quantification-format.md

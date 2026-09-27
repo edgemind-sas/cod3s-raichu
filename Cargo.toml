@@ -16,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.63.3"
+version = "0.63.4"
 edition = "2021"
 rust-version = "1.83"
 license = "MIT"
@@ -26,17 +26,17 @@ description = "RAICHU: native Rust engine for hybrid (PDMP) simulation of comple
 
 [workspace.dependencies]
 # Internal crates
-raichu-model = { path = "crates/raichu-model", version = "0.63.3" }
-raichu-expr = { path = "crates/raichu-expr", version = "0.63.3" }
-raichu-rng = { path = "crates/raichu-rng", version = "0.63.3" }
-raichu-core = { path = "crates/raichu-core", version = "0.63.3" }
-raichu-analysis = { path = "crates/raichu-analysis", version = "0.63.3" }
-raichu-montecarlo = { path = "crates/raichu-montecarlo", version = "0.63.3" }
-raichu-numeric = { path = "crates/raichu-numeric", version = "0.63.3" }
-raichu-explore = { path = "crates/raichu-explore", version = "0.63.3" }
-raichu-fta = { path = "crates/raichu-fta", version = "0.63.3" }
-raichu-quantify = { path = "crates/raichu-quantify", version = "0.63.3" }
-raichu = { path = "crates/raichu", version = "0.63.3" }
+raichu-model = { path = "crates/raichu-model", version = "0.63.4" }
+raichu-expr = { path = "crates/raichu-expr", version = "0.63.4" }
+raichu-rng = { path = "crates/raichu-rng", version = "0.63.4" }
+raichu-core = { path = "crates/raichu-core", version = "0.63.4" }
+raichu-analysis = { path = "crates/raichu-analysis", version = "0.63.4" }
+raichu-montecarlo = { path = "crates/raichu-montecarlo", version = "0.63.4" }
+raichu-numeric = { path = "crates/raichu-numeric", version = "0.63.4" }
+raichu-explore = { path = "crates/raichu-explore", version = "0.63.4" }
+raichu-fta = { path = "crates/raichu-fta", version = "0.63.4" }
+raichu-quantify = { path = "crates/raichu-quantify", version = "0.63.4" }
+raichu = { path = "crates/raichu", version = "0.63.4" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

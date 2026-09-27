@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 440" font-family="Open Sans, DejaVu Sans, Arial, sans-serif">
+<title>Heated tank: two inlet pumps, one outlet valve, a heat source</title>
+<defs><marker id="arrow-1f416d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f416d"/></marker></defs>
+<g id="tank">
+  <rect x="300" y="206.0" width="170" height="154.0" fill="#c9d4e6"/>
+  <path d="M300,107.0 V360 H470 V107.0" fill="none" stroke="#333f48" stroke-width="4"/>
+  <text x="385" y="311.6" font-size="18" fill="#333f48" text-anchor="middle">h, θ</text>
+</g>
+<g id="levels"><line x1="300" y1="140.0" x2="470" y2="140.0" stroke="#ef7b26" stroke-width="2"/><text x="480" y="145.0" font-size="16" fill="#ef7b26">overflow 10 m</text><line x1="300" y1="184.0" x2="470" y2="184.0" stroke="#7a8691" stroke-width="2" stroke-dasharray="6 4"/><text x="480" y="189.0" font-size="16" fill="#7a8691">high set-point 8 m</text><line x1="300" y1="228.0" x2="470" y2="228.0" stroke="#7a8691" stroke-width="2" stroke-dasharray="6 4"/><text x="480" y="233.0" font-size="16" fill="#7a8691">low set-point 6 m</text><line x1="300" y1="272.0" x2="470" y2="272.0" stroke="#ef7b26" stroke-width="2"/><text x="480" y="277.0" font-size="16" fill="#ef7b26">dry-out 4 m</text></g>
+<g id="pump1">
+  <circle cx="120" cy="151.0" r="26" fill="none" stroke="#1f416d" stroke-width="3"/>
+  <text x="120" y="157.0" font-size="18" fill="#1f416d" text-anchor="middle">P1</text>
+  <path d="M40,151.0 H94 M146,151.0 H292" stroke="#1f416d" stroke-width="3" fill="none" marker-end="url(#arrow-1f416d)"/>
+</g>
+<g id="pump2">
+  <circle cx="120" cy="217.0" r="26" fill="none" stroke="#1f416d" stroke-width="3"/>
+  <text x="120" y="223.0" font-size="18" fill="#1f416d" text-anchor="middle">P2</text>
+  <path d="M40,217.0 H94 M146,217.0 H292" stroke="#1f416d" stroke-width="3" fill="none" marker-end="url(#arrow-1f416d)"/>
+</g>
+<g id="inlet-label"><text x="40" y="118.0" font-size="16" fill="#333f48">inflow 1.5 m/h each, 15 °C</text></g>
+<g id="valve">
+  <path d="M470,346 H520 M560,346 H640" stroke="#1f416d" stroke-width="3" fill="none" marker-end="url(#arrow-1f416d)"/>
+  <path d="M520,332 L560,360 V332 L520,360 Z" fill="none" stroke="#1f416d" stroke-width="3"/>
+  <text x="540" y="384" font-size="18" fill="#1f416d" text-anchor="middle">V</text>
+  <text x="600" y="384" font-size="16" fill="#333f48">outflow</text>
+  <text x="600" y="404" font-size="16" fill="#333f48">1.5 m/h</text>
+</g>
+<g id="heater">
+  <path d="M320,372 q10,-10 20,0 t20,0 t20,0 t20,0 t20,0 t20,0 t20,0" stroke="#ef7b26" stroke-width="3" fill="none"/>
+  <text x="250" y="390" font-size="16" fill="#ef7b26" text-anchor="end">heat source</text>
+</g>
+<g id="overheat"><text x="385" y="87.19999999999999" font-size="16" fill="#ef7b26" text-anchor="middle">overheat: θ ≥ 100 °C</text></g>
+</svg>

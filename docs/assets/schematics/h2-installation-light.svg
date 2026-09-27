@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="430" viewBox="0 0 1000 430" font-family="Open Sans, DejaVu Sans, Arial, sans-serif" font-size="20" role="img" aria-labelledby="title">
+  <title id="title">Hydrogen installation</title>
+  <defs>
+    <marker id="arrow-elec" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ef7b26"/></marker>
+    <marker id="arrow-h2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f416d"/></marker>
+    <marker id="arrow-water" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7f96b2"/></marker>
+  </defs>
+  <style>
+    .box { fill: #eef2f7; stroke: #1f416d; stroke-width: 2.5; }
+    .label { fill: #333f48; text-anchor: middle; dominant-baseline: middle; }
+    .small { fill: #333f48; font-size: 17px; }
+    .elec { stroke: #ef7b26; stroke-width: 4; fill: none; }
+    .h2 { stroke: #1f416d; stroke-width: 4; fill: none; }
+    .water { stroke: #7f96b2; stroke-width: 3; fill: none; stroke-dasharray: 8 6; }
+  </style>
+
+  <g id="pv">
+    <rect class="box" x="30" y="150" width="150" height="80" rx="10"/>
+    <text class="label" x="105" y="190">PV panels</text>
+  </g>
+  <g id="battery">
+    <rect class="box" x="30" y="300" width="150" height="80" rx="10"/>
+    <text class="label" x="105" y="340">battery</text>
+  </g>
+  <g id="water">
+    <rect class="box" x="280" y="20" width="150" height="64" rx="10" style="stroke:#7f96b2"/>
+    <text class="label" x="355" y="52">water</text>
+  </g>
+  <g id="electrolyser">
+    <rect class="box" x="265" y="150" width="180" height="80" rx="10"/>
+    <text class="label" x="355" y="190">electrolyser</text>
+  </g>
+  <g id="storage">
+    <rect class="box" x="530" y="140" width="130" height="100" rx="40"/>
+    <text class="label" x="595" y="190">H₂ storage</text>
+  </g>
+  <g id="compressor-a">
+    <rect class="box" x="705" y="95" width="160" height="64" rx="10"/>
+    <text class="label" x="785" y="127">compressor A</text>
+  </g>
+  <g id="compressor-b">
+    <rect class="box" x="705" y="221" width="160" height="64" rx="10"/>
+    <text class="label" x="785" y="253">compressor B</text>
+  </g>
+  <g id="user">
+    <rect class="box" x="895" y="150" width="90" height="80" rx="10"/>
+    <text class="label" x="940" y="190">user</text>
+  </g>
+
+  <g id="electricity-flows">
+    <path class="elec" d="M180,190 L259,190" marker-end="url(#arrow-elec)"/>
+    <path class="elec" d="M105,230 L105,294" marker-end="url(#arrow-elec)"/>
+    <path class="elec" d="M180,340 L355,340 L355,236" marker-end="url(#arrow-elec)"/>
+  </g>
+  <g id="water-flow">
+    <path class="water" d="M355,84 L355,144" marker-end="url(#arrow-water)"/>
+  </g>
+  <g id="hydrogen-flows">
+    <path class="h2" d="M445,190 L524,190" marker-end="url(#arrow-h2)"/>
+    <path class="h2" d="M660,175 L682,175 L682,127 L699,127" marker-end="url(#arrow-h2)"/>
+    <path class="h2" d="M660,205 L682,205 L682,253 L699,253" marker-end="url(#arrow-h2)"/>
+    <path class="h2" d="M865,127 L877,127 L877,175 L889,175" marker-end="url(#arrow-h2)"/>
+    <path class="h2" d="M865,253 L877,253 L877,205 L889,205" marker-end="url(#arrow-h2)"/>
+  </g>
+
+  <g id="legend">
+    <path class="elec" d="M530,330 L580,330"/><text class="small" x="592" y="336">electricity</text>
+    <path class="h2" d="M530,365 L580,365"/><text class="small" x="592" y="371">hydrogen</text>
+    <path class="water" d="M530,400 L580,400"/><text class="small" x="592" y="406">water</text>
+  </g>
+</svg>
