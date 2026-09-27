@@ -14,6 +14,10 @@ question once, a `Method` names the engine with the settings that belong
 to it alone, and `quantify(model, study, method)` returns the envelope.
 `read_quantification` reads one back.
 
+For a walk through one study quantified by the three engines, see the
+[quantification guide](../guides/quantification.md); this page specifies
+the format.
+
 ## From Python
 
 `pyraichu.quantify(model, study, method=..., **settings)` is the one entry

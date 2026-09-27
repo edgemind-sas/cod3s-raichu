@@ -281,7 +281,7 @@ fn reads_time(expr: &CExpr) -> bool {
 }
 
 /// Explore the sequence tree of `model` to the target `settings.target`
-/// with the exact algorithm (see the module documentation).
+/// by exact exploration (see the module documentation).
 ///
 /// # Errors
 ///

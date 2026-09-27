@@ -12,16 +12,16 @@ The result lists the retained sequences with their probabilities at the
 horizon, and states a **lower and an upper bound** on the probability of
 the feared event, so what the cut-offs left out is measured, not guessed.
 
-The two modes run on the same model declaration. Two exploration
-algorithms are provided. The **exact** one (the default) covers the
+The two modes run on the same model declaration. Exploration comes in
+two methods. **Exact exploration** (the default) covers the
 Markov family (see [the exact domain](#the-exact-domain)) and computes
-every probability in closed form. The **discretised** one (see
-[The discretised algorithm](#the-discretised-algorithm)) covers every
+every probability in closed form. **Discretised exploration** (see
+[Discretised exploration](#discretised-exploration)) covers every
 law the engine carries and continuous evolution, at the price of a
 discretisation error that it estimates. Exploration is the mode to use
 when the sequences of interest are rare enough that a campaign would need
 many replicas to see them, or when a result must come with bounds rather
-than a confidence interval. Monte-Carlo remains the mode for
+than a confidence interval. Monte-Carlo simulation remains the mode for
 availability measures on a free-cycling system, for repairable systems
 over horizons long enough that the tree grows faster than the cut-offs
 can bound it, and for models whose discretised tree is too large (see
@@ -228,7 +228,7 @@ thread count. Nothing is drawn: an exploration has no seed.
 
 ## The exact domain
 
-The exact algorithm, `algorithm="exact"` (the default), covers the
+Exact exploration, `algorithm="exact"` (the default), covers the
 Markov family:
 
 - instantaneous transitions (`"distrib": "inst"`) and zero delays, which
@@ -298,7 +298,7 @@ precise. The treatment of truncated trees through a lower bound and a
 neglected mass follows the practice established for GSI (Bon and
 Bouissou 1992).
 
-## The discretised algorithm
+## Discretised exploration
 
 `algorithm="discretised"` lifts the restriction to the Markov family. It
 covers every law the engine carries (delay, exponential with a constant
@@ -335,7 +335,7 @@ deterministic event or the watched crossing fires; at the horizon it is
 dropped. Between branch points the engine runs deterministically, so the
 explorer never re-implements a guard, an effect or a policy.
 Instantaneous transitions, due delays and watched transitions whose
-guard holds fire first, as in the exact algorithm.
+guard holds fire first, as in exact exploration.
 
 Two numerical details keep the tree from growing on round-off. A window
 no wider than the event-location tolerance (`1e-10` time units by
@@ -354,7 +354,7 @@ Leaves that reach the target along the same ordered list of fired
 transitions, through different cells, are one sequence: their
 probabilities are summed before ranking. The probabilities, the lower
 and the upper bound are those of the **discretised model**; the cut-offs
-act on it as in the exact algorithm, except that the minimal-probability
+act on it as in exact exploration, except that the minimal-probability
 cut-off compares a node's mass multiplied by `K` to the power of the
 cell branchings on its path, an estimate of the whole event sequence's
 mass rather than of one cell's fragment of it.
@@ -456,7 +456,7 @@ failed by `t = 10` has the closed form
 reported value differs from it by 8.6e-06, within the estimate of
 2.18e-05. The two sequences also have closed forms, 2.201636e-02 for
 `B` then `A` and 1.670777e-02 for `A` then `B` (by quadrature of the
-first failure's density). The exact algorithm refuses the model before
+first failure's density). Exact exploration refuses the model before
 exploring anything:
 
 ```text
@@ -473,7 +473,7 @@ model while the node count grows about fourfold:
 | 8 (16) | 3.873273e-02 | 2.18e-05 | 545 |
 | 16 (32) | 3.872655e-02 | 6.18e-06 | 2 113 |
 
-For Rust users: the discretised algorithm runs the engine in a
+For Rust users: discretised exploration runs the engine in a
 deferred-draw mode, selected by a new public field of `EngineConfig`,
 `stochastic_dates` (default: dates drawn when a transition is armed, the
 Monte-Carlo semantics, unchanged). Adding a public field is why this
@@ -517,7 +517,7 @@ time, and the dates in the reduced sequences are 0.
 An `Exploration` is saved and read back in its own open format,
 `raichu.exploration`, as a single JSON document. An exact result is
 written at version 1 and a discretised one at version 2, the version
-that introduced the discretised algorithm:
+that introduced discretised exploration:
 
 ```python
 result.to_json("exploration.json")          # also returns the text
@@ -569,14 +569,14 @@ dates.
 
 ## Limits
 
-- **The exact algorithm covers the Markov family only.** A model with an
+- **Exact exploration covers the Markov family only.** A model with an
   ODE, a reachable watched transition, time-dependent expressions, or a
   law other than instantaneous or constant-rate exponential that becomes
   armed, is refused by it; `algorithm="discretised"` explores such a
   model.
-- **The discretised algorithm reports an estimate, not a bound, of its
+- **Discretised exploration reports an estimate, not a bound, of its
   own error**, and its tree grows as `(K x competitors)^depth`: for long
-  sequences or many concurrent competitors, Monte-Carlo is the cheaper
+  sequences or many concurrent competitors, Monte-Carlo simulation is the cheaper
   tool (see [Cost](#cost)).
 - **Repairable systems over long horizons need cut-offs.** Each repair
   reopens the tree, and the number of sequences grows quickly with the

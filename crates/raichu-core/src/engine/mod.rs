@@ -1,27 +1,43 @@
-//! The deterministic simulation engine (M0 discrete subset + M1
-//! continuous evolution).
+//! The deterministic simulation engine: one trajectory of a compiled
+//! model, discrete and continuous evolution together.
 //!
 //! Implements the cycle `init → schedule → continuous → discrete →
-//! update` of Desgeorges et al. 2021. Rule mapping:
+//! update` of Desgeorges et al. (2021), whose operational semantics is
+//! one initialisation axiom and eight inference rules. Each rule has a
+//! descriptive name in this crate (a name for the rule, not a function);
+//! the paper's own name follows it, then the functions that implement it,
+//! so the mapping to the paper stays auditable:
 //!
-//! - scheduling of deterministic transitions: `schedule_deterministic`
-//!   ([`Engine::refresh_schedule`]);
-//! - continuous evolution up to the next scheduled date: `integrate_continuous`
-//!   ([`Engine::integrate_to`]);
-//! - watched transitions fired at located boundary crossings: `schedule_boundary`
-//!   (margin monitoring inside [`Engine::integrate_to`]);
-//! - firing of the earliest transition: `fire_transition` ([`Engine::step`]);
-//! - sensitive-function propagation to fixpoint: `propagate_effects`
-//!   ([`Engine::run_fixpoint`]);
-//! - dropping interruptible transitions whose guard turned false:
-//!   `drop_disabled` ([`Engine::refresh_schedule`]).
+//! - initialisation (the axiom): `Engine::initialize`, called by
+//!   [`Engine::new`];
+//! - scheduling of deterministic transitions, `schedule_deterministic`
+//!   (the paper's `schDT`): `Engine::refresh_schedule`;
+//! - scheduling of stochastic transitions, `schedule_stochastic`
+//!   (`schST`): `Engine::refresh_schedule`, which draws a firing date
+//!   from the transition's law (an exponential hazard threshold for a
+//!   state-dependent rate; no date in deferred-draw mode, where
+//!   `Engine::refresh_deferred` arms the transition without a draw);
+//! - watched transitions fired at located boundary crossings,
+//!   `schedule_boundary` (`schWT`): margin monitoring inside
+//!   `Engine::integrate_to`;
+//! - continuous evolution up to the next scheduled date,
+//!   `integrate_continuous` (`evolC`): `Engine::advance_continuous` and
+//!   `Engine::integrate_to`;
+//! - firing of the earliest transition, `fire_transition` (`evolT`):
+//!   [`Engine::step`];
+//! - sensitive-function propagation to fixpoint, `propagate_effects`
+//!   (`evolA`): `Engine::run_fixpoint`;
+//! - rescheduling of modifiable transitions whose rate changed,
+//!   `reschedule_modifiable` (`updateMT`): through the cumulative-hazard
+//!   realisation of state-dependent rates (`CLaw::ExpVar`), a
+//!   piecewise-constant rate is rescheduled at each discrete change
+//!   (`Engine::refresh_schedule`) and a continuously-varying rate is
+//!   integrated alongside the ODE state, its firing located like a
+//!   boundary crossing (`Engine::integrate_to`);
+//! - dropping interruptible transitions whose guard turned false,
+//!   `drop_disabled` (`updateIT`): `Engine::refresh_schedule`.
 //!
-//! `schedule_stochastic` is implemented (M2, exponential distribution). `reschedule_modifiable` is
-//! implemented through the cumulative-hazard realisation of
-//! state-dependent rates (`CLaw::ExpVar`): a piecewise-constant rate
-//! is rescheduled at each discrete change ([`Engine::refresh_schedule`]),
-//! a continuously-varying rate is integrated alongside the ODE state and
-//! its firing located like a boundary crossing ([`Engine::integrate_to`]).
+//! The functions written without a link are internal to this module.
 //!
 //! **Continuous/discrete coupling semantics:** sensitive functions
 //! react to *discrete* changes (transition firings and effect

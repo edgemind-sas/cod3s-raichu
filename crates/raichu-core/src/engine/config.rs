@@ -319,7 +319,7 @@ pub enum EngineError {
         time: f64,
     },
     /// The conservative flow network did not settle within its sweep
-    /// budget (see [`Engine::resolve_flows`]).
+    /// budget (see `Engine::resolve_flows`).
     #[error(
         "the continuous flow network did not settle after {sweeps} sweeps \
          at t={time}: {cause}; still moving: {moving}"

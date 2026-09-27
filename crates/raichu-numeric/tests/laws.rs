@@ -366,7 +366,7 @@ fn delay_has_zero_hazard_before_its_date_and_certain_firing_at_it() {
 // --- empirical: the exact inverse of the engine sampler ---------------------
 
 /// The engine's inverse-CDF sampler, `sample_empirical` in
-/// `crates/raichu-core/src/engine.rs`, reproduced verbatim.
+/// `crates/raichu-core/src/engine/schedule.rs`, reproduced verbatim.
 fn engine_sample_empirical(points: &[(f64, f64)], u: f64) -> f64 {
     let (first_t, first_c) = points[0];
     if u <= first_c {

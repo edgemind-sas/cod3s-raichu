@@ -55,6 +55,10 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
   [Sequence-tree exploration](guides/sequence-tree-exploration.md),
   [Fault trees](guides/fault-tree.md) and
   [Importance measures](guides/importance-measures.md).
+- **One question, three engines.** A study (feared event, horizon, seed)
+  goes to Monte-Carlo simulation, exact exploration or discretised
+  exploration through one function, and each answers in the same
+  envelope. See [Quantifying a study](guides/quantification.md).
 - **Step through a trajectory by hand.** An interactive session fires
   the transition you choose, forces the branch it takes, and undoes. See
   [Interactive simulation](guides/interactive-simulation.md).
@@ -141,8 +145,8 @@ print("unavailability:", round(failed.mean[-1], 3),
   distribution and expression operator.
 - **[Advanced guides](guides/reproducibility.md)**: reproducibility,
   confidence intervals, numerical tuning, the causal journal, interactive
-  simulation, sequence analysis, sequence-tree exploration, importance
-  measures, fault trees, the muscadet authoring layer, running a muscadet
+  simulation, sequence analysis, sequence-tree exploration, quantifying
+  a study with the three engines, importance measures, fault trees, the muscadet authoring layer, running a muscadet
   model, platform import, parallelism.
 - **[Raw sequence corpus format](reference/sequence-format.md)**: the
   file a sequence campaign writes, for auditing or another tool.
