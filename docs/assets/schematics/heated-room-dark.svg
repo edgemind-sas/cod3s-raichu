@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 400" font-family="Open Sans, DejaVu Sans, Arial, sans-serif">
+<title>Heated room: a main and a backup heater, heat lost to the outside</title>
+<defs><marker id="loss" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8fb3e0"/></marker></defs>
+<g id="room">
+  <rect x="60" y="60" width="440" height="300" fill="#26303c"/>
+  <rect x="60" y="60" width="440" height="300" fill="none" stroke="#dfe5ec" stroke-width="6"/>
+  <text x="280" y="120" font-size="22" fill="#dfe5ec" text-anchor="middle">room T</text>
+  <text x="280" y="150" font-size="16" fill="#ef7b26" text-anchor="middle">frozen: T &lt; 10 °C</text>
+</g>
+<g id="main"><rect x="120" y="230" width="100" height="58" rx="6" fill="none" stroke="#8fb3e0" stroke-width="3"/><line x1="130" y1="236" x2="130" y2="282" stroke="#8fb3e0" stroke-width="4"/><line x1="142" y1="236" x2="142" y2="282" stroke="#8fb3e0" stroke-width="4"/><line x1="154" y1="236" x2="154" y2="282" stroke="#8fb3e0" stroke-width="4"/><line x1="166" y1="236" x2="166" y2="282" stroke="#8fb3e0" stroke-width="4"/><line x1="178" y1="236" x2="178" y2="282" stroke="#8fb3e0" stroke-width="4"/><line x1="190" y1="236" x2="190" y2="282" stroke="#8fb3e0" stroke-width="4"/><line x1="202" y1="236" x2="202" y2="282" stroke="#8fb3e0" stroke-width="4"/><text x="170" y="314" font-size="18" fill="#8fb3e0" text-anchor="middle">main</text><text x="170" y="338" font-size="15" fill="#dfe5ec" text-anchor="middle">on &lt; 19 °C, off &gt; 21 °C</text></g>
+<g id="backup"><rect x="330" y="230" width="100" height="58" rx="6" fill="none" stroke="#8fc58d" stroke-width="3"/><line x1="340" y1="236" x2="340" y2="282" stroke="#8fc58d" stroke-width="4"/><line x1="352" y1="236" x2="352" y2="282" stroke="#8fc58d" stroke-width="4"/><line x1="364" y1="236" x2="364" y2="282" stroke="#8fc58d" stroke-width="4"/><line x1="376" y1="236" x2="376" y2="282" stroke="#8fc58d" stroke-width="4"/><line x1="388" y1="236" x2="388" y2="282" stroke="#8fc58d" stroke-width="4"/><line x1="400" y1="236" x2="400" y2="282" stroke="#8fc58d" stroke-width="4"/><line x1="412" y1="236" x2="412" y2="282" stroke="#8fc58d" stroke-width="4"/><text x="380" y="314" font-size="18" fill="#8fc58d" text-anchor="middle">backup</text><text x="380" y="338" font-size="15" fill="#dfe5ec" text-anchor="middle">on &lt; 17 °C, off &gt; 20 °C</text></g>
+<g id="losses">
+  <path d="M506,270 H600" stroke="#8fb3e0" stroke-width="4" fill="none" marker-end="url(#loss)"/>
+  <text x="580" y="300" font-size="16" fill="#8fb3e0" text-anchor="middle">losses</text>
+  <text x="580" y="320" font-size="16" fill="#8fb3e0" text-anchor="middle">0.1 (T − T_out)</text>
+</g>
+<g id="outside">
+  <path d="M600,150 q8,-12 16,0 t16,0" stroke="#8fb3e0" stroke-width="3" fill="none"/><path d="M622,150 q8,-12 16,0 t16,0" stroke="#8fb3e0" stroke-width="3" fill="none"/><path d="M644,150 q8,-12 16,0 t16,0" stroke="#8fb3e0" stroke-width="3" fill="none"/>
+  <text x="660" y="110" font-size="18" fill="#dfe5ec" text-anchor="middle">outside</text>
+  <text x="660" y="182" font-size="15" fill="#dfe5ec" text-anchor="middle">T_out: −4 to 8 °C</text>
+  <text x="660" y="200" font-size="15" fill="#dfe5ec" text-anchor="middle">daily cycle</text>
+</g>
+</svg>

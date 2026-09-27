@@ -144,6 +144,10 @@ print("unavailability:", round(failed.mean[-1], 3),
 
 - **[Tutorial](tutorial/01-first-model.md)**: from your first model to a
   full hybrid system, step by step.
+- **[Examples](examples/index.md)**: worked studies with schematics,
+  hypotheses and results on charts: the heated tank benchmark, a heated
+  room over a winter, a two-out-of-three system solved three ways, a solar
+  hydrogen installation.
 - **[Model schema reference](reference/model-schema.md)**: every field,
   distribution and expression operator.
 - **[Advanced guides](guides/reproducibility.md)**: reproducibility,

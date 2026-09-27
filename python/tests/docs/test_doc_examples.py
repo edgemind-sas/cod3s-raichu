@@ -27,7 +27,7 @@ DOCS = REPO / "docs"
 
 PAGES = [DOCS / "index.md"] + sorted(
     p
-    for sub in ("tutorial", "reference", "guides", "benchmarks", "pycatshoo")
+    for sub in ("tutorial", "examples", "reference", "guides", "benchmarks", "pycatshoo")
     for p in (DOCS / sub).glob("*.md")
 )
 

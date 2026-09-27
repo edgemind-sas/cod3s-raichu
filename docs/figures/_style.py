@@ -12,6 +12,9 @@ A figure script defines ``draw(fig, theme)`` and calls :func:`render`.
 
 from __future__ import annotations
 
+import os
+import re
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +27,35 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 import pyraichu  # noqa: E402
 
-OUT = Path(__file__).resolve().parents[1] / "assets" / "figures"
+DOCS = Path(__file__).resolve().parents[1]
+OUT = DOCS / "assets" / "figures"
+
+_FENCE = re.compile(
+    r"(?P<skip><!--\s*skip\s*-->\n)?```python\b[^\n]*\n(?P<body>.*?)\n```",
+    re.DOTALL,
+)
+
+
+def page_namespace(page: str) -> dict:
+    """Run a page's executed ``python`` blocks and return their namespace.
+
+    A figure reuses the model its page defines instead of restating it, so
+    the page and its charts cannot drift apart. Blocks marked
+    ``<!-- skip -->`` are left out, as the documentation tests leave them
+    out; the page runs in a temporary directory, as there.
+    """
+    text = (DOCS / page).read_text()
+    namespace: dict = {}
+    here = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            for match in _FENCE.finditer(text):
+                if not match.group("skip"):
+                    exec(compile(match.group("body"), page, "exec"), namespace)  # noqa: S102
+        finally:
+            os.chdir(here)
+    return namespace
 
 NAVY = "#1f416d"
 ORANGE = "#ef7b26"
