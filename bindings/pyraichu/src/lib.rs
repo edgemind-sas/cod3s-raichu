@@ -37,6 +37,9 @@ use raichu::raichu_montecarlo::{
     run_sequences_observed as mc_run_sequences_observed, McConfig, SequenceObservation,
     DEFAULT_CONFIDENCE,
 };
+use raichu::raichu_quantify::{
+    quantify as quantify_study, read_quantification, Method, QuantifyError, Study,
+};
 
 create_exception!(
     _pyraichu,
@@ -936,6 +939,58 @@ fn exploration_minimal_sequences_json(result_json: &str) -> PyResult<String> {
     serde_json::to_string(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))
 }
 
+/// Quantify one study with one method and return the
+/// `raichu.quantification` envelope as JSON (see `raichu_quantify`).
+///
+/// `study_json` is the study (`target`, `horizon`, optional `instants`,
+/// `seed`, `threads`); `method` names the engine (`monte_carlo`, `exact`,
+/// `discretised`) and `settings_json` holds the settings that belong to it
+/// (an object, `None` for every default). An unknown method, or a setting
+/// of another method, is refused naming the valid ones before anything
+/// runs. The GIL is released while the engine runs.
+#[pyfunction]
+#[pyo3(signature = (model_json, study_json, method, settings_json = None))]
+fn quantify_json(
+    py: Python<'_>,
+    model_json: &str,
+    study_json: &str,
+    method: &str,
+    settings_json: Option<&str>,
+) -> PyResult<String> {
+    let model = Model::from_json(model_json)
+        .map_err(|e| ModelError::new_err(format!("invalid model JSON: {e}")))?;
+    let study: Study = serde_json::from_str(study_json)
+        .map_err(|e| SimulationError::new_err(format!("invalid study: {e}")))?;
+    let settings: serde_json::Value = match settings_json {
+        None => serde_json::Value::Null,
+        Some(text) => serde_json::from_str(text)
+            .map_err(|e| SimulationError::new_err(format!("invalid method settings: {e}")))?,
+    };
+    let method = Method::from_parts(method, &settings)
+        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    py.detach(|| {
+        let envelope = quantify_study(&model, &study, &method).map_err(|e| match e {
+            QuantifyError::Compile(e) => ModelError::new_err(e.to_string()),
+            other => SimulationError::new_err(other.to_string()),
+        })?;
+        envelope
+            .to_json()
+            .map_err(|e| SimulationError::new_err(e.to_string()))
+    })
+}
+
+/// Check that `envelope_json` is a quantification envelope this engine
+/// reads (format, version, and a method, probability kind and detail that
+/// belong together); raise `SimulationError` naming what is wrong. The
+/// validating half of `pyraichu.read_quantification`, which builds the
+/// Python object from the text itself.
+#[pyfunction]
+fn validate_quantification(envelope_json: &str) -> PyResult<()> {
+    read_quantification(envelope_json)
+        .map(|_| ())
+        .map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
 /// Opaque checkpoint of an [`Interactive`] session's full trajectory
 /// state (see `raichu_core::Snapshot`): produced by `Interactive.snapshot`
 /// and reinstated by `Interactive.restore`. Held as a Python object; its
@@ -1135,6 +1190,8 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(fault_tree_json, module)?)?;
     module.add_function(wrap_pyfunction!(fault_tree_quantify_json, module)?)?;
     module.add_function(wrap_pyfunction!(validate_exploration, module)?)?;
+    module.add_function(wrap_pyfunction!(quantify_json, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_quantification, module)?)?;
     module.add_function(wrap_pyfunction!(
         exploration_minimal_sequences_json,
         module

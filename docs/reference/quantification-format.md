@@ -14,6 +14,76 @@ question once, a `Method` names the engine with the settings that belong
 to it alone, and `quantify(model, study, method)` returns the envelope.
 `read_quantification` reads one back.
 
+## From Python
+
+`pyraichu.quantify(model, study, method=..., **settings)` is the one entry
+point to the three engines; `Quantification.to_json()` writes the envelope
+and `pyraichu.read_quantification` reads it back into an equal object.
+
+```python
+import math
+
+import pyraichu
+
+
+def unit(name, rate):
+    return {
+        "name": name,
+        "automata": [
+            {
+                "name": "fail",
+                "states": ["ok", "nok"],
+                "init": "ok",
+                "transitions": [
+                    {"name": "occ", "source": "ok", "targets": ["nok"],
+                     "distrib": "exp", "rate": rate, "monitored": True}
+                ],
+            }
+        ],
+    }
+
+
+def nok(name):
+    return {"op": "state_active",
+            "state": {"component": name, "automaton": "fail", "state": "nok"}}
+
+
+pair = pyraichu.load_model({
+    "name": "parallel_pair",
+    "components": [
+        unit("A", 0.1),
+        unit("B", 0.2),
+        {
+            "name": "sys",
+            "automata": [{
+                "name": "watch", "states": ["ok", "down"], "init": "ok",
+                "transitions": [{
+                    "name": "down", "source": "ok", "targets": ["down"],
+                    "distrib": "inst", "probs": [],
+                    "guard": {"op": "bool", "bool_op": "and",
+                              "args": [nok("A"), nok("B")]},
+                }],
+            }],
+        },
+    ],
+    "targets": [{"name": "both_down", "component": "sys",
+                 "automaton": "watch", "state": "down"}],
+})
+study = pyraichu.Study("both_down", 5.0, seed=1)
+closed_form = (1 - math.exp(-0.1 * 5.0)) * (1 - math.exp(-0.2 * 5.0))
+
+exact = pyraichu.quantify(pair, study, method="exact")
+assert math.isclose(exact.probability.low, closed_form, rel_tol=1e-12)
+
+mc = pyraichu.quantify(pair, study, method="monte_carlo", nb_runs=2000)
+print(mc.probability.estimate, mc.probability.low, mc.probability.high)
+
+disc = pyraichu.quantify(pair, study, method="discretised", level=4)
+assert abs(disc.probability.low - closed_form) <= disc.probability.error_estimate
+
+assert pyraichu.read_quantification(exact.to_json()) == exact
+```
+
 ## What the probability is
 
 The probability that the study's target is the **first** of the model's
