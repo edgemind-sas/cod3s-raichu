@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Sequence-tree exploration: exact enumeration of the sequences leading to a feared event, with guaranteed bounds"
 
 [dependencies]
+raichu-analysis.workspace = true
 raichu-core.workspace = true
 raichu-model.workspace = true
 raichu-numeric.workspace = true

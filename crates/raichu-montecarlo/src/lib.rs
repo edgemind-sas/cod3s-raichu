@@ -33,9 +33,10 @@ pub use confidence::{
     DEFAULT_CONFIDENCE,
 };
 
+use raichu_analysis::{importance, target_events, ImportanceAnalysis};
 use raichu_core::{
-    importance, target_events, CIndicator, CIndicatorTarget, CompiledModel, Engine, EngineConfig,
-    EngineError, FlowConfig, ImportanceAnalysis, IndicatorSeries, Sequence, SolverParams,
+    CIndicator, CIndicatorTarget, CompiledModel, Engine, EngineConfig, EngineError, FlowConfig,
+    IndicatorSeries, Sequence, SolverParams,
 };
 use raichu_expr::Value;
 use serde::Serialize;
@@ -562,7 +563,7 @@ fn collect_sequences(
 /// per-trajectory sequences, in replica order (deterministic). Each replica
 /// runs with sequence recording on and target early-stop; a trajectory that
 /// reaches no target still contributes its (target-less) sequence. Feed the
-/// result to [`raichu_core::analyse`] for the minimal-sequence corpus.
+/// result to [`raichu_analysis::analyse`] for the minimal-sequence corpus.
 ///
 /// Reports sequences rather than estimators, so it produces no interval
 /// and ignores [`McConfig::confidence`].
@@ -732,7 +733,7 @@ fn observed_number(value: Value) -> f64 {
 /// same thing the early stop would have recorded: one campaign, both
 /// halves of the answer.
 ///
-/// See [`raichu_core::importance`] for what the measures mean and what
+/// See [`raichu_analysis::importance`] for what the measures mean and what
 /// they assume.
 pub fn run_importance(
     model: &CompiledModel,
@@ -793,7 +794,7 @@ pub fn run_importance(
 
 /// The declared feared events, for an error message that names the
 /// choices instead of only refusing.
-fn named_targets(declared: &[(String, raichu_core::BasicEvent)]) -> String {
+fn named_targets(declared: &[(String, raichu_analysis::BasicEvent)]) -> String {
     if declared.is_empty() {
         return "none".to_owned();
     }

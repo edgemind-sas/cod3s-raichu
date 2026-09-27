@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Monte-Carlo driver: rayon-parallel replicas, per-replica RNG substreams, index-ordered reduction, estimators"
 
 [dependencies]
+raichu-analysis.workspace = true
 raichu-core.workspace = true
 raichu-expr.workspace = true
 rayon = "1"

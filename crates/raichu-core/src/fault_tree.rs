@@ -26,7 +26,7 @@
 //!
 //! # What this is not
 //!
-//! Not the minimal sequences of a simulation (`crate::sequence`), which let
+//! Not the minimal sequences of a simulation (`raichu_analysis::sequence`), which let
 //! attributes move and order the events. A tree is a static structure; the
 //! two answer different questions and are not derived from each other.
 //!

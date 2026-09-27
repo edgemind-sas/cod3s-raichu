@@ -4,10 +4,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use raichu_core::{
-    read_raw_corpus, read_raw_sequences, write_raw_corpus, write_raw_sequences, CompiledModel,
-    ObservedCondition, RawHeader, RawObservation, Sequence, SolverParams,
+use raichu_analysis::{
+    read_raw_corpus, read_raw_sequences, write_raw_corpus, write_raw_sequences, ObservedCondition,
+    RawHeader, RawObservation,
 };
+use raichu_core::{CompiledModel, Sequence, SolverParams};
 use raichu_expr::CmpOp;
 use raichu_model::Model;
 use raichu_montecarlo::{

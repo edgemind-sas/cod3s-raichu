@@ -24,7 +24,7 @@
 //! The events of a sequence use the vocabulary of the Monte-Carlo
 //! sequence corpus (`obj`, the monitored state entered as `attr`, and the
 //! cycle group), so [`ExplorationResult::to_sequences`] hands them to the
-//! existing reduction ([`raichu_core::sequence::analyse`]).
+//! existing reduction ([`raichu_analysis::sequence::analyse`]).
 //!
 //! The format is plain serde data. A reader refuses another `format` and a
 //! `version` above the one it knows; a later version may add fields, which
@@ -497,7 +497,7 @@ impl ExplorationResult {
     /// its probability, dated 0, and ending at the target.
     ///
     /// **Valid input for the minimal-sequence reduction**
-    /// ([`raichu_core::sequence::analyse`]): the retained sequences are
+    /// ([`raichu_analysis::sequence::analyse`]): the retained sequences are
     /// disjoint events, so summing their probabilities when sequences are
     /// grouped or absorbed yields the probability of the union, and the
     /// total weight is [`ExplorationResult::lower`].

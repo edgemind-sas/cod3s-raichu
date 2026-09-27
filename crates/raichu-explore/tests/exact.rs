@@ -5,7 +5,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use raichu_core::{sequence::analyse, CompiledModel, Engine, EngineConfig, EngineError};
+use raichu_analysis::sequence::analyse;
+use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError};
 use raichu_explore::{
     exact_domain_report, explore_exact, read_exploration, DomainViolation, ExactSettings,
     ExplorationResult, ReadExplorationError, EXPLORATION_FORMAT, EXPLORATION_VERSION,

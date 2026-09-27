@@ -4,10 +4,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use raichu_core::{
-    analyse, clean, minimal_sequences, read_raw_sequences, write_raw_sequences, CompiledModel,
-    RawHeader, RawSequencesError, SolverParams, RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
+use raichu_analysis::{
+    analyse, clean, minimal_sequences, read_raw_sequences, write_raw_sequences, RawHeader,
+    RawSequencesError, RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
 };
+use raichu_core::{CompiledModel, SolverParams};
 use raichu_model::Model;
 use raichu_montecarlo::{run_sequences, McConfig, DEFAULT_CONFIDENCE};
 
