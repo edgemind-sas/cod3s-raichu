@@ -44,8 +44,28 @@ jobs:
         run: |
           if [[ "${{ matrix.platform.name }}" == linux-aarch64 ]]; then
             # The upstream 0.12.0 release has no Linux aarch64 binary.
-            cargo install --git https://github.com/modelica/fmusim.git \
-              --tag v0.12.0 --locked --root "$RUNNER_TEMP/fmusim" fmusim
+            # fmi-rs 0.2.0 assumes signed c_char when reading schema messages.
+            # Patch its pinned source for aarch64's unsigned c_char.
+            git clone --quiet --depth 1 --branch v0.12.0 \
+              https://github.com/modelica/fmusim.git "$RUNNER_TEMP/fmusim-src"
+            git clone --quiet https://github.com/CATIA-Systems/fmi-rs.git \
+              "$RUNNER_TEMP/fmi-rs-src"
+            git -C "$RUNNER_TEMP/fmi-rs-src" checkout --quiet --detach \
+              762741440ca8564a5fc9de998ee5146038da5404
+            FMI_RS_SRC="$RUNNER_TEMP/fmi-rs-src" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["FMI_RS_SRC"]) / "src/schema/mod.rs"
+          original = "std::ffi::CStr::from_ptr(msg_ptr)"
+          assert source.read_text().count(original) == 1
+          source.write_text(source.read_text().replace(original, "std::ffi::CStr::from_ptr(msg_ptr.cast())"))
+          PY
+            printf '\n[patch.crates-io]\nfmi-rs = { path = "%s" }\n' \
+              "$RUNNER_TEMP/fmi-rs-src" >> "$RUNNER_TEMP/fmusim-src/Cargo.toml"
+            cargo update --manifest-path "$RUNNER_TEMP/fmusim-src/Cargo.toml" -p fmi-rs
+            cargo install --path "$RUNNER_TEMP/fmusim-src/fmusim" \
+              --locked --root "$RUNNER_TEMP/fmusim"
             echo "RAICHU_FMUSIM=$RUNNER_TEMP/fmusim/bin/fmusim" >> "$GITHUB_ENV"
           else
             case "${{ matrix.platform.name }}" in
