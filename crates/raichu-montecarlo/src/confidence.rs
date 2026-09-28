@@ -32,6 +32,16 @@
 //! - [`IntervalMethod::Normal`] for every other estimator (cumulated
 //!   sojourn, occurrence count, a non-boolean attribute): the
 //!   central-limit interval `mean ± z·s/√n`.
+//! - [`IntervalMethod::WeightedNormal`] for the estimate of a **biased
+//!   (likelihood-weighted) campaign**: the mean of `Yᵢ = Wᵢ·1{hitᵢ}`,
+//!   with `Wᵢ` the likelihood ratio of replica `i`. The bounds are the
+//!   same central-limit construction, but under their own name: a
+//!   likelihood weight is unbounded, so the estimate is not a
+//!   proportion, Wilson does not apply, and an artefact must never
+//!   claim a plain proportion's interval for it. See
+//!   [`weighted_interval`], which also reports the weight diagnostics
+//!   (effective sample size, relative error) that tell a sound interval
+//!   from one a few huge weights made look tight.
 //!
 //! # When every replica said the same thing
 //!
@@ -126,8 +136,15 @@ pub enum IntervalMethod {
     /// (cumulated sojourn, occurrence count, non-boolean attribute).
     /// Asymptotic: its coverage reaches the nominal one as `n` grows.
     Normal,
+    /// Central-limit interval `mean ± z·s/√n` on a **weighted
+    /// indicator** `Yᵢ = Wᵢ·1{hitᵢ}`, `Wᵢ` the likelihood ratio of a
+    /// biased replica. The construction is [`Self::Normal`]'s; the
+    /// distinct name records that the estimate is a weighted mean, not
+    /// a proportion. Not clamped, per the crate policy.
+    WeightedNormal,
     /// No interval could be formed: fewer than two replicas, so no
-    /// dispersion is observable. The bounds repeat the point estimate
+    /// dispersion is observable (or, on a weighted indicator, no replica
+    /// hit at all). The bounds repeat the point estimate
     /// and carry **no** coverage guarantee.
     Undefined,
 }
@@ -349,6 +366,106 @@ impl<'a> Departure<'a> {
             // invert the bounds rather than widen them.
             Some(instants) => instants.get(k).copied().unwrap_or(0.0).max(0.0),
         }
+    }
+}
+
+/// The estimate of a weighted indicator, its interval and its weight
+/// diagnostics: what [`weighted_interval`] returns.
+///
+/// A biased campaign can produce a handful of huge likelihood weights
+/// and an interval that *looks* tight (Glasserman and Wang, 1997): the
+/// two diagnostics travel with the bounds so that case is visible.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeightedInterval {
+    /// Confidence level the bounds were computed at.
+    pub level: f64,
+    /// [`IntervalMethod::WeightedNormal`], or
+    /// [`IntervalMethod::Undefined`] below two replicas or when no
+    /// replica hit.
+    pub method: IntervalMethod,
+    /// Replicas in the sample, hits or not.
+    pub replicas: u64,
+    /// Point estimate: the mean of the weighted indicator values.
+    pub estimate: f64,
+    /// Standard error of the estimate, `s/√n` with `s` the sample
+    /// standard deviation (ddof = 1); 0 when the interval is undefined.
+    pub standard_error: f64,
+    /// Lower bound (the estimate itself when undefined).
+    pub low: f64,
+    /// Upper bound (the estimate itself when undefined).
+    pub high: f64,
+    /// Effective sample size of the hits, `(Σ wᵢ)² / Σ wᵢ²` over the
+    /// hit weights: the number of equally weighted hits that would carry
+    /// the same information. Equal to the hit count when every hit
+    /// weighs the same, close to 1 when one weight dominates, 0 when no
+    /// replica hit.
+    pub effective_sample_size: f64,
+    /// Relative error, standard error over estimate; `None` when the
+    /// interval is undefined (no hit, or fewer than two replicas).
+    pub relative_error: Option<f64>,
+}
+
+/// Normal interval and weight diagnostics of a **weighted indicator**
+/// sample, at confidence `level`.
+///
+/// `values` holds one entry per replica, in replica order: the
+/// likelihood weight of the replica if it hit the target, 0 otherwise
+/// (`Yᵢ = Wᵢ·1{hitᵢ}`). Values are expected finite and non-negative;
+/// the caller (the biased driver) owns that invariant. The non-zero
+/// entries are the hit weights the effective sample size is taken over.
+///
+/// The bounds are [`normal_bounds`] on the mean and ddof-1 standard
+/// deviation of `values`, not clamped (crate policy), under
+/// [`IntervalMethod::WeightedNormal`]. Two cases get
+/// [`IntervalMethod::Undefined`], bounds equal to the estimate and no
+/// relative error:
+///
+/// - fewer than two replicas, as for every estimator of the crate;
+/// - **no hit at all**: the sample is all zero, and no bound on a mean
+///   of unbounded weights follows from it (the constant-sample rule
+///   needs a bounded departure size, which a likelihood weight is not).
+///   A quantification refuses this case upstream rather than report it.
+#[must_use]
+pub fn weighted_interval(values: &[f64], level: f64) -> WeightedInterval {
+    let replicas = values.len() as u64;
+    let n = values.len() as f64;
+    // Serial, replica-ordered sums: the result is bit-reproducible.
+    let sum: f64 = values.iter().sum();
+    let estimate = if values.is_empty() { 0.0 } else { sum / n };
+    let (hit_sum, hit_sum_sq) = values
+        .iter()
+        .filter(|&&v| v != 0.0)
+        .fold((0.0_f64, 0.0_f64), |(s, q), &v| (s + v, q + v * v));
+    let effective_sample_size = if hit_sum_sq > 0.0 {
+        hit_sum * hit_sum / hit_sum_sq
+    } else {
+        0.0
+    };
+    let undefined = WeightedInterval {
+        level,
+        method: IntervalMethod::Undefined,
+        replicas,
+        estimate,
+        standard_error: 0.0,
+        low: estimate,
+        high: estimate,
+        effective_sample_size,
+        relative_error: None,
+    };
+    if replicas < 2 || hit_sum_sq <= 0.0 {
+        return undefined;
+    }
+    let squared_deviations: f64 = values.iter().map(|v| (v - estimate).powi(2)).sum();
+    let std = (squared_deviations / (n - 1.0)).max(0.0).sqrt();
+    let (low, high) = normal_bounds(estimate, std, replicas, level);
+    let standard_error = std / n.sqrt();
+    WeightedInterval {
+        method: IntervalMethod::WeightedNormal,
+        standard_error,
+        low,
+        high,
+        relative_error: (estimate != 0.0).then(|| standard_error / estimate),
+        ..undefined
     }
 }
 

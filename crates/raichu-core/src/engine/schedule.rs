@@ -22,6 +22,106 @@ pub(super) struct Hazard {
     pub(super) since: f64,
 }
 
+/// Running tally of the per-transition sufficient statistics
+/// ([`TransitionExposure`]) of a run with [`EngineConfig::rate_factors`].
+///
+/// Exposure is accrued lazily: in drawn mode a constant-rate exponential
+/// transition is armed and running exactly while it holds a date in
+/// `pending` (a `reset` drop, a `resume` pause, a source exit and a
+/// firing all clear it; a `continue` transition keeps it through a false
+/// guard), and `pending` changes only at discrete events. Accruing
+/// `λ · (t − since)` over every dated `CLaw::Exp` transition just before
+/// each firing, and once at the final time, therefore integrates the
+/// running time exactly.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ExposureTally {
+    /// Statistics per transition, indexed like the compiled transitions.
+    pub(super) stats: Vec<TransitionExposure>,
+    /// Instant up to which `stats` holds the accrued exposure.
+    pub(super) since: f64,
+    /// `(transition index, nominal rate)` of every constant-rate
+    /// exponential transition, the only ones that accrue exposure.
+    exponential: Vec<(usize, f64)>,
+}
+
+impl ExposureTally {
+    /// A fresh tally at `t = 0` for the transitions of `model`.
+    pub(super) fn new(model: &CompiledModel) -> Self {
+        ExposureTally {
+            stats: vec![TransitionExposure::default(); model.transitions.len()],
+            since: 0.0,
+            exponential: model
+                .transitions
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, t)| match t.distrib {
+                    CLaw::Exp(rate) => Some((idx, rate)),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+
+    /// Accrue the nominal exposure of every dated constant-rate
+    /// exponential transition from `since` to `until`.
+    pub(super) fn accrue(&mut self, pending: &[Option<f64>], until: f64) {
+        let span = until - self.since;
+        if span <= 0.0 {
+            return;
+        }
+        for &(idx, rate) in &self.exponential {
+            if pending[idx].is_some() {
+                self.stats[idx].exposure += rate * span;
+            }
+        }
+        self.since = until;
+    }
+}
+
+/// Check [`EngineConfig::rate_factors`] against the compiled model: empty,
+/// or one finite positive factor per transition, other than 1 only on a
+/// constant-rate exponential law, and drawn stochastic dates.
+pub(super) fn validate_rate_factors(
+    model: &CompiledModel,
+    config: &EngineConfig,
+) -> Result<(), EngineError> {
+    let factors = &config.rate_factors;
+    if factors.is_empty() {
+        return Ok(());
+    }
+    if config.stochastic_dates != StochasticDates::Drawn {
+        return Err(EngineError::InvalidStudyParameter {
+            parameter: "rate_factors".to_owned(),
+            detail: "rate factors bias drawn dates; they are refused with deferred \
+                     stochastic dates"
+                .to_owned(),
+        });
+    }
+    if factors.len() != model.transitions.len() {
+        return Err(EngineError::RateFactorCount {
+            expected: model.transitions.len(),
+            found: factors.len(),
+        });
+    }
+    for (transition, &factor) in model.transitions.iter().zip(factors) {
+        let reason = if !factor.is_finite() || factor <= 0.0 {
+            Some("a rate factor must be finite and positive")
+        } else if factor != 1.0 && !matches!(transition.distrib, CLaw::Exp(_)) {
+            Some("only a constant-rate exponential law can be biased; any other law takes 1")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(EngineError::InvalidRateFactor {
+                transition: transition.name.clone(),
+                factor,
+                reason: reason.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Whether a compiled law is stochastic in the sense of
 /// [`StochasticDates`]: its firing date is drawn in drawn mode, deferred
 /// in deferred mode.
@@ -275,7 +375,17 @@ impl<'m> Engine<'m> {
                         // Armed by the dedicated block above.
                         CLaw::ExpVar { .. } => continue,
                         CLaw::Exp(rate) => {
-                            let distribution = rand_distr::Exp::new(*rate)
+                            // The biased rate `f·λ` (`EngineConfig::rate_factors`):
+                            // `Exp` samples `Exp1 / rate`, so the draw consumes
+                            // the nominal random numbers, and `f = 1` is exact.
+                            let rate = rate
+                                * self
+                                    .config
+                                    .rate_factors
+                                    .get(trans_idx)
+                                    .copied()
+                                    .unwrap_or(1.0);
+                            let distribution = rand_distr::Exp::new(rate)
                                 .map_err(|e| bad_law(format!("exp({rate}): {e}")))?;
                             self.time + distribution.sample(&mut self.rng)
                         }

@@ -93,7 +93,8 @@ mod schedule;
 pub use config::{
     DeferredProbe, DeferredTransition, DropReason, EngineConfig, EngineError, Event, Fireable,
     FireableKind, FlowConfig, FlowStall, HazardSample, IndicatorSeries, JournalRecord, ProbeStop,
-    Provenance, SeqEvent, Sequence, SimulationResult, Snapshot, StochasticDates, WorkCounters,
+    Provenance, SeqEvent, Sequence, SimulationResult, Snapshot, StochasticDates,
+    TransitionExposure, WorkCounters,
 };
 pub use flow::{active_set_budget, FLOW_RELAXATION, FLOW_SWEEP_BUDGET};
 
@@ -110,7 +111,7 @@ use flow::{
 use notes::ChangeLog;
 use ode::{ContinuousSystem, FrozenFlow};
 use sampling::indicator_value;
-use schedule::{fireable_kind, Hazard};
+use schedule::{fireable_kind, validate_rate_factors, ExposureTally, Hazard};
 
 /// A simulation engine over a compiled model.
 ///
@@ -209,6 +210,10 @@ pub struct Engine<'m> {
     /// [`crate::MarginIndex`] whenever an attribute, an automaton state or the
     /// clock a guard reads moves; cleared when the guard is re-evaluated.
     watched_stale: Vec<bool>,
+    /// Per-transition firing counts and nominal exposure, present exactly
+    /// when [`EngineConfig::rate_factors`] is non-empty (see
+    /// [`TransitionExposure`]). Trajectory state: part of the snapshot.
+    exposure: Option<ExposureTally>,
 }
 
 impl<'m> Engine<'m> {
@@ -226,6 +231,7 @@ impl<'m> Engine<'m> {
         config: EngineConfig,
         solver: Box<dyn OdeSolver>,
     ) -> Result<Self, EngineError> {
+        validate_rate_factors(model, &config)?;
         let mut engine = Self::bare(model, config, solver);
         engine.initialize()?;
         Ok(engine)
@@ -240,6 +246,11 @@ impl<'m> Engine<'m> {
     /// object): it keeps the owned model + a `Snapshot`, and rebuilds a
     /// throwaway engine on each call. Restores are exact, so a run
     /// driven this way is identical to one driven on a persistent engine.
+    ///
+    /// This constructor cannot fail, so it does not check
+    /// [`EngineConfig::rate_factors`]: the caller passes the configuration
+    /// the snapshot was taken under, which [`Engine::new`] validated. The
+    /// exposure statistics travel with the snapshot.
     pub fn from_snapshot(
         model: &'m CompiledModel,
         config: EngineConfig,
@@ -342,6 +353,7 @@ impl<'m> Engine<'m> {
             watched_active: Vec::new(),
             watched_guard: vec![false; model.watched.len()],
             watched_stale: vec![true; model.watched.len()],
+            exposure: (!config.rate_factors.is_empty()).then(|| ExposureTally::new(model)),
             solver,
             model,
             config,

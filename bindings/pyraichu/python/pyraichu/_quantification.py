@@ -27,6 +27,9 @@ from ._pyraichu import SimulationError, quantify_json, validate_quantification
 
 __all__ = [
     "QUANTIFICATION_METHODS",
+    "BiasFamily",
+    "CrossEntropyResult",
+    "PilotIteration",
     "Quantification",
     "Study",
     "TargetProbability",
@@ -37,7 +40,12 @@ __all__ = [
 
 #: The quantification methods :func:`quantify` provides for a study, in the
 #: order the documentation presents them.
-QUANTIFICATION_METHODS: tuple[str, ...] = ("monte_carlo", "exact", "discretised")
+QUANTIFICATION_METHODS: tuple[str, ...] = (
+    "monte_carlo",
+    "exact",
+    "discretised",
+    "cross_entropy",
+)
 
 
 @dataclass(frozen=True)
@@ -48,8 +56,9 @@ class Study:
 
     ``instants`` are the reporting instants of the Monte-Carlo detailed
     result (ascending, within ``[0, horizon]``; the horizon alone when
-    omitted) and ``seed`` its master seed: the exploration methods ignore
-    both and their results do not record them. ``threads`` sets the worker
+    omitted) and ``seed`` the master seed of the methods that draw at
+    random (Monte-Carlo and cross-entropy): a method that ignores one does
+    not record it. ``threads`` sets the worker
     count; no result depends on it.
     """
 
@@ -88,6 +97,17 @@ class TargetProbability:
     flags a gap above the declared tolerance, and ``error_estimate`` is the
     discretisation error estimate by refinement (an estimate, not a bound;
     ``None`` for an exact exploration and when no refinement was made).
+    It is ``"weighted_estimate"`` for cross-entropy: ``estimate`` is the
+    mean over ``replicas`` of each replica's likelihood ratio when it
+    reached the target first, ``standard_error`` its standard error,
+    ``[low, high]`` its interval at ``level`` (``interval_method``
+    ``"weighted_normal"``, not clamped at zero), ``reached`` the unweighted
+    hit count, ``effective_sample_size`` how many equally weighted hits the
+    estimate is worth (near 1: one replica carries it),
+    ``relative_error`` the standard error over the estimate, and
+    ``inconclusive`` is true when that effective sample size is below the
+    method's threshold: the estimate and its interval are then not to be
+    trusted, however narrow the interval.
     Fields that do not apply to a kind are ``None``.
     """
 
@@ -101,6 +121,9 @@ class TargetProbability:
     interval_method: str | None = None
     inconclusive: bool | None = None
     error_estimate: float | None = None
+    standard_error: float | None = None
+    effective_sample_size: float | None = None
+    relative_error: float | None = None
 
     @classmethod
     def _from_dict(cls, raw: dict[str, Any]) -> TargetProbability:
@@ -114,6 +137,21 @@ class TargetProbability:
                 replicas=raw["replicas"],
                 level=raw["level"],
                 interval_method=raw["method"],
+            )
+        if raw["kind"] == "weighted_estimate":
+            return cls(
+                kind=raw["kind"],
+                low=raw["low"],
+                high=raw["high"],
+                estimate=raw["estimate"],
+                reached=raw["reached"],
+                replicas=raw["replicas"],
+                level=raw["level"],
+                interval_method=raw["method"],
+                standard_error=raw["standard_error"],
+                effective_sample_size=raw["effective_sample_size"],
+                relative_error=raw.get("relative_error"),
+                inconclusive=raw["inconclusive"],
             )
         if raw["kind"] == "bounds":
             return cls(
@@ -129,9 +167,82 @@ class TargetProbability:
 
 
 @dataclass(frozen=True)
+class BiasFamily:
+    """A family of constant-rate exponential transitions sharing one bias
+    factor in a cross-entropy campaign: its ``label``, its member
+    ``transitions`` (qualified names), whether it is a ``repair`` family
+    (started at 1, never escalated) and the ``factor`` the final campaign
+    drew its rates with."""
+
+    label: str
+    transitions: tuple[str, ...]
+    repair: bool
+    factor: float
+
+
+@dataclass(frozen=True)
+class PilotIteration:
+    """One pilot iteration of a cross-entropy fit: the ``factors`` it drew
+    with (in family order), the ``hits`` among its replicas, whether it
+    saw none and ``escalated`` the non-repair factors, and the
+    ``effective_sample_size`` of its hit weights (a pilot below the
+    method's threshold cannot confirm the fit)."""
+
+    factors: tuple[float, ...]
+    hits: int
+    escalated: bool
+    effective_sample_size: float
+
+
+@dataclass(frozen=True)
+class CrossEntropyResult:
+    """The detailed result of a cross-entropy quantification: the
+    ``target``, the ``reached`` and ``replicas`` counts of the final
+    campaign, the ``families`` with their fitted factors, the pilot
+    ``history`` and whether the fit ``converged`` before its iteration
+    cap. The estimate and its diagnostics are the envelope's
+    :class:`TargetProbability`."""
+
+    target: str
+    reached: int
+    replicas: int
+    families: tuple[BiasFamily, ...]
+    history: tuple[PilotIteration, ...]
+    converged: bool
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> CrossEntropyResult:
+        return cls(
+            target=raw["target"],
+            reached=raw["reached"],
+            replicas=raw["replicas"],
+            families=tuple(
+                BiasFamily(
+                    label=f["label"],
+                    transitions=tuple(f["transitions"]),
+                    repair=f["repair"],
+                    factor=f["factor"],
+                )
+                for f in raw["families"]
+            ),
+            history=tuple(
+                PilotIteration(
+                    factors=tuple(it["factors"]),
+                    hits=it["hits"],
+                    escalated=it["escalated"],
+                    effective_sample_size=it["effective_sample_size"],
+                )
+                for it in raw["history"]
+            ),
+            converged=raw["converged"],
+        )
+
+
+@dataclass(frozen=True)
 class Quantification:
     """The answer to a :class:`Study` (:func:`quantify`), whatever the
-    method: the ``raichu.quantification`` envelope, version 1.
+    method: the ``raichu.quantification`` envelope, version 2 (version 1
+    envelopes read as well).
 
     ``method`` and ``settings`` are the method and the settings it
     applied, defaults resolved. The provenance follows: ``engine_version``,
@@ -142,7 +253,8 @@ class Quantification:
     ``probability`` is the probability that ``target`` is the first
     declared target reached by ``horizon``, with its uncertainty, and
     ``detail`` the method's own result, unchanged: :class:`McEstimates`
-    for Monte-Carlo simulation, :class:`Exploration` for the explorations.
+    for Monte-Carlo simulation, :class:`Exploration` for the explorations,
+    :class:`CrossEntropyResult` for cross-entropy.
     """
 
     format: str
@@ -157,7 +269,7 @@ class Quantification:
     instants: tuple[float, ...] | None
     seed: int | None
     probability: TargetProbability
-    detail: McEstimates | Exploration
+    detail: McEstimates | Exploration | CrossEntropyResult
     _text: str = field(default="", init=False, compare=False, repr=False)
 
     @classmethod
@@ -165,10 +277,19 @@ class Quantification:
         raw = json.loads(text)
         provenance = raw["provenance"]
         detail = raw["detail"]
+        # One branch per detail kind, and no fallback: a kind this reader
+        # does not know is refused rather than read as another.
+        parsed: McEstimates | Exploration | CrossEntropyResult
         if "monte_carlo" in detail:
-            parsed: McEstimates | Exploration = _mc_estimates(detail["monte_carlo"])
-        else:
+            parsed = _mc_estimates(detail["monte_carlo"])
+        elif "exploration" in detail:
             parsed = Exploration._from_json(json.dumps(detail["exploration"]))
+        elif "cross_entropy" in detail:
+            parsed = CrossEntropyResult._from_dict(detail["cross_entropy"])
+        else:
+            raise SimulationError(
+                f"detail kind {sorted(detail)!r} is not known to this engine"
+            )
         instants = provenance.get("instants")
         quantification = cls(
             format=raw["format"],
@@ -263,9 +384,9 @@ def quantify(
     """Quantify a study on a model, or a fault tree.
 
     **A study on a model**, ``quantify(model, study, method=...,
-    **settings)``: the one entry point to RAICHU's three engines. ``study``
-    is a :class:`Study` (the feared event, the horizon, and for Monte-Carlo
-    the reporting instants and the seed); ``method`` is one of
+    **settings)``: the one entry point to RAICHU's four engines. ``study``
+    is a :class:`Study` (the feared event, the horizon, and for the methods
+    that draw at random the reporting instants and the seed); ``method`` is one of
     :data:`QUANTIFICATION_METHODS`:
 
     - ``"monte_carlo"``, Monte-Carlo simulation: ``nb_runs`` (required),
@@ -278,6 +399,15 @@ def quantify(
       ``max_terms``, as :func:`explore` takes them.
     - ``"discretised"``, discretised exploration: the same cut-offs,
       ``gap_tolerance``, ``level`` and ``refine``.
+    - ``"cross_entropy"``, biased Monte-Carlo with factors fitted by
+      cross-entropy, for feared events too rare for a plain campaign:
+      ``nb_runs`` (required), ``pilot_runs``, ``max_iterations``,
+      ``smoothing``, ``tolerance``, ``confidence``, ``initial_factor``,
+      ``escalation_ratio``, ``factor_min``, ``factor_max``, ``fit``,
+      ``min_effective_sample_size`` and ``families`` (qualified transition
+      name to family label). The probability is a weighted estimate with its
+      diagnostics and an ``inconclusive`` verdict; a campaign that never
+      reaches the target raises :class:`SimulationError`.
 
     Returns a :class:`Quantification`. An unknown method, or a setting that
     belongs to another method, raises :class:`SimulationError` naming the

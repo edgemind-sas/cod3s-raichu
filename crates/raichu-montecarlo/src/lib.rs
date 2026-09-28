@@ -26,11 +26,19 @@
 //! [`confidence`] for what is computed and why.
 
 pub mod confidence;
+pub mod cross_entropy;
 
 pub use confidence::{
     constant_sample_bounds, is_valid_level, normal_bounds, normal_quantile,
-    unobserved_frequency_bound, wilson_bounds, z_of, ConfidenceInterval, Departure, IntervalMethod,
-    DEFAULT_CONFIDENCE,
+    unobserved_frequency_bound, weighted_interval, wilson_bounds, z_of, ConfidenceInterval,
+    Departure, IntervalMethod, WeightedInterval, DEFAULT_CONFIDENCE,
+};
+pub use cross_entropy::{
+    cross_entropy_families, run_cross_entropy, CrossEntropyError, CrossEntropyEstimate,
+    CrossEntropySettings, Family, FittedFamily, PilotIteration, DEFAULT_CE_ESCALATION_RATIO,
+    DEFAULT_CE_FACTOR_MAX, DEFAULT_CE_FACTOR_MIN, DEFAULT_CE_INITIAL_FACTOR,
+    DEFAULT_CE_MAX_ITERATIONS, DEFAULT_CE_MIN_EFFECTIVE_SAMPLE_SIZE, DEFAULT_CE_NB_RUNS,
+    DEFAULT_CE_PILOT_RUNS, DEFAULT_CE_SMOOTHING, DEFAULT_CE_TOLERANCE,
 };
 
 use raichu_analysis::{importance, target_events, ImportanceAnalysis};
@@ -307,10 +315,9 @@ fn replica_samples(
         ..EngineConfig::default()
     };
     let result = Engine::new(model, engine_config)?.run()?;
-    let end = result.sequence.map(|sequence| ReplicaEnd {
-        end_cause: sequence.end_cause,
-        end_time: sequence.end_time,
-    });
+    let end = result
+        .sequence
+        .map(|sequence| replica_end(Some(sequence), config.t_max));
     let per_indicator = result
         .samples
         .iter()
@@ -398,6 +405,21 @@ pub struct ReplicaEnd {
     pub end_time: f64,
 }
 
+/// How a replica ended, read off its sequence record: the first target
+/// it reached, or none by `horizon` when it recorded no end.
+pub(crate) fn replica_end(sequence: Option<Sequence>, horizon: f64) -> ReplicaEnd {
+    sequence.map_or(
+        ReplicaEnd {
+            end_cause: None,
+            end_time: horizon,
+        },
+        |sequence| ReplicaEnd {
+            end_cause: sequence.end_cause,
+            end_time: sequence.end_time,
+        },
+    )
+}
+
 /// A stop-at-targets campaign: its estimates, and how each replica ended.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TargetCampaign {
@@ -454,12 +476,7 @@ pub fn run_to_targets(
     let (replicas, ends): (Vec<ReplicaSamples>, Vec<Option<ReplicaEnd>>) = per.into_iter().unzip();
     let ends = ends
         .into_iter()
-        .map(|end| {
-            end.unwrap_or(ReplicaEnd {
-                end_cause: None,
-                end_time: config.t_max,
-            })
-        })
+        .map(|end| end.unwrap_or_else(|| replica_end(None, config.t_max)))
         .collect();
     Ok(TargetCampaign {
         estimates: reduce(model, config, &replicas),

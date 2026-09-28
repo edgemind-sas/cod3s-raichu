@@ -11,10 +11,10 @@ use raichu_model::{
 };
 use raichu_montecarlo::IntervalMethod;
 use raichu_quantify::{
-    model_content_hash, quantify, read_quantification, Detail, DiscretisedExplorationSettings,
-    ExactExplorationSettings, Method, MonteCarloSettings, Quantification, QuantifyError,
-    ReadQuantificationError, Study, TargetProbability, QUANTIFICATION_FORMAT,
-    QUANTIFICATION_VERSION,
+    model_content_hash, quantify, read_quantification, CrossEntropySamplingSettings, Detail,
+    DiscretisedExplorationSettings, ExactExplorationSettings, Method, MonteCarloSettings,
+    Quantification, QuantifyError, ReadQuantificationError, Study, TargetProbability,
+    QUANTIFICATION_FORMAT, QUANTIFICATION_VERSION,
 };
 
 // ---- model literals ------------------------------------------------------
@@ -730,4 +730,193 @@ fn a_negative_instant_and_a_non_finite_horizon_are_refused() {
             other => panic!("expected InvalidStudy({parameter}), got {other:?}"),
         }
     }
+}
+
+// ---- the cross-entropy method ------------------------------------------------
+
+fn cross_entropy(nb_runs: u64) -> Method {
+    Method::CrossEntropy(CrossEntropySamplingSettings {
+        pilot_runs: 500,
+        ..CrossEntropySamplingSettings::new(nb_runs)
+    })
+}
+
+fn weighted(q: &Quantification) -> (f64, f64, f64, f64) {
+    match &q.probability {
+        TargetProbability::WeightedEstimate {
+            estimate,
+            standard_error,
+            low,
+            high,
+            ..
+        } => (*estimate, *standard_error, *low, *high),
+        other => panic!("expected a weighted estimate, got {other:?}"),
+    }
+}
+
+/// A rare parallel pair: failure rates of 1e-3 over the study horizon.
+const RARE: f64 = 1e-3;
+
+#[test]
+fn cross_entropy_agrees_with_the_closed_form_and_the_exact_bounds_on_a_rare_pair() {
+    let model = parallel_pair(RARE, RARE);
+    let closed = both_down(RARE, RARE, T);
+    let study = study("both_down");
+
+    let ce = quantify(&model, &study, &cross_entropy(4_000)).unwrap();
+    let (estimate, se, low, high) = weighted(&ce);
+    assert!(se > 0.0 && low < estimate && estimate < high);
+    assert!(
+        (estimate - closed).abs() <= 4.0 * se,
+        "cross-entropy {estimate:e} is {:.1} standard errors from {closed:e}",
+        (estimate - closed).abs() / se
+    );
+    let ex = quantify(&model, &study, &exact()).unwrap();
+    let (lower, upper, _) = bounds(&ex);
+    assert_rel(lower, closed, "exact lower bound");
+    assert_rel(upper, closed, "exact upper bound");
+    match &ce.detail {
+        Detail::CrossEntropy(detail) => {
+            assert_eq!(detail.replicas, 4_000);
+            assert!(!detail.families.is_empty());
+            assert!(
+                detail.ends.is_empty(),
+                "the envelope carries no per-replica ends"
+            );
+        }
+        other => panic!("expected a cross-entropy detail, got {other:?}"),
+    }
+}
+
+#[test]
+fn cross_entropy_at_factor_one_without_fit_counts_what_monte_carlo_counts() {
+    let model = parallel_pair(A, B);
+    let study = study("both_down");
+    let plain = Method::CrossEntropy(CrossEntropySamplingSettings {
+        fit: false,
+        initial_factor: 1.0,
+        ..CrossEntropySamplingSettings::new(2_000)
+    });
+    let ce = quantify(&model, &study, &plain).unwrap();
+    let mc = quantify(&model, &study, &monte_carlo(2_000, 0.95)).unwrap();
+    let reached = |q: &Quantification| match q.probability {
+        TargetProbability::ConfidenceInterval { reached, .. }
+        | TargetProbability::WeightedEstimate { reached, .. } => reached,
+        _ => unreachable!(),
+    };
+    assert_eq!(reached(&ce), reached(&mc));
+    let (estimate, _, _, _) = weighted(&ce);
+    assert_eq!(estimate, reached(&mc) as f64 / 2_000.0);
+}
+
+#[test]
+fn cross_entropy_records_the_seed_and_not_the_instants() {
+    let q = quantify(
+        &parallel_pair(A, B),
+        &study("both_down"),
+        &cross_entropy(200),
+    )
+    .unwrap();
+    assert_eq!(q.provenance.seed, Some(20_260_927));
+    assert_eq!(q.provenance.instants, None);
+    assert_eq!(q.method.name(), "cross_entropy");
+}
+
+#[test]
+fn a_setting_of_another_method_is_refused_by_name_both_ways() {
+    let err = Method::from_parts(
+        "cross_entropy",
+        &serde_json::json!({"nb_runs": 10, "quantiles": [0.5]}),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err, QuantifyError::SettingNotApplicable { setting, applies_to, .. }
+            if setting == "quantiles" && applies_to == &vec!["monte_carlo".to_owned()]),
+        "{err:?}"
+    );
+    let err = Method::from_parts(
+        "monte_carlo",
+        &serde_json::json!({"nb_runs": 10, "pilot_runs": 5}),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err, QuantifyError::SettingNotApplicable { setting, applies_to, .. }
+            if setting == "pilot_runs" && applies_to == &vec!["cross_entropy".to_owned()]),
+        "{err:?}"
+    );
+    let method = Method::from_parts("cross_entropy", &serde_json::json!({"nb_runs": 10})).unwrap();
+    assert_eq!(method.name(), "cross_entropy");
+}
+
+#[test]
+fn a_cross_entropy_campaign_that_never_hits_is_an_error() {
+    let err = quantify(
+        &parallel_pair(1e-9, 1e-9),
+        &study("both_down"),
+        &Method::CrossEntropy(CrossEntropySamplingSettings {
+            fit: false,
+            initial_factor: 1.0,
+            ..CrossEntropySamplingSettings::new(100)
+        }),
+    )
+    .unwrap_err();
+    assert!(matches!(err, QuantifyError::NoHit(_)), "{err:?}");
+}
+
+#[test]
+fn a_cross_entropy_envelope_reads_back_and_refuses_a_forged_estimate() {
+    let q = quantify(
+        &parallel_pair(RARE, RARE),
+        &study("both_down"),
+        &cross_entropy(1_000),
+    )
+    .unwrap();
+    assert_eq!(q.version, QUANTIFICATION_VERSION);
+    let json = q.to_json().unwrap();
+    let back = read_quantification(&json).unwrap();
+    assert_eq!(back, q);
+    assert_eq!(back.to_json().unwrap(), json);
+
+    let base: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let mut older = base.clone();
+    older["version"] = serde_json::json!(1);
+    assert!(
+        matches!(
+            read_quantification(&older.to_string()).unwrap_err(),
+            ReadQuantificationError::Inconsistent(_)
+        ),
+        "a version-1 envelope cannot carry a method version 2 introduced"
+    );
+    for (path, forged) in [
+        ("estimate", serde_json::json!(0.5)),
+        ("inconclusive", serde_json::json!(true)),
+        ("reached", serde_json::json!(1)),
+        ("replicas", serde_json::json!(999)),
+        ("level", serde_json::json!(0.9)),
+    ] {
+        let mut value = base.clone();
+        value["probability"][path] = forged;
+        assert!(
+            matches!(
+                read_quantification(&value.to_string()).unwrap_err(),
+                ReadQuantificationError::Inconsistent(_)
+            ),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn a_version_one_envelope_still_reads() {
+    let q = quantify(
+        &parallel_pair(A, B),
+        &study("both_down"),
+        &monte_carlo(100, 0.95),
+    )
+    .unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&q.to_json().unwrap()).unwrap();
+    value["version"] = serde_json::json!(1);
+    let back = read_quantification(&value.to_string()).unwrap();
+    assert_eq!(back.version, 1);
+    assert_eq!(QUANTIFICATION_VERSION, 2);
 }

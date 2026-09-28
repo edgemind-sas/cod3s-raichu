@@ -49,6 +49,9 @@ from ._pyraichu import quantify_json as quantify_json
 from ._pyraichu import validate_quantification as validate_quantification
 
 __all__ = [
+    "BiasFamily",
+    "CrossEntropyResult",
+    "PilotIteration",
     "BasicEventImportance",
     "FaultTree",
     "FaultTreeQuantification",
@@ -1251,6 +1254,9 @@ def _quantify_fault_tree(
 # The quantification entry point lives in its own module; it is imported
 # here, after the names it builds on, and re-exported as part of this package.
 from ._quantification import (  # noqa: E402
+    BiasFamily,
+    CrossEntropyResult,
+    PilotIteration,
     QUANTIFICATION_METHODS,
     Quantification,
     Study,
