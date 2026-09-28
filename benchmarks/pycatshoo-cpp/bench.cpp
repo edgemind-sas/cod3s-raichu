@@ -327,9 +327,18 @@ int main(int argc, char** argv) {
       std::chrono::duration<double>(std::chrono::steady_clock::now() - started)
           .count();
 
+  // Under mpirun every rank simulates its share of the replicas and the
+  // first one gathers them: only its estimates cover the whole campaign,
+  // so only it reports. Its wall clock includes the gathering.
+  char const* rankEnv = std::getenv("OMPI_COMM_WORLD_RANK");
+  char const* sizeEnv = std::getenv("OMPI_COMM_WORLD_SIZE");
+  if (rankEnv != nullptr && std::atoi(rankEnv) != 0) return 0;
+  int const ranks = sizeEnv != nullptr ? std::atoi(sizeEnv) : 1;
+
   std::vector<double> const instants = system->instants();
   std::printf("{\n  \"model\": \"%s\",\n  \"nb_runs\": %lld,\n", model.c_str(),
               nbRuns);
+  std::printf("  \"mpi_ranks\": %d,\n", ranks);
   std::printf("  \"seed\": %u,\n  \"wall_clock_s\": %.9f,\n", seed, wall);
   std::printf("  \"instants\": [");
   for (size_t i = 0; i < instants.size(); ++i)
