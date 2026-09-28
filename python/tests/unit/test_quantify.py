@@ -1,4 +1,4 @@
-"""One study, three engines, one envelope, from Python.
+"""One study, four engines, one envelope, from Python.
 
 `pyraichu.quantify(model, study, method=...)` hands the same `Study` to
 Monte-Carlo simulation, exact exploration or discretised exploration and
@@ -32,7 +32,7 @@ def _objfm(name, target, rate):
     }
 
 
-def _pair(rate_b=RATE_B):
+def _pair(rate_b=RATE_B, rate_a=RATE_A):
     """Two non-repairable components A and B, one ObjFM each, feared
     event: both down. `P = (1 - e^{-a t}) (1 - e^{-b t})`."""
     document = {
@@ -40,7 +40,7 @@ def _pair(rate_b=RATE_B):
         "plugins": {
             "muscadet": {
                 "objects": [
-                    _objfm("fa", "A", RATE_A),
+                    _objfm("fa", "A", rate_a),
                     _objfm("fb", "B", rate_b),
                     {
                         "type": "ObjEvent",
@@ -89,8 +89,8 @@ def _pair(rate_b=RATE_B):
     return pyraichu.load_model(body)
 
 
-def _closed_form(rate_b=RATE_B):
-    return (1.0 - math.exp(-RATE_A * HORIZON)) * (1.0 - math.exp(-rate_b * HORIZON))
+def _closed_form(rate_b=RATE_B, rate_a=RATE_A):
+    return (1.0 - math.exp(-rate_a * HORIZON)) * (1.0 - math.exp(-rate_b * HORIZON))
 
 
 STUDY = pyraichu.Study("system_down", HORIZON, instants=(2.5, 5.0, HORIZON), seed=11)
@@ -204,7 +204,8 @@ def test_the_envelope_reads_back_equal(tmp_path):
 def test_the_reader_refuses_a_future_version():
     q = pyraichu.quantify(_pair(), STUDY, method="exact")
     document = json.loads(q.to_json())
-    document["version"] = 2
+    # Version 2 is the current one (it added the cross-entropy method).
+    document["version"] = 3
     with pytest.raises(pyraichu.SimulationError, match="version"):
         pyraichu.read_quantification(json.dumps(document))
 
@@ -317,3 +318,110 @@ def test_array_library_scalars_are_accepted_as_settings():
     q = pyraichu.quantify(_pair(), study, method="monte_carlo", nb_runs=_Scalar(50))
     assert q.seed == 11
     assert q.probability.replicas == 50
+
+
+# ---- the cross-entropy method -------------------------------------------------
+
+RARE = 1e-3
+
+
+def test_cross_entropy_estimates_a_rare_pair_within_its_interval():
+    closed = _closed_form(rate_b=RARE, rate_a=RARE)
+    q = pyraichu.quantify(
+        _pair(rate_b=RARE, rate_a=RARE),
+        STUDY,
+        method="cross_entropy",
+        nb_runs=4000,
+        pilot_runs=500,
+    )
+    assert q.method == "cross_entropy"
+    assert q.version == 2
+    assert q.seed == 11
+    assert q.instants is None
+    p = q.probability
+    assert p.kind == "weighted_estimate"
+    assert p.interval_method == "weighted_normal"
+    assert p.replicas == 4000
+    assert p.standard_error > 0.0
+    assert abs(p.estimate - closed) <= 4.0 * p.standard_error, (p.estimate, closed)
+    assert p.effective_sample_size > 1.0
+    assert p.relative_error == pytest.approx(p.standard_error / p.estimate)
+    assert p.inconclusive is False
+    detail = q.detail
+    assert isinstance(detail, pyraichu.CrossEntropyResult)
+    assert detail.reached == p.reached
+    assert detail.families, "the failure transitions form at least one family"
+    assert all(isinstance(f, pyraichu.BiasFamily) for f in detail.families)
+    assert all(f.factor > 1.0 for f in detail.families if not f.repair)
+    assert all(isinstance(it, pyraichu.PilotIteration) for it in detail.history)
+
+
+def test_cross_entropy_reads_back_to_an_equal_object():
+    q = pyraichu.quantify(
+        _pair(rate_b=RARE, rate_a=RARE),
+        STUDY,
+        method="cross_entropy",
+        nb_runs=500,
+        pilot_runs=200,
+    )
+    text = q.to_json()
+    back = pyraichu.read_quantification(text)
+    assert back == q
+    assert back.to_json() == text
+
+
+def test_cross_entropy_settings_are_its_own():
+    with pytest.raises(
+        pyraichu.SimulationError, match="`quantiles` does not apply to the `cross_entropy` method"
+    ):
+        pyraichu.quantify(_pair(), STUDY, method="cross_entropy", nb_runs=10, quantiles=[0.5])
+    with pytest.raises(pyraichu.SimulationError, match="applies to `cross_entropy`"):
+        pyraichu.quantify(_pair(), STUDY, method="monte_carlo", nb_runs=10, pilot_runs=5)
+    assert pyraichu.QUANTIFICATION_METHODS == (
+        "monte_carlo",
+        "exact",
+        "discretised",
+        "cross_entropy",
+    )
+
+
+def test_a_cross_entropy_campaign_that_never_hits_raises():
+    with pytest.raises(pyraichu.SimulationError, match="no final replica reached"):
+        pyraichu.quantify(
+            _pair(rate_b=1e-9, rate_a=1e-9),
+            STUDY,
+            method="cross_entropy",
+            nb_runs=100,
+            fit=False,
+            initial_factor=1.0,
+        )
+
+
+def test_cross_entropy_flags_the_regime_static_factors_cannot_handle():
+    """Fast repairs over a long horizon: fixed factors per family cannot
+    bias these trajectories, and the estimate says so rather than passing
+    for an ordinary one."""
+    document = json.loads(_pair(rate_b=RARE, rate_a=RARE).json)
+    body = document.get("model", document)
+    for component in body["components"]:
+        for automaton in component.get("automata", []):
+            if automaton["name"].startswith("fm"):
+                automaton["transitions"].append(
+                    {
+                        "name": "fast_repair",
+                        "source": "occ",
+                        "targets": ["rep"],
+                        "distrib": "exp",
+                        "rate": 1000.0,
+                        "kind": "repair",
+                    }
+                )
+    q = pyraichu.quantify(
+        pyraichu.load_model(document),
+        pyraichu.Study("system_down", 1000.0, seed=1),
+        method="cross_entropy",
+        nb_runs=2000,
+        pilot_runs=500,
+    )
+    assert q.probability.inconclusive is True
+    assert all(isinstance(it.effective_sample_size, float) for it in q.detail.history)

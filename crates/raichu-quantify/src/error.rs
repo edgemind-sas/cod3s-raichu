@@ -64,6 +64,10 @@ pub enum QuantifyError {
     /// The engine refused the study or failed while running it.
     #[error(transparent)]
     Engine(#[from] EngineError),
+    /// A cross-entropy campaign found no replica reaching the target: no
+    /// estimate is returned in place of a zero.
+    #[error(transparent)]
+    NoHit(raichu_montecarlo::CrossEntropyError),
     /// The model could not be serialized for its content hash.
     #[error("the model could not be serialized for its content hash: {0}")]
     ModelSerialization(String),

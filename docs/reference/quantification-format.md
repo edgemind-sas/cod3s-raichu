@@ -104,20 +104,20 @@ the probability of reaching it by the horizon.
 | `target` | string | the declared target (feared event) quantified |
 | `horizon` | number | finite, nonnegative, in the model's time unit |
 | `instants` | array of numbers, optional | reporting instants of the Monte-Carlo detailed result, strictly ascending within `[0, horizon]`; default: the horizon alone |
-| `seed` | integer, optional | master seed of a Monte-Carlo campaign; default `0` |
+| `seed` | integer, optional | master seed of a Monte-Carlo or cross-entropy campaign; default `0` |
 | `threads` | integer, optional | worker threads, at least 1; no result depends on it |
 
 An unknown target is refused before anything runs, naming the targets the
 model declares.
 
-## `raichu.quantification`, version 1
+## `raichu.quantification`, version 2
 
 One JSON document.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | string | always `"raichu.quantification"` |
-| `version` | integer | `1` |
+| `version` | integer | `2` when written; version `1` (the same document without the cross-entropy method) is still read |
 | `method` | object | `{"name", "settings"}`: the method and the settings it applied, defaults resolved (see [Methods](#methods)) |
 | `provenance` | object | where the answer comes from (see [Provenance](#provenance)) |
 | `probability` | object | the probability of the target, with its uncertainty (see [Probability](#probability)) |
@@ -130,12 +130,15 @@ One JSON document.
 | `monte_carlo` | Monte-Carlo simulation | `nb_runs` (at least 1, required), `confidence` (default `0.95`), `quantiles` (default none) |
 | `exact` | exact exploration (Markov family) | `min_probability`, `max_length`, `max_failures`, `max_branches` (cut-offs, each optional), `gap_tolerance`, `rel_precision`, `max_terms` |
 | `discretised` | discretised exploration | the four cut-offs (`max_branches` defaults to 1 000 000), `gap_tolerance`, `level` (default 8), `refine` (default `true`) |
+| `cross_entropy` | biased Monte-Carlo, factors fitted by cross-entropy | `nb_runs` (final replicas, at least 1, required), `pilot_runs` (default 1 000), `max_iterations` (default 20), `smoothing` (default 0.7), `tolerance` (default 0.02), `confidence` (default `0.95`), `initial_factor` (default 10), `escalation_ratio` (default 10), `factor_min` (default 0.01), `factor_max` (default 10 000), `fit` (default `true`), `min_effective_sample_size` (default 50), `families` (qualified transition name to family label, default none) |
 
 A setting given to a method it does not belong to is refused, naming the
 methods that do take it. The Monte-Carlo campaign always stops each
 trajectory at the first target reached, runs to the study's horizon,
 samples at the study's instants, and uses the engine's default solver and
-flow settings.
+flow settings. The cross-entropy campaign stops at targets the same way and
+runs to the study's horizon; it answers one probability and does not use
+the reporting instants.
 
 ### Provenance
 
@@ -147,7 +150,7 @@ flow settings.
 | `target` | string | the study's target |
 | `horizon` | number | the study's horizon |
 | `instants` | array of numbers | the reporting instants; **Monte-Carlo only**, absent otherwise |
-| `seed` | integer | the master seed; **Monte-Carlo only**, absent otherwise |
+| `seed` | integer | the master seed; **Monte-Carlo and cross-entropy only**, absent otherwise |
 
 The thread count is never recorded, since no result depends on it. The
 exploration methods ignore the seed and the instants and do not record
@@ -184,6 +187,28 @@ ended, not from an indicator. On an event no replica reached, the interval
 is `[0, z²/(n + z²)]` rather than a point at zero (see the
 [confidence intervals guide](../guides/confidence-intervals.md)).
 
+**`weighted_estimate`** (cross-entropy):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `estimate` | number | the mean over the final replicas of each replica's likelihood ratio when it reached the target first, zero otherwise |
+| `standard_error` | number | the standard error of that mean |
+| `reached` | integer | final replicas that reached the target first (unweighted) |
+| `replicas` | integer | final replicas run |
+| `level` | number | the confidence level, strictly inside `(0, 1)` |
+| `method` | string | `"weighted_normal"`: a normal interval on the weighted indicator |
+| `low`, `high` | number | the interval, not clamped at zero |
+| `effective_sample_size` | number | `(Σw)² / Σw²` over the hit weights: how many equally weighted hits the estimate is worth |
+| `relative_error` | number, optional | `standard_error / estimate` |
+| `inconclusive` | boolean | the effective sample size is below `min_effective_sample_size`: the estimate and its interval are not to be trusted, however narrow the interval |
+
+A campaign whose final replicas never reach the target is an error, not an
+envelope with a zero: a zero would read as "impossible" where the campaign
+only saw nothing. An `inconclusive` estimate is one whose hits are too few
+or too unevenly weighted: measured on repairable systems with fast repairs
+over a long horizon, such estimates were from 30 % to three orders of
+magnitude off.
+
 **`bounds`** (exact and discretised exploration):
 
 | Field | Type | Meaning |
@@ -206,7 +231,14 @@ An object with a single key naming the engine kind:
   and instants;
 - `{"exploration": {...}}`: the exploration result, a `raichu.exploration`
   document (version 1 for an exact exploration, 2 for a discretised one;
-  see the [sequence-tree exploration guide](../guides/sequence-tree-exploration.md)).
+  see the [sequence-tree exploration guide](../guides/sequence-tree-exploration.md));
+- `{"cross_entropy": {...}}`: the cross-entropy campaign: the target, the
+  estimate with its diagnostics, the reached and replica counts, the
+  factor used for each family (label, member transitions, whether it is a
+  repair family), the pilot history (factors, hits and the effective
+  sample size of the hits per iteration, whether it escalated), whether
+  the fit converged (on a pilot at or above the threshold) and whether the
+  estimate is inconclusive.
 
 ### Example
 
@@ -215,7 +247,7 @@ An exact exploration of a parallel pair (the detail shortened):
 ```json
 {
   "format": "raichu.quantification",
-  "version": 1,
+  "version": 2,
   "method": {"name": "exact", "settings": {"min_probability": null, "max_length": null,
              "max_failures": null, "max_branches": null, "gap_tolerance": 0.01,
              "rel_precision": 1e-9, "max_terms": 100000}},
@@ -239,7 +271,7 @@ A reader refuses:
   an exploration detail under the `monte_carlo` method, an exact result
   under the `discretised` method, bounds that are not the exploration's
   own, or an estimate, replica count, level or seed that disagrees with the
-  Monte-Carlo detail and the method settings;
+  Monte-Carlo or cross-entropy detail and the method settings;
 - an exploration detail that its own reader refuses.
 
 Numbers are read correctly rounded, so an envelope written by the engine
@@ -247,7 +279,7 @@ reads back to the same bits.
 
 ## Adding an engine
 
-The three names are not a closed list. A later engine adds a `method`
+The four names are not a closed list. A later engine adds a `method`
 name with its settings, and a `probability` kind if it states a new sort
 of uncertainty; the envelope's other members keep their meaning. Such an
 addition raises the format version, so a reader written before it refuses

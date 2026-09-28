@@ -137,6 +137,51 @@ pub struct EngineConfig {
     /// ([`StochasticDates::Deferred`], the seam of the discretised
     /// sequence-tree explorer).
     pub stochastic_dates: StochasticDates,
+    /// Per-transition multiplicative factors on the rate of constant-rate
+    /// exponential laws, indexed like `CompiledModel::transitions`: the
+    /// seam of the biased Monte-Carlo sampler fitted by cross-entropy.
+    ///
+    /// Empty (the default) means no factor at all: nothing is biased and
+    /// no statistics are collected, so the default path allocates nothing
+    /// new. A non-empty vector must hold one factor per transition. A
+    /// factor multiplies the rate when the date of a `CLaw::Exp`
+    /// transition is drawn (`schedule_stochastic`, the paper's `schST`);
+    /// the draw consumes exactly the random numbers of the nominal one,
+    /// so a factor of exactly 1 leaves the trajectory bit-identical.
+    /// Each factor must be finite and positive, and a factor other than
+    /// 1 is accepted only on a constant-rate exponential law: every
+    /// other law runs unbiased ([`EngineError::InvalidRateFactor`]).
+    /// Drawn mode only: a non-empty vector under
+    /// [`StochasticDates::Deferred`] is refused.
+    ///
+    /// When the vector is present the run reports, per transition, its
+    /// firing count and nominal exposure
+    /// ([`SimulationResult::rate_statistics`], [`TransitionExposure`]).
+    pub rate_factors: Vec<f64>,
+}
+
+/// Sufficient statistics of one transition over a trajectory, for the
+/// likelihood ratio of a biased run and for the cross-entropy update.
+///
+/// Collected only when [`EngineConfig::rate_factors`] is non-empty. For a
+/// constant-rate exponential transition of nominal rate `λ` biased by a
+/// factor `f`, the likelihood ratio of the nominal law against the biased
+/// one over a trajectory is `f^(-firings) · exp((f − 1) · exposure)`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct TransitionExposure {
+    /// How many times the transition fired over the trajectory, whatever
+    /// its law.
+    pub firings: u64,
+    /// Nominal cumulated hazard `λ · (time armed and running)`, with `λ`
+    /// the model's rate, not the biased one. "Running" follows the
+    /// interruption policy (`drop_disabled`, the paper's `updateIT`): a
+    /// `reset` transition stops at the drop, a `resume` one excludes its
+    /// paused stretches, a `continue` one runs through false-guard
+    /// stretches; every one stops at firing and at source exit, and the
+    /// last stretch is censored at the trajectory's final time (the
+    /// target instant on an early stop, the horizon otherwise). Zero for
+    /// every law other than a constant-rate exponential.
+    pub exposure: f64,
 }
 
 /// How the engine handles the firing date of a **stochastic** transition
@@ -188,6 +233,7 @@ impl Default for EngineConfig {
             rng_stream: 0,
             flow: FlowConfig::default(),
             stochastic_dates: StochasticDates::Drawn,
+            rate_factors: Vec::new(),
         }
     }
 }
@@ -468,6 +514,32 @@ pub enum EngineError {
         /// state up to the start of the instantaneous chain (the chain
         /// itself excluded), in firing order.
         sequence: Vec<String>,
+    },
+    /// [`EngineConfig::rate_factors`] holds a factor the engine cannot
+    /// apply: zero, negative or non-finite on any transition, or other
+    /// than 1 on a transition whose law is not a constant-rate
+    /// exponential (such a transition runs unbiased). Raised when the
+    /// engine is built, naming the transition.
+    #[error("rate factor {factor} on transition `{transition}` is refused: {reason}")]
+    InvalidRateFactor {
+        /// Qualified name of the transition.
+        transition: String,
+        /// The refused factor.
+        factor: f64,
+        /// Why it is refused, in words.
+        reason: String,
+    },
+    /// [`EngineConfig::rate_factors`] is neither empty nor one factor per
+    /// compiled transition. Raised when the engine is built.
+    #[error(
+        "rate factors: the model compiles {expected} transitions, the \
+         factor vector holds {found}"
+    )]
+    RateFactorCount {
+        /// Number of compiled transitions.
+        expected: usize,
+        /// Length of the factor vector received.
+        found: usize,
     },
     /// An operation of the deferred-draw mode was called on an engine
     /// running with drawn dates ([`StochasticDates::Drawn`]).
@@ -837,6 +909,7 @@ pub struct Snapshot {
     pub(super) first_flow_restart: f64,
     pub(super) rng: ChaCha8Rng,
     pub(super) worklist: BTreeSet<FnIdx>,
+    pub(super) exposure: Option<ExposureTally>,
 }
 
 /// Value of an attribute by qualified name (`component.attribute`):
@@ -1002,4 +1075,10 @@ pub struct SimulationResult {
     pub work: WorkCounters,
     /// Final simulation time.
     pub final_time: f64,
+    /// Per-transition firing count and nominal exposure, indexed like
+    /// `CompiledModel::transitions`: `Some` exactly when
+    /// [`EngineConfig::rate_factors`] is non-empty. Omitted from the
+    /// serialized result when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_statistics: Option<Vec<TransitionExposure>>,
 }

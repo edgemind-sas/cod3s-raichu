@@ -99,6 +99,11 @@ impl<'m> Engine<'m> {
         };
         self.time = final_time;
         self.note_time_change();
+        // Censor the exposure of every still-running transition at the
+        // trajectory's final time (the target instant on an early stop).
+        if let Some(tally) = self.exposure.as_mut() {
+            tally.accrue(&self.pending, final_time);
+        }
         // A target-stopped trajectory holds its frozen state through the
         // remaining sample instants (the latch semantics of a
         // target-stopped study: the feared-event state stays active from
@@ -149,6 +154,7 @@ impl<'m> Engine<'m> {
             },
             work,
             final_time,
+            rate_statistics: self.exposure.map(|tally| tally.stats),
         })
     }
 
@@ -165,6 +171,12 @@ impl<'m> Engine<'m> {
         trans_idx: TransIdx,
         forced: Option<StateIdx>,
     ) -> Result<Event, EngineError> {
+        // Close the exposure stretch up to this instant while `pending`
+        // still describes what was running, then count the firing.
+        if let Some(tally) = self.exposure.as_mut() {
+            tally.accrue(&self.pending, self.time);
+            tally.stats[trans_idx].firings += 1;
+        }
         self.pending[trans_idx] = None;
         self.frozen[trans_idx] = None;
         self.hazards[trans_idx] = None;

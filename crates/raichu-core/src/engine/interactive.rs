@@ -342,6 +342,21 @@ impl<'m> Engine<'m> {
         Ok(())
     }
 
+    /// Per-transition firing count and nominal exposure accrued up to the
+    /// current time ([`TransitionExposure`]), indexed like the compiled
+    /// transitions; `None` unless [`EngineConfig::rate_factors`] is
+    /// non-empty. Stretches still running are counted up to now, without
+    /// closing them: the next step continues accruing from where the
+    /// engine's own tally stands.
+    #[must_use]
+    pub fn rate_statistics(&self) -> Option<Vec<TransitionExposure>> {
+        self.exposure.as_ref().map(|tally| {
+            let mut tally = tally.clone();
+            tally.accrue(&self.pending, self.time);
+            tally.stats
+        })
+    }
+
     /// **Interactive control**: capture the full mutable trajectory
     /// state as an opaque [`Snapshot`] (checkpoint / undo point). Costs
     /// one clone of the state vectors; the immutable model is untouched.
@@ -369,6 +384,7 @@ impl<'m> Engine<'m> {
             first_flow_restart: self.first_flow_restart,
             rng: self.rng.clone(),
             worklist: self.worklist.clone(),
+            exposure: self.exposure.clone(),
         }
     }
 
@@ -397,6 +413,7 @@ impl<'m> Engine<'m> {
         self.first_flow_restart = snap.first_flow_restart;
         self.rng = snap.rng.clone();
         self.worklist = snap.worklist.clone();
+        self.exposure = snap.exposure.clone();
         // The indexed watched set is *derived*, never carried: rewinding
         // the state rewinds the arming and discards every cached verdict,
         // which is what keeps a replay from a restored snapshot exact.
@@ -461,6 +478,9 @@ impl<'m> Engine<'m> {
         self.watched_streak = (0.0, 0);
         self.rng = raichu_rng::replica_rng(self.config.seed, self.config.rng_stream);
         self.worklist.clear();
+        if let Some(tally) = self.exposure.as_mut() {
+            *tally = ExposureTally::new(self.model);
+        }
         self.initialize()
     }
 

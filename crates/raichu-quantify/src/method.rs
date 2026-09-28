@@ -4,7 +4,9 @@ use raichu_explore::{
     Cutoffs, DiscretisedSettings, ExactSettings, Precision, DEFAULT_GAP_TOLERANCE, DEFAULT_LEVEL,
     DEFAULT_MAX_BRANCHES,
 };
-use raichu_montecarlo::DEFAULT_CONFIDENCE;
+use std::collections::BTreeMap;
+
+use raichu_montecarlo::{CrossEntropySettings, DEFAULT_CONFIDENCE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -15,7 +17,7 @@ use crate::{QuantifyError, Study};
 /// the [`Study`]).
 ///
 /// Serialized as `{"name": <method>, "settings": {...}}`, the names being
-/// `monte_carlo`, `exact` and `discretised`. Non-exhaustive: a later
+/// `monte_carlo`, `exact`, `discretised` and `cross_entropy`. Non-exhaustive: a later
 /// engine adds a variant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "settings", rename_all = "snake_case")]
@@ -29,12 +31,17 @@ pub enum Method {
     /// Discretised exploration of the sequence tree (crate
     /// `raichu-explore`).
     Discretised(DiscretisedExplorationSettings),
+    /// Biased Monte-Carlo simulation whose rate factors are fitted by
+    /// cross-entropy, each replica weighted by its likelihood ratio (crate
+    /// `raichu-montecarlo`): the method for feared events too rare for a
+    /// plain campaign.
+    CrossEntropy(CrossEntropySamplingSettings),
 }
 
 impl Method {
     /// The method names this engine provides, in the order the
     /// documentation presents them.
-    pub const NAMES: [&'static str; 3] = ["monte_carlo", "exact", "discretised"];
+    pub const NAMES: [&'static str; 4] = ["monte_carlo", "exact", "discretised", "cross_entropy"];
 
     /// The method's name, as serialized.
     #[must_use]
@@ -43,6 +50,7 @@ impl Method {
             Method::MonteCarlo(_) => "monte_carlo",
             Method::Exact(_) => "exact",
             Method::Discretised(_) => "discretised",
+            Method::CrossEntropy(_) => "cross_entropy",
         }
     }
 
@@ -54,6 +62,7 @@ impl Method {
             "monte_carlo" => Some(MonteCarloSettings::NAMES),
             "exact" => Some(ExactExplorationSettings::NAMES),
             "discretised" => Some(DiscretisedExplorationSettings::NAMES),
+            "cross_entropy" => Some(CrossEntropySamplingSettings::NAMES),
             _ => None,
         }
     }
@@ -286,6 +295,161 @@ impl DiscretisedExplorationSettings {
     }
 }
 
+/// Settings of a cross-entropy quantification: a biased Monte-Carlo
+/// campaign whose per-family rate factors are fitted by cross-entropy
+/// (see [`raichu_montecarlo::run_cross_entropy`], whose target, horizon,
+/// seed and thread count come from the [`Study`]).
+///
+/// Every setting but `nb_runs` has the default the driver documents. The
+/// campaign uses the study's seed and not its reporting instants: it
+/// answers one probability, at the horizon.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrossEntropySamplingSettings {
+    /// Replicas of the final campaign, at least 1.
+    pub nb_runs: u64,
+    /// Replicas of each pilot iteration.
+    #[serde(default = "ce_defaults::pilot_runs")]
+    pub pilot_runs: u64,
+    /// Cap on pilot iterations, escalations included.
+    #[serde(default = "ce_defaults::max_iterations")]
+    pub max_iterations: u64,
+    /// Weight of a new factor against the previous one, in `(0, 1]`.
+    #[serde(default = "ce_defaults::smoothing")]
+    pub smoothing: f64,
+    /// Relative factor change under which the fit stops.
+    #[serde(default = "ce_defaults::tolerance")]
+    pub tolerance: f64,
+    /// Confidence level of the interval, strictly inside `(0, 1)`.
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+    /// Starting factor of every family not declared a repair.
+    #[serde(default = "ce_defaults::initial_factor")]
+    pub initial_factor: f64,
+    /// Multiplier applied to non-repair families after a pilot with no hit.
+    #[serde(default = "ce_defaults::escalation_ratio")]
+    pub escalation_ratio: f64,
+    /// Lowest admissible factor.
+    #[serde(default = "ce_defaults::factor_min")]
+    pub factor_min: f64,
+    /// Highest admissible factor.
+    #[serde(default = "ce_defaults::factor_max")]
+    pub factor_max: f64,
+    /// Whether factors are fitted; `false` runs the final campaign at the
+    /// starting factors.
+    #[serde(default = "ce_defaults::fit")]
+    pub fit: bool,
+    /// Effective sample size under which a pilot cannot confirm the fit
+    /// and the final estimate is flagged inconclusive.
+    #[serde(default = "ce_defaults::min_effective_sample_size")]
+    pub min_effective_sample_size: f64,
+    /// Override of the automatic families: qualified transition name to
+    /// family label.
+    #[serde(default)]
+    pub families: BTreeMap<String, String>,
+}
+
+/// The driver's documented defaults, one function per setting (serde's
+/// per-field default form), read from its constants.
+mod ce_defaults {
+    use raichu_montecarlo as mc;
+
+    pub(super) fn pilot_runs() -> u64 {
+        mc::DEFAULT_CE_PILOT_RUNS
+    }
+    pub(super) fn max_iterations() -> u64 {
+        mc::DEFAULT_CE_MAX_ITERATIONS
+    }
+    pub(super) fn smoothing() -> f64 {
+        mc::DEFAULT_CE_SMOOTHING
+    }
+    pub(super) fn tolerance() -> f64 {
+        mc::DEFAULT_CE_TOLERANCE
+    }
+    pub(super) fn initial_factor() -> f64 {
+        mc::DEFAULT_CE_INITIAL_FACTOR
+    }
+    pub(super) fn escalation_ratio() -> f64 {
+        mc::DEFAULT_CE_ESCALATION_RATIO
+    }
+    pub(super) fn factor_min() -> f64 {
+        mc::DEFAULT_CE_FACTOR_MIN
+    }
+    pub(super) fn factor_max() -> f64 {
+        mc::DEFAULT_CE_FACTOR_MAX
+    }
+    pub(super) fn fit() -> bool {
+        true
+    }
+    pub(super) fn min_effective_sample_size() -> f64 {
+        mc::DEFAULT_CE_MIN_EFFECTIVE_SAMPLE_SIZE
+    }
+}
+
+impl CrossEntropySamplingSettings {
+    /// The setting names, as serialized.
+    pub const NAMES: &'static [&'static str] = &[
+        "nb_runs",
+        "pilot_runs",
+        "max_iterations",
+        "smoothing",
+        "tolerance",
+        "confidence",
+        "initial_factor",
+        "escalation_ratio",
+        "factor_min",
+        "factor_max",
+        "fit",
+        "min_effective_sample_size",
+        "families",
+    ];
+
+    /// `nb_runs` final replicas, every other setting at its default.
+    #[must_use]
+    pub fn new(nb_runs: u64) -> Self {
+        CrossEntropySamplingSettings {
+            nb_runs,
+            pilot_runs: ce_defaults::pilot_runs(),
+            max_iterations: ce_defaults::max_iterations(),
+            smoothing: ce_defaults::smoothing(),
+            tolerance: ce_defaults::tolerance(),
+            confidence: DEFAULT_CONFIDENCE,
+            initial_factor: ce_defaults::initial_factor(),
+            escalation_ratio: ce_defaults::escalation_ratio(),
+            factor_min: ce_defaults::factor_min(),
+            factor_max: ce_defaults::factor_max(),
+            fit: ce_defaults::fit(),
+            min_effective_sample_size: ce_defaults::min_effective_sample_size(),
+            families: BTreeMap::new(),
+        }
+    }
+
+    /// The driver settings these stand for, on `study`.
+    #[must_use]
+    pub fn to_engine(&self, study: &Study) -> CrossEntropySettings {
+        CrossEntropySettings {
+            target: study.target.clone(),
+            t_max: study.horizon,
+            seed: study.seed,
+            samples: Vec::new(),
+            nb_runs: self.nb_runs,
+            pilot_runs: self.pilot_runs,
+            max_iterations: self.max_iterations,
+            smoothing: self.smoothing,
+            tolerance: self.tolerance,
+            confidence: self.confidence,
+            initial_factor: self.initial_factor,
+            escalation_ratio: self.escalation_ratio,
+            factor_min: self.factor_min,
+            factor_max: self.factor_max,
+            fit: self.fit,
+            min_effective_sample_size: self.min_effective_sample_size,
+            families: self.families.clone(),
+            threads: study.threads,
+            ..CrossEntropySettings::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -304,10 +468,12 @@ mod tests {
         let mut exact = keys(&serde_json::to_value(ExactExplorationSettings::default()).unwrap());
         let mut disc =
             keys(&serde_json::to_value(DiscretisedExplorationSettings::default()).unwrap());
+        let mut ce = keys(&serde_json::to_value(CrossEntropySamplingSettings::new(1)).unwrap());
         for (found, declared) in [
             (&mut mc, MonteCarloSettings::NAMES),
             (&mut exact, ExactExplorationSettings::NAMES),
             (&mut disc, DiscretisedExplorationSettings::NAMES),
+            (&mut ce, CrossEntropySamplingSettings::NAMES),
         ] {
             found.sort();
             let mut declared: Vec<String> = declared.iter().map(|&n| n.to_owned()).collect();
@@ -322,6 +488,7 @@ mod tests {
             Method::MonteCarlo(MonteCarloSettings::new(1)),
             Method::Exact(ExactExplorationSettings::default()),
             Method::Discretised(DiscretisedExplorationSettings::default()),
+            Method::CrossEntropy(CrossEntropySamplingSettings::new(1)),
         ];
         for (method, name) in methods.iter().zip(Method::NAMES) {
             assert_eq!(method.name(), name);

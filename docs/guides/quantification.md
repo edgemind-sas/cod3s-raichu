@@ -1,14 +1,15 @@
-# Quantifying a study: one question, three engines
+# Quantifying a study: one question, four engines
 
 RAICHU answers "what is the probability that this feared event happens by
-this horizon" with three engines: **Monte-Carlo simulation**, **exact
-exploration** and **discretised exploration**. `pyraichu.quantify` is the
-one entry point to the three: the question is stated once, as a
+this horizon" with four engines: **Monte-Carlo simulation**, **exact
+exploration**, **discretised exploration** and **cross-entropy** (a biased
+Monte-Carlo campaign for rare events). `pyraichu.quantify` is the one
+entry point to the four: the question is stated once, as a
 `pyraichu.Study`, and each engine answers it in the same envelope, so
 switching engine means changing one argument.
 
-This guide runs one study through the three engines and reads what comes
-back. The envelope's fields are specified in the
+This guide runs one study through the first three engines, then a rare
+event through the fourth, and reads what comes back. The envelope's fields are specified in the
 [quantification envelope format](../reference/quantification-format.md);
 each engine has its own guide for what it does beyond this common
 question (see [Further reading](#further-reading)).
@@ -19,9 +20,11 @@ flowchart LR
     Q -->|monte_carlo| MC["Monte-Carlo<br/>simulation"]
     Q -->|exact| EX["exact<br/>exploration"]
     Q -->|discretised| DI["discretised<br/>exploration"]
+    Q -->|cross_entropy| CE["cross-entropy<br/>biased sampling"]
     MC --> ENV(["one envelope"])
     EX --> ENV
     DI --> ENV
+    CE --> ENV
 ```
 
 ## Choosing an engine
@@ -31,11 +34,15 @@ flowchart LR
 | `"monte_carlo"` | Monte-Carlo simulation | every model | an estimate with a confidence interval |
 | `"exact"` | exact exploration | the Markov family (instantaneous branchings, zero delays, exponential laws whose rate is constant between jumps, no continuous evolution) | guaranteed lower and upper bounds, closed-form probabilities |
 | `"discretised"` | discretised exploration | every law and continuous evolution | bounds on the discretised model, and an estimate of the discretisation error |
+| `"cross_entropy"` | biased Monte-Carlo, factors fitted by cross-entropy | every model; biases constant-rate exponential laws only, the rest runs unbiased | a weighted estimate with a confidence interval and its diagnostics |
 
 Exploration pays off when the feared event is rare, since it enumerates
 paths instead of waiting for replicas to reach them. Monte-Carlo
 simulation is the tool for large models, long horizons with repairs, and
 anything whose exploration tree grows faster than its cut-offs can bound.
+When the event is too rare for a plain campaign and the model too large to
+explore, cross-entropy keeps the simulation and makes the event frequent
+(see [Rare feared events](#rare-feared-events-cross-entropy)).
 
 ## An example: a unit in series with a redundant pair
 
@@ -181,13 +188,107 @@ discretised bounds widened by the error estimate), against the closed form:
 
 *Figure produced by `docs/figures/guide_quantification_engines.py`.*
 
+## Rare feared events: cross-entropy
+
+A plain campaign needs about `100 / p` replicas to estimate a probability
+`p` to 10 %: a million for `p = 1e-4`, ten billion for `p = 1e-8`. The
+`cross_entropy` method draws the dates of constant-rate exponential
+transitions at multiplied rates, so the feared event is reached often, and
+weights each replica by its likelihood ratio, so the weighted proportion
+is still an unbiased estimate of `p`. Textbooks call the technique
+importance sampling; the factors are fitted by the cross-entropy method
+(de Boer, Kroese, Mannor and Rubinstein, 2005) over a few pilot campaigns
+before the final one.
+
+Take a redundant pair, `D` and `E`, each failing at 1e-4 per hour: losing
+both within 10 hours has a probability of about 1e-6.
+
+```python
+rare = pyraichu.load_model({
+    "name": "rare_pair",
+    "components": [
+        unit("D", 1e-4),
+        unit("E", 1e-4),
+        {
+            "name": "sys",
+            "automata": [{
+                "name": "watch", "states": ["ok", "lost"], "init": "ok",
+                "transitions": [{
+                    "name": "loss", "source": "ok", "targets": ["lost"],
+                    "distrib": "inst", "probs": [],
+                    "guard": both(nok("D"), nok("E")),
+                }],
+            }],
+        },
+    ],
+    "targets": [{"name": "pair_lost", "component": "sys",
+                 "automaton": "watch", "state": "lost"}],
+})
+rare_form = (1 - math.exp(-1e-4 * horizon)) ** 2
+
+ce = pyraichu.quantify(rare, pyraichu.Study("pair_lost", horizon, seed=7),
+                       method="cross_entropy", nb_runs=4000, pilot_runs=500)
+p = ce.probability
+print(f"{p.estimate:.3e} +/- {p.standard_error:.1e}, closed form {rare_form:.3e}")
+print(f"effective sample size {p.effective_sample_size:.0f}, "
+      f"relative error {p.relative_error:.1%}")
+assert not p.inconclusive
+assert abs(p.estimate - rare_form) <= 4 * p.standard_error
+```
+
+The detail names each family of transitions that shares a factor, and the
+factor the final campaign used. Here `D` and `E` are the same kind of
+unit at the same rate, so they form one family:
+
+```python
+for family in ce.detail.families:
+    print(family.label, family.transitions, round(family.factor))
+```
+
+Read the verdict and the diagnostics before the interval:
+
+- **`inconclusive`**: true when the effective sample size is below the
+  method's threshold (`min_effective_sample_size`, default 50). The
+  estimate and its interval are then not to be trusted, however narrow the
+  interval: read it as "not established", not as a number.
+- **effective sample size**: how many equally weighted hits the estimate
+  is worth. Near 1, a single replica carries the estimate.
+- **relative error**: the standard error over the estimate. It measures
+  the precision reached only when the estimate is conclusive: with a few
+  dominant weights, the standard error is itself badly estimated.
+- A campaign that never reaches the target raises `SimulationError`
+  instead of returning a zero: a zero would read as "impossible" where the
+  campaign only saw nothing.
+
+The fit is declared converged only from a pilot whose own effective sample
+size reaches the same threshold: a pilot whose few hits are carried by one
+replica returns that replica's rates, so its factors barely move whatever
+the truth, and it cannot confirm anything.
+
+**One regime is out of reach of this version.** A highly reliable system
+with fast repairs over a long horizon reaches the feared event through
+many failure and repair cycles, and one fixed factor per family cannot
+bias such trajectories well. Measured on redundant pairs of this kind, the
+estimate came from 30 % to three orders of magnitude below the truth, with
+an interval that did not contain it, and an effective sample size between
+1 and 35: such results are marked `inconclusive`. The same pair over a
+short horizon, or with slow repairs over a long one, is recovered within
+its interval with an effective sample size of 48 and more.
+
+Only constant-rate exponential laws are biased in this version. Other laws
+(Weibull, delays, on-demand failures, state-dependent rates) run at their
+nominal law, which keeps the estimate unbiased but brings no variance
+reduction through them. Repairs start unbiased; a family can be merged or
+named by hand with `families={"comp.automaton.transition": "label"}`.
+
 ## Provenance and detail
 
 The rest of the envelope says where the answer comes from. `method` and
 `settings` record what ran, defaults resolved; `engine_version`, `model`
 and `model_hash` identify the engine and the model; `seed` and `instants`
-are recorded for Monte-Carlo simulation only, since the explorations do
-not use them.
+are recorded for the methods that use them: both for Monte-Carlo
+simulation, the seed alone for cross-entropy, neither for the
+explorations.
 
 ```python
 print(exact.method, exact.settings["rel_precision"])

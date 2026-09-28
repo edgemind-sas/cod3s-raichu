@@ -34,8 +34,8 @@ use raichu_core::{CompiledModel, EngineError, FlowConfig};
 use raichu_model::{Automaton, Component, Distrib, Indicator, IndicatorTarget, Model, Transition};
 use raichu_montecarlo::{
     constant_sample_bounds, normal_bounds, normal_quantile, run, unobserved_frequency_bound,
-    wilson_bounds, z_of, ConfidenceInterval, Departure, IntervalMethod, McConfig,
-    DEFAULT_CONFIDENCE,
+    weighted_interval, wilson_bounds, z_of, ConfidenceInterval, Departure, IntervalMethod,
+    McConfig, WeightedInterval, DEFAULT_CONFIDENCE,
 };
 
 /// A single exponential `ok → nok` transition at rate `rate`, observed
@@ -838,4 +838,118 @@ fn the_interval_helpers_are_usable_on_their_own() {
     assert_eq!(ci.high, vec![high]);
     assert_eq!(ci.method, IntervalMethod::Wilson);
     assert_eq!(ci.level, 0.95);
+}
+
+// ---------------------------------------------------------------------
+// Weighted indicator (likelihood-ratio weighted hits)
+// ---------------------------------------------------------------------
+
+/// Sample mean and standard deviation (ddof = 1), written out from
+/// their definition, independently of the crate.
+fn mean_and_std(values: &[f64]) -> (f64, f64) {
+    let n = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    (mean, var.sqrt())
+}
+
+#[test]
+fn unit_weights_give_the_normal_interval_of_the_plain_proportion_under_another_name() {
+    // 37 hits among 500 replicas, every weight 1: the weighted indicator
+    // is the 0/1 indicator itself.
+    let values: Vec<f64> = (0..500)
+        .map(|i| if i % 13 == 0 { 1.0 } else { 0.0 })
+        .collect();
+    let hits = values.iter().filter(|&&v| v > 0.0).count();
+    let (p, std) = mean_and_std(&values);
+    let (low, high) = normal_bounds(p, std, 500, 0.95);
+
+    let w: WeightedInterval = weighted_interval(&values, 0.95);
+    assert_eq!(w.method, IntervalMethod::WeightedNormal);
+    assert_ne!(w.method, IntervalMethod::Normal);
+    assert_ne!(w.method, IntervalMethod::Wilson);
+    assert_eq!(w.level, 0.95);
+    assert_eq!(w.replicas, 500);
+    assert!((w.estimate - hits as f64 / 500.0).abs() < 1e-15);
+    assert!((w.low - low).abs() < 1e-15, "{} vs {low}", w.low);
+    assert!((w.high - high).abs() < 1e-15, "{} vs {high}", w.high);
+    // Every hit weighs the same: the effective sample size is the hit
+    // count.
+    assert!((w.effective_sample_size - hits as f64).abs() < 1e-9);
+    let se = std / 500f64.sqrt();
+    assert!((w.standard_error - se).abs() < 1e-15);
+    assert!((w.relative_error.unwrap() - se / p).abs() < 1e-12);
+}
+
+#[test]
+fn one_small_hit_among_a_thousand_gives_its_weight_over_n_and_an_ess_of_one() {
+    let mut values = vec![0.0; 1000];
+    values[417] = 1e-6;
+    let w = weighted_interval(&values, 0.95);
+    assert_eq!(w.method, IntervalMethod::WeightedNormal);
+    assert!((w.estimate - 1e-9).abs() < 1e-24, "{}", w.estimate);
+    assert_eq!(w.effective_sample_size, 1.0);
+    // Not clamped: the lower bound falls below zero, which is the
+    // interval saying the normal approximation is out of its range.
+    assert!(w.low < 0.0);
+    assert!(w.high > 1e-9);
+    // The relative error, computed from its definition (standard error
+    // over the estimate) rather than from a derived closed form.
+    let (mean, std) = mean_and_std(&values);
+    let rel = std / 1000f64.sqrt() / mean;
+    assert!((w.relative_error.unwrap() - rel).abs() < 1e-12);
+}
+
+#[test]
+fn unequal_weights_lower_the_effective_sample_size() {
+    // Hits weighing 1, 1, 1 and 10: (13)² / (3 + 100) = 169/103.
+    let mut values = vec![0.0; 100];
+    values[3] = 1.0;
+    values[20] = 1.0;
+    values[55] = 1.0;
+    values[90] = 10.0;
+    let w = weighted_interval(&values, 0.9);
+    assert!((w.effective_sample_size - 169.0 / 103.0).abs() < 1e-12);
+    assert_eq!(w.level, 0.9);
+}
+
+#[test]
+fn no_hit_gives_an_undefined_interval_an_ess_of_zero_and_no_relative_error() {
+    let values = vec![0.0; 1000];
+    let w = weighted_interval(&values, 0.95);
+    assert_eq!(w.method, IntervalMethod::Undefined);
+    assert_eq!(w.estimate, 0.0);
+    assert_eq!((w.low, w.high), (0.0, 0.0));
+    assert_eq!(w.effective_sample_size, 0.0);
+    assert_eq!(w.relative_error, None);
+    assert_eq!(w.replicas, 1000);
+}
+
+#[test]
+fn fewer_than_two_replicas_give_an_undefined_interval() {
+    for values in [vec![], vec![0.5]] {
+        let w = weighted_interval(&values, 0.95);
+        assert_eq!(w.method, IntervalMethod::Undefined, "{values:?}");
+        assert_eq!(w.low, w.estimate);
+        assert_eq!(w.high, w.estimate);
+        assert_eq!(w.relative_error, None);
+    }
+    assert_eq!(weighted_interval(&[0.5], 0.95).estimate, 0.5);
+    assert_eq!(weighted_interval(&[], 0.95).estimate, 0.0);
+}
+
+#[test]
+fn the_weighted_method_serialises_under_its_own_name() {
+    assert_eq!(
+        serde_json::to_value(IntervalMethod::WeightedNormal).unwrap(),
+        "weighted_normal"
+    );
+    let mut values = vec![0.0; 10];
+    values[2] = 0.25;
+    let json = serde_json::to_value(weighted_interval(&values, 0.95)).unwrap();
+    assert_eq!(json["method"], "weighted_normal");
+    assert!(json["effective_sample_size"].is_number());
+    assert!(json["relative_error"].is_number());
+    let none = serde_json::to_value(weighted_interval(&[0.0; 10], 0.95)).unwrap();
+    assert!(none["relative_error"].is_null());
 }

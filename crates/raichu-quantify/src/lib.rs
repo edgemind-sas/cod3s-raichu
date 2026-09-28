@@ -1,7 +1,7 @@
 //! # raichu-quantify: one study, any quantification engine, one envelope
 //!
 //! RAICHU answers "what is the probability that this feared event happens
-//! by this horizon" with three engines:
+//! by this horizon" with four engines:
 //!
 //! - **Monte-Carlo simulation** ([`Method::MonteCarlo`], crate
 //!   `raichu-montecarlo`): replicas drawn at random, the probability
@@ -12,7 +12,12 @@
 //! - **discretised exploration** ([`Method::Discretised`], crate
 //!   `raichu-explore`): the sequence tree for every law the engine
 //!   carries, bounds on the discretised model plus an estimate of the
-//!   discretisation error.
+//!   discretisation error;
+//! - **cross-entropy** ([`Method::CrossEntropy`], crate
+//!   `raichu-montecarlo`): a biased Monte-Carlo campaign whose
+//!   exponential rates are multiplied by factors fitted by cross-entropy,
+//!   each replica weighted by its likelihood ratio, for feared events too
+//!   rare for a plain campaign.
 //!
 //! Each engine keeps its own settings and its own detailed result. This
 //! crate puts one contract above them:
@@ -52,6 +57,7 @@
 //! The bindings reach every method through the single [`quantify`] entry
 //! point.
 
+mod cross_entropy;
 mod envelope;
 mod error;
 mod exact_json;
@@ -68,7 +74,8 @@ pub use envelope::{
 pub use error::QuantifyError;
 pub use hash::model_content_hash;
 pub use method::{
-    DiscretisedExplorationSettings, ExactExplorationSettings, Method, MonteCarloSettings,
+    CrossEntropySamplingSettings, DiscretisedExplorationSettings, ExactExplorationSettings, Method,
+    MonteCarloSettings,
 };
 pub use study::Study;
 
@@ -126,8 +133,10 @@ pub trait QuantificationEngine {
 /// [`QuantifyError::UnknownTarget`] or [`QuantifyError::InvalidStudy`]
 /// before anything runs, [`QuantifyError::InvalidSettings`] for a method
 /// setting outside its domain, [`QuantifyError::Compile`] for a model that
-/// does not compile, and [`QuantifyError::Engine`] for the engine's own
-/// typed refusals (a model outside the exact domain, for instance).
+/// does not compile, [`QuantifyError::Engine`] for the engine's own typed
+/// refusals (a model outside the exact domain, for instance), and
+/// [`QuantifyError::NoHit`] for a cross-entropy campaign that never reached
+/// the target.
 pub fn quantify(
     model: &Model,
     study: &Study,
@@ -137,6 +146,7 @@ pub fn quantify(
         Method::MonteCarlo(settings) => quantify_with(settings, model, study),
         Method::Exact(settings) => quantify_with(settings, model, study),
         Method::Discretised(settings) => quantify_with(settings, model, study),
+        Method::CrossEntropy(settings) => quantify_with(settings, model, study),
     }
 }
 

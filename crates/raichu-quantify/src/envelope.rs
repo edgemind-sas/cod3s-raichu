@@ -1,7 +1,8 @@
-//! The result envelope, `raichu.quantification` version 1.
+//! The result envelope, `raichu.quantification` version 2 (version 1 is
+//! still read).
 
 use raichu_explore::{Algorithm, ExplorationResult};
-use raichu_montecarlo::{IntervalMethod, McEstimates};
+use raichu_montecarlo::{CrossEntropyEstimate, IntervalMethod, McEstimates};
 use serde::{Deserialize, Serialize};
 
 use crate::Method;
@@ -10,10 +11,14 @@ use crate::Method;
 pub const QUANTIFICATION_FORMAT: &str = "raichu.quantification";
 
 /// The format version this crate writes and the highest it reads.
-pub const QUANTIFICATION_VERSION: u32 = 1;
+///
+/// Version 2 added the cross-entropy method, its `weighted_estimate`
+/// probability and its `cross_entropy` detail; a version 1 envelope reads
+/// unchanged.
+pub const QUANTIFICATION_VERSION: u32 = 2;
 
 /// The answer to a study, whatever the engine: `raichu.quantification`
-/// version 1.
+/// version 2.
 ///
 /// The envelope carries the method as applied, the provenance, the
 /// probability of the study's target with its uncertainty, and the
@@ -67,7 +72,7 @@ pub struct QuantificationProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instants: Option<Vec<f64>>,
     /// The master seed, recorded only for a method that draws at random
-    /// (Monte-Carlo simulation).
+    /// (Monte-Carlo simulation, cross-entropy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
 }
@@ -99,6 +104,38 @@ pub enum TargetProbability {
         /// Upper bound of the interval.
         high: f64,
     },
+    /// A weighted estimate with its confidence interval (cross-entropy):
+    /// the mean over `replicas` of each replica's likelihood ratio when it
+    /// reached the target first, zero otherwise.
+    WeightedEstimate {
+        /// The point estimate.
+        estimate: f64,
+        /// Its standard error.
+        standard_error: f64,
+        /// Replicas that reached the target first (unweighted).
+        reached: u64,
+        /// Replicas run in the final campaign.
+        replicas: u64,
+        /// Confidence level of the interval, strictly inside `(0, 1)`.
+        level: f64,
+        /// The construction: [`IntervalMethod::WeightedNormal`].
+        method: IntervalMethod,
+        /// Lower bound of the interval.
+        low: f64,
+        /// Upper bound of the interval.
+        high: f64,
+        /// Effective sample size of the hit weights: how many equally
+        /// weighted hits the estimate is worth. A value near 1 means one
+        /// replica carries the estimate.
+        effective_sample_size: f64,
+        /// Standard error over the estimate.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relative_error: Option<f64>,
+        /// Whether the effective sample size is below the method's
+        /// threshold: the estimate and its interval are then not to be
+        /// trusted, however narrow the interval.
+        inconclusive: bool,
+    },
     /// Guaranteed bounds (exact and discretised exploration): the
     /// probability lies in `[lower, upper]`, on the discretised model for
     /// a discretised exploration.
@@ -124,7 +161,8 @@ impl TargetProbability {
     #[must_use]
     pub fn range(&self) -> (f64, f64) {
         match self {
-            TargetProbability::ConfidenceInterval { low, high, .. } => (*low, *high),
+            TargetProbability::ConfidenceInterval { low, high, .. }
+            | TargetProbability::WeightedEstimate { low, high, .. } => (*low, *high),
             TargetProbability::Bounds { lower, upper, .. } => (*lower, *upper),
         }
     }
@@ -143,6 +181,9 @@ pub enum Detail {
     MonteCarlo(Box<McEstimates>),
     /// The exploration result (`raichu.exploration`).
     Exploration(Box<ExplorationResult>),
+    /// The cross-entropy campaign: fitted factors per family, pilot
+    /// history and diagnostics, without the per-replica ends.
+    CrossEntropy(Box<CrossEntropyEstimate>),
 }
 
 /// Why a document is not a quantification envelope this crate reads.
@@ -233,18 +274,75 @@ fn check_consistency(envelope: &Quantification) -> Result<(), ReadQuantification
                     "expects a confidence interval and a Monte-Carlo detail",
                 );
             };
-            let same = |a: f64, b: f64| a.to_bits() == b.to_bits();
             if *replicas != settings.nb_runs || detail.nb_runs != settings.nb_runs {
                 return inconsistent("monte_carlo", "the replica counts disagree");
             }
-            if !same(*level, settings.confidence) || !same(detail.confidence, settings.confidence) {
+            if !same_bits(*level, settings.confidence)
+                || !same_bits(detail.confidence, settings.confidence)
+            {
                 return inconsistent("monte_carlo", "the confidence levels disagree");
             }
-            if *reached > *replicas || !same(*estimate, *reached as f64 / *replicas as f64) {
+            if *reached > *replicas || !same_bits(*estimate, *reached as f64 / *replicas as f64) {
                 return inconsistent("monte_carlo", "the estimate is not `reached / replicas`");
             }
             if envelope.provenance.seed != Some(detail.seed) {
                 return inconsistent("monte_carlo", "the seeds disagree");
+            }
+            Ok(())
+        }
+        Method::CrossEntropy(settings) => {
+            let (
+                TargetProbability::WeightedEstimate {
+                    estimate,
+                    standard_error,
+                    reached,
+                    replicas,
+                    level,
+                    method,
+                    low,
+                    high,
+                    effective_sample_size,
+                    relative_error,
+                    inconclusive,
+                },
+                Detail::CrossEntropy(detail),
+            ) = (&envelope.probability, &envelope.detail)
+            else {
+                return inconsistent(
+                    "cross_entropy",
+                    "expects a weighted estimate and a cross-entropy detail",
+                );
+            };
+            let d = &detail.estimate;
+            if *replicas != settings.nb_runs || detail.replicas != settings.nb_runs {
+                return inconsistent("cross_entropy", "the replica counts disagree");
+            }
+            if !same_bits(*level, settings.confidence) || !same_bits(d.level, settings.confidence) {
+                return inconsistent("cross_entropy", "the confidence levels disagree");
+            }
+            let same_relative = match (relative_error, d.relative_error) {
+                (None, None) => true,
+                (Some(a), Some(b)) => same_bits(*a, b),
+                _ => false,
+            };
+            if *reached != detail.reached
+                || *reached > *replicas
+                || *method != d.method
+                || !same_bits(*estimate, d.estimate)
+                || !same_bits(*standard_error, d.standard_error)
+                || !same_bits(*low, d.low)
+                || !same_bits(*high, d.high)
+                || !same_bits(*effective_sample_size, d.effective_sample_size)
+                || !same_relative
+                || *inconclusive != detail.estimate_inconclusive
+            {
+                return inconsistent("cross_entropy", "the estimate is not the detail's");
+            }
+            if envelope.version < 2 {
+                return inconsistent("cross_entropy", "the method exists from format version 2");
+            }
+            if detail.target != envelope.provenance.target || envelope.provenance.seed.is_none() {
+                return inconsistent("cross_entropy", "the target or seed is not the detail's");
             }
             Ok(())
         }
@@ -274,25 +372,30 @@ fn check_bounds(
     if result.algorithm != algorithm {
         return inconsistent(method, "the detail was computed by another algorithm");
     }
-    let same = |a: f64, b: f64| a.to_bits() == b.to_bits();
     let same_estimate = match (error_estimate, result.error_estimate()) {
         (None, None) => true,
-        (Some(a), Some(b)) => same(*a, b),
+        (Some(a), Some(b)) => same_bits(*a, b),
         _ => false,
     };
-    if !same(*lower, result.lower)
-        || !same(*upper, result.upper)
+    if !same_bits(*lower, result.lower)
+        || !same_bits(*upper, result.upper)
         || *inconclusive != result.inconclusive
         || !same_estimate
     {
         return inconsistent(method, "the bounds are not the detail's");
     }
     if result.target != envelope.provenance.target
-        || !same(result.horizon, envelope.provenance.horizon)
+        || !same_bits(result.horizon, envelope.provenance.horizon)
     {
         return inconsistent(method, "the target or horizon is not the detail's");
     }
     Ok(())
+}
+
+/// Two numbers are the same when their bits are: the envelope is read
+/// correctly rounded, so a value copied from the detail is bit-identical.
+fn same_bits(a: f64, b: f64) -> bool {
+    a.to_bits() == b.to_bits()
 }
 
 fn inconsistent(method: &str, what: &str) -> Result<(), ReadQuantificationError> {

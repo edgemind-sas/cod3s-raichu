@@ -12,12 +12,13 @@ description = "Monte-Carlo driver: rayon-parallel replicas, per-replica RNG subs
 raichu-analysis.workspace = true
 raichu-core.workspace = true
 raichu-expr.workspace = true
+raichu-model.workspace = true
+raichu-rng.workspace = true
 rayon = "1"
 serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-raichu-model.workspace = true
 serde_json.workspace = true
 divan.workspace = true
 
