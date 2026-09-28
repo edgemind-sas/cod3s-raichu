@@ -587,7 +587,10 @@ right-hand side whose absolute value reaches it, with an error naming
 the integrated variable, the date and the rate, instead of integrating
 it. The physics of such a draw is an instantaneous transfer, which a
 rate cannot express; the modeller bounds one of the two sides (a finite
-fill or serve rate, or a finite demand).
+fill or serve rate, or a finite demand). From Python the refusal is a
+`pyraichu.UnboundedRateError`, a `SimulationError` whose `variable`,
+`time`, `rate` and `unbounded` attributes carry the same facts as the
+message.
 
 The value must be finite and positive. Absent, nothing is reserved and
 nothing is checked. The `pyraichu.muscadet` layer declares `1e30`, the

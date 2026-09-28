@@ -12,6 +12,7 @@
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
+use pyo3::import_exception;
 use pyo3::prelude::*;
 use raichu::raichu_analysis::analyse as analyse_sequences;
 use raichu::raichu_analysis::{
@@ -20,8 +21,8 @@ use raichu::raichu_analysis::{
 };
 use raichu::raichu_core::{fault_tree as generate_fault_tree, FaultTreeSettings};
 use raichu::raichu_core::{
-    CompiledModel, Engine, EngineConfig, FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot,
-    SolverParams,
+    CompiledModel, Engine, EngineConfig, EngineError, FlowConfig as CoreFlowConfig,
+    Snapshot as CoreSnapshot, SolverParams,
 };
 use raichu::raichu_explore::{
     exact_domain_report, explore_discretised, explore_exact,
@@ -55,6 +56,32 @@ create_exception!(
     PyException,
     "The simulation failed (typed engine error)."
 );
+// Defined in Python (`pyraichu.UnboundedRateError`, a `SimulationError`)
+// so it can carry its fields as attributes while `str()` stays the
+// engine's message; imported lazily, when the error is materialised.
+import_exception!(pyraichu, UnboundedRateError);
+
+/// The Python exception for an engine error: the typed
+/// `UnboundedRateError` when the run met the model's reserved
+/// "unbounded" magnitude (so a caller can name the construct to bound),
+/// `SimulationError` for every other failure.
+fn engine_error(error: EngineError) -> PyErr {
+    match &error {
+        EngineError::UnboundedRate {
+            time,
+            variable,
+            rate,
+            unbounded,
+        } => UnboundedRateError::new_err((
+            error.to_string(),
+            variable.clone(),
+            *time,
+            *rate,
+            *unbounded,
+        )),
+        _ => SimulationError::new_err(error.to_string()),
+    }
+}
 
 /// Convergence policy of the continuous flow resolution, as **one
 /// object** every entry point accepts under a single `flow=` keyword.
@@ -284,11 +311,8 @@ fn simulate_json(
             max_flow_restarts: max_flow_restarts.unwrap_or(defaults.max_flow_restarts),
             ..defaults
         };
-        let engine =
-            Engine::new(&compiled, config).map_err(|e| SimulationError::new_err(e.to_string()))?;
-        let result = engine
-            .run()
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let engine = Engine::new(&compiled, config).map_err(engine_error)?;
+        let result = engine.run().map_err(engine_error)?;
         serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
     })
 }
@@ -371,8 +395,7 @@ fn monte_carlo_json(
             stop_at_targets,
             flow,
         };
-        let estimates =
-            mc_run(&compiled, &config).map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let estimates = mc_run(&compiled, &config).map_err(engine_error)?;
         serde_json::to_string(&estimates).map_err(|e| SimulationError::new_err(e.to_string()))
     })
 }
@@ -412,8 +435,7 @@ fn analyse_sequences_json(
             stop_at_targets: false,
             flow,
         };
-        let raw = mc_run_sequences(&compiled, &config)
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let raw = mc_run_sequences(&compiled, &config).map_err(engine_error)?;
         let minimal = analyse_sequences(raw);
         serde_json::to_string(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))
     })
@@ -560,8 +582,8 @@ fn run_sequences_json(
                 time: *time,
             })
             .collect();
-        let campaign = mc_run_sequences_observed(&compiled, &config, &asked)
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let campaign =
+            mc_run_sequences_observed(&compiled, &config, &asked).map_err(engine_error)?;
         let header = RawHeader::new(
             raichu::VERSION,
             &model.name,
@@ -673,8 +695,8 @@ fn importance_json(
             stop_at_targets: false,
             flow,
         };
-        let analysis = mc_run_importance(&compiled, &config, target.as_deref())
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let analysis =
+            mc_run_importance(&compiled, &config, target.as_deref()).map_err(engine_error)?;
         serde_json::to_string(&analysis).map_err(|e| SimulationError::new_err(e.to_string()))
     })
 }
@@ -767,8 +789,7 @@ fn explore_json(
             };
             settings.threads = threads;
             py.detach(|| {
-                let result = explore_exact(&compiled, &settings)
-                    .map_err(|e| SimulationError::new_err(e.to_string()))?;
+                let result = explore_exact(&compiled, &settings).map_err(engine_error)?;
                 serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
             })
         }
@@ -795,8 +816,7 @@ fn explore_json(
             settings.refine = refine;
             settings.threads = threads;
             py.detach(|| {
-                let result = explore_discretised(&compiled, &settings)
-                    .map_err(|e| SimulationError::new_err(e.to_string()))?;
+                let result = explore_discretised(&compiled, &settings).map_err(engine_error)?;
                 serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
             })
         }
@@ -999,6 +1019,7 @@ fn quantify_json(
     py.detach(|| {
         let envelope = quantify_study(&model, &study, &method).map_err(|e| match e {
             QuantifyError::Compile(e) => ModelError::new_err(e.to_string()),
+            QuantifyError::Engine(e) => engine_error(e),
             other => SimulationError::new_err(other.to_string()),
         })?;
         envelope
@@ -1085,7 +1106,7 @@ impl Interactive {
             ..EngineConfig::default()
         };
         let snap = Engine::new(&model, config.clone())
-            .map_err(|e| SimulationError::new_err(e.to_string()))?
+            .map_err(engine_error)?
             .snapshot();
         Ok(Interactive {
             model,
@@ -1139,7 +1160,7 @@ impl Interactive {
             Some(to) => engine.fire_named_to(name, to),
             None => engine.fire_named(name),
         }
-        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        .map_err(engine_error)?;
         self.snap = engine.snapshot();
         Self::json(&event)
     }
@@ -1149,9 +1170,7 @@ impl Interactive {
     /// horizon.
     fn step(&mut self) -> PyResult<Option<String>> {
         let mut engine = self.engine();
-        let event = engine
-            .step()
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let event = engine.step().map_err(engine_error)?;
         self.snap = engine.snapshot();
         event.map(|e| Self::json(&e)).transpose()
     }
@@ -1160,9 +1179,7 @@ impl Interactive {
     /// `>=` the current time).
     fn set_date(&mut self, name: &str, date: f64) -> PyResult<()> {
         let mut engine = self.engine();
-        engine
-            .set_date(name, date)
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        engine.set_date(name, date).map_err(engine_error)?;
         self.snap = engine.snapshot();
         Ok(())
     }
@@ -1170,9 +1187,7 @@ impl Interactive {
     /// Reset the session to its initial state (`t = 0`, fresh RNG).
     fn reset(&mut self) -> PyResult<()> {
         let mut engine = self.engine();
-        engine
-            .reset()
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        engine.reset().map_err(engine_error)?;
         self.snap = engine.snapshot();
         Ok(())
     }

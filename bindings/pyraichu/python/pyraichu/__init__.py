@@ -83,6 +83,7 @@ __all__ = [
     "ModelError",
     "SimulationError",
     "SimulationResult",
+    "UnboundedRateError",
     "__version__",
     "analyse_raw_sequences",
     "analyse_sequences",
@@ -106,6 +107,43 @@ __all__ = [
     "switching_loops",
     "unfed_triggers",
 ]
+
+
+class UnboundedRateError(SimulationError):
+    """An integrated rate reached the magnitude the model reserves for "unbounded".
+
+    Raised when a stock with no ceiling on what leaves it meets a demand with
+    no ceiling on what it takes: the physics is an instantaneous transfer, which
+    a rate cannot express, so the run is refused rather than answering a
+    non-physical number. ``str()`` is the engine's message; the fields name what
+    to bound.
+
+    Attributes
+    ----------
+    variable : str
+        The integrated variable, ``component.attribute``.
+    time : float
+        The simulation time of the evaluation.
+    rate : float
+        The right-hand side value the engine met.
+    unbounded : float
+        The magnitude the model declares as "unbounded".
+    """
+
+    def __init__(
+        self, message: str, variable: str, time: float, rate: float, unbounded: float
+    ) -> None:
+        super().__init__(message)
+        self.variable = variable
+        self.time = time
+        self.rate = rate
+        self.unbounded = unbounded
+
+    def __reduce__(self):
+        return (
+            type(self),
+            (str(self), self.variable, self.time, self.rate, self.unbounded),
+        )
 
 
 def _value_to_python(value: dict[str, Any]) -> bool | int | float:

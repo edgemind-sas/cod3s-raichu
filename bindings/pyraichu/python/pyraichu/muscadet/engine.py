@@ -62,6 +62,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .. import MODEL_ENVELOPE_KEY, Model, load_model, model_body, monte_carlo, seal
 from .. import interactive as open_interactive
+from . import run_explained
 from .declare import (
     SystemSpecError,
     build_document,
@@ -929,7 +930,8 @@ def simulate(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
     kwargs.setdefault("stop_at_targets", bool(targets))
     if resolution is not None:
         kwargs.setdefault("event_resolution", resolution)
-    return monte_carlo(
+    return run_explained(
+        monte_carlo,
         build_model(spec, targets),
         nb_runs=nb_runs,
         t_max=instants[-1],
