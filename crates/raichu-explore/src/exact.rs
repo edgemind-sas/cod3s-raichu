@@ -130,6 +130,11 @@ impl ExactSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum DomainViolation {
+    /// An imported FMU has its own state and scheduled communication points.
+    Fmu {
+        /// Name of the imported unit.
+        unit: String,
+    },
     /// The model integrates an ODE: its state evolves continuously
     /// between jumps.
     Ode {
@@ -155,6 +160,12 @@ pub enum DomainViolation {
 impl std::fmt::Display for DomainViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DomainViolation::Fmu { unit } => {
+                write!(
+                    f,
+                    "FMU unit `{unit}` has external state and communication points"
+                )
+            }
             DomainViolation::Ode { attribute } => {
                 write!(f, "`{attribute}` is integrated by an ODE")
             }
@@ -182,6 +193,11 @@ impl std::fmt::Display for DomainViolation {
 #[must_use]
 pub fn exact_domain_report(model: &CompiledModel) -> Vec<DomainViolation> {
     let mut report = Vec::new();
+    for unit in &model.fmu_units {
+        report.push(DomainViolation::Fmu {
+            unit: unit.name.clone(),
+        });
+    }
     for (var, _) in &model.ode {
         report.push(DomainViolation::Ode {
             attribute: model.var_names[*var].clone(),

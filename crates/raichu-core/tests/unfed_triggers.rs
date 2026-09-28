@@ -190,6 +190,7 @@ fn standby(logic: &str, connected: bool, init: &str) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -744,6 +745,7 @@ fn duty(wired: bool, draws: bool, floor: f64, below: bool) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 

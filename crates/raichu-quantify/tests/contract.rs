@@ -6,16 +6,66 @@
 
 use raichu_core::{CompiledModel, EngineError};
 use raichu_explore::{explore_discretised, explore_exact};
+use raichu_expr::{AttrRef, Value};
 use raichu_model::{
-    Automaton, Component, Distrib, Indicator, IndicatorTarget, Model, Target, Transition,
+    AttrKind, Attribute, Automaton, Component, Distrib, FmuBinding, FmuUnit, Indicator,
+    IndicatorTarget, Model, Target, Transition,
 };
 use raichu_montecarlo::IntervalMethod;
 use raichu_quantify::{
-    model_content_hash, quantify, read_quantification, CrossEntropySamplingSettings, Detail,
-    DiscretisedExplorationSettings, ExactExplorationSettings, Method, MonteCarloSettings,
-    Quantification, QuantifyError, ReadQuantificationError, Study, TargetProbability,
-    QUANTIFICATION_FORMAT, QUANTIFICATION_VERSION,
+    model_content_hash, quantify, quantify_with_fmu, read_quantification,
+    CrossEntropySamplingSettings, Detail, DiscretisedExplorationSettings, ExactExplorationSettings,
+    Method, MonteCarloSettings, Quantification, QuantifyError, ReadQuantificationError, Study,
+    TargetProbability, QUANTIFICATION_FORMAT, QUANTIFICATION_VERSION,
 };
+use std::path::Path;
+
+#[test]
+fn imported_unit_propagates_to_quantification_provenance() {
+    let mut model = parallel_pair(0.1, 0.1);
+    model.components[0].attributes.push(Attribute {
+        name: "x".into(),
+        kind: AttrKind::Float,
+        init: Value::Float(1.0),
+    });
+    model.fmu_units.push(FmuUnit {
+        name: "dahlquist".into(),
+        path: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../raichu-fmi/tests/fixtures/reference-fmus/2.0/Dahlquist.fmu"
+        )
+        .into(),
+        step: 0.1,
+        inputs: vec![],
+        outputs: vec![FmuBinding {
+            attribute: AttrRef {
+                component: "A".into(),
+                attribute: "x".into(),
+            },
+            variable: "x".into(),
+        }],
+        parameters: vec![],
+    });
+    let study = Study::new("both_down", 0.2);
+    let method = monte_carlo(2, 0.95);
+    assert!(matches!(
+        quantify(&model, &study, &method),
+        Err(QuantifyError::Engine(EngineError::FmuPermission { unit })) if unit == "dahlquist"
+    ));
+    let result = quantify_with_fmu(&model, &study, &method, Path::new("."), true, false).unwrap();
+    assert_eq!(result.provenance.fmu_units.len(), 1);
+    let Detail::MonteCarlo(estimates) = &result.detail else {
+        panic!("expected Monte-Carlo detail");
+    };
+    assert_eq!(result.provenance.fmu_units, estimates.fmu_units);
+    assert_eq!(
+        read_quantification(&result.to_json().unwrap())
+            .unwrap()
+            .provenance
+            .fmu_units,
+        result.provenance.fmu_units
+    );
+}
 
 // ---- model literals ------------------------------------------------------
 
@@ -130,6 +180,7 @@ fn parallel_pair(a: f64, b: f64) -> Model {
         }],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -145,6 +196,7 @@ fn competing_pair(a: f64, b: f64) -> Model {
         targets: vec![down_target("A_down", "A"), down_target("B_down", "B")],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 

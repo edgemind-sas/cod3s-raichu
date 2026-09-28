@@ -64,6 +64,7 @@ fn probe_model() -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 

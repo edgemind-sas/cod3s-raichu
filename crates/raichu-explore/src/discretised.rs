@@ -93,14 +93,15 @@ use raichu_core::{
     StochasticDates,
 };
 use raichu_numeric::{Law, LawError};
+use std::path::Path;
 
 use crate::result::{
     Algorithm, Cutoffs, Discretisation, ExplorationResult, Precision, Refinement,
     DEFAULT_GAP_TOLERANCE,
 };
 use crate::walk::{
-    assemble, drive, engine_config, instantaneous_branches, invalid, validate_common, Common,
-    Expansion, NodeMass, Strategy, Timed,
+    assemble, drive, drive_with_fmu, engine_config, instantaneous_branches, invalid,
+    validate_common, Common, Expansion, NodeMass, Strategy, Timed,
 };
 
 /// Default discretisation level `K`: cells per timed node.
@@ -197,6 +198,38 @@ pub fn explore_discretised(
     model: &CompiledModel,
     settings: &DiscretisedSettings,
 ) -> Result<ExplorationResult, EngineError> {
+    if let Some(unit) = model.fmu_units.first() {
+        return Err(EngineError::FmuPermission {
+            unit: unit.name.clone(),
+        });
+    }
+    explore_discretised_impl(model, settings, None)
+}
+
+/// Explore a model with imported FMUs after an explicit run-side grant.
+/// Relative archive paths are resolved under `base_dir`. Every FMU must
+/// provide serialized state get/set so branch snapshots can be replayed.
+///
+/// # Errors
+/// Refuses permission and missing state capabilities before loading a native
+/// library, then propagates archive, binding and exploration errors.
+pub fn explore_discretised_with_fmu(
+    model: &CompiledModel,
+    settings: &DiscretisedSettings,
+    base_dir: &Path,
+    allow_fmu_import: bool,
+) -> Result<ExplorationResult, EngineError> {
+    let prepared =
+        raichu_core::PreparedCoSimulation::prepare_authorized(model, base_dir, allow_fmu_import)?;
+    prepared.require_serializable_state()?;
+    explore_discretised_impl(model, settings, Some(&prepared))
+}
+
+fn explore_discretised_impl(
+    model: &CompiledModel,
+    settings: &DiscretisedSettings,
+    prepared: Option<&raichu_core::PreparedCoSimulation>,
+) -> Result<ExplorationResult, EngineError> {
     validate_common(model, &settings.common())?;
     let max_level = if settings.refine {
         u32::MAX / 2
@@ -212,7 +245,7 @@ pub fn explore_discretised(
             ),
         ));
     }
-    let mut base = run(model, settings, settings.level)?;
+    let mut base = run(model, settings, settings.level, prepared)?;
     if !settings.refine {
         base.discretisation = Some(Discretisation {
             level: settings.level,
@@ -221,7 +254,7 @@ pub fn explore_discretised(
         return Ok(base);
     }
     let fine_level = 2 * settings.level;
-    let mut fine = run(model, settings, fine_level)?;
+    let mut fine = run(model, settings, fine_level, prepared)?;
     let error_estimate = (fine.lower - base.lower)
         .abs()
         .max((fine.upper - base.upper).abs());
@@ -252,11 +285,13 @@ fn run(
     model: &CompiledModel,
     settings: &DiscretisedSettings,
     level: u32,
+    prepared: Option<&raichu_core::PreparedCoSimulation>,
 ) -> Result<ExplorationResult, EngineError> {
     let common = settings.common();
     let config = EngineConfig {
         t_max: settings.horizon,
         stochastic_dates: StochasticDates::Deferred,
+        allow_fmu_import: prepared.is_some() && !model.fmu_units.is_empty(),
         ..engine_config()
     };
     let strategy = DiscretisedStrategy {
@@ -265,7 +300,11 @@ fn run(
         horizon: settings.horizon,
         tol_event: config.ode.tol_event,
     };
-    let partials = drive(model, &common, &strategy, &config, &(), true)?;
+    let partials = if let Some(prepared) = prepared.filter(|_| !model.fmu_units.is_empty()) {
+        drive_with_fmu(model, &common, &strategy, &config, &(), true, prepared)?
+    } else {
+        drive(model, &common, &strategy, &config, &(), true)?
+    };
     Ok(assemble(
         model,
         &common,
@@ -285,6 +324,8 @@ enum Action {
     At { transition: usize, time: f64 },
     /// Let time run to `time`, firing nothing.
     Advance { time: f64 },
+    /// Advance to the next communication point and let the engine step it.
+    Communicate { time: f64 },
     /// Let time run to `time`, the date of the deterministic `transition`,
     /// then fire it into its destination at `branch` (a window below the
     /// event-location tolerance, treated as empty).
@@ -591,18 +632,36 @@ impl Strategy for DiscretisedStrategy<'_> {
         via: Option<&Child>,
         _path: &[(u32, u32)],
     ) -> Timed<Child, ()> {
+        engine.sample_fmu_inputs_at_current_point();
         let t0 = engine.current_time();
+        let next_fmu = engine
+            .next_fmu_point()
+            .filter(|&point| point <= self.horizon);
+        let cells = via.map_or(0, |child| child.cells);
+        if let Some(point) = next_fmu.filter(|&point| point <= t0) {
+            return Ok(Some(Expansion {
+                children: vec![Child {
+                    action: Action::Communicate { time: point },
+                    factor: 1.0,
+                    cells,
+                }],
+                shared: (),
+                snapshot: None,
+            }));
+        }
         if t0 >= self.horizon {
             return Ok(None);
         }
-        let cells = via.map_or(0, |child| child.cells);
 
         // The window: probe the deterministic flow, then come back.
-        let snapshot = engine.snapshot();
-        let probe = engine.probe_deferred(self.horizon);
-        engine.restore(&snapshot);
+        let snapshot = engine.try_snapshot()?;
+        let limit = next_fmu.map_or(self.horizon, |point| point.min(self.horizon));
+        let probe = engine.probe_deferred(limit);
+        engine.try_restore(&snapshot)?;
         let probe = probe?;
         let t_end = probe.stop;
+        let communication_at_end = next_fmu
+            .is_some_and(|point| point == t_end && matches!(probe.reason, ProbeStop::Limit));
         let end_event = match probe.reason {
             ProbeStop::Deterministic { index } | ProbeStop::Watched { index } => Some(index),
             ProbeStop::Limit | ProbeStop::Horizon => None,
@@ -645,6 +704,11 @@ impl Strategy for DiscretisedStrategy<'_> {
                     .collect(),
                 ProbeStop::Watched { .. } => vec![Child {
                     action: Action::Advance { time: t_end },
+                    factor: 1.0,
+                    cells,
+                }],
+                ProbeStop::Limit if communication_at_end => vec![Child {
+                    action: Action::Communicate { time: t_end },
                     factor: 1.0,
                     cells,
                 }],
@@ -740,11 +804,15 @@ impl Strategy for DiscretisedStrategy<'_> {
                 }
             }
         }
-        if end_event.is_some() {
+        if end_event.is_some() || communication_at_end {
             let survival = (-total_end).exp();
             if survival > 0.0 {
                 children.push(Child {
-                    action: Action::Advance { time: t_end },
+                    action: if communication_at_end {
+                        Action::Communicate { time: t_end }
+                    } else {
+                        Action::Advance { time: t_end }
+                    },
                     factor: survival,
                     cells,
                 });
@@ -793,6 +861,16 @@ impl Strategy for DiscretisedStrategy<'_> {
                 }
             }
             Action::Advance { time } => engine.probe_deferred(time).map(|_| ()),
+            Action::Communicate { time } => {
+                engine.probe_deferred(time)?;
+                match engine.step()? {
+                    Some(event) if event.transition == "fmi.communication" => Ok(()),
+                    _ => Err(invalid(
+                        "fmi communication",
+                        format!("no FMU communication event was due at {time}"),
+                    )),
+                }
+            }
             Action::AdvanceAndFire {
                 time,
                 transition,
@@ -811,7 +889,7 @@ impl Strategy for DiscretisedStrategy<'_> {
             Action::AdvanceAndFire {
                 transition, branch, ..
             } => Some((transition as u32, branch as u32)),
-            Action::Advance { .. } => None,
+            Action::Advance { .. } | Action::Communicate { .. } => None,
         }
     }
 }

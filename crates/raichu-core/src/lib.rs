@@ -36,10 +36,10 @@ pub use compile::{
     CIndicator, CIndicatorTarget, CompileError, CompiledModel, MarginIndex, WatchedIdx,
 };
 pub use engine::{
-    DeferredProbe, DeferredTransition, DropReason, Engine, EngineConfig, EngineError, Event,
-    Fireable, FireableKind, FlowConfig, FlowStall, HazardSample, IndicatorSeries, JournalRecord,
-    ProbeStop, Provenance, SeqEvent, Sequence, SimulationResult, Snapshot, StochasticDates,
-    TransitionExposure, WorkCounters,
+    CoSimulationHost, DeferredProbe, DeferredTransition, DropReason, Engine, EngineConfig,
+    EngineError, Event, Fireable, FireableKind, FlowConfig, FlowStall, FmuProvenance, HazardSample,
+    IndicatorSeries, JournalRecord, PreparedCoSimulation, ProbeStop, Provenance, SeqEvent,
+    Sequence, SimulationResult, Snapshot, StochasticDates, TransitionExposure, WorkCounters,
 };
 pub use fault_tree::{
     fault_tree, BasicLaw, FaultTree, FaultTreeError, FaultTreeSettings, FtNode, GateOp, TreeEvent,

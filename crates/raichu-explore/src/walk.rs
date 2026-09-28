@@ -23,7 +23,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use raichu_core::compile::CLaw;
-use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError, Snapshot};
+use raichu_core::{
+    CompiledModel, Engine, EngineConfig, EngineError, PreparedCoSimulation, Snapshot,
+};
 use raichu_model::TransitionKind;
 
 use crate::result::{
@@ -340,7 +342,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
             };
             if frame.dirty {
                 if let Some(snapshot) = &frame.snapshot {
-                    self.engine.restore(snapshot);
+                    self.engine.try_restore(snapshot)?;
                 }
             }
             frame.dirty = true;
@@ -367,8 +369,8 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                 } => {
                     let snapshot = if children.len() > 1 {
                         snapshot
-                            .map(|s| *s)
-                            .or_else(|| Some(self.engine.snapshot()))
+                            .map(|s| Ok(Some(*s)))
+                            .unwrap_or_else(|| self.engine.try_snapshot().map(Some))?
                     } else {
                         None
                     };
@@ -490,7 +492,7 @@ pub(crate) fn drive<S: Strategy>(
             ..
         } => (children, shared, child_streak),
     };
-    let root_snapshot = root.engine.snapshot();
+    let root_snapshot = root.engine.snapshot()?;
     let shares = split_budget(
         common
             .cutoffs
@@ -509,7 +511,7 @@ pub(crate) fn drive<S: Strategy>(
             config.max_fixpoint_iterations,
             merge,
         );
-        walker.engine.restore(&root_snapshot);
+        walker.engine.restore(&root_snapshot)?;
         walker.explore_below(1.0, 0, child_streak, &shared, children[k])?;
         Ok(walker.out)
     };
@@ -530,6 +532,94 @@ pub(crate) fn drive<S: Strategy>(
 
     // Reduction in child order: the first error in exploration order wins.
     let mut partials = vec![root.out];
+    for outcome in outcomes {
+        partials.push(outcome?);
+    }
+    Ok(partials)
+}
+
+/// Drive a tree with one caller-owned FMU host per walker. Each host is
+/// prepared and checked before the first native library is loaded. Native
+/// state accompanies every branch snapshot, including the root split.
+pub(crate) fn drive_with_fmu<S: Strategy>(
+    model: &CompiledModel,
+    common: &Common<'_>,
+    strategy: &S,
+    config: &EngineConfig,
+    root_shared: &S::Shared,
+    merge: bool,
+    prepared: &PreparedCoSimulation,
+) -> Result<Vec<Partial>, EngineError> {
+    use rayon::prelude::*;
+
+    let mut root_host = prepared.spawn_host();
+    let single_instance = prepared.single_instance_unit().is_some();
+    let mut root = Walker::new(
+        model,
+        common,
+        strategy,
+        Engine::new_with_host(model, config.clone(), &mut root_host)?,
+        common.cutoffs.max_branches,
+        config.max_fixpoint_iterations,
+        merge,
+    );
+    let (children, shared, child_streak) = match root.examine(1.0, root_shared, None, 0)? {
+        Node::Leaf => return Ok(vec![root.out]),
+        Node::Expand {
+            children,
+            shared,
+            child_streak,
+            ..
+        } => (children, shared, child_streak),
+    };
+    let root_snapshot = root.engine.try_snapshot()?;
+    let shares = split_budget(
+        common
+            .cutoffs
+            .max_branches
+            .map(|cap| cap.saturating_sub(root.out.expanded)),
+        children.len(),
+    );
+    let root_out = std::mem::take(&mut root.out);
+    drop(root);
+    drop(root_host);
+
+    let explore_child = |k: usize| -> Result<Partial, EngineError> {
+        let mut host = prepared.spawn_host();
+        let mut walker = Walker::new(
+            model,
+            common,
+            strategy,
+            Engine::new_with_host(model, config.clone(), &mut host)?,
+            shares[k],
+            config.max_fixpoint_iterations,
+            merge,
+        );
+        walker.engine.try_restore(&root_snapshot)?;
+        walker.explore_below(1.0, 0, child_streak, &shared, children[k])?;
+        Ok(walker.out)
+    };
+    let compute = || -> Vec<Result<Partial, EngineError>> {
+        (0..children.len())
+            .into_par_iter()
+            .map(explore_child)
+            .collect()
+    };
+    let outcomes = match (single_instance, common.threads) {
+        (true, _) => (0..children.len()).map(explore_child).collect(),
+        (false, None) => compute(),
+        (false, Some(threads)) => rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .map_err(|error| {
+                invalid(
+                    "threads",
+                    format!("thread-pool construction failed: {error}"),
+                )
+            })?
+            .install(compute),
+    };
+    let mut partials = vec![root_out];
     for outcome in outcomes {
         partials.push(outcome?);
     }

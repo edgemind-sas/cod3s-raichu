@@ -49,6 +49,66 @@ A complete, minimal model that uses most sections:
 | `programs` | array of [Program](#program) | no (default `[]`) | discrete mixed-integer optimisation steps |
 | `evaluation_order` | array of VarRef | no (default: declaration order) | sweep order of the explicit equations, see [Evaluation order](#evaluation-order) |
 | `unbounded_rate` | number | no (default: none reserved) | the magnitude that stands for "no ceiling", which no integrated rate may reach, see [Unbounded rate](#unbounded-rate) |
+| `fmu_units` | array of [FMU unit](#fmu-unit) | no (default `[]`) | imported FMI co-simulation units; requires the `fmi` feature |
+
+### FMU unit
+
+An FMU unit connects an FMI 2.0 or 3.0 co-simulation archive to model
+attributes. Its declaration does not grant permission to execute native
+code. The runner must grant FMU import explicitly; this first version
+loads the FMU's native library in the engine process, without isolation.
+
+| key | type | meaning |
+|---|---|---|
+| `name` | string | unit name, unique within the model |
+| `path` | string | `.fmu` archive path; relative paths resolve against the loader's explicit base directory, defaulting to the document directory for a file or the working directory for an in-memory document |
+| `step` | positive finite number | communication interval in model time units |
+| `inputs` | array of bindings | model attributes sampled into FMU inputs; a tunable FMU parameter may also be bound here |
+| `outputs` | array of bindings | FMU outputs copied into model attributes at communication points |
+| `parameters` | array of start values | FMU parameter values assigned during initialization |
+
+A binding is `{"attribute": {"component": string, "attribute": string},
+"variable": string}`. A start value is `{"variable": string, "value":
+Value}`. Structural validation checks that each bound model attribute
+exists, each output attribute and output variable is bound at most once,
+no output attribute has another writer (equation, sensitive function or
+transition effect), and `step` is finite and positive. Preparation checks
+the FMU description for variable names, causality and compatible types
+before loading its binary. The FMU's content hash identifies it in run
+provenance; the path is only a locator.
+
+<!-- model -->
+```json
+{
+  "raichu_model": {"format": 1, "requires": ["fmi"]},
+  "model": {
+    "name": "pump_with_external_physics",
+    "components": [{
+      "name": "pump",
+      "attributes": [
+        {"name": "command", "kind": "float", "init": {"kind": "float", "value": 0.0}},
+        {"name": "flow", "kind": "float", "init": {"kind": "float", "value": 0.0}}
+      ]
+    }],
+    "fmu_units": [{
+      "name": "hydraulics",
+      "path": "units/hydraulics.fmu",
+      "step": 0.1,
+      "inputs": [{"attribute": {"component": "pump", "attribute": "command"},
+                  "variable": "command"}],
+      "outputs": [{"variable": "flow",
+                   "attribute": {"component": "pump", "attribute": "flow"}}],
+      "parameters": [{"variable": "gain",
+                      "value": {"kind": "float", "value": 2.0}}]
+    }]
+  }
+}
+```
+
+The `fmi` entry is derived from the nonempty `fmu_units` list when the
+model is sealed. A bare document with a unit, or an envelope that omits
+`fmi`, is refused before model preparation. No unit means the field is
+omitted on serialization and the required feature list is unchanged.
 
 ### Program
 
@@ -727,6 +787,7 @@ The Python helpers, all in `pyraichu`:
 | `allocation` | component-level [allocations](#allocation) |
 | `unbounded_rate` | model-level [unbounded rate](#unbounded-rate) |
 | `transition_effects` | transition-level [edge effects](#edge-effects) |
+| `fmi` | model-level [FMU units](#fmu-unit) |
 | `mixed_integer_program` | model-level [programs](#program) |
 
 The transition-level [declared kind](#declared-kind) is a **baseline**

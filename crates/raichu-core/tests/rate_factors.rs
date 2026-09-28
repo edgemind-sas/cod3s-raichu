@@ -527,12 +527,12 @@ fn a_restored_snapshot_continues_with_the_same_statistics() {
     for _ in 0..5 {
         engine.step().unwrap();
     }
-    let mid = engine.snapshot();
+    let mid = engine.snapshot().unwrap();
     let at_mid = engine.rate_statistics().unwrap();
     for _ in 0..5 {
         engine.step().unwrap();
     }
-    engine.restore(&mid);
+    engine.restore(&mid).unwrap();
     assert_eq!(engine.rate_statistics().unwrap(), at_mid);
     let restored = engine.run().unwrap();
     assert_eq!(restored.rate_statistics, straight.rate_statistics);
@@ -540,6 +540,7 @@ fn a_restored_snapshot_continues_with_the_same_statistics() {
 
     // The facade route: a throwaway engine rebuilt from the snapshot.
     let rebuilt = Engine::from_snapshot(&compiled, config, &mid)
+        .unwrap()
         .run()
         .unwrap();
     assert_eq!(rebuilt.rate_statistics, straight.rate_statistics);

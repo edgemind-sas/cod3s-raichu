@@ -101,6 +101,7 @@ fn tank(indicators: Vec<Indicator>) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -381,6 +382,7 @@ fn draining(initial: f64) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 

@@ -228,12 +228,12 @@ impl<'m> Engine<'m> {
             if self.needs_integration() {
                 // The crossing is known only once integrated: rewind on
                 // refusal so the engine is left unchanged.
-                let before = self.snapshot();
+                let before = self.try_snapshot()?;
                 match self.advance_continuous(t) {
                     Ok(None) => {}
                     Ok(Some(watched)) => {
                         let at = self.time;
-                        self.restore(&before);
+                        self.try_restore(&before)?;
                         let cause = format!(
                             "the watched transition `{}`",
                             self.model.transitions[watched].name
@@ -241,7 +241,7 @@ impl<'m> Engine<'m> {
                         return Err(too_late(at, cause));
                     }
                     Err(error) => {
-                        self.restore(&before);
+                        self.try_restore(&before)?;
                         return Err(error);
                     }
                 }

@@ -530,7 +530,7 @@ fn a_materialised_attribute_survives_snapshot_and_restore() {
     };
     let mut engine = Engine::new(&compiled, config).unwrap();
     let name = "producer.out__share__consumer__input";
-    let before = engine.snapshot();
+    let before = engine.snapshot().unwrap();
     assert_eq!(engine.attribute(name), Some(Value::Float(0.0)));
 
     while engine.step().unwrap().is_some() {}
@@ -539,16 +539,16 @@ fn a_materialised_attribute_survives_snapshot_and_restore() {
         Some(Value::Float(4.0)),
         "the allocation was written"
     );
-    let after = engine.snapshot();
+    let after = engine.snapshot().unwrap();
     assert_eq!(after.attribute(&compiled, name), Some(Value::Float(4.0)));
 
-    engine.restore(&before);
+    engine.restore(&before).unwrap();
     assert_eq!(
         engine.attribute(name),
         Some(Value::Float(0.0)),
         "restore rewinds the materialised attribute like any other"
     );
-    engine.restore(&after);
+    engine.restore(&after).unwrap();
     assert_eq!(engine.attribute(name), Some(Value::Float(4.0)));
 }
 

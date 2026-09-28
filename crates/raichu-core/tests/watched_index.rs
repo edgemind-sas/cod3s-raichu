@@ -137,6 +137,7 @@ fn independent_branches(n: usize, active: usize) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -213,6 +214,7 @@ fn shared_boundary(n: usize) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -344,6 +346,7 @@ fn a_scan_over_an_unmoving_network_costs_one_cold_pass() {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     };
     let work = run(&model, 20.0).work;
     assert_eq!(
@@ -378,7 +381,7 @@ fn a_restored_snapshot_replays_the_same_watched_trajectory() {
     // Advance past the first located crossing, then checkpoint.
     engine.step().expect("a step runs");
     engine.step().expect("a second step runs");
-    let snapshot = engine.snapshot();
+    let snapshot = engine.snapshot().unwrap();
     let at_snapshot = engine.history().len();
 
     let mut reference = Vec::new();
@@ -386,7 +389,7 @@ fn a_restored_snapshot_replays_the_same_watched_trajectory() {
         reference.push(format!("{:.9} {}", event.time, event.transition));
     }
 
-    engine.restore(&snapshot);
+    engine.restore(&snapshot).unwrap();
     assert_eq!(
         engine.history().len(),
         at_snapshot,
@@ -403,7 +406,7 @@ fn a_restored_snapshot_replays_the_same_watched_trajectory() {
     );
 
     // The same through the rebuild seam a stateful facade uses.
-    let mut rebuilt = Engine::from_snapshot(&compiled, config(), &snapshot);
+    let mut rebuilt = Engine::from_snapshot(&compiled, config(), &snapshot).unwrap();
     let mut again = Vec::new();
     while let Some(event) = rebuilt.step().expect("the rebuilt engine runs") {
         again.push(format!("{:.9} {}", event.time, event.transition));

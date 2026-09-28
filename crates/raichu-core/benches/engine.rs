@@ -148,6 +148,7 @@ fn delay_model() -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -241,6 +242,7 @@ fn tank_model() -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -553,6 +555,7 @@ fn wide_network(watched: bool) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 

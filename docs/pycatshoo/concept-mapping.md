@@ -52,6 +52,7 @@ deliberate departures.
 | silent hang on instantaneous loops | typed errors (fixpoint-iteration cap, Zeno guard) | fail loudly, not silently |
 | order-dependent simultaneous effects (modeller's job) | optional non-confluence probe (`confluence_check`) | diagnoses order-dependence instead of hiding it |
 | `setDtCond` (event-location step) | explicit integrator tolerances (`rtol`, `tol_event`, …) | recorded in the run's provenance |
+| FMU co-simulation import (developer manual, section 4.1.11.2) | `fmu_units` with attribute bindings and an explicit import grant | outputs are held between scheduled communication points; crossing dates on those outputs have the declared step resolution |
 
 ## Sequence-tree exploration
 

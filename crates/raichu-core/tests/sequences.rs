@@ -82,6 +82,7 @@ fn model() -> Model {
         }],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -173,6 +174,7 @@ fn early_stop_finishes_the_hit_instant() {
         }],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     };
     let compiled = CompiledModel::compile(&m).unwrap();
     let config = EngineConfig {

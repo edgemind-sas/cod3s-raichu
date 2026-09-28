@@ -66,6 +66,7 @@ fn model(components: Vec<Component>, targets: Vec<Target>) -> Model {
         targets,
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -430,7 +431,7 @@ fn a_branch_index_out_of_range_is_a_typed_error() {
     let compiled = compile(&demand_model(0.9));
     let resolve = index(&compiled, "d.req.resolve");
     let mut engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
-    let before = engine.snapshot();
+    let before = engine.snapshot().unwrap();
 
     let err = engine.fire_now(resolve, Some(2)).unwrap_err();
     assert!(
@@ -451,7 +452,7 @@ fn a_branch_index_out_of_range_is_a_typed_error() {
     );
     // A refused firing changes nothing.
     assert_eq!(engine.state("d.req"), Some("pending"));
-    assert_eq!(engine.snapshot().time(), before.time());
+    assert_eq!(engine.snapshot().unwrap().time(), before.time());
 }
 
 // ---- reached_target ----------------------------------------------------
@@ -491,12 +492,12 @@ fn reached_target_is_none_before_and_named_after_the_firing() {
         }],
     ));
     let mut engine = Engine::new(&compiled_again, config_with_targets()).unwrap();
-    let root = engine.snapshot();
+    let root = engine.snapshot().unwrap();
     engine
         .fire_now(index(&compiled_again, "A.fail.occ"), None)
         .unwrap();
     assert!(engine.reached_target().is_some());
-    engine.restore(&root);
+    engine.restore(&root).unwrap();
     assert_eq!(engine.reached_target(), None);
 }
 

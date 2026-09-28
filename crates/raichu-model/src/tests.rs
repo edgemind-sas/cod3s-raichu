@@ -383,7 +383,148 @@ fn sample_model() -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
+}
+
+fn fmu_model() -> Model {
+    let mut model = sample_model();
+    model.components[1]
+        .attributes
+        .push(float_attribute("fmu_out"));
+    model.fmu_units = vec![FmuUnit {
+        name: "physics".into(),
+        path: "physics.fmu".into(),
+        step: 0.1,
+        inputs: vec![FmuBinding {
+            attribute: order_entry("source", "flow_out"),
+            variable: "enabled".into(),
+        }],
+        outputs: vec![FmuBinding {
+            attribute: order_entry("target", "fmu_out"),
+            variable: "fed".into(),
+        }],
+        parameters: vec![FmuParameter {
+            variable: "gain".into(),
+            value: Value::Float(2.0),
+        }],
+    }];
+    model
+}
+
+#[test]
+fn fmu_requires_declared_feature_and_round_trips() {
+    let model = fmu_model();
+    assert_eq!(
+        model.required_features().into_iter().collect::<Vec<_>>(),
+        vec![Feature::Fmi]
+    );
+    let bare = serde_json::to_string(&model).unwrap();
+    assert!(matches!(
+        Model::from_json(&bare),
+        Err(LoadError::FeatureNotDeclared { feature: "fmi", .. })
+    ));
+    let sealed = model.to_json().unwrap();
+    assert_eq!(Model::from_json(&sealed).unwrap(), model);
+    model.validate().unwrap();
+}
+
+#[test]
+fn fmu_rejects_unknown_binding_attribute() {
+    let mut model = fmu_model();
+    model.fmu_units[0].inputs[0].attribute.attribute = "flwo".into();
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuBindingUnknownAttribute { unit, attribute, variable })
+            if unit == "physics" && attribute == "source.flwo" && variable == "enabled"
+    ));
+}
+
+#[test]
+fn fmu_rejects_output_written_by_ode_and_transition() {
+    let mut model = fmu_model();
+    model.fmu_units[0].outputs[0].attribute = order_entry("source", "flow_out");
+    model.components[0].attributes[0] = float_attribute("flow_out");
+    model.components[0]
+        .equations
+        .push(constant_equation("flow_out", EquationKind::Ode, 1.0));
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuOutputWritten { unit, attribute, variable, writer })
+            if unit == "physics" && attribute == "source.flow_out"
+                && variable == "fed" && writer.contains("ODE")
+    ));
+    model.components[0].equations.clear();
+    model.fmu_units[0].outputs[0].attribute = order_entry("target", "fmu_out");
+    model.components[0].automata[0].transitions[0]
+        .effects
+        .push(Assignment {
+            target: order_entry("target", "fmu_out"),
+            value: Expr::Const {
+                value: Value::Float(1.0),
+            },
+        });
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuOutputWritten { writer, .. }) if writer.contains("transition")
+    ));
+}
+
+#[test]
+fn fmu_rejects_duplicate_output_and_invalid_step() {
+    let mut model = fmu_model();
+    model.fmu_units[0].outputs.push(FmuBinding {
+        attribute: order_entry("target", "fmu_out"),
+        variable: "fed_again".into(),
+    });
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuOutputWritten { .. })
+    ));
+    model.fmu_units[0].outputs.pop();
+    model.fmu_units[0].outputs.push(FmuBinding {
+        attribute: order_entry("source", "flow_out"),
+        variable: "fed".into(),
+    });
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuOutputDuplicated { unit, variable })
+            if unit == "physics" && variable == "fed"
+    ));
+    model.fmu_units[0].outputs.pop();
+    model.fmu_units[0].step = 0.0;
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuInvalidStep { unit, step }) if unit == "physics" && step == 0.0
+    ));
+    model.fmu_units[0].step = f64::INFINITY;
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuInvalidStep { .. })
+    ));
+}
+
+#[test]
+fn fmu_rejects_duplicate_unit_name_and_empty_path() {
+    let mut model = fmu_model();
+    model.fmu_units.push(model.fmu_units[0].clone());
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuDuplicateUnit { unit }) if unit == "physics"
+    ));
+    model.fmu_units.pop();
+    model.fmu_units[0].path = " ".into();
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::FmuEmptyPath { unit }) if unit == "physics"
+    ));
+}
+
+#[test]
+fn models_without_fmu_units_keep_their_wire_format() {
+    let model = sample_model();
+    assert!(model.required_features().is_empty());
+    assert!(!serde_json::to_string(&model).unwrap().contains("fmu_units"));
 }
 
 #[test]
@@ -782,6 +923,7 @@ fn continuous_cycle_model(first: EquationKind, second: EquationKind) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -851,6 +993,7 @@ fn fan_in_model(second: AttrKind) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -969,6 +1112,7 @@ fn ordered_model(order: Option<Vec<AttrRef>>) -> Model {
         targets: vec![],
         evaluation_order: order,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 

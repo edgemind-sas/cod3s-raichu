@@ -21,6 +21,8 @@ thiserror.workspace = true
 [dev-dependencies]
 raichu-expr.workspace = true
 raichu-montecarlo.workspace = true
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+tempfile = "3"
 
 [lints]
 workspace = true

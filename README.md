@@ -75,6 +75,9 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
 - **Interactive simulation**: a trajectory stepped by hand, firing a
   chosen transition, forcing its branch, rescheduling and undoing. See
   [Interactive simulation](docs/guides/interactive-simulation.md).
+- **FMI co-simulation import**: opt-in execution of FMI 2.0 or 3.0
+  co-simulation units with model-attribute bindings and scheduled
+  communication points. See the [FMI import guide](docs/guides/fmi-co-simulation.md).
 - **Explainability**: an optional, queryable causal journal (event →
   triggered functions → variable changes → rescheduling), zero-cost when
   disabled.

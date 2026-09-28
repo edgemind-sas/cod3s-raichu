@@ -1,6 +1,7 @@
 //! The result envelope, `raichu.quantification` version 2 (version 1 is
 //! still read).
 
+use raichu_core::FmuProvenance;
 use raichu_explore::{Algorithm, ExplorationResult};
 use raichu_montecarlo::{CrossEntropyEstimate, IntervalMethod, McEstimates};
 use serde::{Deserialize, Serialize};
@@ -75,6 +76,9 @@ pub struct QuantificationProvenance {
     /// (Monte-Carlo simulation, cross-entropy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
+    /// Imported co-simulation units, omitted for native-only studies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fmu_units: Vec<FmuProvenance>,
 }
 
 /// The probability of the study's target, typed by the kind of

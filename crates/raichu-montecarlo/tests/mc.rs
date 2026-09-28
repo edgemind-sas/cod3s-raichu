@@ -4,8 +4,13 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use raichu_core::{CompiledModel, FlowConfig};
-use raichu_model::{Automaton, Component, Distrib, Indicator, IndicatorTarget, Model, Transition};
-use raichu_montecarlo::{run, McConfig, DEFAULT_CONFIDENCE};
+use raichu_expr::{AttrRef, Value};
+use raichu_model::{
+    AttrKind, Attribute, Automaton, Component, Distrib, FmuBinding, FmuUnit, Indicator,
+    IndicatorTarget, Model, Transition,
+};
+use raichu_montecarlo::{run, run_with_fmu, McConfig, DEFAULT_CONFIDENCE};
+use std::path::Path;
 
 /// The `test_pyc_system_003` model: one component, `ok → nok` at rate
 /// λ = 1/5, no repair. Closed forms: P(nok at t) = 1 − e^{−λt};
@@ -55,11 +60,78 @@ fn exp_ok_nok(rate: f64) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
 fn schedule() -> Vec<f64> {
     (1..=10).map(f64::from).collect()
+}
+
+#[test]
+fn imported_unit_requires_permission_and_records_identity() {
+    let mut model = exp_ok_nok(0.2);
+    model.components[0].attributes.push(Attribute {
+        name: "x".into(),
+        kind: AttrKind::Float,
+        init: Value::Float(1.0),
+    });
+    model.fmu_units.push(FmuUnit {
+        name: "dahlquist".into(),
+        path: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../raichu-fmi/tests/fixtures/reference-fmus/2.0/Dahlquist.fmu"
+        )
+        .into(),
+        step: 0.1,
+        inputs: vec![],
+        outputs: vec![FmuBinding {
+            attribute: AttrRef {
+                component: "C".into(),
+                attribute: "x".into(),
+            },
+            variable: "x".into(),
+        }],
+        parameters: vec![],
+    });
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let config = McConfig {
+        nb_runs: 2,
+        seed: 42,
+        t_max: 0.2,
+        samples: vec![0.1, 0.2],
+        threads: Some(2),
+        quantiles: vec![],
+        confidence: DEFAULT_CONFIDENCE,
+        ode: Default::default(),
+        stop_at_targets: false,
+        flow: FlowConfig::default(),
+    };
+    assert!(matches!(
+        run(&compiled, &config),
+        Err(raichu_core::EngineError::FmuPermission { unit }) if unit == "dahlquist"
+    ));
+    let result = run_with_fmu(&compiled, &config, Path::new("."), true, false).unwrap();
+    assert_eq!(result.fmu_units.len(), 1);
+    assert_eq!(result.fmu_units[0].name, "dahlquist");
+    assert_eq!(result.fmu_units[0].fmi_version, "2.0");
+    assert_eq!(
+        result.fmu_units[0].content_hash,
+        "sha256:cecf1fb0f04cbb9de102c783dd7d905a17aec0c6e8ce4641f54a0b26673c2c7f"
+    );
+    assert_eq!(
+        result.fmu_units[0].generating_tool.as_deref(),
+        Some("Reference FMUs (v0.0.41)")
+    );
+    assert_eq!(
+        result.fmu_units[0].instantiation_token,
+        "{221063D2-EF4A-45FE-B954-B5BFEEA9A59B}"
+    );
+    assert_eq!(result.indicators[0].instants, vec![0.1, 0.2]);
+    assert_eq!(
+        result,
+        run_with_fmu(&compiled, &config, Path::new("."), true, false).unwrap()
+    );
 }
 
 #[test]

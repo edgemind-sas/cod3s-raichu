@@ -874,7 +874,7 @@ fn the_resolved_state_survives_snapshot_and_restore() {
     };
 
     let mut engine = Engine::new(&compiled, config()).unwrap();
-    let snapshot = engine.snapshot();
+    let snapshot = engine.snapshot().unwrap();
     let at_snapshot = read(&engine);
 
     // Run once from the snapshot state, through the crossing at t = 10.
@@ -886,7 +886,7 @@ fn the_resolved_state_survives_snapshot_and_restore() {
     );
 
     // Rewind and replay: bit-for-bit the same, crossing included.
-    engine.restore(&snapshot);
+    engine.restore(&snapshot).unwrap();
     assert_eq!(
         read(&engine),
         at_snapshot,
@@ -901,7 +901,7 @@ fn the_resolved_state_survives_snapshot_and_restore() {
 
     // And an engine rebuilt on the snapshot, the seam a stateful facade
     // uses, reaches the same place.
-    let mut rebuilt = Engine::from_snapshot(&compiled, config(), &snapshot);
+    let mut rebuilt = Engine::from_snapshot(&compiled, config(), &snapshot).unwrap();
     while rebuilt.step().unwrap().is_some() {}
     assert_eq!(
         read(&rebuilt),

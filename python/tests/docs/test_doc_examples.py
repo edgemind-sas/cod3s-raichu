@@ -17,6 +17,7 @@ to ship and to run in CI.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -66,7 +67,9 @@ def test_doc_page_examples_run(page: Path, tmp_path: Path, monkeypatch):
         elif lang == "json" and marker == "model":
             import pyraichu
 
-            pyraichu.load_model(body)
+            document = json.loads(body)
+            has_fmu = bool(pyraichu.model_body(document).get("fmu_units"))
+            pyraichu.load_model(document, allow_fmu_import=has_fmu)
             ran += 1
     if not PAGES:  # pragma: no cover - guards an empty glob
         pytest.skip("no documentation pages yet")
