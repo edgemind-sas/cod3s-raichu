@@ -190,6 +190,18 @@ fn validate_model(model_json: &str) -> PyResult<()> {
     parse_and_compile(model_json).map(|_| ())
 }
 
+/// Validate an export manifest and return the resource document and FMI description.
+#[pyfunction]
+fn prepare_fmu_export(model_json: &str, manifest_json: &str) -> PyResult<(String, String)> {
+    let manifest: raichu_fmu::ExportManifest = serde_json::from_str(manifest_json)
+        .map_err(|error| ModelError::new_err(error.to_string()))?;
+    let document = raichu_fmu::prepare_document(model_json, &manifest)
+        .map_err(|error| ModelError::new_err(error.to_string()))?;
+    let description = raichu_fmu::model_description(&document)
+        .map_err(|error| ModelError::new_err(error.to_string()))?;
+    Ok((document, description))
+}
+
 /// Switching loops of a model, as JSON: a cycle automaton to variable to
 /// automaton where some automaton switches on a single threshold.
 ///
@@ -1277,6 +1289,37 @@ impl Interactive {
         event.map(|e| Self::json(&e)).transpose()
     }
 
+    /// Advance through all events at or before `date` and stop at that date.
+    fn advance_to(&mut self, date: f64) -> PyResult<()> {
+        let snap = {
+            let mut engine = self.engine()?;
+            engine.advance_to(date).map_err(engine_error)?;
+            engine.try_snapshot().map_err(engine_error)?
+        };
+        self.snap = snap;
+        Ok(())
+    }
+
+    /// Set an attribute named in the caller's explicit input manifest.
+    fn set_input(
+        &mut self,
+        qualified: &str,
+        value_json: &str,
+        allowed_inputs: Vec<String>,
+    ) -> PyResult<()> {
+        let value: raichu::raichu_expr::Value = serde_json::from_str(value_json)
+            .map_err(|error| SimulationError::new_err(error.to_string()))?;
+        let snap = {
+            let mut engine = self.engine()?;
+            engine
+                .set_input(qualified, value, &allowed_inputs)
+                .map_err(engine_error)?;
+            engine.try_snapshot().map_err(engine_error)?
+        };
+        self.snap = snap;
+        Ok(())
+    }
+
     /// Override an armed transition's scheduled firing date (must be
     /// `>=` the current time).
     fn set_date(&mut self, name: &str, date: f64) -> PyResult<()> {
@@ -1326,6 +1369,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("ModelError", py.get_type::<ModelError>())?;
     module.add("SimulationError", py.get_type::<SimulationError>())?;
     module.add_function(wrap_pyfunction!(validate_model, module)?)?;
+    module.add_function(wrap_pyfunction!(prepare_fmu_export, module)?)?;
     module.add_function(wrap_pyfunction!(switching_loops_json, module)?)?;
     module.add_function(wrap_pyfunction!(unfed_triggers_json, module)?)?;
     module.add_function(wrap_pyfunction!(required_features, module)?)?;

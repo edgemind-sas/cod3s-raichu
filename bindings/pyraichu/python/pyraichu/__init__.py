@@ -1716,6 +1716,17 @@ class Interactive:
         raw = self._raw.step()
         return None if raw is None else self._event(raw)
 
+    def advance_to(self, date: float) -> None:
+        """Fire every event through ``date`` and leave the clock there."""
+        self._raw.advance_to(date)
+
+    def set_input(
+        self, qualified: str, value: bool | int | float,
+        allowed_inputs: list[str],
+    ) -> None:
+        """Set an attribute explicitly named by the export input manifest."""
+        self._raw.set_input(qualified, json.dumps(_profile_value(value)), allowed_inputs)
+
     def set_date(self, name: str, date: float) -> None:
         """Override an armed transition's firing date (``>=`` current time)."""
         self._raw.set_date(name, date)

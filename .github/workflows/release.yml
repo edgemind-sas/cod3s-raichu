@@ -32,21 +32,29 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, native: true, manylinux: "2_28" }
+          - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, native: true, manylinux: "2_28", extension: so }
           # aarch64 cross-compiles on the hosted runner; the smoke test is
           # skipped (the wheel cannot execute there).
-          - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, native: false, manylinux: "2_28" }
+          - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, native: false, manylinux: "2_28", extension: so }
           # macOS Intel (macos-13) dropped on 2026-09-02: hosted runners for
           # the retired Intel Mac line queue for many hours (the v0.9.0 run
           # sat 13 h in queue and was never scheduled). Intel Mac users build
           # the binding from source instead.
-          - { name: macos-arm64, runner: macos-latest, target: aarch64, native: true, manylinux: auto }
-          - { name: windows-x86_64, runner: windows-latest, target: x64, native: true, manylinux: auto }
+          - { name: macos-arm64, runner: macos-latest, target: aarch64, native: true, manylinux: auto, extension: dylib }
+          - { name: windows-x86_64, runner: windows-latest, target: x64, native: true, manylinux: auto, extension: dll }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+        if: startsWith(matrix.platform.name, 'macos-') || startsWith(matrix.platform.name, 'windows-')
+      - name: Build FMU runtime on macOS
+        if: startsWith(matrix.platform.name, 'macos-')
+        run: python scripts/build_fmu_runtime.py --target aarch64-apple-darwin --release
+      - name: Build FMU runtime on Windows
+        if: startsWith(matrix.platform.name, 'windows-')
+        run: python scripts/build_fmu_runtime.py --target x86_64-pc-windows-msvc --release
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -66,18 +74,30 @@ jobs:
               cross_sysroot=$(/usr/aarch64-unknown-linux-gnu/bin/aarch64-unknown-linux-gnu-gcc -print-sysroot)
               export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-unknown-linux-gnu --sysroot=$cross_sysroot"
             fi
-      - name: Smoke-test import
+            python scripts/build_fmu_runtime.py --target ${{ matrix.platform.target }}-unknown-linux-gnu --release
+      - name: Smoke-test wheel and exported FMU
         if: matrix.platform.native
         shell: bash
         run: |
           pip install --no-index --find-links dist pyraichu
           python -c "import pyraichu; print(pyraichu.__version__)"
-          pip install pytest
+          pip install pytest fmpy
           python -m pytest python/tests/unit/test_program.py -q
+          python scripts/smoke_fmu_wheel.py
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.platform.name }}
           path: dist/*.whl
+      - name: Stage standalone runtime
+        shell: bash
+        run: |
+          cp bindings/pyraichu/python/pyraichu/runtime/*/* \
+            dist/raichu_fmu-${{ matrix.platform.name }}.${{ matrix.platform.extension }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.platform.name }}
+          path: dist/raichu_fmu-${{ matrix.platform.name }}.${{ matrix.platform.extension }}
+          if-no-files-found: error
 
   sdist:
     name: Source distribution

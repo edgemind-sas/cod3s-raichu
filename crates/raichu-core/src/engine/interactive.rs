@@ -10,6 +10,93 @@ impl<'m> Engine<'m> {
         self.time
     }
 
+    /// Advance an interactive trajectory through every event dated at or
+    /// before `date`, then leave its clock at `date`. The caller may split
+    /// continuous evolution at arbitrary communication points.
+    pub fn advance_to(&mut self, date: f64) -> Result<(), EngineError> {
+        if !date.is_finite() || date < self.time || date > self.config.t_max {
+            return Err(EngineError::AdvanceTimeInvalid {
+                date,
+                time: self.time,
+                horizon: self.config.t_max,
+            });
+        }
+        let horizon = self.config.t_max;
+        self.config.t_max = date;
+        let result = (|| {
+            while self.step()?.is_some() {}
+            if self.time < date {
+                if self.needs_integration() {
+                    if let Some(trans_idx) = self.advance_continuous(date)? {
+                        self.note_watched_firing()?;
+                        self.fire(trans_idx, None)?;
+                        while self.step()?.is_some() {}
+                    }
+                }
+                self.flush_samples_before(date);
+                self.time = date;
+                self.note_time_change();
+                self.watched_streak = (date, 0);
+            }
+            self.flush_samples_through(date);
+            self.record_indicators();
+            Ok(())
+        })();
+        self.config.t_max = horizon;
+        result
+    }
+
+    /// Write an explicitly declared input at the current communication
+    /// point and complete its discrete reaction before returning. The
+    /// allowlist comes from the export manifest, not model naming rules.
+    pub fn set_input(
+        &mut self,
+        qualified: &str,
+        value: Value,
+        allowed_inputs: &[String],
+    ) -> Result<(), EngineError> {
+        if !allowed_inputs.iter().any(|name| name == qualified) {
+            return Err(EngineError::InputNotAllowed {
+                attribute: qualified.to_owned(),
+            });
+        }
+        let Some(&idx) = self.model.var_index.get(qualified) else {
+            return Err(EngineError::InputNotAllowed {
+                attribute: qualified.to_owned(),
+            });
+        };
+        if std::mem::discriminant(&self.model.var_init[idx]) != std::mem::discriminant(&value)
+            || matches!(value, Value::Float(number) if !number.is_finite())
+        {
+            return Err(EngineError::InputType {
+                attribute: qualified.to_owned(),
+            });
+        }
+        if self.vars[idx] == value {
+            return Ok(());
+        }
+        let old = self.vars[idx];
+        self.vars[idx] = value;
+        self.note_var_change(idx);
+        if self.config.journal {
+            self.journal.push(JournalRecord::AttributeChanged {
+                time: self.time,
+                attribute: qualified.to_owned(),
+                old,
+                new: value,
+                cause: "external.input".to_owned(),
+            });
+        }
+        self.worklist
+            .extend(self.model.var_triggers[idx].iter().copied());
+        self.run_fixpoint()?;
+        self.resolve_flows()?;
+        self.refresh_schedule()?;
+        self.record_indicators();
+        self.check_targets();
+        self.advance_to(self.time)
+    }
+
     /// Next FMU communication point, or `None` for a native-only model.
     #[must_use]
     pub fn next_fmu_point(&self) -> Option<f64> {
