@@ -45,7 +45,7 @@ jobs:
           if [[ "${{ matrix.platform.name }}" == linux-aarch64 ]]; then
             # The upstream 0.12.0 release has no Linux aarch64 binary.
             cargo install --git https://github.com/modelica/fmusim.git \
-              --tag v0.12.0 --locked --path fmusim --root "$RUNNER_TEMP/fmusim"
+              --tag v0.12.0 --locked --root "$RUNNER_TEMP/fmusim" fmusim
             echo "RAICHU_FMUSIM=$RUNNER_TEMP/fmusim/bin/fmusim" >> "$GITHUB_ENV"
           else
             case "${{ matrix.platform.name }}" in
