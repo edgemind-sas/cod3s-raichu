@@ -270,6 +270,7 @@ class Quantification:
     seed: int | None
     probability: TargetProbability
     detail: McEstimates | Exploration | CrossEntropyResult
+    fmu_units: list[dict[str, Any]] = field(default_factory=list)
     _text: str = field(default="", init=False, compare=False, repr=False)
 
     @classmethod
@@ -305,6 +306,7 @@ class Quantification:
             seed=provenance.get("seed"),
             probability=TargetProbability._from_dict(raw["probability"]),
             detail=parsed,
+            fmu_units=provenance.get("fmu_units", []),
         )
         # The engine's own text, set only here: an object derived from this
         # one (``dataclasses.replace``) or built by hand does not carry it,
@@ -357,7 +359,8 @@ def _json_value(value: Any) -> Any:
 
 
 def _quantify_study(
-    model: Model, study: Study, method: str, settings: dict[str, Any]
+    model: Model, study: Study, method: str, settings: dict[str, Any],
+    require_parallel: bool = False,
 ) -> Quantification:
     return Quantification._from_json(
         quantify_json(
@@ -365,6 +368,9 @@ def _quantify_study(
             study._to_json(),
             method,
             json.dumps(settings, default=_json_value),
+            model.allow_fmu_import,
+            str(model.base_dir),
+            require_parallel,
         )
     )
 
@@ -437,7 +443,8 @@ def quantify(
                 "quantify(model, study) needs a method; the methods are "
                 + ", ".join(f"`{name}`" for name in QUANTIFICATION_METHODS)
             )
-        return _quantify_study(tree, study, method, options)
+        require_parallel = bool(options.pop("require_parallel", False))
+        return _quantify_study(tree, study, method, options, require_parallel)
     if study is not None or method is not None:
         raise TypeError(
             "a study and a method apply to a pyraichu.Model; a fault tree is "

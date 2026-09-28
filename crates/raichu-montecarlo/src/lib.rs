@@ -43,11 +43,13 @@ pub use cross_entropy::{
 
 use raichu_analysis::{importance, target_events, ImportanceAnalysis};
 use raichu_core::{
-    CIndicator, CIndicatorTarget, CompiledModel, Engine, EngineConfig, EngineError, FlowConfig,
-    IndicatorSeries, Sequence, SolverParams,
+    CIndicator, CIndicatorTarget, CoSimulationHost, CompiledModel, Engine, EngineConfig,
+    EngineError, FlowConfig, FmuProvenance, IndicatorSeries, PreparedCoSimulation, Sequence,
+    SolverParams,
 };
 use raichu_expr::Value;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Monte-Carlo run parameters.
 #[derive(Debug, Clone)]
@@ -202,6 +204,12 @@ pub struct McEstimates {
     pub confidence: f64,
     /// Engine version.
     pub engine_version: String,
+    /// Imported co-simulation units, omitted for native-only campaigns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fmu_units: Vec<FmuProvenance>,
+    /// Unit that required serial replica execution, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_fallback_unit: Option<String>,
 }
 
 fn value_as_f64(value: Value) -> f64 {
@@ -284,8 +292,9 @@ fn run_replica(
     model: &CompiledModel,
     config: &McConfig,
     replica: u64,
+    prepared: Option<&PreparedCoSimulation>,
 ) -> Result<ReplicaSamples, EngineError> {
-    replica_samples(model, config, replica, false).map(|(samples, _)| samples)
+    replica_samples(model, config, replica, false, prepared, None).map(|(samples, _)| samples)
 }
 
 /// One replica's samples, plus how it ended when `record_end` is set.
@@ -299,6 +308,8 @@ fn replica_samples(
     config: &McConfig,
     replica: u64,
     record_end: bool,
+    prepared: Option<&PreparedCoSimulation>,
+    reusable_host: Option<&mut CoSimulationHost>,
 ) -> Result<(ReplicaSamples, Option<ReplicaEnd>), EngineError> {
     let engine_config = EngineConfig {
         t_max: config.t_max,
@@ -312,9 +323,14 @@ fn replica_samples(
         stop_at_targets: config.stop_at_targets,
         sequences: record_end,
         flow: config.flow.clone(),
+        allow_fmu_import: prepared.is_some(),
         ..EngineConfig::default()
     };
-    let result = Engine::new(model, engine_config)?.run()?;
+    let mut owned_host = prepared.map(PreparedCoSimulation::spawn_host);
+    let result = match reusable_host.or(owned_host.as_mut()) {
+        Some(host) => Engine::new_with_host(model, engine_config, host)?.run()?,
+        _ => Engine::new(model, engine_config)?.run()?,
+    };
     let end = result
         .sequence
         .map(|sequence| replica_end(Some(sequence), config.t_max));
@@ -347,18 +363,125 @@ fn replica_samples(
 /// Replicas run in parallel; the reduction is a serial fold in replica
 /// order, so the estimates are bit-identical for any thread count.
 pub fn run(model: &CompiledModel, config: &McConfig) -> Result<McEstimates, EngineError> {
+    run_internal(model, config, None, false)
+}
+
+/// Run an explicitly authorized campaign with one isolated FMU instance per replica.
+///
+/// A unit that forbids multiple instances makes the campaign serial unless
+/// `require_parallel` is true, in which case it is rejected before loading
+/// native code. `base_dir` resolves relative paths declared by the model.
+///
+/// # Errors
+/// Returns a typed permission, capability, FMU or engine error.
+pub fn run_with_fmu(
+    model: &CompiledModel,
+    config: &McConfig,
+    base_dir: &Path,
+    allow_fmu_import: bool,
+    require_parallel: bool,
+) -> Result<McEstimates, EngineError> {
+    if !allow_fmu_import {
+        return run(model, config);
+    }
+    run_internal(model, config, Some(base_dir), require_parallel)
+}
+
+fn run_internal(
+    model: &CompiledModel,
+    config: &McConfig,
+    base_dir: Option<&Path>,
+    require_parallel: bool,
+) -> Result<McEstimates, EngineError> {
     use rayon::prelude::*;
 
     check_level(config)?;
 
+    let PreparedCampaign {
+        serial_fallback_unit,
+        fmu_units,
+        prepared,
+    } = prepare_campaign(model, base_dir, require_parallel)?;
+
+    if serial_fallback_unit.is_some() {
+        let mut host = prepared.as_ref().map(PreparedCoSimulation::spawn_host);
+        let replicas = (0..config.nb_runs)
+            .map(|replica| {
+                replica_samples(
+                    model,
+                    config,
+                    replica,
+                    false,
+                    prepared.as_ref(),
+                    host.as_mut(),
+                )
+                .map(|(samples, _)| samples)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(reduce(
+            model,
+            config,
+            &replicas,
+            fmu_units,
+            serial_fallback_unit,
+        ));
+    }
+
     let compute = || -> Result<Vec<ReplicaSamples>, EngineError> {
         (0..config.nb_runs)
             .into_par_iter()
-            .map(|replica| run_replica(model, config, replica))
+            .map(|replica| run_replica(model, config, replica, prepared.as_ref()))
             .collect()
     };
     let replicas = in_pool(config.threads, compute)?;
-    Ok(reduce(model, config, &replicas))
+    Ok(reduce(model, config, &replicas, fmu_units, None))
+}
+
+struct PreparedCampaign {
+    serial_fallback_unit: Option<String>,
+    fmu_units: Vec<FmuProvenance>,
+    prepared: Option<PreparedCoSimulation>,
+}
+
+fn prepare_campaign(
+    model: &CompiledModel,
+    base_dir: Option<&Path>,
+    require_parallel: bool,
+) -> Result<PreparedCampaign, EngineError> {
+    let Some(base_dir) = base_dir else {
+        if let Some(unit) = model.fmu_units.first() {
+            return Err(EngineError::FmuPermission {
+                unit: unit.name.clone(),
+            });
+        }
+        return Ok(PreparedCampaign {
+            serial_fallback_unit: None,
+            fmu_units: Vec::new(),
+            prepared: None,
+        });
+    };
+    if model.fmu_units.is_empty() {
+        return Ok(PreparedCampaign {
+            serial_fallback_unit: None,
+            fmu_units: Vec::new(),
+            prepared: None,
+        });
+    }
+    let prepared = PreparedCoSimulation::prepare_authorized(model, base_dir, true)?;
+    let single_instance = prepared.single_instance_unit();
+    if require_parallel {
+        if let Some(unit) = single_instance {
+            return Err(EngineError::FmuCapability {
+                unit: unit.to_owned(),
+                capability: "multiple instances per process, required by parallel execution",
+            });
+        }
+    }
+    Ok(PreparedCampaign {
+        serial_fallback_unit: single_instance.map(str::to_owned),
+        fmu_units: prepared.provenance(),
+        prepared: Some(prepared),
+    })
 }
 
 /// Run `compute` on the default rayon pool, or on a pool of `threads`
@@ -458,6 +581,32 @@ pub fn run_to_targets(
     model: &CompiledModel,
     config: &McConfig,
 ) -> Result<TargetCampaign, EngineError> {
+    run_to_targets_internal(model, config, None, false)
+}
+
+/// Run a target-stopped campaign with explicitly authorized FMU imports.
+///
+/// # Errors
+/// Returns a typed permission, capability, FMU or engine error.
+pub fn run_to_targets_with_fmu(
+    model: &CompiledModel,
+    config: &McConfig,
+    base_dir: &Path,
+    allow_fmu_import: bool,
+    require_parallel: bool,
+) -> Result<TargetCampaign, EngineError> {
+    if !allow_fmu_import {
+        return run_to_targets(model, config);
+    }
+    run_to_targets_internal(model, config, Some(base_dir), require_parallel)
+}
+
+fn run_to_targets_internal(
+    model: &CompiledModel,
+    config: &McConfig,
+    base_dir: Option<&Path>,
+    require_parallel: bool,
+) -> Result<TargetCampaign, EngineError> {
     use rayon::prelude::*;
 
     let config = McConfig {
@@ -465,28 +614,57 @@ pub fn run_to_targets(
         ..config.clone()
     };
     check_level(&config)?;
+    let PreparedCampaign {
+        serial_fallback_unit,
+        fmu_units,
+        prepared,
+    } = prepare_campaign(model, base_dir, require_parallel)?;
     let config = &config;
-    let compute = || -> Result<Vec<(ReplicaSamples, Option<ReplicaEnd>)>, EngineError> {
+    let per = if serial_fallback_unit.is_some() {
+        let mut host = prepared.as_ref().map(PreparedCoSimulation::spawn_host);
         (0..config.nb_runs)
-            .into_par_iter()
-            .map(|replica| replica_samples(model, config, replica, true))
-            .collect()
+            .map(|replica| {
+                replica_samples(
+                    model,
+                    config,
+                    replica,
+                    true,
+                    prepared.as_ref(),
+                    host.as_mut(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let compute = || -> Result<Vec<(ReplicaSamples, Option<ReplicaEnd>)>, EngineError> {
+            (0..config.nb_runs)
+                .into_par_iter()
+                .map(|replica| {
+                    replica_samples(model, config, replica, true, prepared.as_ref(), None)
+                })
+                .collect()
+        };
+        in_pool(config.threads, compute)?
     };
-    let per = in_pool(config.threads, compute)?;
     let (replicas, ends): (Vec<ReplicaSamples>, Vec<Option<ReplicaEnd>>) = per.into_iter().unzip();
     let ends = ends
         .into_iter()
         .map(|end| end.unwrap_or_else(|| replica_end(None, config.t_max)))
         .collect();
     Ok(TargetCampaign {
-        estimates: reduce(model, config, &replicas),
+        estimates: reduce(model, config, &replicas, fmu_units, serial_fallback_unit),
         ends,
     })
 }
 
 /// The serial, replica-ordered reduction of a campaign's samples into
 /// its estimates (the determinism contract of the crate docs).
-fn reduce(model: &CompiledModel, config: &McConfig, replicas: &[ReplicaSamples]) -> McEstimates {
+fn reduce(
+    model: &CompiledModel,
+    config: &McConfig,
+    replicas: &[ReplicaSamples],
+    fmu_units: Vec<FmuProvenance>,
+    serial_fallback_unit: Option<String>,
+) -> McEstimates {
     let n_indicators = model.indicators.len();
     let n_instants = config.samples.len();
     let n = config.nb_runs as f64;
@@ -646,6 +824,8 @@ fn reduce(model: &CompiledModel, config: &McConfig, replicas: &[ReplicaSamples])
         seed: config.seed,
         confidence: config.confidence,
         engine_version: env!("CARGO_PKG_VERSION").to_owned(),
+        fmu_units,
+        serial_fallback_unit,
     }
 }
 

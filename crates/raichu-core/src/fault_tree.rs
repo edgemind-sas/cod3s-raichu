@@ -49,6 +49,12 @@ use crate::compile::{AutIdx, CExpr, CLaw, CompiledModel, StateIdx};
 /// Why a tree could not be generated.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum FaultTreeError {
+    /// An imported FMU is opaque to structural backward chaining.
+    #[error("fault tree: FMU unit `{unit}` is opaque to structural analysis")]
+    OpaqueFmu {
+        /// Name of the imported unit.
+        unit: String,
+    },
     /// A name in the top expression or the profile designates nothing.
     #[error("fault tree: `{0}` designates no attribute, automaton or state of the model")]
     Unresolved(String),
@@ -214,6 +220,11 @@ pub fn fault_tree(
     top: &Expr,
     settings: &FaultTreeSettings,
 ) -> Result<FaultTree, FaultTreeError> {
+    if let Some(unit) = model.fmu_units.first() {
+        return Err(FaultTreeError::OpaqueFmu {
+            unit: unit.name.clone(),
+        });
+    }
     let mut vars = model.var_init.clone();
     for (name, value) in &settings.profile {
         let index = *model

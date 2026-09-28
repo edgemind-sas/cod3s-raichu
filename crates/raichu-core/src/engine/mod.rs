@@ -80,6 +80,7 @@ use thiserror::Error;
 
 mod config;
 mod continuous;
+mod cosim;
 mod deferred;
 mod eval;
 mod flow;
@@ -92,10 +93,11 @@ mod schedule;
 
 pub use config::{
     DeferredProbe, DeferredTransition, DropReason, EngineConfig, EngineError, Event, Fireable,
-    FireableKind, FlowConfig, FlowStall, HazardSample, IndicatorSeries, JournalRecord, ProbeStop,
-    Provenance, SeqEvent, Sequence, SimulationResult, Snapshot, StochasticDates,
-    TransitionExposure, WorkCounters,
+    FireableKind, FlowConfig, FlowStall, FmuProvenance, HazardSample, IndicatorSeries,
+    JournalRecord, ProbeStop, Provenance, SeqEvent, Sequence, SimulationResult, Snapshot,
+    StochasticDates, TransitionExposure, WorkCounters,
 };
+pub use cosim::{CoSimulationHost, PreparedCoSimulation};
 pub use flow::{active_set_budget, FLOW_RELAXATION, FLOW_SWEEP_BUDGET};
 
 pub(crate) use eval::eval_frozen;
@@ -120,6 +122,7 @@ use schedule::{fireable_kind, validate_rate_factors, ExposureTally, Hazard};
 /// this struct.
 pub struct Engine<'m> {
     model: &'m CompiledModel,
+    host: Option<&'m mut CoSimulationHost>,
     config: EngineConfig,
     solver: Box<dyn OdeSolver>,
     time: f64,
@@ -231,9 +234,91 @@ impl<'m> Engine<'m> {
         config: EngineConfig,
         solver: Box<dyn OdeSolver>,
     ) -> Result<Self, EngineError> {
+        if let Some(unit) = model.fmu_units.first() {
+            return Err(if config.allow_fmu_import {
+                EngineError::FmuHostRequired {
+                    unit: unit.name.clone(),
+                }
+            } else {
+                EngineError::FmuPermission {
+                    unit: unit.name.clone(),
+                }
+            });
+        }
         validate_rate_factors(model, &config)?;
         let mut engine = Self::bare(model, config, solver);
         engine.initialize()?;
+        Ok(engine)
+    }
+
+    /// Build a trajectory using a caller-owned host prepared from this model.
+    ///
+    /// # Errors
+    /// Refuses missing run permission, invalid rate factors, or FMU startup errors.
+    pub fn new_with_host(
+        model: &'m CompiledModel,
+        config: EngineConfig,
+        host: &'m mut CoSimulationHost,
+    ) -> Result<Self, EngineError> {
+        if !config.allow_fmu_import {
+            if let Some(unit) = model.fmu_units.first() {
+                return Err(EngineError::FmuPermission {
+                    unit: unit.name.clone(),
+                });
+            }
+        }
+        if !model.fmu_units.is_empty() && (!config.t_max.is_finite() || config.t_max < 0.0) {
+            return Err(EngineError::InvalidStudyParameter {
+                parameter: "t_max".to_owned(),
+                detail: "an FMU run requires a finite nonnegative horizon".to_owned(),
+            });
+        }
+        if !host.matches_model(model) {
+            return Err(EngineError::FmuHostMismatch {
+                model: model.name.clone(),
+            });
+        }
+        validate_rate_factors(model, &config)?;
+        let solver = Box::new(DormandPrince45::new(config.ode.clone()));
+        let mut engine = Self::bare(model, config, solver);
+        host.start(&engine.vars)?;
+        engine.host = Some(host);
+        engine.initialize()?;
+        Ok(engine)
+    }
+
+    /// Rebuild a trajectory while borrowing the same FMU host.
+    ///
+    /// # Errors
+    /// Refuses a missing or incompatible serialized FMU checkpoint.
+    pub fn from_snapshot_with_host(
+        model: &'m CompiledModel,
+        config: EngineConfig,
+        snapshot: &Snapshot,
+        host: &'m mut CoSimulationHost,
+    ) -> Result<Self, EngineError> {
+        if !config.allow_fmu_import {
+            if let Some(unit) = model.fmu_units.first() {
+                return Err(EngineError::FmuPermission {
+                    unit: unit.name.clone(),
+                });
+            }
+        }
+        if !model.fmu_units.is_empty() && (!config.t_max.is_finite() || config.t_max < 0.0) {
+            return Err(EngineError::InvalidStudyParameter {
+                parameter: "t_max".to_owned(),
+                detail: "an FMU run requires a finite nonnegative horizon".to_owned(),
+            });
+        }
+        if !host.matches_model(model) {
+            return Err(EngineError::FmuHostMismatch {
+                model: model.name.clone(),
+            });
+        }
+        let solver = Box::new(DormandPrince45::new(config.ode.clone()));
+        let mut engine = Self::bare(model, config, solver);
+        engine.host = Some(host);
+        engine.try_restore(snapshot)?;
         Ok(engine)
     }
 
@@ -247,19 +332,27 @@ impl<'m> Engine<'m> {
     /// throwaway engine on each call. Restores are exact, so a run
     /// driven this way is identical to one driven on a persistent engine.
     ///
-    /// This constructor cannot fail, so it does not check
-    /// [`EngineConfig::rate_factors`]: the caller passes the configuration
-    /// the snapshot was taken under, which [`Engine::new`] validated. The
-    /// exposure statistics travel with the snapshot.
+    /// The exposure statistics travel with the snapshot. FMU models must
+    /// use [`Engine::from_snapshot_with_host`] to restore native state.
+    ///
+    /// # Errors
+    /// Refuses an FMU model or a snapshot that cannot be restored.
     pub fn from_snapshot(
         model: &'m CompiledModel,
         config: EngineConfig,
         snapshot: &Snapshot,
-    ) -> Self {
+    ) -> Result<Self, EngineError> {
+        if let Some(unit) = model.fmu_units.first() {
+            return Err(EngineError::FmuSnapshotApi {
+                unit: unit.name.clone(),
+                operation: "engine reconstruction",
+                alternative: "Engine::from_snapshot_with_host",
+            });
+        }
         let solver = Box::new(DormandPrince45::new(config.ode.clone()));
         let mut engine = Self::bare(model, config, solver);
-        engine.restore(snapshot);
-        engine
+        engine.restore(snapshot)?;
+        Ok(engine)
     }
 
     /// Construct the engine struct with its pristine pre-initialization
@@ -299,6 +392,7 @@ impl<'m> Engine<'m> {
             .collect();
         let rng = raichu_rng::replica_rng(config.seed, config.rng_stream);
         Engine {
+            host: None,
             time: 0.0,
             vars: model.var_init.clone(),
             states: model.automata.iter().map(|a| a.init).collect(),
@@ -373,7 +467,16 @@ impl<'m> Engine<'m> {
             .extend(0..self.model.functions.len() + self.model.programs.len());
         self.run_fixpoint()?;
         self.resolve_flows()?;
+        if let Some(host) = self.host.as_deref_mut() {
+            let outputs = host.initial_outputs()?;
+            self.apply_fmu_outputs(outputs);
+            self.run_fixpoint()?;
+            self.resolve_flows()?;
+        }
         self.refresh_schedule()?;
+        if let Some(host) = self.host.as_deref_mut() {
+            host.sample_inputs(&self.vars, 0.0);
+        }
         self.record_indicators();
         // Sample instants at or before t = 0 use the initial state.
         self.flush_samples_through(0.0);

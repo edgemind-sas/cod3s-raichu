@@ -21,11 +21,11 @@ use raichu::raichu_analysis::{
 };
 use raichu::raichu_core::{fault_tree as generate_fault_tree, FaultTreeSettings};
 use raichu::raichu_core::{
-    CompiledModel, Engine, EngineConfig, EngineError, FlowConfig as CoreFlowConfig,
-    Snapshot as CoreSnapshot, SolverParams,
+    CoSimulationHost, CompiledModel, Engine, EngineConfig, EngineError,
+    FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot, SolverParams,
 };
 use raichu::raichu_explore::{
-    exact_domain_report, explore_discretised, explore_exact,
+    exact_domain_report, explore_discretised, explore_discretised_with_fmu, explore_exact,
     read_exploration as read_exploration_result, Algorithm, Cutoffs, DiscretisedSettings,
     ExactSettings, ExplorationResult, Precision,
 };
@@ -37,12 +37,14 @@ use raichu::raichu_model::Model;
 use raichu::raichu_model::{Indicator, IndicatorTarget};
 use raichu::raichu_montecarlo::{
     run as mc_run, run_importance as mc_run_importance, run_sequences as mc_run_sequences,
-    run_sequences_observed as mc_run_sequences_observed, McConfig, SequenceObservation,
-    DEFAULT_CONFIDENCE,
+    run_sequences_observed as mc_run_sequences_observed, run_with_fmu as mc_run_with_fmu, McConfig,
+    SequenceObservation, DEFAULT_CONFIDENCE,
 };
 use raichu::raichu_quantify::{
-    quantify as quantify_study, read_quantification, Method, QuantifyError, Study,
+    quantify as quantify_study, quantify_with_fmu as quantify_study_with_fmu, read_quantification,
+    Method, QuantifyError, Study,
 };
+use std::path::Path;
 
 create_exception!(
     _pyraichu,
@@ -279,7 +281,7 @@ fn seal_model(model_json: &str) -> PyResult<String> {
 ///
 /// The GIL is released while the engine runs.
 #[pyfunction]
-#[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, samples = None, seed = 0, rng_stream = 0, flow = None, max_transition_firings = None, max_flow_restarts = None))]
+#[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, samples = None, seed = 0, rng_stream = 0, flow = None, max_transition_firings = None, max_flow_restarts = None, allow_fmu_import = false, fmu_base_dir = None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn simulate_json(
     py: Python<'_>,
@@ -293,6 +295,8 @@ fn simulate_json(
     flow: Option<FlowConfig>,
     max_transition_firings: Option<u64>,
     max_flow_restarts: Option<u64>,
+    allow_fmu_import: bool,
+    fmu_base_dir: Option<&str>,
 ) -> PyResult<String> {
     let compiled = parse_and_compile(model_json)?;
     let flow = flow_policy(flow);
@@ -309,10 +313,26 @@ fn simulate_json(
             max_transition_firings: max_transition_firings
                 .unwrap_or(defaults.max_transition_firings),
             max_flow_restarts: max_flow_restarts.unwrap_or(defaults.max_flow_restarts),
+            allow_fmu_import,
             ..defaults
         };
-        let engine = Engine::new(&compiled, config).map_err(engine_error)?;
-        let result = engine.run().map_err(engine_error)?;
+        let result = if compiled.fmu_units.is_empty() {
+            Engine::new(&compiled, config)
+                .map_err(engine_error)?
+                .run()
+                .map_err(engine_error)?
+        } else {
+            let mut host = CoSimulationHost::prepare_authorized(
+                &compiled,
+                Path::new(fmu_base_dir.unwrap_or(".")),
+                allow_fmu_import,
+            )
+            .map_err(engine_error)?;
+            Engine::new_with_host(&compiled, config, &mut host)
+                .map_err(engine_error)?
+                .run()
+                .map_err(engine_error)?
+        };
         serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
     })
 }
@@ -334,7 +354,7 @@ fn simulate_json(
 /// `DEFAULT_CONFIDENCE` (0.95). The level applied is reported back with
 /// the result, so an artefact never leaves it to be assumed.
 #[pyfunction]
-#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, confidence = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false, flow = None, event_resolution = None))]
+#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, confidence = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false, flow = None, event_resolution = None, allow_fmu_import = false, fmu_base_dir = None, require_parallel = false))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn monte_carlo_json(
     py: Python<'_>,
@@ -354,6 +374,9 @@ fn monte_carlo_json(
     stop_at_targets: bool,
     flow: Option<FlowConfig>,
     event_resolution: Option<f64>,
+    allow_fmu_import: bool,
+    fmu_base_dir: Option<&str>,
+    require_parallel: bool,
 ) -> PyResult<String> {
     if let Some(v) = event_resolution {
         if !(v.is_finite() && v > 0.0) {
@@ -395,7 +418,18 @@ fn monte_carlo_json(
             stop_at_targets,
             flow,
         };
-        let estimates = mc_run(&compiled, &config).map_err(engine_error)?;
+        let estimates = if compiled.fmu_units.is_empty() {
+            mc_run(&compiled, &config)
+        } else {
+            mc_run_with_fmu(
+                &compiled,
+                &config,
+                Path::new(fmu_base_dir.unwrap_or(".")),
+                allow_fmu_import,
+                require_parallel,
+            )
+        }
+        .map_err(engine_error)?;
         serde_json::to_string(&estimates).map_err(|e| SimulationError::new_err(e.to_string()))
     })
 }
@@ -733,7 +767,7 @@ fn importance_json(
 ///
 /// The GIL is released while the exploration runs.
 #[pyfunction]
-#[pyo3(signature = (model_json, target, horizon, algorithm = "exact", min_probability = None, max_length = None, max_failures = None, max_branches = None, gap_tolerance = None, rel_precision = None, max_terms = None, threads = None, level = None, refine = true))]
+#[pyo3(signature = (model_json, target, horizon, algorithm = "exact", min_probability = None, max_length = None, max_failures = None, max_branches = None, gap_tolerance = None, rel_precision = None, max_terms = None, threads = None, level = None, refine = true, allow_fmu_import = false, fmu_base_dir = None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn explore_json(
     py: Python<'_>,
@@ -751,6 +785,8 @@ fn explore_json(
     threads: Option<usize>,
     level: Option<u32>,
     refine: bool,
+    allow_fmu_import: bool,
+    fmu_base_dir: Option<&str>,
 ) -> PyResult<String> {
     let parsed: Algorithm = algorithm.parse().map_err(|e| {
         SimulationError::new_err(format!(
@@ -816,7 +852,17 @@ fn explore_json(
             settings.refine = refine;
             settings.threads = threads;
             py.detach(|| {
-                let result = explore_discretised(&compiled, &settings).map_err(engine_error)?;
+                let result = if compiled.fmu_units.is_empty() {
+                    explore_discretised(&compiled, &settings)
+                } else {
+                    explore_discretised_with_fmu(
+                        &compiled,
+                        &settings,
+                        Path::new(fmu_base_dir.unwrap_or(".")),
+                        allow_fmu_import,
+                    )
+                }
+                .map_err(engine_error)?;
                 serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
             })
         }
@@ -997,13 +1043,17 @@ fn exploration_minimal_sequences_json(result_json: &str) -> PyResult<String> {
 /// of another method, is refused naming the valid ones before anything
 /// runs. The GIL is released while the engine runs.
 #[pyfunction]
-#[pyo3(signature = (model_json, study_json, method, settings_json = None))]
+#[pyo3(signature = (model_json, study_json, method, settings_json = None, allow_fmu_import = false, fmu_base_dir = None, require_parallel = false))]
+#[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn quantify_json(
     py: Python<'_>,
     model_json: &str,
     study_json: &str,
     method: &str,
     settings_json: Option<&str>,
+    allow_fmu_import: bool,
+    fmu_base_dir: Option<&str>,
+    require_parallel: bool,
 ) -> PyResult<String> {
     let model = Model::from_json(model_json)
         .map_err(|e| ModelError::new_err(format!("invalid model JSON: {e}")))?;
@@ -1017,7 +1067,19 @@ fn quantify_json(
     let method = Method::from_parts(method, &settings)
         .map_err(|e| SimulationError::new_err(e.to_string()))?;
     py.detach(|| {
-        let envelope = quantify_study(&model, &study, &method).map_err(|e| match e {
+        let answer = if model.fmu_units.is_empty() {
+            quantify_study(&model, &study, &method)
+        } else {
+            quantify_study_with_fmu(
+                &model,
+                &study,
+                &method,
+                Path::new(fmu_base_dir.unwrap_or(".")),
+                allow_fmu_import,
+                require_parallel,
+            )
+        };
+        let envelope = answer.map_err(|e| match e {
             QuantifyError::Compile(e) => ModelError::new_err(e.to_string()),
             QuantifyError::Engine(e) => engine_error(e),
             other => SimulationError::new_err(other.to_string()),
@@ -1059,11 +1121,12 @@ struct Snapshot {
 /// this object keeps the owned `CompiledModel` + a `Snapshot` and
 /// rebuilds a throwaway engine (`Engine::from_snapshot`) per method:
 /// exact restores make this identical to driving one persistent engine.
-#[pyclass]
+#[pyclass(unsendable)]
 struct Interactive {
     model: CompiledModel,
     config: EngineConfig,
     snap: CoreSnapshot,
+    host: Option<CoSimulationHost>,
 }
 
 impl Interactive {
@@ -1073,8 +1136,15 @@ impl Interactive {
     /// **mutating** methods; the read-only accessors answer straight from
     /// `self.snap` (polling the state between steps must not cost a state
     /// clone per read).
-    fn engine(&self) -> Engine<'_> {
-        Engine::from_snapshot(&self.model, self.config.clone(), &self.snap)
+    fn engine(&mut self) -> PyResult<Engine<'_>> {
+        match self.host.as_mut() {
+            Some(host) => {
+                Engine::from_snapshot_with_host(&self.model, self.config.clone(), &self.snap, host)
+                    .map_err(engine_error)
+            }
+            None => Engine::from_snapshot(&self.model, self.config.clone(), &self.snap)
+                .map_err(engine_error),
+        }
     }
 
     fn json<T: serde::Serialize + ?Sized>(value: &T) -> PyResult<String> {
@@ -1085,7 +1155,8 @@ impl Interactive {
 #[pymethods]
 impl Interactive {
     #[new]
-    #[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, seed = 0, rng_stream = 0, flow = None))]
+    #[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, seed = 0, rng_stream = 0, flow = None, allow_fmu_import = false, fmu_base_dir = None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
     fn new(
         model_json: &str,
         t_max: f64,
@@ -1094,6 +1165,8 @@ impl Interactive {
         seed: u64,
         rng_stream: u64,
         flow: Option<FlowConfig>,
+        allow_fmu_import: bool,
+        fmu_base_dir: Option<&str>,
     ) -> PyResult<Self> {
         let model = parse_and_compile(model_json)?;
         let config = EngineConfig {
@@ -1103,15 +1176,36 @@ impl Interactive {
             seed,
             rng_stream,
             flow: flow_policy(flow),
+            allow_fmu_import,
             ..EngineConfig::default()
         };
-        let snap = Engine::new(&model, config.clone())
-            .map_err(engine_error)?
-            .snapshot();
+        let (snap, host) = if model.fmu_units.is_empty() {
+            (
+                Engine::new(&model, config.clone())
+                    .map_err(engine_error)?
+                    .snapshot()
+                    .map_err(engine_error)?,
+                None,
+            )
+        } else {
+            let mut host = CoSimulationHost::prepare_authorized(
+                &model,
+                Path::new(fmu_base_dir.unwrap_or(".")),
+                allow_fmu_import,
+            )
+            .map_err(engine_error)?;
+            host.require_serializable_state().map_err(engine_error)?;
+            let snap = Engine::new_with_host(&model, config.clone(), &mut host)
+                .map_err(engine_error)?
+                .try_snapshot()
+                .map_err(engine_error)?;
+            (snap, Some(host))
+        };
         Ok(Interactive {
             model,
             config,
             snap,
+            host,
         })
     }
 
@@ -1126,8 +1220,8 @@ impl Interactive {
     ///
     /// The only reader that needs a rebuilt engine: locating an armed
     /// watched transition evaluates its guard against the live state.
-    fn fireable(&self) -> PyResult<String> {
-        Self::json(&self.engine().fireable())
+    fn fireable(&mut self) -> PyResult<String> {
+        Self::json(&self.engine()?.fireable())
     }
 
     /// Value of an attribute by qualified name (`component.attribute`),
@@ -1155,13 +1249,17 @@ impl Interactive {
     /// deterministic resolution). Returns the fired event as JSON.
     #[pyo3(signature = (name, to = None))]
     fn fire(&mut self, name: &str, to: Option<&str>) -> PyResult<String> {
-        let mut engine = self.engine();
-        let event = match to {
-            Some(to) => engine.fire_named_to(name, to),
-            None => engine.fire_named(name),
-        }
-        .map_err(engine_error)?;
-        self.snap = engine.snapshot();
+        let (event, snap) = {
+            let mut engine = self.engine()?;
+            let event = match to {
+                Some(to) => engine.fire_named_to(name, to),
+                None => engine.fire_named(name),
+            }
+            .map_err(engine_error)?;
+            let snap = engine.try_snapshot().map_err(engine_error)?;
+            (event, snap)
+        };
+        self.snap = snap;
         Self::json(&event)
     }
 
@@ -1169,26 +1267,36 @@ impl Interactive {
     /// run would). Returns the fired event as JSON, or `None` at the
     /// horizon.
     fn step(&mut self) -> PyResult<Option<String>> {
-        let mut engine = self.engine();
-        let event = engine.step().map_err(engine_error)?;
-        self.snap = engine.snapshot();
+        let (event, snap) = {
+            let mut engine = self.engine()?;
+            let event = engine.step().map_err(engine_error)?;
+            let snap = engine.try_snapshot().map_err(engine_error)?;
+            (event, snap)
+        };
+        self.snap = snap;
         event.map(|e| Self::json(&e)).transpose()
     }
 
     /// Override an armed transition's scheduled firing date (must be
     /// `>=` the current time).
     fn set_date(&mut self, name: &str, date: f64) -> PyResult<()> {
-        let mut engine = self.engine();
-        engine.set_date(name, date).map_err(engine_error)?;
-        self.snap = engine.snapshot();
+        let snap = {
+            let mut engine = self.engine()?;
+            engine.set_date(name, date).map_err(engine_error)?;
+            engine.try_snapshot().map_err(engine_error)?
+        };
+        self.snap = snap;
         Ok(())
     }
 
     /// Reset the session to its initial state (`t = 0`, fresh RNG).
     fn reset(&mut self) -> PyResult<()> {
-        let mut engine = self.engine();
-        engine.reset().map_err(engine_error)?;
-        self.snap = engine.snapshot();
+        let snap = {
+            let mut engine = self.engine()?;
+            engine.reset().map_err(engine_error)?;
+            engine.try_snapshot().map_err(engine_error)?
+        };
+        self.snap = snap;
         Ok(())
     }
 

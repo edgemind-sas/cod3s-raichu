@@ -303,6 +303,46 @@ pub struct Equation {
     pub expr: Expr,
 }
 
+/// A binding between one model attribute and one variable in an imported FMU.
+/// The FMU description resolves the variable name and type before execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmuBinding {
+    /// Attribute read for an input, or written by an output.
+    pub attribute: AttrRef,
+    /// Variable name in the FMU description.
+    pub variable: String,
+}
+
+/// An initial value assigned to an FMU parameter before simulation starts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmuParameter {
+    /// Parameter name in the FMU description.
+    pub variable: String,
+    /// Typed initial value, checked against the FMU description at preparation.
+    pub value: Value,
+}
+
+/// One imported FMI co-simulation unit and its model-facing bindings.
+/// Loading its native library requires a separate run-side permission.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmuUnit {
+    /// Name unique among the model's units.
+    pub name: String,
+    /// FMU archive path, resolved by the loader against its base directory.
+    pub path: String,
+    /// Communication interval in model time units; finite and positive.
+    pub step: f64,
+    /// Values sampled from model attributes and written to FMU inputs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<FmuBinding>,
+    /// FMU outputs written to model attributes at communication points.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<FmuBinding>,
+    /// Start values for FMU parameters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<FmuParameter>,
+}
+
 /// One **consumer-keyed** parameter of an allocation policy: the value
 /// that applies to the connection ending at `to`.
 ///
@@ -685,6 +725,9 @@ pub enum Feature {
     /// the write, and a latched detection would read its initial value for
     /// the whole trajectory without a word.
     TransitionEffects,
+    /// Model-level [`Model::fmu_units`]: imported native FMI co-simulation
+    /// units. An older engine must refuse instead of ignoring their physics.
+    Fmi,
     /// Model-level mixed-integer programs solved at discrete fixpoints.
     MixedIntegerProgram,
 }
@@ -696,6 +739,7 @@ impl Feature {
         Feature::Allocation,
         Feature::UnboundedRate,
         Feature::TransitionEffects,
+        Feature::Fmi,
         Feature::MixedIntegerProgram,
     ];
 
@@ -707,6 +751,7 @@ impl Feature {
             Feature::Allocation => "allocation",
             Feature::UnboundedRate => "unbounded_rate",
             Feature::TransitionEffects => "transition_effects",
+            Feature::Fmi => "fmi",
             Feature::MixedIntegerProgram => "mixed_integer_program",
         }
     }
@@ -998,12 +1043,70 @@ pub struct Model {
     /// [`Feature::UnboundedRate`] in its [`FormatHeader`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unbounded_rate: Option<f64>,
+    /// Imported FMI co-simulation units. The feature declaration records
+    /// their use; it does not grant permission to execute their native code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fmu_units: Vec<FmuUnit>,
 }
 
 /// Typed model-validation errors. Every invalid model is reported with a
 /// precise, contextual error: never a panic, never a crash.
 #[derive(Debug, Error, PartialEq)]
 pub enum ModelError {
+    /// Two imported FMU units have the same name.
+    #[error("duplicate FMU unit `{unit}`")]
+    FmuDuplicateUnit {
+        /// Duplicated unit name.
+        unit: String,
+    },
+    /// An FMU unit has no usable archive path.
+    #[error("FMU unit `{unit}` has an empty archive path")]
+    FmuEmptyPath {
+        /// Unit name.
+        unit: String,
+    },
+    /// A communication interval must be finite and positive.
+    #[error(
+        "FMU unit `{unit}` has invalid communication step {step}; expected a finite positive value"
+    )]
+    FmuInvalidStep {
+        /// Unit name.
+        unit: String,
+        /// Invalid interval in model time units.
+        step: f64,
+    },
+    /// A binding refers to an attribute absent from the model.
+    #[error("FMU unit `{unit}` binds variable `{variable}` to unknown attribute `{attribute}`")]
+    FmuBindingUnknownAttribute {
+        /// Unit name.
+        unit: String,
+        /// Qualified model attribute.
+        attribute: String,
+        /// FMU variable name.
+        variable: String,
+    },
+    /// An FMU output variable is mapped more than once.
+    #[error("FMU unit `{unit}` output variable `{variable}` is bound more than once")]
+    FmuOutputDuplicated {
+        /// Unit name.
+        unit: String,
+        /// Duplicated FMU variable.
+        variable: String,
+    },
+    /// An FMU output and another source write the same attribute.
+    #[error(
+        "FMU unit `{unit}` output `{variable}` writes `{attribute}`, which {writer} also writes"
+    )]
+    FmuOutputWritten {
+        /// Unit name.
+        unit: String,
+        /// Qualified model attribute.
+        attribute: String,
+        /// FMU output variable name.
+        variable: String,
+        /// Other writer.
+        writer: String,
+    },
     /// A program declaration violates its structural or linearity contract.
     #[error("program `{program}`: {term}: {reason}")]
     ProgramInvalid {
@@ -1936,6 +2039,9 @@ impl Model {
     #[must_use]
     pub fn required_features(&self) -> BTreeSet<Feature> {
         let mut features = BTreeSet::new();
+        if !self.fmu_units.is_empty() {
+            features.insert(Feature::Fmi);
+        }
         if !self.programs.is_empty() {
             features.insert(Feature::MixedIntegerProgram);
         }
@@ -2019,6 +2125,7 @@ impl Model {
     /// time, never mid-simulation surprises).
     pub fn validate(&self) -> Result<(), ModelError> {
         let scopes = self.check_components()?;
+        self.check_fmu_units(&scopes)?;
         self.check_connections(&scopes)?;
         self.check_allocations()?;
         self.check_expressions(&scopes)?;
@@ -2031,6 +2138,116 @@ impl Model {
         if let Some(value) = self.unbounded_rate {
             if !(value.is_finite() && value > 0.0) {
                 return Err(ModelError::UnboundedRateInvalid { value });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check declarations independent of any FMU archive or binary.
+    fn check_fmu_units(&self, scopes: &HashMap<&str, Scope<'_>>) -> Result<(), ModelError> {
+        let writers = self.attribute_writers();
+        let mut unit_names = HashSet::new();
+        let mut outputs: HashMap<(&str, &str), String> = HashMap::new();
+        for unit in &self.fmu_units {
+            if !unit_names.insert(unit.name.as_str()) {
+                return Err(ModelError::FmuDuplicateUnit {
+                    unit: unit.name.clone(),
+                });
+            }
+            if unit.path.trim().is_empty() {
+                return Err(ModelError::FmuEmptyPath {
+                    unit: unit.name.clone(),
+                });
+            }
+            if !(unit.step.is_finite() && unit.step > 0.0) {
+                return Err(ModelError::FmuInvalidStep {
+                    unit: unit.name.clone(),
+                    step: unit.step,
+                });
+            }
+            for binding in unit.inputs.iter().chain(&unit.outputs) {
+                let attribute = &binding.attribute;
+                if scopes
+                    .get(attribute.component.as_str())
+                    .and_then(|scope| scope.attribute_kind(&attribute.attribute))
+                    .is_none()
+                {
+                    return Err(ModelError::FmuBindingUnknownAttribute {
+                        unit: unit.name.clone(),
+                        attribute: format!("{}.{}", attribute.component, attribute.attribute),
+                        variable: binding.variable.clone(),
+                    });
+                }
+            }
+            let mut output_variables = HashSet::new();
+            for binding in &unit.outputs {
+                if !output_variables.insert(binding.variable.as_str()) {
+                    return Err(ModelError::FmuOutputDuplicated {
+                        unit: unit.name.clone(),
+                        variable: binding.variable.clone(),
+                    });
+                }
+                let attribute = &binding.attribute;
+                let key = (attribute.component.as_str(), attribute.attribute.as_str());
+                let writer = writers
+                    .get(&key)
+                    .cloned()
+                    .or_else(|| {
+                        self.components.iter().find_map(|component| {
+                            component.automata.iter().find_map(|automaton| {
+                                automaton.transitions.iter().find_map(|transition| {
+                                    transition
+                                        .effects
+                                        .iter()
+                                        .any(|effect| effect.target == *attribute)
+                                        .then(|| {
+                                            format!(
+                                                "transition `{}.{}.{}`",
+                                                component.name, automaton.name, transition.name
+                                            )
+                                        })
+                                })
+                            })
+                        })
+                    })
+                    .or_else(|| {
+                        self.components.iter().find_map(|component| {
+                            if component.name != attribute.component {
+                                return None;
+                            }
+                            component.allocations.iter().find_map(|allocation| {
+                                self.connections
+                                    .iter()
+                                    .any(|connection| {
+                                        connection.from.component == component.name
+                                            && connection.from.port == allocation.port
+                                            && channel_attribute_name(
+                                                connection,
+                                                &allocation.allocated,
+                                            ) == attribute.attribute
+                                    })
+                                    .then(|| {
+                                        format!(
+                                            "distribution operator `{}.{}`",
+                                            component.name, allocation.name
+                                        )
+                                    })
+                            })
+                        })
+                    })
+                    .or_else(|| outputs.get(&key).cloned());
+                if let Some(writer) = writer {
+                    return Err(ModelError::FmuOutputWritten {
+                        unit: unit.name.clone(),
+                        attribute: format!("{}.{}", key.0, key.1),
+                        variable: binding.variable.clone(),
+                        writer,
+                    });
+                }
+                outputs.insert(
+                    key,
+                    format!("FMU unit `{}` output `{}`", unit.name, binding.variable),
+                );
             }
         }
         Ok(())

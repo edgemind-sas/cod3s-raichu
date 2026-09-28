@@ -934,13 +934,13 @@ fn set_date_on_a_deferred_transition_is_a_typed_error() {
 fn a_snapshot_restores_the_deferred_bookkeeping() {
     let compiled = CompiledModel::compile(&policy_model()).unwrap();
     let mut engine = Engine::new(&compiled, deferred_config()).unwrap();
-    let before = engine.snapshot();
+    let before = engine.snapshot().unwrap();
     let ages_before: Vec<f64> = engine.deferred().iter().map(|d| d.age).collect();
     engine.probe_deferred(3.0).unwrap();
     engine
         .fire_deferred_at(index(&compiled, "k.job.finish"), 3.5, None)
         .unwrap();
-    engine.restore(&before);
+    engine.restore(&before).unwrap();
     let ages_after: Vec<f64> = engine.deferred().iter().map(|d| d.age).collect();
     assert_eq!(ages_before, ages_after);
     assert_eq!(engine.deferred().len(), 4);

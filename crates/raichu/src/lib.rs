@@ -27,6 +27,7 @@
 //!   answered by Monte-Carlo simulation, exact exploration or
 //!   discretised exploration in one result envelope
 //!   (`raichu.quantification`).
+//! - [`raichu_fmi`]: FMI 2.0 and 3.0 co-simulation archive and instance host.
 //!
 //! The engine upholds standing validation / performance / observability
 //! contracts across its milestone sequence.
@@ -35,6 +36,7 @@ pub use raichu_analysis;
 pub use raichu_core;
 pub use raichu_explore;
 pub use raichu_expr;
+pub use raichu_fmi;
 pub use raichu_fta;
 pub use raichu_milp;
 pub use raichu_model;

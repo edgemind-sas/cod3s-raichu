@@ -124,6 +124,7 @@ fn model(name: &str, mut components: Vec<Component>, guard: Expr) -> Model {
         }],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 

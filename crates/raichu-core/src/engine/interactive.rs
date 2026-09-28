@@ -10,6 +10,12 @@ impl<'m> Engine<'m> {
         self.time
     }
 
+    /// Next FMU communication point, or `None` for a native-only model.
+    #[must_use]
+    pub fn next_fmu_point(&self) -> Option<f64> {
+        self.host.as_ref().and_then(|host| host.next_point())
+    }
+
     /// Counted work done so far (see [`WorkCounters`]): the
     /// machine-independent performance units of this run.
     ///
@@ -357,12 +363,30 @@ impl<'m> Engine<'m> {
         })
     }
 
-    /// **Interactive control**: capture the full mutable trajectory
-    /// state as an opaque [`Snapshot`] (checkpoint / undo point). Costs
-    /// one clone of the state vectors; the immutable model is untouched.
-    #[must_use]
-    pub fn snapshot(&self) -> Snapshot {
+    /// Capture a native-only trajectory as an opaque [`Snapshot`].
+    /// Imported units require [`Engine::try_snapshot`] so their native state
+    /// is captured together with the Rust state.
+    ///
+    /// # Errors
+    /// Refuses an FMU model before returning an incomplete checkpoint.
+    pub fn snapshot(&self) -> Result<Snapshot, EngineError> {
+        if let Some(unit) = self.model.fmu_units.first() {
+            return Err(EngineError::FmuSnapshotApi {
+                unit: unit.name.clone(),
+                operation: "snapshot capture",
+                alternative: "Engine::try_snapshot",
+            });
+        }
+        Ok(self.capture_rust_snapshot())
+    }
+
+    fn capture_rust_snapshot(&self) -> Snapshot {
         Snapshot {
+            fmu_states: None,
+            fmu_positions: self
+                .host
+                .as_ref()
+                .map_or_else(Vec::new, |host| host.positions()),
             time: self.time,
             vars: self.vars.clone(),
             states: self.states.clone(),
@@ -388,10 +412,62 @@ impl<'m> Engine<'m> {
         }
     }
 
+    /// Capture the engine and serializable native FMU state together.
+    ///
+    /// # Errors
+    /// Refuses a unit without state get/set and serialization capability.
+    pub fn try_snapshot(&mut self) -> Result<Snapshot, EngineError> {
+        let mut snapshot = self.capture_rust_snapshot();
+        if let Some(host) = self.host.as_deref_mut() {
+            snapshot.fmu_states = Some(host.save_states()?);
+        }
+        Ok(snapshot)
+    }
+
+    /// Restore the engine and native FMU state from one checkpoint.
+    ///
+    /// # Errors
+    /// Refuses a checkpoint without serialized state for imported units.
+    pub fn try_restore(&mut self, snapshot: &Snapshot) -> Result<(), EngineError> {
+        if let Some(host) = self.host.as_deref_mut() {
+            let states =
+                snapshot
+                    .fmu_states
+                    .as_ref()
+                    .ok_or_else(|| EngineError::FmuCapability {
+                        unit: self
+                            .model
+                            .fmu_units
+                            .first()
+                            .map_or_else(String::new, |unit| unit.name.clone()),
+                        capability: "serialized FMU state in snapshot",
+                    })?;
+            host.restore_states(states)?;
+            host.restore_positions(&snapshot.fmu_positions);
+        }
+        self.restore_rust_snapshot(snapshot);
+        Ok(())
+    }
+
     /// **Interactive control**: reinstate a previously captured
-    /// [`Snapshot`] (undo). The RNG is restored too, so any continuation
-    /// is bit-for-bit identical to continuing from the original point.
-    pub fn restore(&mut self, snap: &Snapshot) {
+    /// [`Snapshot`] (undo) for native-only models. Imported units require
+    /// [`Engine::try_restore`] to restore their native state too.
+    ///
+    /// # Errors
+    /// Refuses an FMU model before changing either state.
+    pub fn restore(&mut self, snap: &Snapshot) -> Result<(), EngineError> {
+        if let Some(unit) = self.model.fmu_units.first() {
+            return Err(EngineError::FmuSnapshotApi {
+                unit: unit.name.clone(),
+                operation: "snapshot restore",
+                alternative: "Engine::try_restore",
+            });
+        }
+        self.restore_rust_snapshot(snap);
+        Ok(())
+    }
+
+    fn restore_rust_snapshot(&mut self, snap: &Snapshot) {
         self.time = snap.time;
         self.vars = snap.vars.clone();
         self.states = snap.states.clone();
@@ -456,6 +532,9 @@ impl<'m> Engine<'m> {
     /// initialization axiom. A run restarted from here is identical to a
     /// fresh [`Engine::new`].
     pub fn reset(&mut self) -> Result<(), EngineError> {
+        if let Some(host) = self.host.as_deref_mut() {
+            host.start(&self.model.var_init)?;
+        }
         let n = self.model.transitions.len();
         self.time = 0.0;
         self.vars = self.model.var_init.clone();

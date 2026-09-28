@@ -509,6 +509,8 @@ pub struct CompiledModel {
     pub(crate) cache_id: u64,
     /// Model name (provenance).
     pub name: String,
+    /// Imported co-simulation units, separate from authored transitions.
+    pub fmu_units: Vec<raichu_model::FmuUnit>,
     /// Qualified attribute names `component.attribute` (journal, results).
     pub var_names: Vec<String>,
     /// Initial attribute values.
@@ -1742,6 +1744,7 @@ impl CompiledModel {
                 NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             },
             name: model.name.clone(),
+            fmu_units: model.fmu_units.clone(),
             var_names,
             var_init,
             automata,

@@ -19,21 +19,20 @@ from ._pyraichu import (
     MODEL_ENVELOPE_KEY,
     MODEL_FORMAT_REVISION,
     FlowConfig,
-    Interactive as _RawInteractive,
     ModelError,
     SimulationError,
     __version__,
     analyse_raw_sequences_json,
     analyse_sequences_json,
     exploration_domain_json,
-    fault_tree_json,
-    fault_tree_quantify_json,
     exploration_minimal_sequences_json,
     explore_json,
+    fault_tree_json,
+    fault_tree_quantify_json,
     importance_json,
-    run_sequences_json,
     monte_carlo_json,
     required_features,
+    run_sequences_json,
     seal_model,
     simulate_json,
     switching_loops_json,
@@ -41,51 +40,54 @@ from ._pyraichu import (
     validate_exploration,
     validate_model,
 )
-from .journal import Cascade, JournalQuery, TransitionHistory, AttributeChange
+from ._pyraichu import (
+    Interactive as _RawInteractive,
+)
 
 # The extension entry points the quantification module calls, kept as
 # attributes of this package as they were before it moved out.
 from ._pyraichu import quantify_json as quantify_json
 from ._pyraichu import validate_quantification as validate_quantification
+from .journal import AttributeChange, Cascade, JournalQuery, TransitionHistory
 
 __all__ = [
-    "BiasFamily",
-    "CrossEntropyResult",
-    "PilotIteration",
-    "BasicEventImportance",
-    "FaultTree",
-    "FaultTreeQuantification",
-    "fault_tree",
-    "quantify",
+    "DEFAULT_CONFIDENCE",
+    "MODEL_ENVELOPE_KEY",
+    "MODEL_FORMAT_REVISION",
     "QUANTIFICATION_METHODS",
-    "Quantification",
-    "Study",
-    "TargetProbability",
-    "read_quantification",
+    "AttributeChange",
+    "BasicEventImportance",
+    "BiasFamily",
     "Cascade",
     "ComponentImportance",
     "ConfidenceInterval",
+    "CrossEntropyResult",
     "Cut",
-    "DEFAULT_CONFIDENCE",
     "Event",
     "Exploration",
     "ExploredSequence",
     "Extremes",
+    "FaultTree",
+    "FaultTreeQuantification",
     "Fireable",
     "FlowConfig",
     "ImportanceAnalysis",
     "IndicatorEstimate",
     "Interactive",
     "JournalQuery",
-    "MODEL_ENVELOPE_KEY",
-    "MODEL_FORMAT_REVISION",
-    "TransitionHistory",
-    "AttributeChange",
     "McEstimates",
     "Model",
     "ModelError",
+    "Observation",
+    "PilotIteration",
+    "Quantification",
+    "SequenceCampaign",
+    "SequenceCondition",
     "SimulationError",
     "SimulationResult",
+    "Study",
+    "TargetProbability",
+    "TransitionHistory",
     "UnboundedRateError",
     "__version__",
     "analyse_raw_sequences",
@@ -93,17 +95,17 @@ __all__ = [
     "expand_model",
     "exploration_domain",
     "explore",
+    "fault_tree",
     "importance",
-    "run_sequences",
-    "Observation",
-    "SequenceCampaign",
-    "SequenceCondition",
     "interactive",
     "load_model",
     "model_body",
     "monte_carlo",
+    "quantify",
     "read_exploration",
+    "read_quantification",
     "required_features",
+    "run_sequences",
     "seal",
     "seal_model",
     "simulate",
@@ -201,6 +203,8 @@ class Model:
 
     json: str
     name: str = field(default="", compare=False)
+    allow_fmu_import: bool = field(default=False, compare=False)
+    base_dir: Path = field(default_factory=Path.cwd, compare=False)
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"Model({self.name!r})"
@@ -263,7 +267,9 @@ def expand_model(source: str | dict[str, Any]) -> dict[str, Any]:
     return _expand(model)
 
 
-def load_model(source: str | dict[str, Any]) -> Model:
+def load_model(
+    source: str | Path | dict[str, Any], *, allow_fmu_import: bool = False
+) -> Model:
     """Load and validate a model from a JSON string or a dict, in either
     document shape (bare body, or body under the format envelope).
 
@@ -273,7 +279,17 @@ def load_model(source: str | dict[str, Any]) -> Model:
     Raises :class:`ModelError` with a precise, typed message when the
     model is invalid (never a crash).
     """
-    document = json.loads(source) if isinstance(source, str) else source
+    base_dir = Path.cwd()
+    if isinstance(source, Path) or (
+        isinstance(source, str) and not source.lstrip().startswith("{")
+    ):
+        path = Path(source).resolve()
+        base_dir = path.parent
+        document = json.loads(path.read_text(encoding="utf-8"))
+    elif isinstance(source, str):
+        document = json.loads(source)
+    else:
+        document = source
     # What the document declares survives the plugin expansion that
     # replaces its body: a declaration this engine cannot honour has to
     # reach the engine, which is where it is refused by name.
@@ -281,13 +297,24 @@ def load_model(source: str | dict[str, Any]) -> Model:
     body = model_body(document)
     if "plugins" in body:
         body = expand_model(document)
+    units = body.get("fmu_units", [])
+    if units and not allow_fmu_import:
+        raise ModelError(
+            f"FMU import for unit {units[0].get('name', '<unnamed>')!r} "
+            "requires allow_fmu_import=True"
+        )
     # Sealing is a no-op for a body using baseline constructs only and
     # declaring nothing, so the whole existing corpus keeps its exact
     # document shape.
     model_json = json.dumps(seal(body, declared))
     validate_model(model_json)
     name = body.get("name", "")
-    return Model(json=model_json, name=name)
+    return Model(
+        json=model_json,
+        name=name,
+        allow_fmu_import=allow_fmu_import,
+        base_dir=base_dir,
+    )
 
 
 def _series_dict(raw_series: list[dict[str, Any]]) -> dict[str, list[tuple[float, Any]]]:
@@ -387,6 +414,8 @@ class McEstimates:
     seed: int
     confidence: float
     engine_version: str
+    fmu_units: list[dict[str, Any]] = field(default_factory=list)
+    serial_fallback_unit: str | None = None
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
@@ -429,6 +458,8 @@ def _mc_estimates(raw: dict[str, Any]) -> McEstimates:
         seed=raw["seed"],
         confidence=raw["confidence"],
         engine_version=raw["engine_version"],
+        fmu_units=raw.get("fmu_units", []),
+        serial_fallback_unit=raw.get("serial_fallback_unit"),
     )
 
 
@@ -449,6 +480,7 @@ def monte_carlo(
     stop_at_targets: bool = False,
     flow: FlowConfig | None = None,
     event_resolution: float | None = None,
+    require_parallel: bool = False,
 ) -> McEstimates:
     """Estimate indicator statistics over ``nb_runs`` replicas.
 
@@ -505,6 +537,9 @@ def monte_carlo(
             stop_at_targets,
             flow,
             event_resolution,
+            model.allow_fmu_import,
+            str(model.base_dir),
+            require_parallel,
         )
     )
     return _mc_estimates(raw)
@@ -946,6 +981,8 @@ def explore(
             threads,
             level,
             refine,
+            model.allow_fmu_import,
+            str(model.base_dir),
         )
     )
 
@@ -1253,11 +1290,11 @@ def _quantify_fault_tree(
 
 # The quantification entry point lives in its own module; it is imported
 # here, after the names it builds on, and re-exported as part of this package.
-from ._quantification import (  # noqa: E402
+from ._quantification import (
+    QUANTIFICATION_METHODS,
     BiasFamily,
     CrossEntropyResult,
     PilotIteration,
-    QUANTIFICATION_METHODS,
     Quantification,
     Study,
     TargetProbability,
@@ -1569,6 +1606,8 @@ def simulate(
             flow,
             max_transition_firings,
             max_flow_restarts,
+            model.allow_fmu_import,
+            str(model.base_dir),
         )
     )
     events = [
@@ -1644,7 +1683,8 @@ class Interactive:
             model = load_model(model)
         self._model = model
         self._raw = _RawInteractive(
-            model.json, t_max, journal, confluence_check, seed, rng_stream, flow
+            model.json, t_max, journal, confluence_check, seed, rng_stream, flow,
+            model.allow_fmu_import, str(model.base_dir),
         )
 
     @property

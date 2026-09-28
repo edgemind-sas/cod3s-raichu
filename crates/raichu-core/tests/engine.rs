@@ -155,6 +155,7 @@ fn delay_model() -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -242,6 +243,7 @@ fn journal_records_the_causality_chain() {
             JournalRecord::TransitionFired { time, .. }
             | JournalRecord::FunctionTriggered { time, .. }
             | JournalRecord::AttributeChanged { time, .. }
+            | JournalRecord::FmuInputHeld { time, .. }
             | JournalRecord::TransitionScheduled { time, .. }
             | JournalRecord::TransitionRescheduled { time, .. }
             | JournalRecord::TransitionDropped { time, .. }
@@ -255,6 +257,7 @@ fn journal_records_the_causality_chain() {
             JournalRecord::TransitionFired { transition, .. } => format!("fired:{transition}"),
             JournalRecord::FunctionTriggered { function, .. } => format!("fn:{function}"),
             JournalRecord::AttributeChanged { attribute, .. } => format!("attr:{attribute}"),
+            JournalRecord::FmuInputHeld { unit, .. } => format!("fmu-held:{unit}"),
             JournalRecord::TransitionScheduled { transition, .. } => {
                 format!("sched:{transition}")
             }
@@ -362,6 +365,7 @@ fn instantaneous_loop_is_detected() {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let result = Engine::new(&compiled, EngineConfig::default());
@@ -429,6 +433,7 @@ fn non_confluence_is_diagnosed() {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let config = EngineConfig {
@@ -501,6 +506,7 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
@@ -561,6 +567,7 @@ fn inst_transition_fires_immediately_on_certain_branch() {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     };
     let result = run(&model, 10.0, false);
     let times: Vec<(f64, &str)> = result
@@ -695,6 +702,7 @@ fn tank_model() -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -902,6 +910,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -1024,6 +1033,7 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     };
     let result = run(&model, 30.0, true);
 
@@ -1161,6 +1171,7 @@ fn port_mean_and_median_aggregations() {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();

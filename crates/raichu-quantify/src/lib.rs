@@ -81,6 +81,7 @@ pub use study::Study;
 
 use raichu_core::CompiledModel;
 use raichu_model::Model;
+use std::path::Path;
 
 /// The answer one engine gives to a study, before the envelope is put
 /// around it: the probability with its uncertainty, and the engine's own
@@ -150,6 +151,55 @@ pub fn quantify(
     }
 }
 
+/// Quantify a model with explicitly authorized FMU imports.
+///
+/// Only Monte-Carlo simulation currently accepts live imported units.
+/// Other methods retain their domain checks and typed refusals.
+/// Relative FMU paths are resolved against `base_dir`.
+///
+/// # Errors
+/// Returns study, compilation, permission, capability or engine errors.
+pub fn quantify_with_fmu(
+    model: &Model,
+    study: &Study,
+    method: &Method,
+    base_dir: &Path,
+    allow_fmu_import: bool,
+    require_parallel: bool,
+) -> Result<Quantification, QuantifyError> {
+    if !allow_fmu_import || model.fmu_units.is_empty() {
+        return quantify(model, study, method);
+    }
+    let Method::MonteCarlo(settings) = method else {
+        return quantify(model, study, method);
+    };
+    let compiled = CompiledModel::compile(model)?;
+    study.validate(&compiled)?;
+    let model_hash = model_content_hash(model)?;
+    let answer = settings.answer_with_fmu(&compiled, study, base_dir, require_parallel)?;
+    let fmu_units = match &answer.detail {
+        Detail::MonteCarlo(estimates) => estimates.fmu_units.clone(),
+        _ => Vec::new(),
+    };
+    Ok(Quantification {
+        format: QUANTIFICATION_FORMAT.to_owned(),
+        version: QUANTIFICATION_VERSION,
+        method: method.clone(),
+        provenance: QuantificationProvenance {
+            engine_version: env!("CARGO_PKG_VERSION").to_owned(),
+            model: model.name.clone(),
+            model_hash,
+            target: study.target.clone(),
+            horizon: study.horizon,
+            instants: Some(study.reporting_instants()),
+            seed: Some(study.seed),
+            fmu_units,
+        },
+        probability: answer.probability,
+        detail: answer.detail,
+    })
+}
+
 /// Quantify `study` on `model` with any [`QuantificationEngine`]: the
 /// dispatcher behind [`quantify`], public so that an engine can be driven
 /// before it has its [`Method`] variant.
@@ -180,6 +230,7 @@ pub fn quantify_with(
             horizon: study.horizon,
             instants: engine.uses_instants().then(|| study.reporting_instants()),
             seed: engine.uses_seed().then_some(study.seed),
+            fmu_units: Vec::new(),
         },
         probability,
         detail,

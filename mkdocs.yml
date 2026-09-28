@@ -82,6 +82,7 @@ nav:
       - Numerical tuning: guides/numerical-tuning.md
       - Causal journal: guides/causal-journal.md
       - Interactive simulation: guides/interactive-simulation.md
+      - FMI co-simulation import: guides/fmi-co-simulation.md
       - Sequence analysis: guides/sequence-analysis.md
       - Sequence-tree exploration: guides/sequence-tree-exploration.md
       - Quantifying a study: guides/quantification.md

@@ -20,6 +20,7 @@ raichu-numeric.workspace = true
 raichu-explore.workspace = true
 raichu-fta.workspace = true
 raichu-quantify.workspace = true
+raichu-fmi.workspace = true
 
 [lints]
 workspace = true

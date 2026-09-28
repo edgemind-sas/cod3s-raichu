@@ -102,6 +102,7 @@ fn two_component_model() -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -304,6 +305,7 @@ fn demand_model(ok_prob: f64) -> Model {
         targets: vec![],
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 
@@ -503,7 +505,7 @@ fn snapshot_restore_round_trips_state_and_history() {
     let mut engine = bounded(&compiled, 30.0);
 
     engine.step().unwrap(); // fire A.occ @5
-    let snap = engine.snapshot();
+    let snap = engine.snapshot().unwrap();
     let t_at_snap = engine.current_time();
     let hist_at_snap: Vec<_> = engine.history().to_vec();
 
@@ -514,7 +516,7 @@ fn snapshot_restore_round_trips_state_and_history() {
     assert!(engine.history().len() > hist_at_snap.len());
 
     // Restore undoes everything: time, discrete state, and history.
-    engine.restore(&snap);
+    engine.restore(&snap).unwrap();
     assert_eq!(engine.current_time(), t_at_snap);
     assert_eq!(engine.history(), hist_at_snap.as_slice());
     assert_eq!(engine.state("A.fail"), Some("nok"));
@@ -530,14 +532,14 @@ fn continuation_after_restore_is_reproducible() {
     let mut engine = bounded(&compiled, 30.0);
 
     engine.step().unwrap();
-    let snap = engine.snapshot();
+    let snap = engine.snapshot().unwrap();
 
     let mut first = Vec::new();
     while let Some(event) = engine.step().unwrap() {
         first.push(event);
     }
 
-    engine.restore(&snap);
+    engine.restore(&snap).unwrap();
     let mut second = Vec::new();
     while let Some(event) = engine.step().unwrap() {
         second.push(event);

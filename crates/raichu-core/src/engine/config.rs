@@ -64,6 +64,8 @@ impl Default for FlowConfig {
 /// Engine configuration.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
+    /// Explicit permission to execute imported FMU native code, off by default.
+    pub allow_fmu_import: bool,
     /// Simulation horizon (events strictly after it are not fired).
     pub t_max: f64,
     /// Record the structured causal journal (zero cost when `false`).
@@ -219,6 +221,7 @@ pub enum StochasticDates {
 impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
+            allow_fmu_import: false,
             t_max: f64::INFINITY,
             journal: false,
             sequences: false,
@@ -241,6 +244,65 @@ impl Default for EngineConfig {
 /// Typed runtime errors. The engine never panics on a library path.
 #[derive(Debug, Error)]
 pub enum EngineError {
+    /// The native-only snapshot API cannot capture or restore FMU state.
+    #[error("FMU unit `{unit}` requires `{alternative}` for {operation}")]
+    FmuSnapshotApi {
+        /// Name of the imported unit.
+        unit: String,
+        /// Operation that was requested.
+        operation: &'static str,
+        /// FMU-aware API to use instead.
+        alternative: &'static str,
+    },
+    /// Import requires the runner's explicit permission.
+    #[error("FMU unit `{unit}` requires allow_fmu_import before unpacking or execution")]
+    FmuPermission {
+        /// Name of the unit requiring permission.
+        unit: String,
+    },
+    /// A model importing an FMU needs a prepared host.
+    #[error("FMU unit `{unit}` requires a co-simulation host")]
+    FmuHostRequired {
+        /// Name of the unit.
+        unit: String,
+    },
+    /// The supplied host was prepared from another compiled model.
+    #[error("co-simulation host does not match compiled model `{model}`")]
+    FmuHostMismatch {
+        /// Name of the requested model.
+        model: String,
+    },
+    /// An FMU binding does not match the unit's description.
+    #[error("FMU unit `{unit}` binding `{attribute}` to `{variable}` is invalid: {reason}")]
+    FmuBinding {
+        /// Name of the unit.
+        unit: String,
+        /// Qualified model attribute.
+        attribute: String,
+        /// FMU variable name.
+        variable: String,
+        /// Detailed mismatch.
+        reason: String,
+    },
+    /// FMU I/O or stepping failed at the given engine date.
+    #[error("FMU unit `{unit}` failed at t={time}: {source}")]
+    FmuRuntime {
+        /// Name of the unit.
+        unit: String,
+        /// Date of the failed operation.
+        time: f64,
+        /// Underlying FMI error.
+        #[source]
+        source: raichu_fmi::FmiError,
+    },
+    /// A driver requested a capability the FMU does not declare.
+    #[error("FMU unit `{unit}` lacks capability `{capability}`")]
+    FmuCapability {
+        /// Name of the unit.
+        unit: String,
+        /// Missing capability.
+        capability: &'static str,
+    },
     /// A model-level program did not prove a usable optimum.
     #[error("program `{program}` failed at t={time}: {reason}")]
     ProgramFailed {
@@ -682,6 +744,17 @@ pub enum JournalRecord {
         /// Qualified name of the function that wrote it.
         cause: String,
     },
+    /// A fixed-step unit keeps its previously sampled input until its next point.
+    FmuInputHeld {
+        /// Date of the model event that changed the bound attribute.
+        time: f64,
+        /// FMU unit name.
+        unit: String,
+        /// Qualified model attribute supplying the input.
+        attribute: String,
+        /// Value already sampled for the current interval.
+        held: Value,
+    },
     /// A transition was scheduled (`schedule_deterministic`).
     TransitionScheduled {
         /// Simulation time.
@@ -911,6 +984,8 @@ pub struct Fireable {
 /// restore bit-for-bit reproducible.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
+    pub(super) fmu_states: Option<Vec<Vec<u8>>>,
+    pub(super) fmu_positions: Vec<(f64, u64, Option<f64>, Vec<Value>)>,
     pub(super) time: f64,
     pub(super) vars: Vec<Value>,
     pub(super) states: Vec<StateIdx>,
@@ -1059,8 +1134,24 @@ pub struct WorkCounters {
     pub immediate_guard_scans: u64,
 }
 
-/// Provenance metadata attached to every result (reproducibility by
-/// construction).
+/// Identity of one imported FMU attached to result provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct FmuProvenance {
+    /// Declared unit name.
+    pub name: String,
+    /// FMI major and minor version.
+    pub fmi_version: String,
+    /// Tool that generated the FMU, when declared.
+    pub generating_tool: Option<String>,
+    /// Version of the generating tool, when declared.
+    pub generating_tool_version: Option<String>,
+    /// FMI 2 GUID or FMI 3 instantiation token.
+    pub instantiation_token: String,
+    /// SHA-256 digest of the original archive, prefixed by `sha256:`.
+    pub content_hash: String,
+}
+
+/// Provenance metadata attached to every result (reproducibility by construction).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Provenance {
     /// Programs that requested no tie-break, so their dispatch is not
@@ -1080,6 +1171,9 @@ pub struct Provenance {
     pub ode_rtol: f64,
     /// Event-location time tolerance (level-3 provenance).
     pub ode_tol_event: f64,
+    /// Imported co-simulation units, omitted for native-only runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fmu_units: Vec<FmuProvenance>,
 }
 
 /// Full result of a simulation run.

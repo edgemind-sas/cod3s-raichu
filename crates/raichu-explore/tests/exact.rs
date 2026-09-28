@@ -164,6 +164,7 @@ fn model(name: &str, components: Vec<Component>, targets: Vec<Target>) -> Model 
         targets,
         evaluation_order: None,
         unbounded_rate: None,
+        fmu_units: vec![],
     }
 }
 

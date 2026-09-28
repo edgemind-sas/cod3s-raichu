@@ -30,7 +30,8 @@ pub mod result;
 mod walk;
 
 pub use discretised::{
-    explore_discretised, DiscretisedSettings, DEFAULT_LEVEL, DEFAULT_MAX_BRANCHES,
+    explore_discretised, explore_discretised_with_fmu, DiscretisedSettings, DEFAULT_LEVEL,
+    DEFAULT_MAX_BRANCHES,
 };
 pub use exact::{exact_domain_report, explore_exact, DomainViolation, ExactSettings};
 pub use result::{

@@ -107,9 +107,10 @@ impl<'m> Engine<'m> {
         }
     }
 
-    /// Fire the next transition: discrete (`fire_transition`) or watched at a
-    /// located boundary crossing (`schedule_boundary`): if one occurs within the
-    /// horizon.
+    /// Advance to the next authored transition or FMI communication point
+    /// within the horizon. A communication point returns a synthetic
+    /// `fmi.communication` event for interactive callers, but does not enter
+    /// the authored event history or firing statistics.
     ///
     /// Returns the fired event, or `None` when nothing remains before
     /// `t_max`. Tie-break: earliest date first, then lowest transition
@@ -124,8 +125,10 @@ impl<'m> Engine<'m> {
         }
 
         let next_discrete = self.next_pending();
-        let t_target =
-            next_discrete.map_or(self.config.t_max, |(_, date)| date.min(self.config.t_max));
+        let next_fmu = self.host.as_ref().and_then(|host| host.next_point());
+        let t_target = next_discrete
+            .map_or(self.config.t_max, |(_, date)| date.min(self.config.t_max))
+            .min(next_fmu.unwrap_or(f64::INFINITY));
 
         if self.needs_integration() && t_target > self.time && t_target.is_finite() {
             if let Some(trans_idx) = self.advance_continuous(t_target)? {
@@ -135,7 +138,9 @@ impl<'m> Engine<'m> {
         }
 
         match next_discrete {
-            Some((trans_idx, date)) if date <= self.config.t_max => {
+            Some((trans_idx, date))
+                if date <= self.config.t_max && next_fmu.is_none_or(|point| date <= point) =>
+            {
                 // The clock never runs backwards: in a step-driven run
                 // every scheduled date is ≥ the current time, so `max`
                 // is a no-op; it only guards an *overdue* transition left
@@ -147,7 +152,112 @@ impl<'m> Engine<'m> {
                 self.watched_streak = (t_new, 0);
                 self.fire(trans_idx, None).map(Some)
             }
-            _ => Ok(None),
+            _ => {
+                if let Some(point) = next_fmu.filter(|point| *point <= self.config.t_max) {
+                    self.flush_samples_before(point);
+                    self.time = point;
+                    self.note_time_change();
+                    self.watched_streak = (point, 0);
+                    self.process_fmu_point()?;
+                    return Ok(Some(Event {
+                        time: point,
+                        transition: "fmi.communication".to_owned(),
+                        from: String::new(),
+                        to: String::new(),
+                    }));
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    fn process_fmu_point(&mut self) -> Result<(), EngineError> {
+        // An output may change another unit's input and make that unit due
+        // at this same instant. Complete every such step before sampling any
+        // inputs for the next interval.
+        while self
+            .host
+            .as_ref()
+            .and_then(|host| host.next_point())
+            .is_some_and(|point| point <= self.time)
+        {
+            let before_fmu = self.host.as_ref().map(|host| host.input_values(&self.vars));
+            let outputs = self
+                .host
+                .as_deref_mut()
+                .map_or(Ok(Vec::new()), |host| host.step_due(self.time))?;
+            self.apply_fmu_outputs(outputs);
+            self.run_fixpoint()?;
+            self.resolve_flows()?;
+            self.refresh_schedule()?;
+            if let (Some(host), Some(before)) = (self.host.as_deref_mut(), before_fmu) {
+                let held = host.mark_input_changes(&before, &self.vars, self.time);
+                if self.config.journal {
+                    for (unit, attribute, value) in held {
+                        self.journal.push(JournalRecord::FmuInputHeld {
+                            time: self.time,
+                            unit,
+                            attribute: self.model.var_names[attribute].clone(),
+                            held: value,
+                        });
+                    }
+                }
+            }
+            // In deferred mode the explorer must branch these reactions
+            // itself, including instantaneous choices and their weights.
+            if self.config.stochastic_dates != StochasticDates::Deferred {
+                loop {
+                    if let Some(trans_idx) = self.immediate_watched()? {
+                        self.note_watched_firing()?;
+                        self.fire(trans_idx, None)?;
+                    } else if let Some((trans_idx, _)) =
+                        self.next_pending().filter(|(_, date)| *date <= self.time)
+                    {
+                        self.fire(trans_idx, None)?;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        if self.config.stochastic_dates != StochasticDates::Deferred {
+            self.sample_fmu_inputs_at_current_point();
+        }
+        self.record_indicators();
+        self.check_targets();
+        Ok(())
+    }
+
+    /// Sample inputs after all reactions to a communication point have been
+    /// handled. The deferred exploration driver calls this when its current
+    /// node has no further immediate branch or same-date FMU step.
+    pub fn sample_fmu_inputs_at_current_point(&mut self) {
+        if let Some(host) = self.host.as_deref_mut() {
+            if host.next_point().is_none_or(|point| point > self.time) {
+                host.sample_inputs(&self.vars, self.time);
+            }
+        }
+    }
+
+    pub(super) fn apply_fmu_outputs(&mut self, outputs: Vec<(VarIdx, Value, String)>) {
+        for (target, new, unit) in outputs {
+            let old = self.vars[target];
+            if old == new {
+                continue;
+            }
+            self.vars[target] = new;
+            self.note_var_change(target);
+            self.worklist
+                .extend(self.model.var_triggers[target].iter().copied());
+            if self.config.journal {
+                self.journal.push(JournalRecord::AttributeChanged {
+                    time: self.time,
+                    attribute: self.model.var_names[target].clone(),
+                    old,
+                    new,
+                    cause: format!("FMU unit `{unit}`"),
+                });
+            }
         }
     }
 
@@ -156,6 +266,12 @@ impl<'m> Engine<'m> {
     /// [`EngineConfig::stop_at_targets`] on, a run **early-stops** at the
     /// first target (feared event) reached.
     pub fn run(mut self) -> Result<SimulationResult, EngineError> {
+        if self.host.is_some() && !self.config.t_max.is_finite() {
+            return Err(EngineError::InvalidStudyParameter {
+                parameter: "t_max".to_owned(),
+                detail: "a batch run with an FMU requires a finite horizon".to_owned(),
+            });
+        }
         loop {
             if let Some((_, t_hit)) = &self.seq_end {
                 // The target is reached: FINISH the hit instant first,
@@ -163,7 +279,12 @@ impl<'m> Engine<'m> {
                 // state is the completed instant, not a half-propagated
                 // one (PyCATSHOO completes the step before stopping).
                 let t_hit = *t_hit;
-                let still_due = self.pending.iter().flatten().any(|d| *d <= t_hit);
+                let still_due = self.pending.iter().flatten().any(|d| *d <= t_hit)
+                    || self
+                        .host
+                        .as_ref()
+                        .and_then(|host| host.next_point())
+                        .is_some_and(|d| d <= t_hit);
                 if !still_due {
                     break;
                 }
@@ -245,6 +366,10 @@ impl<'m> Engine<'m> {
                 seed: self.stochastic.then_some(self.config.seed),
                 ode_rtol: self.config.ode.rtol,
                 ode_tol_event: self.config.ode.tol_event,
+                fmu_units: self
+                    .host
+                    .as_ref()
+                    .map_or_else(Vec::new, |host| host.provenance()),
             },
             work,
             final_time,
@@ -265,6 +390,9 @@ impl<'m> Engine<'m> {
         trans_idx: TransIdx,
         forced: Option<StateIdx>,
     ) -> Result<Event, EngineError> {
+        // All firing entry points, including deferred exploration and
+        // interactive control, can change an FMU input.
+        let before_fmu = self.host.as_ref().map(|host| host.input_values(&self.vars));
         // Close the exposure stretch up to this instant while `pending`
         // still describes what was running, then count the firing.
         if let Some(tally) = self.exposure.as_mut() {
@@ -333,6 +461,19 @@ impl<'m> Engine<'m> {
         // `run`). States change only through transitions (or the declared
         // init, checked in `initialize`), so this catches every activation.
         self.check_targets();
+        if let (Some(host), Some(before)) = (self.host.as_deref_mut(), before_fmu) {
+            let held = host.mark_input_changes(&before, &self.vars, self.time);
+            if self.config.journal {
+                for (unit, attribute, value) in held {
+                    self.journal.push(JournalRecord::FmuInputHeld {
+                        time: self.time,
+                        unit,
+                        attribute: self.model.var_names[attribute].clone(),
+                        held: value,
+                    });
+                }
+            }
+        }
         Ok(event)
     }
 
