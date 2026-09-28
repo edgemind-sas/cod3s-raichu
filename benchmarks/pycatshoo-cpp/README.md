@@ -49,6 +49,28 @@ its `.so` (subclassing `CComponent`/`CSystem` then mis-reads members
 and segfaults). The 1.4.1.0 Linux tarball from pycatshoo.org is a known
 self-consistent set; its Python module needs Python 3.11.
 
+### The scaling campaign (the Performance page)
+
+`campaign.py` measures, on a quiet machine, the accuracy-cost grid of the
+hybrid model, the aligned pair of settings, the wall clock against the
+number of replicas, and the wall clock against the number of workers
+(RAICHU threads against PyCATSHOO MPI ranks). It writes one JSON file,
+which `docs/figures/benchmark_performance.py` draws:
+
+```bash
+export PYCATSHOO_DIR=/path/to/pycatshoo-1.4.x RAICHU_BENCH_PYTHON=python3.11
+python campaign.py --quick --out /tmp/check.json          # plumbing, a few minutes
+python campaign.py --out ../results/<machine>-<date>.json  # the real campaign
+python campaign.py --parts workers --out ../results/<machine>-<date>.json  # redo one part
+```
+
+The MPI sweep runs `mpirun -n k ./pyc_bench ...`. PyCATSHOO loads
+`libmpi.so` at run time, so an Open MPI must be on `PATH` and
+`LD_LIBRARY_PATH`; a build under the user's home (`./configure
+--prefix=$HOME/openmpi --disable-mpi-fortran`) is enough. Under MPI only
+the first rank prints: its estimates cover the whole campaign, and its
+wall clock includes gathering the other ranks' results.
+
 ## Files
 
 - `../models/*.json`: the three benchmark models (vendored, the source
@@ -62,6 +84,8 @@ self-consistent set; its Python module needs Python 3.11.
 - `run_bench.py`: orchestrates the engines/paths, checks the
   consistency gates, writes `results.json` (or `results-raichu-only.json`
   with `--raichu-only`).
+- `campaign.py`: the scaling campaign above; `../results/` holds its
+  committed outputs.
 - `parity_experiment.py`: tolerance-parity experiment on
   `heated_room_s3`: achieved accuracy (deterministic thermostat cycle
   vs its closed form) and cost per integration-effort setting on both
