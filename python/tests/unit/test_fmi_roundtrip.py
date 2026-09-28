@@ -3,6 +3,7 @@
 import os
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pyraichu
 import pytest
@@ -165,16 +166,33 @@ def _validate(path: Path, fmpy) -> None:
 
 
 def _series(path: Path, fmpy, outputs: list[str], seed: int = 0):
-    return fmpy.simulate_fmu(
-        str(path),
-        start_time=0,
-        stop_time=2,
-        step_size=0.5,
-        output_interval=0.5,
-        output=outputs,
-        start_values={"seed": seed},
-        validate=True,
-    )
+    from fmpy.fmi3 import FMU3Slave
+
+    description = fmpy.read_model_description(str(path))
+    with TemporaryDirectory() as directory:
+        fmpy.extract(str(path), unzipdir=directory)
+        slave = FMU3Slave(
+            guid=description.guid,
+            modelIdentifier=description.coSimulation.modelIdentifier,
+            unzipDirectory=directory,
+            instanceName="roundtrip",
+        )
+        slave.instantiate()
+        try:
+            return fmpy.simulate_fmu(
+                directory,
+                start_time=0,
+                stop_time=2,
+                step_size=0.5,
+                output_interval=0.5,
+                output=outputs,
+                start_values={"seed": seed},
+                model_description=description,
+                fmu_instance=slave,
+                validate=True,
+            )
+        finally:
+            slave.freeInstance()
 
 
 def test_delay_fmu_matches_native_points_and_event_date(
