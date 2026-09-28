@@ -739,7 +739,21 @@ express. Integrated, the stock read -9.3e19 and the run ended normally;
 the layer now declares the magnitude it writes for "no ceiling" on every
 continuous model (`unbounded_rate`, see the model schema), and the
 engine refuses the rate by name. Bound one of the two sides: a finite
-`fill_rate` on the room, or a finite `serve_rate` on the volume. The
+`fill_rate` on the room, or a finite `serve_rate` on the volume.
+
+The refusal is a `pyraichu.UnboundedRateError` (a `SimulationError`)
+carrying the integrated `variable`, the `time`, the `rate` and the
+declared `unbounded` magnitude. When the variable is a volume's content,
+this layer completes the engine's message in muscadet's words, on the
+authoring route and on the one muscadet calls for `engine="raichu"`
+alike: it names the capacity and its component, and the key to declare,
+`serve_rate`. An interactive session raises the same typed error at the
+step that meets the rate, with the engine's message only. With a finite `serve_rate` the stock drains at that rate
+until it is empty, then passes its inflow on, and the two engines agree
+on the trajectory (measured on muscadet 5.7.0 with PyCATSHOO at 0.5 and
+2). Without one, the reference engine does not transfer at once either:
+it runs the rule at one activity per time unit, a rate the model does
+not state and which therefore changes with the study's time unit. The
 magnitude is a model-level key like the evaluation order: a document
 that sets a different `unbounded_rate` beside a muscadet section is
 refused rather than resolved, since one model cannot reserve two.

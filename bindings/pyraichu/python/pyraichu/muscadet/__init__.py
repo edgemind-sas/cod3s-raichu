@@ -217,7 +217,9 @@ from .. import (
     Model,
     SimulationResult,
     McEstimates,
+    UnboundedRateError,
     load_model,
+    model_body,
     monte_carlo,
     seal,
     simulate,
@@ -439,6 +441,70 @@ def model_level_keys(evaluation_order: list[dict[str, str]]) -> dict[str, Any]:
     function for the three routes that build such a model, so none of
     them can carry the order without the reservation."""
     return {"evaluation_order": evaluation_order, "unbounded_rate": UNBOUNDED_SERVICE}
+
+
+def _stocked_capacity(model: Model, variable: str) -> str | None:
+    """The capacity whose content `variable` (``component.attribute``) is.
+
+    Read from the model rather than from a naming guess alone: the attribute
+    must be the capacity's total content or one of its per-flow contents, and
+    the component must carry that capacity's bounds automaton. ``None`` for
+    anything else, so the explanation below never names a volume that is not
+    there.
+    """
+    component_name, _, attribute = variable.partition(".")
+    body = model_body(json.loads(model.json))
+    for component in body.get("components", []):
+        if component["name"] != component_name:
+            continue
+        for automaton in component.get("automata", []):
+            name = automaton["name"]
+            if not name.endswith("_bounds"):
+                continue
+            capacity = name[: -len("_bounds")]
+            total = _content_attribute(capacity)
+            if attribute == total or attribute.startswith(f"{total}_"):
+                return capacity
+    return None
+
+
+def explain_unbounded_rate(error: UnboundedRateError, model: Model) -> UnboundedRateError:
+    """The engine's refusal, completed in muscadet's vocabulary.
+
+    The engine names the variable and says "bound one of the two"; a modeller
+    needs the capacity and the key. When the variable is a capacity's content,
+    the stock of that capacity is what drains without bound, and a finite
+    ``serve_rate`` on it is what states the rate (with it, RAICHU and the
+    reference engine agree). Any other variable is returned unchanged.
+    """
+    capacity = _stocked_capacity(model, error.variable)
+    if capacity is None:
+        return error
+    component = error.variable.partition(".")[0]
+    message = (
+        f"{error}. In muscadet terms: capacity `{capacity}` of `{component}` "
+        f"holds a stock with no ceiling on what leaves it (`serve_rate` left "
+        f"unbounded) while what it feeds takes without bound (for instance an "
+        f"infinite `fill_rate` downstream). Declare a finite `serve_rate` on capacity "
+        f"`{capacity}`, the rate its stock may leave at, or bound the demand "
+        f"downstream. The reference engine runs such a model at a rate the "
+        f"model does not state (one rule activity per time unit, measured on "
+        f"a stock beside rules), so its answer depends on the study's time "
+        f"unit"
+    )
+    return UnboundedRateError(
+        message, error.variable, error.time, error.rate, error.unbounded
+    )
+
+
+def run_explained(run: Any, model: Model, **kwargs: Any) -> Any:
+    """``run(model, **kwargs)``, with an unbounded-rate refusal explained
+    by :func:`explain_unbounded_rate`. The one wrapper every muscadet entry
+    point that runs a model goes through."""
+    try:
+        return run(model, **kwargs)
+    except UnboundedRateError as error:
+        raise explain_unbounded_rate(error, model) from error
 
 #: Stand-in read where a flow is held by no volume at all, so that the
 #: question "does the volume holding it transit?" has an answer without a
@@ -9448,12 +9514,17 @@ class System:
 
     def simulate(self, t_max: float, **kwargs: Any) -> SimulationResult:
         """One trajectory through the RAICHU engine."""
-        return simulate(self.build_model(), t_max=t_max, **kwargs)
+        return run_explained(simulate, self.build_model(), t_max=t_max, **kwargs)
 
     def monte_carlo(
         self, nb_runs: int, t_max: float, samples: list[float], **kwargs: Any
     ) -> McEstimates:
         """Monte-Carlo estimation through the RAICHU driver."""
-        return monte_carlo(
-            self.build_model(), nb_runs=nb_runs, t_max=t_max, samples=samples, **kwargs
+        return run_explained(
+            monte_carlo,
+            self.build_model(),
+            nb_runs=nb_runs,
+            t_max=t_max,
+            samples=samples,
+            **kwargs,
         )
