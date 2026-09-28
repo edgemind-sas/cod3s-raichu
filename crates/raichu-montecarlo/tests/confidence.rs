@@ -42,6 +42,7 @@ use raichu_montecarlo::{
 /// through a state indicator: `E[1{nok at t}] = 1 − e^{−rate·t}`.
 fn exponential_model(rate: f64) -> Model {
     Model {
+        programs: vec![],
         name: "ci_probe".into(),
         components: vec![Component {
             name: "C".into(),

@@ -17,6 +17,7 @@
 //! part of the design (reserved API), not exercised in M0.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// A runtime value carried by attributes and expressions.
 ///
@@ -64,6 +65,24 @@ pub struct StateRef {
     pub automaton: String,
     /// Name of the state.
     pub state: String,
+}
+
+/// An expression separated into a decision-free constant and one coefficient
+/// expression for each occurrence of a decision variable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AffineExpr {
+    /// The part independent of all selected variables.
+    pub constant: Expr,
+    /// Coefficients and their corresponding selected variables. Repeated
+    /// variables may occur and their contributions must be summed by callers.
+    pub terms: Vec<(AttrRef, Expr)>,
+}
+
+/// A term that cannot be affine in the selected variables.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonlinearTerm {
+    /// The offending expression, useful for a model diagnostic.
+    pub expression: Expr,
 }
 
 /// Comparison operators (guards on discrete state).
@@ -239,6 +258,121 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// Decompose this expression into an affine form in `variables`.
+    /// Coefficients remain expressions over quantities outside that set.
+    pub fn affine_in(&self, variables: &HashSet<AttrRef>) -> Result<AffineExpr, NonlinearTerm> {
+        if !self.contains_any(variables) {
+            return Ok(AffineExpr {
+                constant: self.clone(),
+                terms: Vec::new(),
+            });
+        }
+        let zero = || Expr::Const {
+            value: Value::Float(0.0),
+        };
+        match self {
+            Expr::Attr { attr } => Ok(AffineExpr {
+                constant: zero(),
+                terms: vec![(
+                    attr.clone(),
+                    Expr::Const {
+                        value: Value::Float(1.0),
+                    },
+                )],
+            }),
+            Expr::Add { args } => {
+                let mut constants = Vec::with_capacity(args.len());
+                let mut terms = Vec::new();
+                for arg in args {
+                    let part = arg.affine_in(variables)?;
+                    constants.push(part.constant);
+                    terms.extend(part.terms);
+                }
+                Ok(AffineExpr {
+                    constant: Expr::Add { args: constants },
+                    terms,
+                })
+            }
+            Expr::Sub { lhs, rhs } => {
+                let left = lhs.affine_in(variables)?;
+                let right = rhs.affine_in(variables)?;
+                let mut terms = left.terms;
+                terms.extend(right.terms.into_iter().map(|(attr, coefficient)| {
+                    (
+                        attr,
+                        Expr::Sub {
+                            lhs: Box::new(zero()),
+                            rhs: Box::new(coefficient),
+                        },
+                    )
+                }));
+                Ok(AffineExpr {
+                    constant: Expr::Sub {
+                        lhs: Box::new(left.constant),
+                        rhs: Box::new(right.constant),
+                    },
+                    terms,
+                })
+            }
+            Expr::Mul { args } => {
+                let dependent: Vec<_> = args
+                    .iter()
+                    .filter(|arg| arg.contains_any(variables))
+                    .collect();
+                if dependent.len() != 1 {
+                    return Err(NonlinearTerm {
+                        expression: self.clone(),
+                    });
+                }
+                let part = dependent[0].affine_in(variables)?;
+                let free: Vec<_> = args
+                    .iter()
+                    .filter(|arg| !arg.contains_any(variables))
+                    .cloned()
+                    .collect();
+                let scaled = |value: Expr| {
+                    let mut product = free.clone();
+                    product.push(value);
+                    Expr::Mul { args: product }
+                };
+                Ok(AffineExpr {
+                    constant: scaled(part.constant),
+                    terms: part
+                        .terms
+                        .into_iter()
+                        .map(|(attr, coefficient)| (attr, scaled(coefficient)))
+                        .collect(),
+                })
+            }
+            Expr::Div { lhs, rhs } if !rhs.contains_any(variables) => {
+                let part = lhs.affine_in(variables)?;
+                let divide = |value| Expr::Div {
+                    lhs: Box::new(value),
+                    rhs: rhs.clone(),
+                };
+                Ok(AffineExpr {
+                    constant: divide(part.constant),
+                    terms: part
+                        .terms
+                        .into_iter()
+                        .map(|(attr, coefficient)| (attr, divide(coefficient)))
+                        .collect(),
+                })
+            }
+            _ => Err(NonlinearTerm {
+                expression: self.clone(),
+            }),
+        }
+    }
+
+    /// Whether this tree reads one of the selected attributes.
+    #[must_use]
+    pub fn contains_any(&self, variables: &HashSet<AttrRef>) -> bool {
+        let mut found = false;
+        self.for_each_attr_ref(&mut |attr| found |= variables.contains(attr));
+        found
+    }
+
     /// Convenience constructor: boolean constant.
     #[must_use]
     pub fn bool(value: bool) -> Self {
@@ -313,6 +447,14 @@ impl Expr {
         self.for_each_child(&mut |child| child.for_each_port_ref(f));
     }
 
+    /// Visit each port aggregate with its optional channel selector.
+    pub fn for_each_port_agg(&self, f: &mut impl FnMut(&PortRef, Option<&str>)) {
+        if let Expr::PortAgg { port, channel, .. } = self {
+            f(port, channel.as_deref());
+        }
+        self.for_each_child(&mut |child| child.for_each_port_agg(f));
+    }
+
     /// Visit every automaton-state reference in the tree (model
     /// validation; state-sensitivity derivation in the engine).
     pub fn for_each_state_ref(&self, f: &mut impl FnMut(&StateRef)) {
@@ -337,6 +479,44 @@ pub struct Assignment {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn affine_decomposition_distinguishes_coefficients_from_decisions() {
+        let x = AttrRef {
+            component: "c".into(),
+            attribute: "x".into(),
+        };
+        let selected = HashSet::from([x.clone()]);
+        let coefficient = Expr::attr("c", "cost");
+        let linear = Expr::Add {
+            args: vec![
+                Expr::Mul {
+                    args: vec![coefficient.clone(), Expr::Attr { attr: x.clone() }],
+                },
+                Expr::Const {
+                    value: Value::Float(3.0),
+                },
+            ],
+        };
+        let affine = linear.affine_in(&selected).unwrap();
+        assert_eq!(affine.terms.len(), 1);
+        assert_eq!(affine.terms[0].0, x);
+        assert!(affine.terms[0].1.contains_any(&HashSet::from([AttrRef {
+            component: "c".into(),
+            attribute: "cost".into(),
+        }])));
+        assert!(!affine.terms[0].1.contains_any(&selected));
+
+        let quadratic = Expr::Mul {
+            args: vec![Expr::attr("c", "x"), Expr::attr("c", "x")],
+        };
+        assert!(quadratic.affine_in(&selected).is_err());
+        let reciprocal = Expr::Div {
+            lhs: Box::new(Expr::attr("c", "cost")),
+            rhs: Box::new(Expr::attr("c", "x")),
+        };
+        assert!(reciprocal.affine_in(&selected).is_err());
+    }
 
     fn sample_expr() -> Expr {
         // (comp_a.on == true) && (sum(comp_b.p_in) >= 2)

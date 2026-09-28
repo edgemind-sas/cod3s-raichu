@@ -6,11 +6,231 @@ use super::*;
 use proptest::prelude::*;
 use raichu_expr::{AggOp, BoolOp, CmpOp, StateRef};
 
+fn program_model() -> Model {
+    let mut model = sample_model();
+    model.components[0].attributes.extend([
+        Attribute {
+            name: "x".into(),
+            kind: AttrKind::Float,
+            init: Value::Float(0.0),
+        },
+        Attribute {
+            name: "y".into(),
+            kind: AttrKind::Float,
+            init: Value::Float(0.0),
+        },
+        Attribute {
+            name: "demand".into(),
+            kind: AttrKind::Float,
+            init: Value::Float(30.0),
+        },
+        Attribute {
+            name: "feasible".into(),
+            kind: AttrKind::Bool,
+            init: Value::Bool(false),
+        },
+        Attribute {
+            name: "cost".into(),
+            kind: AttrKind::Float,
+            init: Value::Float(0.0),
+        },
+    ]);
+    model.programs.push(Program {
+        name: "dispatch".into(),
+        variables: ["x", "y"]
+            .into_iter()
+            .map(|name| ProgramVariable {
+                attribute: AttrRef {
+                    component: "source".into(),
+                    attribute: name.into(),
+                },
+                lower: Some(Expr::Const {
+                    value: Value::Float(0.0),
+                }),
+                upper: Some(Expr::Const {
+                    value: Value::Float(60.0),
+                }),
+                on_infeasible: Value::Float(0.0),
+            })
+            .collect(),
+        sense: ProgramSense::Minimize,
+        objective: Expr::Add {
+            args: vec![Expr::attr("source", "x"), Expr::attr("source", "y")],
+        },
+        constraints: vec![ProgramConstraint {
+            name: "supply".into(),
+            expr: Expr::Add {
+                args: vec![Expr::attr("source", "x"), Expr::attr("source", "y")],
+            },
+            lower: Some(Expr::attr("source", "demand")),
+            upper: None,
+        }],
+        feasible: AttrRef {
+            component: "source".into(),
+            attribute: "feasible".into(),
+        },
+        objective_value: Some(AttrRef {
+            component: "source".into(),
+            attribute: "cost".into(),
+        }),
+        tie_break: None,
+        node_limit: None,
+    });
+    model
+}
+
+#[test]
+fn program_requires_feature_and_validates() {
+    let model = program_model();
+    model.validate().unwrap();
+    assert!(model
+        .required_features()
+        .contains(&Feature::MixedIntegerProgram));
+    let sealed = model.to_json().unwrap();
+    assert!(sealed.contains("mixed_integer_program"));
+    assert_eq!(Model::from_json(&sealed).unwrap(), model);
+    let bare = serde_json::to_string(&model).unwrap();
+    assert!(matches!(
+        Model::from_json(&bare),
+        Err(LoadError::FeatureNotDeclared {
+            feature: "mixed_integer_program",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn program_rejects_nonlinear_and_continuous_inputs() {
+    let mut model = program_model();
+    model.programs[0].objective = Expr::Mul {
+        args: vec![Expr::attr("source", "x"), Expr::attr("source", "y")],
+    };
+    assert!(
+        matches!(model.validate(), Err(ModelError::ProgramInvalid { reason, .. }) if reason.contains("nonlinear"))
+    );
+    let mut model = program_model();
+    model.programs[0].constraints[0].lower = Some(Expr::Time);
+    assert!(
+        matches!(model.validate(), Err(ModelError::ProgramInvalid { reason, .. }) if reason.contains("time"))
+    );
+    let mut model = program_model();
+    model.components[0].equations.push(Equation {
+        target: "demand".into(),
+        kind: EquationKind::Ode,
+        expr: Expr::Const {
+            value: Value::Float(1.0),
+        },
+    });
+    assert!(
+        matches!(model.validate(), Err(ModelError::ProgramInvalid { reason, .. }) if reason.contains("integration"))
+    );
+}
+
+#[test]
+fn program_rejects_boolean_objectives_and_bounds() {
+    let mut model = program_model();
+    model.programs[0].objective = Expr::bool(true);
+    assert!(
+        matches!(model.validate(), Err(ModelError::ProgramInvalid { reason, .. }) if reason.contains("numeric"))
+    );
+    let mut model = program_model();
+    model.programs[0].variables[0].upper = Some(Expr::attr("source", "flow_out"));
+    assert!(
+        matches!(model.validate(), Err(ModelError::ProgramInvalid { reason, .. }) if reason.contains("numeric"))
+    );
+}
+
+#[test]
+fn program_rejects_another_writer() {
+    let mut model = program_model();
+    model.components[0].automata[0].transitions[0]
+        .effects
+        .push(Assignment {
+            target: AttrRef {
+                component: "source".into(),
+                attribute: "x".into(),
+            },
+            value: Expr::Const {
+                value: Value::Float(1.0),
+            },
+        });
+    assert!(
+        matches!(model.validate(), Err(ModelError::ProgramInvalid { reason, .. }) if reason.contains("transition effect"))
+    );
+}
+
+#[test]
+fn program_accepts_a_discrete_sensitive_input() {
+    let mut model = program_model();
+    model.programs[0].constraints[0].lower = Some(Expr::If {
+        cond: Box::new(Expr::attr("source", "flow_out")),
+        then: Box::new(Expr::Const {
+            value: Value::Float(30.0),
+        }),
+        otherwise: Box::new(Expr::Const {
+            value: Value::Float(20.0),
+        }),
+    });
+    model.validate().unwrap();
+}
+
+#[test]
+fn program_dependencies_cannot_form_a_cycle() {
+    let mut model = program_model();
+    model.components[0].attributes.extend([
+        Attribute {
+            name: "z".into(),
+            kind: AttrKind::Float,
+            init: Value::Float(0.0),
+        },
+        Attribute {
+            name: "feasible_z".into(),
+            kind: AttrKind::Bool,
+            init: Value::Bool(false),
+        },
+    ]);
+    model.programs[0].objective = Expr::Mul {
+        args: vec![Expr::attr("source", "z"), Expr::attr("source", "x")],
+    };
+    model.programs.push(Program {
+        name: "second".into(),
+        variables: vec![ProgramVariable {
+            attribute: AttrRef {
+                component: "source".into(),
+                attribute: "z".into(),
+            },
+            lower: Some(Expr::Const {
+                value: Value::Float(0.0),
+            }),
+            upper: Some(Expr::Const {
+                value: Value::Float(10.0),
+            }),
+            on_infeasible: Value::Float(0.0),
+        }],
+        sense: ProgramSense::Minimize,
+        objective: Expr::Mul {
+            args: vec![Expr::attr("source", "x"), Expr::attr("source", "z")],
+        },
+        constraints: vec![],
+        feasible: AttrRef {
+            component: "source".into(),
+            attribute: "feasible_z".into(),
+        },
+        objective_value: None,
+        tie_break: None,
+        node_limit: None,
+    });
+    assert!(
+        matches!(model.validate(), Err(ModelError::ProgramInvalid { reason, .. }) if reason.contains("cycle"))
+    );
+}
+
 /// A small but complete valid model: a source exporting a boolean flow to
 /// a target, a two-state failure automaton with delay transitions, an
 /// instantaneous branching, one sensitive function and two indicators.
 fn sample_model() -> Model {
     Model {
+        programs: vec![],
         name: "delay_001".into(),
         components: vec![
             Component {
@@ -522,6 +742,7 @@ fn connect(from: (&str, &str), to: (&str, &str)) -> Connection {
 /// breaks the loop.
 fn continuous_cycle_model(first: EquationKind, second: EquationKind) -> Model {
     Model {
+        programs: vec![],
         name: "continuous_cycle".into(),
         components: vec![
             Component {
@@ -576,6 +797,7 @@ fn fan_in_model(second: AttrKind) -> Model {
         AttrKind::Float => Value::Float(0.0),
     };
     Model {
+        programs: vec![],
         name: "fan_in".into(),
         components: vec![
             Component {
@@ -722,6 +944,7 @@ fn order_entry(component: &str, attribute: &str) -> AttrRef {
 /// the evaluation order.
 fn ordered_model(order: Option<Vec<AttrRef>>) -> Model {
     Model {
+        programs: vec![],
         name: "ordered".into(),
         components: vec![Component {
             name: "c".into(),

@@ -111,6 +111,7 @@ fn watcher(guard: Expr) -> Component {
 fn model(name: &str, mut components: Vec<Component>, guard: Expr) -> Model {
     components.push(watcher(guard));
     Model {
+        programs: vec![],
         name: name.into(),
         components,
         connections: vec![],

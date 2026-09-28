@@ -58,6 +58,7 @@ fn component(name: &str, occ_law: Distrib) -> Component {
 
 fn model(components: Vec<Component>, targets: Vec<Target>) -> Model {
     Model {
+        programs: vec![],
         name: "exploration_access".into(),
         components,
         connections: vec![],

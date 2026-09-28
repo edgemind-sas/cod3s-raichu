@@ -30,6 +30,7 @@ use raichu_model::{
 /// (expression evaluation dominates).
 fn delay_model() -> Model {
     Model {
+        programs: vec![],
         name: "bench_delay".into(),
         components: vec![
             Component {
@@ -154,6 +155,7 @@ fn delay_model() -> Model {
 fn tank_model() -> Model {
     let content = || Expr::attr("tank", "content");
     Model {
+        programs: vec![],
         name: "bench_tank".into(),
         components: vec![Component {
             name: "tank".into(),
@@ -539,6 +541,7 @@ fn wide_network(watched: bool) -> Model {
     }
 
     Model {
+        programs: vec![],
         name: if watched {
             "bench_wide_network".into()
         } else {

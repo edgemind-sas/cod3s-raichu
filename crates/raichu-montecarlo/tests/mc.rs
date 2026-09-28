@@ -12,6 +12,7 @@ use raichu_montecarlo::{run, McConfig, DEFAULT_CONFIDENCE};
 /// E[sojourn_nok](t) = t − (1 − e^{−λt})/λ.
 fn exp_ok_nok(rate: f64) -> Model {
     Model {
+        programs: vec![],
         name: "exp_ok_nok".into(),
         components: vec![Component {
             name: "C".into(),

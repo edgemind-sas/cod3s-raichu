@@ -156,6 +156,7 @@ fn sys_down() -> Target {
 
 fn model(name: &str, components: Vec<Component>, targets: Vec<Target>) -> Model {
     Model {
+        programs: vec![],
         name: name.into(),
         components,
         connections: vec![],

@@ -4,6 +4,93 @@
 //! its optional confluence probe.
 
 use super::*;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+
+type ProgramCacheKey = (u64, usize, Vec<u64>);
+const PROGRAM_CACHE_LIMIT: usize = 1024;
+
+#[derive(Default)]
+struct ProgramCache {
+    outcomes: HashMap<ProgramCacheKey, raichu_milp::Outcome>,
+    order: VecDeque<ProgramCacheKey>,
+}
+
+thread_local! {
+    static PROGRAM_CACHE: RefCell<ProgramCache> = RefCell::new(ProgramCache::default());
+}
+
+fn program_key(program: &raichu_milp::Program, tie_break: &raichu_milp::TieBreak) -> Vec<u64> {
+    let mut bits = vec![
+        program.columns.len() as u64,
+        program.rows.len() as u64,
+        u64::from(program.sense == raichu_milp::Sense::Maximize),
+        program.node_limit.unwrap_or(100_000),
+    ];
+    for column in &program.columns {
+        bits.extend([
+            column.cost.to_bits(),
+            column.lower.to_bits(),
+            column.upper.to_bits(),
+            match column.kind {
+                raichu_milp::Kind::Continuous => 0,
+                raichu_milp::Kind::Integer => 1,
+                raichu_milp::Kind::Binary => 2,
+            },
+        ]);
+    }
+    for row in &program.rows {
+        bits.extend([
+            row.lower.to_bits(),
+            row.upper.to_bits(),
+            row.terms.len() as u64,
+        ]);
+        for (column, coefficient) in &row.terms {
+            bits.extend([*column as u64, coefficient.to_bits()]);
+        }
+    }
+    match tie_break {
+        raichu_milp::TieBreak::Default => bits.push(0),
+        raichu_milp::TieBreak::None => bits.push(1),
+        raichu_milp::TieBreak::Objectives(objectives) => {
+            bits.extend([2, objectives.len() as u64]);
+            for objective in objectives {
+                bits.push(u64::from(objective.sense == raichu_milp::Sense::Maximize));
+                bits.extend(objective.coefficients.iter().map(|value| value.to_bits()));
+            }
+        }
+    }
+    bits
+}
+
+fn solve_cached(
+    model_id: u64,
+    index: usize,
+    program: &raichu_milp::Program,
+    tie_break: &raichu_milp::TieBreak,
+) -> (raichu_milp::Outcome, bool) {
+    let key = (model_id, index, program_key(program, tie_break));
+    if let Some(outcome) = PROGRAM_CACHE.with(|cache| cache.borrow().outcomes.get(&key).cloned()) {
+        return (outcome, true);
+    }
+    let outcome = raichu_milp::solve(program, tie_break);
+    if matches!(
+        outcome,
+        raichu_milp::Outcome::Optimal(_) | raichu_milp::Outcome::Infeasible
+    ) {
+        PROGRAM_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.order.len() == PROGRAM_CACHE_LIMIT {
+                if let Some(oldest) = cache.order.pop_front() {
+                    cache.outcomes.remove(&oldest);
+                }
+            }
+            cache.outcomes.insert(key.clone(), outcome.clone());
+            cache.order.push_back(key);
+        });
+    }
+    (outcome, false)
+}
 
 impl<'m> Engine<'m> {
     /// Sequence analysis: label the trajectory with the first target
@@ -145,6 +232,13 @@ impl<'m> Engine<'m> {
             journal: self.journal,
             sequence,
             provenance: Provenance {
+                non_unique_programs: self
+                    .model
+                    .programs
+                    .iter()
+                    .filter(|program| matches!(program.tie_break, CProgramTieBreak::None))
+                    .map(|program| program.name.clone())
+                    .collect(),
                 engine_version: env!("CARGO_PKG_VERSION").to_owned(),
                 model: self.model.name.clone(),
                 t_max: self.config.t_max,
@@ -375,6 +469,207 @@ impl<'m> Engine<'m> {
         Ok(())
     }
 
+    fn program_affine(
+        &self,
+        expr: &CProgramAffine,
+        columns: usize,
+    ) -> Result<(f64, Vec<f64>), EngineError> {
+        let constant = eval_f64(
+            self.model,
+            &self.vars,
+            &self.states,
+            self.time,
+            &expr.constant,
+        )?;
+        let mut coefficients = vec![0.0; columns];
+        for (column, coefficient) in &expr.terms {
+            coefficients[*column] +=
+                eval_f64(self.model, &self.vars, &self.states, self.time, coefficient)?;
+        }
+        Ok((constant, coefficients))
+    }
+
+    fn program_number(&self, expr: Option<&CExpr>, default: f64) -> Result<f64, EngineError> {
+        expr.map(|expr| eval_f64(self.model, &self.vars, &self.states, self.time, expr))
+            .unwrap_or(Ok(default))
+    }
+
+    fn program_write(&mut self, target: VarIdx, value: Value, name: &str, trigger: bool) {
+        let old = self.vars[target];
+        if old == value {
+            return;
+        }
+        self.vars[target] = value;
+        self.note_var_change(target);
+        if self.config.journal {
+            self.journal.push(JournalRecord::AttributeChanged {
+                time: self.time,
+                attribute: self.model.var_names[target].clone(),
+                old,
+                new: value,
+                cause: name.to_owned(),
+            });
+        }
+        if trigger {
+            self.worklist
+                .extend(self.model.var_triggers[target].iter().copied());
+        }
+    }
+
+    fn apply_program(&mut self, program_idx: usize, trigger: bool) -> Result<(), EngineError> {
+        let program = &self.model.programs[program_idx];
+        let columns = program.variables.len();
+        let (objective_offset, costs) = self.program_affine(&program.objective, columns)?;
+        if !objective_offset.is_finite() {
+            return Err(EngineError::ProgramFailed {
+                program: program.name.clone(),
+                time: self.time,
+                reason: "non-finite objective offset".to_owned(),
+            });
+        }
+        let mut numeric_columns = Vec::with_capacity(columns);
+        for (variable, cost) in program.variables.iter().zip(costs) {
+            let kind = match variable.kind {
+                raichu_model::AttrKind::Bool => raichu_milp::Kind::Binary,
+                raichu_model::AttrKind::Int => raichu_milp::Kind::Integer,
+                raichu_model::AttrKind::Float => raichu_milp::Kind::Continuous,
+            };
+            numeric_columns.push(raichu_milp::Column {
+                cost,
+                lower: self.program_number(
+                    variable.lower.as_ref(),
+                    if kind == raichu_milp::Kind::Binary {
+                        0.0
+                    } else {
+                        f64::NEG_INFINITY
+                    },
+                )?,
+                upper: self.program_number(
+                    variable.upper.as_ref(),
+                    if kind == raichu_milp::Kind::Binary {
+                        1.0
+                    } else {
+                        f64::INFINITY
+                    },
+                )?,
+                kind,
+            });
+        }
+        let mut rows = Vec::with_capacity(program.constraints.len());
+        for constraint in &program.constraints {
+            let (offset, coefficients) = self.program_affine(&constraint.expr, columns)?;
+            rows.push(raichu_milp::Row {
+                terms: coefficients
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, value)| *value != 0.0)
+                    .collect(),
+                lower: self.program_number(constraint.lower.as_ref(), f64::NEG_INFINITY)? - offset,
+                upper: self.program_number(constraint.upper.as_ref(), f64::INFINITY)? - offset,
+            });
+        }
+        let tie_break = match &program.tie_break {
+            CProgramTieBreak::Default => raichu_milp::TieBreak::Default,
+            CProgramTieBreak::None => raichu_milp::TieBreak::None,
+            CProgramTieBreak::Objectives(objectives) => {
+                let mut numeric = Vec::with_capacity(objectives.len());
+                for (sense, expr) in objectives {
+                    let (offset, coefficients) = self.program_affine(expr, columns)?;
+                    if !offset.is_finite() {
+                        return Err(EngineError::ProgramFailed {
+                            program: program.name.clone(),
+                            time: self.time,
+                            reason: "non-finite secondary objective offset".to_owned(),
+                        });
+                    }
+                    numeric.push(raichu_milp::Objective {
+                        sense: *sense,
+                        coefficients,
+                    });
+                }
+                raichu_milp::TieBreak::Objectives(numeric)
+            }
+        };
+        let numeric = raichu_milp::Program {
+            columns: numeric_columns,
+            rows,
+            sense: program.sense,
+            node_limit: program.node_limit,
+        };
+        let (outcome, cached) =
+            solve_cached(self.model.cache_id, program_idx, &numeric, &tie_break);
+        match outcome {
+            raichu_milp::Outcome::Optimal(solution) => {
+                let objective = objective_offset + solution.objective;
+                if !objective.is_finite() {
+                    return Err(EngineError::ProgramFailed {
+                        program: program.name.clone(),
+                        time: self.time,
+                        reason: "non-finite objective value".to_owned(),
+                    });
+                }
+                for (variable, value) in program.variables.iter().zip(&solution.values) {
+                    if variable.kind == raichu_model::AttrKind::Int
+                        && (!value.is_finite() || value.abs() > 9_007_199_254_740_992.0)
+                    {
+                        return Err(EngineError::ProgramFailed {
+                            program: program.name.clone(),
+                            time: self.time,
+                            reason: "integer decision exceeds exact f64 range".to_owned(),
+                        });
+                    }
+                }
+                if self.config.journal {
+                    self.journal.push(JournalRecord::ProgramSolved {
+                        time: self.time,
+                        program: program.name.clone(),
+                        status: "optimal",
+                        objective: Some(objective),
+                        cached,
+                    });
+                }
+                for (variable, value) in program.variables.iter().zip(solution.values) {
+                    let typed = match variable.kind {
+                        raichu_model::AttrKind::Bool => Value::Bool(value >= 0.5),
+                        raichu_model::AttrKind::Int => Value::Int(value as i64),
+                        raichu_model::AttrKind::Float => Value::Float(value),
+                    };
+                    self.program_write(variable.target, typed, &program.name, trigger);
+                }
+                self.program_write(program.feasible, Value::Bool(true), &program.name, trigger);
+                if let Some(target) = program.objective_value {
+                    self.program_write(target, Value::Float(objective), &program.name, trigger);
+                }
+            }
+            raichu_milp::Outcome::Infeasible => {
+                if self.config.journal {
+                    self.journal.push(JournalRecord::ProgramSolved {
+                        time: self.time,
+                        program: program.name.clone(),
+                        status: "infeasible",
+                        objective: None,
+                        cached,
+                    });
+                }
+                for variable in &program.variables {
+                    self.program_write(variable.target, variable.fallback, &program.name, trigger);
+                }
+                self.program_write(program.feasible, Value::Bool(false), &program.name, trigger);
+                if let Some(target) = program.objective_value {
+                    self.program_write(target, Value::Float(0.0), &program.name, trigger);
+                }
+            }
+            other => {
+                return Err(EngineError::ProgramFailed {
+                    program: program.name.clone(),
+                    time: self.time,
+                    reason: format!("{other:?}"),
+                })
+            }
+        }
+        Ok(())
+    }
+
     /// Non-confluence diagnostic: converge a *copy* of the state with
     /// the worklist processed in reverse order and compare. Divergence
     /// means the model's result depends on evaluation order: reported
@@ -433,7 +728,21 @@ impl<'m> Engine<'m> {
                 .iter()
                 .filter(|f| f.effects.iter().any(|(target, _)| *target == diverging))
                 .map(|f| f.name.clone())
-                .chain(operators);
+                .chain(operators)
+                .chain(
+                    self.model
+                        .programs
+                        .iter()
+                        .filter(|program| {
+                            program
+                                .variables
+                                .iter()
+                                .any(|variable| variable.target == diverging)
+                                || program.feasible == diverging
+                                || program.objective_value == Some(diverging)
+                        })
+                        .map(|program| program.name.clone()),
+                );
             let first = writers.next().unwrap_or_else(|| "<unknown>".to_owned());
             let second = writers.next().unwrap_or_else(|| first.clone());
             return Err(EngineError::NonConfluent {
@@ -466,14 +775,84 @@ impl<'m> Engine<'m> {
                     iterations: self.config.max_fixpoint_iterations,
                 });
             }
-            if self.config.journal {
-                self.journal.push(JournalRecord::FunctionTriggered {
-                    time: self.time,
-                    function: self.model.functions[fn_idx].name.clone(),
-                });
+            if fn_idx < self.model.functions.len() {
+                if self.config.journal {
+                    self.journal.push(JournalRecord::FunctionTriggered {
+                        time: self.time,
+                        function: self.model.functions[fn_idx].name.clone(),
+                    });
+                }
+                self.apply_function(fn_idx, true)?;
+            } else {
+                self.apply_program(fn_idx - self.model.functions.len(), true)?;
             }
-            self.apply_function(fn_idx, true)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod program_cache_tests {
+    use super::*;
+
+    #[test]
+    fn final_bit_of_a_coefficient_changes_the_key() {
+        let mut program = raichu_milp::Program {
+            columns: vec![raichu_milp::Column {
+                cost: 1.0,
+                lower: 0.0,
+                upper: 2.0,
+                kind: raichu_milp::Kind::Continuous,
+            }],
+            rows: vec![],
+            sense: raichu_milp::Sense::Minimize,
+            node_limit: None,
+        };
+        let original = program_key(&program, &raichu_milp::TieBreak::Default);
+        program.columns[0].cost = f64::from_bits(1.0f64.to_bits() + 1);
+        assert_ne!(
+            original,
+            program_key(&program, &raichu_milp::TieBreak::Default)
+        );
+    }
+
+    #[test]
+    fn cached_and_uncached_solves_match_across_threads() {
+        let program = raichu_milp::Program {
+            columns: vec![raichu_milp::Column {
+                cost: 1.0,
+                lower: 0.0,
+                upper: 2.0,
+                kind: raichu_milp::Kind::Continuous,
+            }],
+            rows: vec![],
+            sense: raichu_milp::Sense::Minimize,
+            node_limit: None,
+        };
+        for threads in [1, 4] {
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..threads)
+                    .map(|worker| {
+                        let program = &program;
+                        scope.spawn(move || {
+                            for replica in (worker..1000).step_by(threads) {
+                                let (cached, _) = solve_cached(
+                                    10_000 + threads as u64,
+                                    replica % 2,
+                                    program,
+                                    &raichu_milp::TieBreak::Default,
+                                );
+                                let uncached =
+                                    raichu_milp::solve(program, &raichu_milp::TieBreak::Default);
+                                assert_eq!(cached, uncached);
+                            }
+                        })
+                    })
+                    .collect();
+                for worker in workers {
+                    assert!(worker.join().is_ok());
+                }
+            });
+        }
     }
 }

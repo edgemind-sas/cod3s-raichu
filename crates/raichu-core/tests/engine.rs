@@ -16,6 +16,7 @@ use raichu_model::{
 /// flow. Expected: flow drops at t=5, recovers at t=15, drops at t=20…
 fn delay_model() -> Model {
     Model {
+        programs: vec![],
         name: "delay_001".into(),
         components: vec![
             Component {
@@ -244,6 +245,7 @@ fn journal_records_the_causality_chain() {
             | JournalRecord::TransitionScheduled { time, .. }
             | JournalRecord::TransitionRescheduled { time, .. }
             | JournalRecord::TransitionDropped { time, .. }
+            | JournalRecord::ProgramSolved { time, .. }
             | JournalRecord::ActiveSetCrossed { time, .. } => *time == 5.0,
         })
         .collect();
@@ -260,6 +262,7 @@ fn journal_records_the_causality_chain() {
                 format!("resched:{transition}")
             }
             JournalRecord::TransitionDropped { transition, .. } => format!("drop:{transition}"),
+            JournalRecord::ProgramSolved { program, .. } => format!("program:{program}"),
             JournalRecord::ActiveSetCrossed { operator, .. } => format!("active-set:{operator}"),
         })
         .collect();
@@ -326,6 +329,7 @@ fn step_api_exposes_state_and_variables() {
 #[test]
 fn instantaneous_loop_is_detected() {
     let model = Model {
+        programs: vec![],
         name: "loop".into(),
         components: vec![Component {
             name: "c".into(),
@@ -373,6 +377,7 @@ fn instantaneous_loop_is_detected() {
 #[test]
 fn non_confluence_is_diagnosed() {
     let model = Model {
+        programs: vec![],
         name: "non_confluent".into(),
         components: vec![Component {
             name: "c".into(),
@@ -444,6 +449,7 @@ fn non_confluence_is_diagnosed() {
 fn non_confluent_model_is_order_deterministic_without_probe() {
     // Same model as above.
     let model = Model {
+        programs: vec![],
         name: "non_confluent".into(),
         components: vec![Component {
             name: "c".into(),
@@ -507,6 +513,7 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
 #[test]
 fn inst_transition_fires_immediately_on_certain_branch() {
     let model = Model {
+        programs: vec![],
         name: "inst".into(),
         components: vec![Component {
             name: "c".into(),
@@ -584,6 +591,7 @@ fn tank_model() -> Model {
     use raichu_expr::{CmpOp, StateRef};
     let content = || Expr::attr("tank", "content");
     Model {
+        programs: vec![],
         name: "tank_01".into(),
         components: vec![Component {
             name: "tank".into(),
@@ -788,6 +796,7 @@ fn tank_runs_on_the_euler_backend_too() {
 fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model {
     use raichu_expr::BoolOp;
     Model {
+        programs: vec![],
         name: "interrupt_probe".into(),
         components: vec![
             Component {
@@ -946,6 +955,7 @@ fn interruption_policy_without_guard_is_rejected() {
 #[test]
 fn expvar_rate_change_is_rescheduled_and_journaled() {
     let model = Model {
+        programs: vec![],
         name: "expvar_updatemt".into(),
         components: vec![Component {
             name: "C".into(),
@@ -1069,6 +1079,7 @@ fn port_mean_and_median_aggregations() {
         sensitive_functions: vec![],
     };
     let model = Model {
+        programs: vec![],
         name: "agg_probe".into(),
         components: vec![
             sensor("s1", 10.0),

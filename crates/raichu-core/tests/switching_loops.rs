@@ -24,6 +24,7 @@ use raichu_model::{
 /// the start threshold gives the switch a band.
 fn pump(start: f64, release: f64) -> Model {
     Model {
+        programs: vec![],
         name: "pump".into(),
         components: vec![Component {
             name: "P".into(),

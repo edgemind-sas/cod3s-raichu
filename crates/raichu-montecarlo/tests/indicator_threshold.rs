@@ -46,6 +46,7 @@ const HORIZON: f64 = 60.0;
 /// is a Monte-Carlo tolerance.
 fn tank(indicators: Vec<Indicator>) -> Model {
     Model {
+        programs: vec![],
         name: "tank".into(),
         components: vec![Component {
             name: "T".into(),
@@ -342,6 +343,7 @@ fn a_threshold_survives_the_round_trip_through_the_document() {
 /// Closed form: the condition holds for exactly `initial` hours.
 fn draining(initial: f64) -> Model {
     Model {
+        programs: vec![],
         name: "draining".into(),
         components: vec![Component {
             name: "T".into(),

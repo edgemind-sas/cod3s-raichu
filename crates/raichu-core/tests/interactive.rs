@@ -91,6 +91,7 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
 /// earlier than B.
 fn two_component_model() -> Model {
     Model {
+        programs: vec![],
         name: "isimu_two".into(),
         components: vec![
             failing_component("A", 5.0, 10.0),
@@ -257,6 +258,7 @@ fn demand_model(ok_prob: f64) -> Model {
         }],
     };
     Model {
+        programs: vec![],
         name: "isimu_demand".into(),
         components: vec![Component {
             name: "d".into(),

@@ -117,6 +117,7 @@ fn parallel_pair(a: f64, b: f64) -> Model {
         },
     );
     Model {
+        programs: vec![],
         name: "parallel_pair".into(),
         components: vec![unit("A", exp(a)), unit("B", exp(b)), watcher],
         connections: vec![],
@@ -136,6 +137,7 @@ fn parallel_pair(a: f64, b: f64) -> Model {
 /// first one down ends the trajectory.
 fn competing_pair(a: f64, b: f64) -> Model {
     Model {
+        programs: vec![],
         name: "competing_pair".into(),
         components: vec![unit("A", exp(a)), unit("B", exp(b))],
         connections: vec![],
