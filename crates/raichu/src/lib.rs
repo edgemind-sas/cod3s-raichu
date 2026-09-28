@@ -10,6 +10,7 @@
 //!
 //! - [`raichu_model`]: the native formalism (components, ports,
 //!   interfaces, automata, transitions).
+//! - [`raichu_milp`]: deterministic mixed-integer optimisation.
 //! - [`raichu_expr`]: serializable expression trees (guards, effects,
 //!   ODE right-hand sides).
 //! - [`raichu_core`]: scheduler and simulation cycle.
@@ -35,6 +36,7 @@ pub use raichu_core;
 pub use raichu_explore;
 pub use raichu_expr;
 pub use raichu_fta;
+pub use raichu_milp;
 pub use raichu_model;
 pub use raichu_montecarlo;
 pub use raichu_numeric;

@@ -9,9 +9,9 @@ use crate::flow::CPolicy;
 use raichu_expr::{AggOp, AttrRef, BoolOp, CmpOp, Expr, PortRef, Value};
 use raichu_model::{
     Allocation, AllocationPolicy, Distrib, EquationKind, IndicatorTarget, InterruptionPolicy,
-    Model, ModelError, PortDir, TransitionKind,
+    Model, ModelError, PortDir, ProgramSense, ProgramTieBreak, TransitionKind,
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use thiserror::Error;
 
 /// Margin tightening applied to *strict* watched comparisons (`<`,
@@ -394,6 +394,91 @@ pub struct CFunction {
     pub effects: Vec<(VarIdx, CExpr)>,
 }
 
+/// Compiled affine expression over one program's decision columns.
+#[derive(Debug, Clone)]
+pub struct CProgramAffine {
+    /// Decision-free offset.
+    pub constant: CExpr,
+    /// Sparse terms `(column index, coefficient expression)`.
+    pub terms: Vec<(usize, CExpr)>,
+}
+
+impl CProgramAffine {
+    fn collect_sensitivity(&self, vars: &mut Vec<VarIdx>, auts: &mut Vec<AutIdx>) {
+        self.constant.collect_sensitivity(vars, auts);
+        for (_, coefficient) in &self.terms {
+            coefficient.collect_sensitivity(vars, auts);
+        }
+    }
+}
+
+/// One compiled decision attribute.
+#[derive(Debug, Clone)]
+pub struct CProgramVariable {
+    /// Published attribute.
+    pub target: VarIdx,
+    /// Declared kind.
+    pub kind: raichu_model::AttrKind,
+    /// Lower and upper numeric expressions.
+    pub lower: Option<CExpr>,
+    /// Upper numeric expression.
+    pub upper: Option<CExpr>,
+    /// Infeasible fallback.
+    pub fallback: Value,
+}
+
+/// One compiled ranged constraint.
+#[derive(Debug, Clone)]
+pub struct CProgramConstraint {
+    /// Affine left-hand side.
+    pub expr: CProgramAffine,
+    /// Optional lower bound.
+    pub lower: Option<CExpr>,
+    /// Optional upper bound.
+    pub upper: Option<CExpr>,
+}
+
+/// A discrete fixpoint program with all references resolved.
+#[derive(Debug, Clone)]
+pub struct CProgram {
+    /// Program name.
+    pub name: String,
+    /// Decision columns.
+    pub variables: Vec<CProgramVariable>,
+    /// Primary direction.
+    pub sense: raichu_milp::Sense,
+    /// Primary objective.
+    pub objective: CProgramAffine,
+    /// Constraints.
+    pub constraints: Vec<CProgramConstraint>,
+    /// Feasibility output.
+    pub feasible: VarIdx,
+    /// Optional objective-value output.
+    pub objective_value: Option<VarIdx>,
+    /// Lexicographic rule.
+    pub tie_break: CProgramTieBreak,
+    /// Node cap.
+    pub node_limit: Option<u64>,
+}
+
+/// Compiled secondary-objective rule.
+#[derive(Debug, Clone)]
+pub enum CProgramTieBreak {
+    /// Default decision-order tie-break.
+    Default,
+    /// No tie-break.
+    None,
+    /// Secondary objectives, followed by decision-order tie-break.
+    Objectives(Vec<(raichu_milp::Sense, CProgramAffine)>),
+}
+
+fn program_sense(sense: ProgramSense) -> raichu_milp::Sense {
+    match sense {
+        ProgramSense::Minimize => raichu_milp::Sense::Minimize,
+        ProgramSense::Maximize => raichu_milp::Sense::Maximize,
+    }
+}
+
 /// A compiled indicator.
 #[derive(Debug, Clone)]
 pub struct CIndicator {
@@ -419,6 +504,9 @@ pub enum CIndicatorTarget {
 /// A validated model resolved to dense tables.
 #[derive(Debug, Clone)]
 pub struct CompiledModel {
+    /// Unique identity for thread-local caches shared by replicas of this
+    /// compiled model, including clones.
+    pub(crate) cache_id: u64,
     /// Model name (provenance).
     pub name: String,
     /// Qualified attribute names `component.attribute` (journal, results).
@@ -432,6 +520,9 @@ pub struct CompiledModel {
     /// All sensitive functions (global order = declaration order: this
     /// *is* the documented deterministic fixpoint order).
     pub functions: Vec<CFunction>,
+    /// Model-level programs, executed after sensitive functions in the
+    /// same discrete fixpoint worklist.
+    pub programs: Vec<CProgram>,
     /// var index → functions to re-evaluate when it changes.
     pub var_triggers: Vec<Vec<FnIdx>>,
     /// automaton index → functions to re-evaluate when its state changes.
@@ -526,6 +617,37 @@ struct Resolver {
 }
 
 impl Resolver {
+    fn compile_program_affine(
+        &self,
+        expr: &Expr,
+        decisions: &HashSet<AttrRef>,
+        columns: &HashMap<AttrRef, usize>,
+    ) -> Result<CProgramAffine, CompileError> {
+        let form = expr
+            .affine_in(decisions)
+            .map_err(|error| CompileError::Unresolved {
+                what: "affine program expression",
+                name: format!("{:?}", error.expression),
+            })?;
+        let constant = self.compile_expr(&form.constant)?;
+        let terms = form
+            .terms
+            .into_iter()
+            .map(|(attr, coefficient)| {
+                let column =
+                    columns
+                        .get(&attr)
+                        .copied()
+                        .ok_or_else(|| CompileError::Unresolved {
+                            what: "program decision",
+                            name: format!("{}.{}", attr.component, attr.attribute),
+                        })?;
+                Ok((column, self.compile_expr(&coefficient)?))
+            })
+            .collect::<Result<Vec<_>, CompileError>>()?;
+        Ok(CProgramAffine { constant, terms })
+    }
+
     fn var(&self, component: &str, attribute: &str) -> Result<VarIdx, CompileError> {
         self.vars
             .get(&(component.to_owned(), attribute.to_owned()))
@@ -1394,6 +1516,112 @@ impl CompiledModel {
             }
         }
 
+        let programs = model
+            .programs
+            .iter()
+            .map(|program| {
+                let decisions: HashSet<_> = program
+                    .variables
+                    .iter()
+                    .map(|variable| variable.attribute.clone())
+                    .collect();
+                let columns: HashMap<_, _> = program
+                    .variables
+                    .iter()
+                    .enumerate()
+                    .map(|(index, variable)| (variable.attribute.clone(), index))
+                    .collect();
+                let variables = program
+                    .variables
+                    .iter()
+                    .map(|variable| {
+                        let target = resolver
+                            .var(&variable.attribute.component, &variable.attribute.attribute)?;
+                        let kind = match variable.on_infeasible {
+                            Value::Bool(_) => raichu_model::AttrKind::Bool,
+                            Value::Int(_) => raichu_model::AttrKind::Int,
+                            Value::Float(_) => raichu_model::AttrKind::Float,
+                        };
+                        Ok(CProgramVariable {
+                            target,
+                            kind,
+                            lower: variable
+                                .lower
+                                .as_ref()
+                                .map(|expr| resolver.compile_expr(expr))
+                                .transpose()?,
+                            upper: variable
+                                .upper
+                                .as_ref()
+                                .map(|expr| resolver.compile_expr(expr))
+                                .transpose()?,
+                            fallback: variable.on_infeasible,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CompileError>>()?;
+                let objective =
+                    resolver.compile_program_affine(&program.objective, &decisions, &columns)?;
+                let constraints = program
+                    .constraints
+                    .iter()
+                    .map(|constraint| {
+                        Ok(CProgramConstraint {
+                            expr: resolver.compile_program_affine(
+                                &constraint.expr,
+                                &decisions,
+                                &columns,
+                            )?,
+                            lower: constraint
+                                .lower
+                                .as_ref()
+                                .map(|expr| resolver.compile_expr(expr))
+                                .transpose()?,
+                            upper: constraint
+                                .upper
+                                .as_ref()
+                                .map(|expr| resolver.compile_expr(expr))
+                                .transpose()?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CompileError>>()?;
+                let tie_break = match &program.tie_break {
+                    None => CProgramTieBreak::Default,
+                    Some(ProgramTieBreak::None) => CProgramTieBreak::None,
+                    Some(ProgramTieBreak::Objectives(objectives)) => CProgramTieBreak::Objectives(
+                        objectives
+                            .iter()
+                            .map(|objective| {
+                                Ok((
+                                    program_sense(objective.sense),
+                                    resolver.compile_program_affine(
+                                        &objective.expr,
+                                        &decisions,
+                                        &columns,
+                                    )?,
+                                ))
+                            })
+                            .collect::<Result<Vec<_>, CompileError>>()?,
+                    ),
+                };
+                Ok(CProgram {
+                    name: program.name.clone(),
+                    variables,
+                    sense: program_sense(program.sense),
+                    objective,
+                    constraints,
+                    feasible: resolver
+                        .var(&program.feasible.component, &program.feasible.attribute)?,
+                    objective_value: program
+                        .objective_value
+                        .as_ref()
+                        .map(|attr| resolver.var(&attr.component, &attr.attribute))
+                        .transpose()?,
+                    tie_break,
+                    node_limit: program.node_limit.map(|limit| limit as u64),
+                })
+            })
+            .collect::<Result<Vec<CProgram>, CompileError>>()?;
+
         // Pass 4: sensitivity sets → trigger tables.
         let mut var_triggers = vec![Vec::new(); var_names.len()];
         let mut state_triggers = vec![Vec::new(); automata.len()];
@@ -1412,6 +1640,44 @@ impl CompiledModel {
             }
             for aut in auts {
                 state_triggers[aut].push(fn_idx);
+            }
+        }
+        for (program_idx, program) in programs.iter().enumerate() {
+            let mut vars = Vec::new();
+            let mut auts = Vec::new();
+            program.objective.collect_sensitivity(&mut vars, &mut auts);
+            for variable in &program.variables {
+                for expr in [variable.lower.as_ref(), variable.upper.as_ref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    expr.collect_sensitivity(&mut vars, &mut auts);
+                }
+            }
+            for constraint in &program.constraints {
+                constraint.expr.collect_sensitivity(&mut vars, &mut auts);
+                for expr in [constraint.lower.as_ref(), constraint.upper.as_ref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    expr.collect_sensitivity(&mut vars, &mut auts);
+                }
+            }
+            if let CProgramTieBreak::Objectives(objectives) = &program.tie_break {
+                for (_, objective) in objectives {
+                    objective.collect_sensitivity(&mut vars, &mut auts);
+                }
+            }
+            vars.sort_unstable();
+            vars.dedup();
+            auts.sort_unstable();
+            auts.dedup();
+            let step = functions.len() + program_idx;
+            for var in vars {
+                var_triggers[var].push(step);
+            }
+            for aut in auts {
+                state_triggers[aut].push(step);
             }
         }
 
@@ -1471,12 +1737,17 @@ impl CompiledModel {
             .collect();
 
         let mut compiled = CompiledModel {
+            cache_id: {
+                static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
             name: model.name.clone(),
             var_names,
             var_init,
             automata,
             transitions,
             functions,
+            programs,
             var_triggers,
             state_triggers,
             indicators,

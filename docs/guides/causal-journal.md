@@ -7,6 +7,11 @@ transition, every attribute write with its cause, and the consequence
 chain of each event. It is **zero-cost when off** and enabled per run
 with `journal=True`:
 
+Each mixed-integer program solve adds a `program_solved` record with its
+name, date, `optimal` or `infeasible` status, optional objective, and a
+`cached` flag. Decision, feasibility and objective writes appear as
+`attribute_changed` records caused by the program.
+
 <!-- skip -->
 ```python
 result = pyraichu.simulate(model, t_max=15.0, journal=True)

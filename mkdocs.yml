@@ -76,6 +76,7 @@ nav:
   - Raw sequence corpus format: reference/sequence-format.md
   - Quantification envelope format: reference/quantification-format.md
   - Advanced guides:
+      - Mixed-integer optimisation: guides/optimisation.md
       - Reproducibility: guides/reproducibility.md
       - Confidence intervals: guides/confidence-intervals.md
       - Numerical tuning: guides/numerical-tuning.md

@@ -21,6 +21,7 @@ fn main() {
 
 fn probe_model() -> Model {
     Model {
+        programs: vec![],
         name: "ci_bench".into(),
         components: vec![Component {
             name: "C".into(),

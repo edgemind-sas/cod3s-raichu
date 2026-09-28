@@ -51,6 +51,7 @@ fn comp(
 /// cycle pair). `ER.ev` fires occ@10, which is the feared-event target.
 fn model() -> Model {
     Model {
+        programs: vec![],
         name: "seq_a1".into(),
         components: vec![
             comp(
@@ -144,6 +145,7 @@ fn early_stop_finishes_the_hit_instant() {
     // `T.ev` (the target) and `B.aux` are both due at t=5; T fires first
     // (declaration order): B must fire too.
     let m = Model {
+        programs: vec![],
         name: "same_instant".into(),
         components: vec![
             comp(

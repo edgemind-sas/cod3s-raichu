@@ -241,6 +241,16 @@ impl Default for EngineConfig {
 /// Typed runtime errors. The engine never panics on a library path.
 #[derive(Debug, Error)]
 pub enum EngineError {
+    /// A model-level program did not prove a usable optimum.
+    #[error("program `{program}` failed at t={time}: {reason}")]
+    ProgramFailed {
+        /// Program name.
+        program: String,
+        /// Simulation time.
+        time: f64,
+        /// Solver outcome or invalid numeric input.
+        reason: String,
+    },
     /// An expression combined values of incompatible kinds.
     #[error("type error at t={time}: {detail}")]
     TypeError {
@@ -628,6 +638,19 @@ impl std::fmt::Display for FlowStall {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum JournalRecord {
+    /// A program was solved or its exact numeric input was found in cache.
+    ProgramSolved {
+        /// Simulation time.
+        time: f64,
+        /// Program name.
+        program: String,
+        /// Proven status, either `optimal` or `infeasible`.
+        status: &'static str,
+        /// Optimal primary objective, absent when infeasible.
+        objective: Option<f64>,
+        /// Whether an exact-input cache entry served the outcome.
+        cached: bool,
+    },
     /// A transition fired (`fire_transition` / `schedule_boundary`).
     TransitionFired {
         /// Simulation time.
@@ -1040,6 +1063,10 @@ pub struct WorkCounters {
 /// construction).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Provenance {
+    /// Programs that requested no tie-break, so their dispatch is not
+    /// guaranteed unique across solver builds or platforms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub non_unique_programs: Vec<String>,
     /// Engine version (workspace version).
     pub engine_version: String,
     /// Model name.

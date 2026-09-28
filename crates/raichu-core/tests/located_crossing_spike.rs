@@ -106,6 +106,7 @@ fn float_attr(name: &str) -> Attribute {
 /// `x` integrates at rate 1; `y = 2x` is explicit; the boundary is `y >= 5`.
 fn same_component_model() -> Model {
     Model {
+        programs: vec![],
         name: "spike_explicit_same_component".into(),
         components: vec![Component {
             name: "src".into(),
@@ -160,6 +161,7 @@ fn same_component_model() -> Model {
 /// is explicit; the boundary is `sink.y >= 5`.
 fn across_connection_model() -> Model {
     Model {
+        programs: vec![],
         name: "spike_explicit_across_connection".into(),
         components: vec![
             Component {

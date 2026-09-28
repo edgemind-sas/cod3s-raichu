@@ -11,6 +11,7 @@ description = "Simulation cycle: scheduler, discrete evolution, sensitive-functi
 [dependencies]
 raichu-expr.workspace = true
 raichu-model.workspace = true
+raichu-milp.workspace = true
 raichu-numeric.workspace = true
 raichu-rng.workspace = true
 rand.workspace = true

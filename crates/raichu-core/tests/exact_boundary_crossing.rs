@@ -39,6 +39,7 @@ const T_MAX: f64 = 40.0;
 /// `x(0) = x0`, `dx/dt = slope`, one watched transition on `x <cmp> rhs`.
 fn ramp_model(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Model {
     Model {
+        programs: vec![],
         name: "exact_boundary_ramp".into(),
         components: vec![Component {
             name: "ramp".into(),

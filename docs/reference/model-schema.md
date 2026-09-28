@@ -46,8 +46,57 @@ A complete, minimal model that uses most sections:
 | `connections` | array of [Connection](#connection) | no (default `[]`) | out-port → in-port wiring |
 | `indicators` | array of [Indicator](#indicator) | no (default `[]`) | what the engine measures |
 | `targets` | array of [Target](#target) | no (default `[]`) | feared-event states for [sequence analysis](../guides/sequence-analysis.md) |
+| `programs` | array of [Program](#program) | no (default `[]`) | discrete mixed-integer optimisation steps |
 | `evaluation_order` | array of VarRef | no (default: declaration order) | sweep order of the explicit equations, see [Evaluation order](#evaluation-order) |
 | `unbounded_rate` | number | no (default: none reserved) | the magnitude that stands for "no ceiling", which no integrated rate may reach, see [Unbounded rate](#unbounded-rate) |
+
+### Program
+
+A program is solved at the initial discrete fixpoint and whenever an input
+attribute or automaton state changes. It may dispatch decisions across
+components. A document containing a nonempty `programs` list must use the
+format envelope and declare `mixed_integer_program` under `requires`.
+
+| key | type | meaning |
+|---|---|---|
+| `name` | string | unique program name |
+| `variables` | array of variable objects | decisions in default tie-break order |
+| `sense` | `minimize` or `maximize` | direction of the primary objective |
+| `objective` | Expr | affine primary objective |
+| `constraints` | array of constraint objects | ranged linear constraints |
+| `feasible` | AttrRef | Bool attribute set to true for an optimum, false when infeasible |
+| `objective_value` | AttrRef | optional Float attribute set to the optimum, or 0 when infeasible |
+| `tie_break` | `none` or `{ "objectives": [...] }` | optional secondary objectives; omitted uses lexicographic minimisation of decisions |
+| `node_limit` | positive integer | optional deterministic branch-and-bound cap, default 100,000 |
+
+Each variable is `{ "attribute": AttrRef, "lower": Expr?, "upper": Expr?,
+"on_infeasible": Value }`. The attribute's kind selects continuous (`float`),
+integer (`int`) or binary (`bool`) decision. A binary decision has implicit
+bounds 0 and 1. Every variable needs a fallback of the same kind.
+
+Each constraint is `{ "name": string, "expr": Expr, "lower": Expr?,
+"upper": Expr? }`, with at least one bound. Its meaning is
+`lower <= expr <= upper`. A secondary objective is `{ "sense":
+"minimize"|"maximize", "expr": Expr }`. After the primary and declared
+secondary optima are fixed, the solver minimises each decision in
+declaration order unless `tie_break` is `none`.
+Each preceding optimum is retained within `1e-9 * max(1, abs(optimum))`
+when the next objective is solved. Continuous decisions can therefore differ
+from a closed-form optimum by that numerical tolerance. Integer decisions
+outside the exact `f64` range (absolute value above `2^53`) fail the run.
+
+The objective and constraint expressions must be affine in the decision
+attributes. Coefficients and bounds can read discrete attributes and states,
+including outputs of sensitive functions, transition effects and earlier
+programs. A program cannot read one of its own outputs, use `time`, or read
+an ODE target, an explicit-equation target or an allocated channel, including
+through `port_agg`. Program dependencies cannot form a cycle. No other
+writer may assign one of a program's decision or output attributes.
+
+An infeasible solve publishes every variable's fallback and `feasible=false`.
+An unbounded program, node-limit stop or solver fault ends the trajectory
+with an error naming the program and date. See the
+[optimisation guide](../guides/optimisation.md) for a runnable dispatch.
 
 ### Connection
 
@@ -678,6 +727,7 @@ The Python helpers, all in `pyraichu`:
 | `allocation` | component-level [allocations](#allocation) |
 | `unbounded_rate` | model-level [unbounded rate](#unbounded-rate) |
 | `transition_effects` | transition-level [edge effects](#edge-effects) |
+| `mixed_integer_program` | model-level [programs](#program) |
 
 The transition-level [declared kind](#declared-kind) is a **baseline**
 construct and has no feature name: an engine that ignored it would

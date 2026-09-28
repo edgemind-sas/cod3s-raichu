@@ -75,6 +75,7 @@ fn trigger_condition(logic: &str) -> Expr {
 fn standby(logic: &str, connected: bool, init: &str) -> Model {
     let condition = trigger_condition(logic);
     Model {
+        programs: vec![],
         name: "standby".into(),
         components: vec![
             Component {
@@ -606,6 +607,7 @@ fn duty(wired: bool, draws: bool, floor: f64, below: bool) -> Model {
         }
     };
     Model {
+        programs: vec![],
         name: "duty".into(),
         components: vec![
             Component {

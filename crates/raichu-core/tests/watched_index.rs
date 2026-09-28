@@ -124,6 +124,7 @@ fn branch(index: usize, delay: f64, reads: (&str, &str), driven: bool) -> Compon
 /// reads an attribute that never moves.
 fn independent_branches(n: usize, active: usize) -> Model {
     Model {
+        programs: vec![],
         name: "wide_independent".into(),
         components: (0..n)
             .map(|i| {
@@ -204,6 +205,7 @@ fn shared_boundary(n: usize) -> Model {
         },
     );
     Model {
+        programs: vec![],
         name: "shared_boundary".into(),
         components,
         connections: vec![],
@@ -329,6 +331,7 @@ fn changing_one_attribute_re_evaluates_only_the_guards_that_read_it() {
 fn a_scan_over_an_unmoving_network_costs_one_cold_pass() {
     let n = 50;
     let model = Model {
+        programs: vec![],
         name: "unmoving".into(),
         components: (0..n)
             .map(|i| {

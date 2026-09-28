@@ -76,6 +76,7 @@ fn clock_model(watched: bool) -> Model {
         }];
     }
     Model {
+        programs: vec![],
         name: "clock_only".into(),
         components: vec![component],
         indicators: vec![Indicator {

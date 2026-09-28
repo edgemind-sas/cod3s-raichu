@@ -124,6 +124,7 @@ fn system(name: &str, mut components: Vec<Component>, lost: Expr) -> Model {
         },
     ));
     Model {
+        programs: vec![],
         name: name.into(),
         components,
         connections: vec![],

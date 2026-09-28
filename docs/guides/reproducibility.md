@@ -55,6 +55,12 @@ print("exact replay")
   [Parallelism](parallelism.md)).
 - Simultaneous events are ordered by (date, transition index): a
   documented, stable tie-break.
+- Mixed-integer programs use HiGHS in single-thread mode with a fixed solver
+  seed and a deterministic node cap. Equal-cost optima use lexicographic
+  minimisation of decisions in declaration order unless a program declares
+  `tie_break: none`. Those programs are listed in
+  `provenance.non_unique_programs`. Exact numeric inputs may be served from
+  a per-worker cache; this changes only the journal's `cached` field.
 
 ## Explicit numerics
 
@@ -84,3 +90,5 @@ print(sorted(result.provenance))     # keys include engine_version, model, seed
 - Cross-engine bit-identity: agreement with other engines is a
   statistical/tolerance property, documented in the
   [benchmarks](../benchmarks/cross-validation.md).
+- Cross-platform bit-identity of continuous mixed-integer program decisions:
+  solver floating-point arithmetic can differ in the last bits.

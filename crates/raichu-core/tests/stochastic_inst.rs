@@ -13,6 +13,7 @@ use raichu_model::{Automaton, Component, Distrib, Model, Transition};
 /// `ok` (probability `ok_prob`) or `ko` (the complement).
 fn demand_model(ok_prob: f64) -> Model {
     Model {
+        programs: vec![],
         name: "inst_demand".into(),
         components: vec![Component {
             name: "d".into(),
@@ -110,6 +111,7 @@ fn three_way_branching_covers_every_target() {
     // probs = [0.2, 0.3] ⇒ full [0.2, 0.3, 0.5]: all three branches are
     // reachable across streams (the inverse-CDF walk hits each interval).
     let model = Model {
+        programs: vec![],
         name: "inst_three".into(),
         components: vec![Component {
             name: "d".into(),

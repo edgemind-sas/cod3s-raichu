@@ -1,0 +1,19 @@
+[package]
+name = "raichu-milp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Deterministic mixed-integer linear programming for RAICHU"
+
+[dependencies]
+highs-sys = { version = "=1.15.0", default-features = false, features = ["build", "highs_release"] }
+
+[dev-dependencies]
+microlp = "=0.6.0"
+proptest.workspace = true
+
+[lints]
+workspace = true

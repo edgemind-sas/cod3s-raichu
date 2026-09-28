@@ -28,6 +28,7 @@ use raichu_model::{
 /// same-instant guard sees it.
 fn sawtooth() -> Model {
     Model {
+        programs: vec![],
         name: "sawtooth".into(),
         components: vec![Component {
             name: "C".into(),

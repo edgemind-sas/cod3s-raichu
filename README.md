@@ -118,12 +118,17 @@ platform and:
 pip install pyraichu-<version>-cp39-abi3-<platform>.whl
 ```
 
-Intel Macs are not built for: use the source build below there.
+Intel Macs are not built for: use the source build below there. Linux wheels
+require glibc 2.28 or newer.
 
 RAICHU is deliberately not published on PyPI: the GitHub releases are
 the distribution channel.
 
 ## Build
+
+Building from source, including from the sdist, requires CMake, a C++
+compiler and libclang to compile the embedded HiGHS solver. Installed
+wheels need no system solver library.
 
 ```bash
 cargo build --workspace                 # engine

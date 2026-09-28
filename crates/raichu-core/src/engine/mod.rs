@@ -66,8 +66,8 @@
 //! here, so its path is `raichu_core::engine::<name>`.
 
 use crate::compile::{
-    AutIdx, CAllocation, CExpr, CFlowMargins, CIndicatorTarget, CLaw, CStep, CompiledModel, FnIdx,
-    StateIdx, TransIdx, VarIdx, WatchedIdx,
+    AutIdx, CAllocation, CExpr, CFlowMargins, CIndicatorTarget, CLaw, CProgramAffine,
+    CProgramTieBreak, CStep, CompiledModel, FnIdx, StateIdx, TransIdx, VarIdx, WatchedIdx,
 };
 use crate::flow::{allocate, classify, edge_margin, flow_band, EdgeClass, FLOW_TOLERANCE};
 use raichu_expr::{AggOp, BoolOp, CmpOp, Value};
@@ -369,7 +369,8 @@ impl<'m> Engine<'m> {
         // The state vectors have just been set wholesale (fresh build or
         // reset): derive the arming and discard every cached verdict.
         self.rebuild_watched_index();
-        self.worklist.extend(0..self.model.functions.len());
+        self.worklist
+            .extend(0..self.model.functions.len() + self.model.programs.len());
         self.run_fixpoint()?;
         self.resolve_flows()?;
         self.refresh_schedule()?;
