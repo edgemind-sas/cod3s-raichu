@@ -54,6 +54,23 @@ deliberate departures.
 | `setDtCond` (event-location step) | explicit integrator tolerances (`rtol`, `tol_event`, …) | recorded in the run's provenance |
 | FMU co-simulation import (developer manual, section 4.1.11.2) | `fmu_units` with attribute bindings and an explicit import grant | outputs are held between scheduled communication points; crossing dates on those outputs have the declared step resolution |
 
+### Result files
+
+The reference engine's result files are described in its user manual
+V1.3.7.2, sections 7, 7.4-7.6 and 8. RAICHU keeps its own documented
+formats; the COD3S platform translates either engine's results into the
+same platform artefacts ([platform import guide](../guides/platform-import.md#converting-the-outputs)).
+
+| Reference engine file | RAICHU counterpart | Reader and boundary |
+|---|---|---|
+| Complete result file, including monitored data (sections 7.4 and 8) | [`raichu.quantification`](../reference/quantification-format.md) for a quantified study, plus the platform's `indicators.csv` and run metadata | The platform reads its own artefacts. RAICHU does not produce a file for the reference engine's result loader. |
+| Grouped or raw `sequences.xml` (section 7.5) | [`raichu.sequences`](../reference/sequence-format.md) raw corpus; the platform also writes `sequences_minimal.json` and `sequences_all.json` | The platform's run viewer and exports read the shared JSON envelope. A reload into the reference engine has no counterpart, by decision. |
+| Fault-tree export (section 7.6) | [OpenPSA](../guides/fault-tree.md) | Both engines can exchange this open standard. |
+| `pyc_param.xml`, the reference run's parameter record (section 7) | The sealed model document's content hash in [`raichu.quantification`](../reference/quantification-format.md) | Provenance is recorded in RAICHU's own result format; no parameter-file clone is written. |
+
+The manual's NetCDF manager (section 9.3.31) reads model inputs. It is not
+a result-file export and is outside this mapping.
+
 ## Sequence-tree exploration
 
 PyCATSHOO's sequence-tree explorer (user manual V1.3.7.2, sections 5.5.5,

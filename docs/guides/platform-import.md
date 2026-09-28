@@ -91,6 +91,10 @@ largest value that measure took across the replicas at each instant.
 
 ## Converting the outputs
 
+The [result-file mapping](../pycatshoo/concept-mapping.md#result-files)
+identifies the counterpart of each reference-engine result file and the
+readers that consume it.
+
 RAICHU's results map line-for-line onto the platform's artefacts. The
 minimal sequences, in the platform's sequence-artefact shape (`weight` is
 the trajectory count; divide by `nb_runs` for the probability):
