@@ -1,10 +1,11 @@
 # Quantification envelope format
 
 RAICHU answers "what is the probability that this feared event happens by
-this horizon" with three engines: **Monte-Carlo simulation**, **exact
-exploration** and **discretised exploration**. Each engine keeps its own
+this horizon" with five engines: **Monte-Carlo simulation**, **exact
+exploration**, **discretised exploration**, **cross-entropy** and
+**adaptive splitting**. Each engine keeps its own
 settings and its own detailed result; the quantification envelope puts one
-shape around all three, so a reader finds the method, the provenance and
+shape around all five, so a reader finds the method, the provenance and
 the probability with its uncertainty in the same place whichever engine
 answered.
 
@@ -14,14 +15,14 @@ question once, a `Method` names the engine with the settings that belong
 to it alone, and `quantify(model, study, method)` returns the envelope.
 `read_quantification` reads one back.
 
-For a walk through one study quantified by the three engines, see the
+For worked examples of studies quantified by these engines, see the
 [quantification guide](../guides/quantification.md); this page specifies
 the format.
 
 ## From Python
 
 `pyraichu.quantify(model, study, method=..., **settings)` is the one entry
-point to the three engines; `Quantification.to_json()` writes the envelope
+point to the five engines; `Quantification.to_json()` writes the envelope
 and `pyraichu.read_quantification` reads it back into an equal object.
 
 ```python
@@ -104,20 +105,20 @@ the probability of reaching it by the horizon.
 | `target` | string | the declared target (feared event) quantified |
 | `horizon` | number | finite, nonnegative, in the model's time unit |
 | `instants` | array of numbers, optional | reporting instants of the Monte-Carlo detailed result, strictly ascending within `[0, horizon]`; default: the horizon alone |
-| `seed` | integer, optional | master seed of a Monte-Carlo or cross-entropy campaign; default `0` |
+| `seed` | integer, optional | master seed of a Monte-Carlo, cross-entropy or splitting campaign; default `0` |
 | `threads` | integer, optional | worker threads, at least 1; no result depends on it |
 
 An unknown target is refused before anything runs, naming the targets the
 model declares.
 
-## `raichu.quantification`, version 2
+## `raichu.quantification`, version 3
 
 One JSON document.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | string | always `"raichu.quantification"` |
-| `version` | integer | `2` when written; version `1` (the same document without the cross-entropy method) is still read |
+| `version` | integer | `3` when written; versions `1` and `2` are still read for the methods they introduced |
 | `method` | object | `{"name", "settings"}`: the method and the settings it applied, defaults resolved (see [Methods](#methods)) |
 | `provenance` | object | where the answer comes from (see [Provenance](#provenance)) |
 | `probability` | object | the probability of the target, with its uncertainty (see [Probability](#probability)) |
@@ -131,6 +132,7 @@ One JSON document.
 | `exact` | exact exploration (Markov family) | `min_probability`, `max_length`, `max_failures`, `max_branches` (cut-offs, each optional), `gap_tolerance`, `rel_precision`, `max_terms` |
 | `discretised` | discretised exploration | the four cut-offs (`max_branches` defaults to 1 000 000), `gap_tolerance`, `level` (default 8), `refine` (default `true`) |
 | `cross_entropy` | biased Monte-Carlo, factors fitted by cross-entropy | `nb_runs` (final replicas, at least 1, required), `pilot_runs` (default 1 000), `max_iterations` (default 20), `smoothing` (default 0.7), `tolerance` (default 0.02), `confidence` (default `0.95`), `initial_factor` (default 10), `escalation_ratio` (default 10), `factor_min` (default 0.01), `factor_max` (default 10 000), `fit` (default `true`), `min_effective_sample_size` (default 50), `families` (qualified transition name to family label, default none) |
+| `splitting` | adaptive multilevel splitting | `importance` (required: `{"kind":"attribute","name":"component.score"}`), `particles` (per batch, default 16 000), `batches` (default 20), `score_grid` (default empty), `max_iterations` (default 10 000), `confidence` (default `0.95`) |
 
 A setting given to a method it does not belong to is refused, naming the
 methods that do take it. The Monte-Carlo campaign always stops each
@@ -150,7 +152,7 @@ the reporting instants.
 | `target` | string | the study's target |
 | `horizon` | number | the study's horizon |
 | `instants` | array of numbers | the reporting instants; **Monte-Carlo only**, absent otherwise |
-| `seed` | integer | the master seed; **Monte-Carlo and cross-entropy only**, absent otherwise |
+| `seed` | integer | the master seed; **Monte-Carlo, cross-entropy and splitting only**, absent otherwise |
 
 The thread count is never recorded, since no result depends on it. The
 exploration methods ignore the seed and the instants and do not record
@@ -209,6 +211,23 @@ or too unevenly weighted: measured on repairable systems with fast repairs
 over a long horizon, such estimates were from 30 % to three orders of
 magnitude off.
 
+**`splitting_estimate`** (adaptive splitting, version 3 onward):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `estimate` | number | mean of all independent batch estimates, including extinct zeros |
+| `standard_error` | number | sample standard deviation divided by the square root of the batch count |
+| `level` | number | confidence level strictly inside `(0, 1)` |
+| `method` | string | `"batch_student"`, Student interval with `batches - 1` degrees of freedom |
+| `low`, `high` | number | interval endpoints, not clamped |
+| `batches` | integer | independent batches completed |
+| `extinct_batches` | integer | batches with no surviving particle below the target |
+| `inconclusive` | boolean | any extinction, lower bound at or below zero, or relative half-width above one |
+
+An iteration cap raises a splitting error and returns no envelope. The
+study's reporting instants are unused; `score_grid` supplies extra score
+observations between completed event instants. Imported FMUs are refused.
+
 **`bounds`** (exact and discretised exploration):
 
 | Field | Type | Meaning |
@@ -239,6 +258,14 @@ An object with a single key naming the engine kind:
   sample size of the hits per iteration, whether it escalated), whether
   the fit converged (on a pilot at or above the threshold) and whether the
   estimate is inconclusive.
+
+The `{"splitting": {...}}` detail contains `target`, `seed`, `interval`
+(the estimate, standard error, level, method and endpoints), `batches`,
+`extinct_batches`, `estimate_inconclusive` and total `trajectories`.
+Each batch has `estimate`, `extinct`, `trajectories` and a `levels` history.
+Each level records the finite `level`, `killed` count and
+`survival_fraction = 1 - killed / particles`. Python exposes these as
+`SplittingResult`, `SplittingBatch` and `SplittingLevel`.
 
 ### Example
 
@@ -271,7 +298,8 @@ A reader refuses:
   an exploration detail under the `monte_carlo` method, an exact result
   under the `discretised` method, bounds that are not the exploration's
   own, or an estimate, replica count, level or seed that disagrees with the
-  Monte-Carlo or cross-entropy detail and the method settings;
+  Monte-Carlo, cross-entropy or splitting detail and the method settings;
+- splitting in a version-1 or version-2 document, or cross-entropy in version 1;
 - an exploration detail that its own reader refuses.
 
 Numbers are read correctly rounded, so an envelope written by the engine
@@ -279,7 +307,7 @@ reads back to the same bits.
 
 ## Adding an engine
 
-The four names are not a closed list. A later engine adds a `method`
+The five names are not a closed list. A later engine adds a `method`
 name with its settings, and a `probability` kind if it states a new sort
 of uncertainty; the envelope's other members keep their meaning. Such an
 addition raises the format version, so a reader written before it refuses

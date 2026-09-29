@@ -87,6 +87,7 @@ mod flow;
 mod interactive;
 mod notes;
 mod ode;
+mod restart;
 mod run;
 mod sampling;
 mod schedule;
@@ -112,6 +113,7 @@ use flow::{
 };
 use notes::ChangeLog;
 use ode::{ContinuousSystem, FrozenFlow};
+use restart::DrawnClock;
 use sampling::indicator_value;
 use schedule::{fireable_kind, validate_rate_factors, ExposureTally, Hazard};
 
@@ -131,6 +133,8 @@ pub struct Engine<'m> {
     /// Pending firing date per transition (`None` = not scheduled;
     /// watched transitions are monitored, never date-scheduled).
     pending: Vec<Option<f64>>,
+    /// Ages of drawn stochastic clocks, including paused clocks.
+    clocks: Vec<Option<DrawnClock>>,
     /// Remaining countdown of paused transitions
     /// (`on_interruption: resume` only).
     frozen: Vec<Option<f64>>,
@@ -397,6 +401,7 @@ impl<'m> Engine<'m> {
             vars: model.var_init.clone(),
             states: model.automata.iter().map(|a| a.init).collect(),
             pending: vec![None; model.transitions.len()],
+            clocks: vec![None; model.transitions.len()],
             frozen: vec![None; model.transitions.len()],
             hazards: vec![None; model.transitions.len()],
             deferred: vec![None; model.transitions.len()],

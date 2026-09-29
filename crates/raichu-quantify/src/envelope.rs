@@ -1,9 +1,9 @@
-//! The result envelope, `raichu.quantification` version 2 (version 1 is
+//! The result envelope, `raichu.quantification` version 3 (versions 1 and 2 are
 //! still read).
 
 use raichu_core::FmuProvenance;
 use raichu_explore::{Algorithm, ExplorationResult};
-use raichu_montecarlo::{CrossEntropyEstimate, IntervalMethod, McEstimates};
+use raichu_montecarlo::{CrossEntropyEstimate, IntervalMethod, McEstimates, SplittingEstimate};
 use serde::{Deserialize, Serialize};
 
 use crate::Method;
@@ -16,10 +16,11 @@ pub const QUANTIFICATION_FORMAT: &str = "raichu.quantification";
 /// Version 2 added the cross-entropy method, its `weighted_estimate`
 /// probability and its `cross_entropy` detail; a version 1 envelope reads
 /// unchanged.
-pub const QUANTIFICATION_VERSION: u32 = 2;
+/// Version 3 adds splitting and its independent-batch interval.
+pub const QUANTIFICATION_VERSION: u32 = 3;
 
 /// The answer to a study, whatever the engine: `raichu.quantification`
-/// version 2.
+/// version 3.
 ///
 /// The envelope carries the method as applied, the provenance, the
 /// probability of the study's target with its uncertainty, and the
@@ -73,7 +74,7 @@ pub struct QuantificationProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instants: Option<Vec<f64>>,
     /// The master seed, recorded only for a method that draws at random
-    /// (Monte-Carlo simulation, cross-entropy).
+    /// (Monte-Carlo simulation, cross-entropy, splitting).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
     /// Imported co-simulation units, omitted for native-only studies.
@@ -140,6 +141,27 @@ pub enum TargetProbability {
         /// trusted, however narrow the interval.
         inconclusive: bool,
     },
+    /// Mean of independent splitting batches with a Student interval.
+    SplittingEstimate {
+        /// Mean batch estimate.
+        estimate: f64,
+        /// Standard error of the mean across independent batches.
+        standard_error: f64,
+        /// Confidence level strictly inside `(0, 1)`.
+        level: f64,
+        /// The construction: [`IntervalMethod::BatchStudent`].
+        method: IntervalMethod,
+        /// Lower interval endpoint, not clamped.
+        low: f64,
+        /// Upper interval endpoint, not clamped.
+        high: f64,
+        /// Number of independent batches.
+        batches: u64,
+        /// Batches that became extinct, included as zeros in the mean.
+        extinct_batches: u64,
+        /// Extinction, nonpositive lower bound or relative half-width above one.
+        inconclusive: bool,
+    },
     /// Guaranteed bounds (exact and discretised exploration): the
     /// probability lies in `[lower, upper]`, on the discretised model for
     /// a discretised exploration.
@@ -166,7 +188,8 @@ impl TargetProbability {
     pub fn range(&self) -> (f64, f64) {
         match self {
             TargetProbability::ConfidenceInterval { low, high, .. }
-            | TargetProbability::WeightedEstimate { low, high, .. } => (*low, *high),
+            | TargetProbability::WeightedEstimate { low, high, .. }
+            | TargetProbability::SplittingEstimate { low, high, .. } => (*low, *high),
             TargetProbability::Bounds { lower, upper, .. } => (*lower, *upper),
         }
     }
@@ -188,6 +211,8 @@ pub enum Detail {
     /// The cross-entropy campaign: fitted factors per family, pilot
     /// history and diagnostics, without the per-replica ends.
     CrossEntropy(Box<CrossEntropyEstimate>),
+    /// Independent batch estimates and their selection-level histories.
+    Splitting(Box<SplittingEstimate>),
 }
 
 /// Why a document is not a quantification envelope this crate reads.
@@ -347,6 +372,58 @@ fn check_consistency(envelope: &Quantification) -> Result<(), ReadQuantification
             }
             if detail.target != envelope.provenance.target || envelope.provenance.seed.is_none() {
                 return inconsistent("cross_entropy", "the target or seed is not the detail's");
+            }
+            Ok(())
+        }
+        Method::Splitting(settings) => {
+            let (
+                TargetProbability::SplittingEstimate {
+                    estimate,
+                    standard_error,
+                    level,
+                    method,
+                    low,
+                    high,
+                    batches,
+                    extinct_batches,
+                    inconclusive,
+                },
+                Detail::Splitting(detail),
+            ) = (&envelope.probability, &envelope.detail)
+            else {
+                return inconsistent(
+                    "splitting",
+                    "expects a splitting estimate and a splitting detail",
+                );
+            };
+            if envelope.version < 3 {
+                return inconsistent("splitting", "the method exists from format version 3");
+            }
+            let d = &detail.interval;
+            if *batches != settings.batches
+                || detail.batches.len() as u64 != settings.batches
+                || *extinct_batches != detail.extinct_batches
+                || detail.extinct_batches
+                    != detail.batches.iter().filter(|b| b.extinct).count() as u64
+            {
+                return inconsistent("splitting", "the batch counts disagree");
+            }
+            if !same_bits(*level, settings.confidence)
+                || !same_bits(d.level, settings.confidence)
+                || *method != IntervalMethod::BatchStudent
+                || *method != d.method
+                || !same_bits(*estimate, d.estimate)
+                || !same_bits(*standard_error, d.standard_error)
+                || !same_bits(*low, d.low)
+                || !same_bits(*high, d.high)
+                || *inconclusive != detail.estimate_inconclusive
+            {
+                return inconsistent("splitting", "the estimate is not the detail's");
+            }
+            if detail.target != envelope.provenance.target
+                || envelope.provenance.seed != Some(detail.seed)
+            {
+                return inconsistent("splitting", "the target or seed is not the detail's");
             }
             Ok(())
         }

@@ -932,6 +932,9 @@ fn a_cross_entropy_envelope_reads_back_and_refuses_a_forged_estimate() {
     assert_eq!(back.to_json().unwrap(), json);
 
     let base: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let mut v2 = base.clone();
+    v2["version"] = serde_json::json!(2);
+    assert_eq!(read_quantification(&v2.to_string()).unwrap().version, 2);
     let mut older = base.clone();
     older["version"] = serde_json::json!(1);
     assert!(
@@ -972,5 +975,5 @@ fn a_version_one_envelope_still_reads() {
     value["version"] = serde_json::json!(1);
     let back = read_quantification(&value.to_string()).unwrap();
     assert_eq!(back.version, 1);
-    assert_eq!(QUANTIFICATION_VERSION, 2);
+    assert_eq!(QUANTIFICATION_VERSION, 3);
 }

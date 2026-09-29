@@ -31,6 +31,9 @@ __all__ = [
     "CrossEntropyResult",
     "PilotIteration",
     "Quantification",
+    "SplittingBatch",
+    "SplittingLevel",
+    "SplittingResult",
     "Study",
     "TargetProbability",
     "quantify",
@@ -45,6 +48,7 @@ QUANTIFICATION_METHODS: tuple[str, ...] = (
     "exact",
     "discretised",
     "cross_entropy",
+    "splitting",
 )
 
 
@@ -57,8 +61,8 @@ class Study:
     ``instants`` are the reporting instants of the Monte-Carlo detailed
     result (ascending, within ``[0, horizon]``; the horizon alone when
     omitted) and ``seed`` the master seed of the methods that draw at
-    random (Monte-Carlo and cross-entropy): a method that ignores one does
-    not record it. ``threads`` sets the worker
+    random (Monte-Carlo, cross-entropy and splitting): a method that ignores
+    one does not record it. ``threads`` sets the worker
     count; no result depends on it.
     """
 
@@ -108,6 +112,10 @@ class TargetProbability:
     ``inconclusive`` is true when that effective sample size is below the
     method's threshold: the estimate and its interval are then not to be
     trusted, however narrow the interval.
+    ``"splitting_estimate"`` uses ``"batch_student"``: the mean and
+    standard error of ``batches`` independent estimates. ``extinct_batches``
+    counts zero estimates from extinction. Any extinction, a nonpositive
+    lower bound or relative half-width above one makes it ``inconclusive``.
     Fields that do not apply to a kind are ``None``.
     """
 
@@ -124,6 +132,8 @@ class TargetProbability:
     standard_error: float | None = None
     effective_sample_size: float | None = None
     relative_error: float | None = None
+    batches: int | None = None
+    extinct_batches: int | None = None
 
     @classmethod
     def _from_dict(cls, raw: dict[str, Any]) -> TargetProbability:
@@ -151,6 +161,19 @@ class TargetProbability:
                 standard_error=raw["standard_error"],
                 effective_sample_size=raw["effective_sample_size"],
                 relative_error=raw.get("relative_error"),
+                inconclusive=raw["inconclusive"],
+            )
+        if raw["kind"] == "splitting_estimate":
+            return cls(
+                kind=raw["kind"],
+                low=raw["low"],
+                high=raw["high"],
+                estimate=raw["estimate"],
+                standard_error=raw["standard_error"],
+                level=raw["level"],
+                interval_method=raw["method"],
+                batches=raw["batches"],
+                extinct_batches=raw["extinct_batches"],
                 inconclusive=raw["inconclusive"],
             )
         if raw["kind"] == "bounds":
@@ -239,9 +262,64 @@ class CrossEntropyResult:
 
 
 @dataclass(frozen=True)
+class SplittingLevel:
+    """A selection level, the number killed and its exact survival fraction."""
+
+    level: float
+    killed: int
+    survival_fraction: float
+
+
+@dataclass(frozen=True)
+class SplittingBatch:
+    """An independent batch estimate, including zero when extinct."""
+
+    estimate: float
+    extinct: bool
+    levels: tuple[SplittingLevel, ...]
+    trajectories: int
+
+
+@dataclass(frozen=True)
+class SplittingResult:
+    """Independent splitting batches in deterministic order.
+
+    The envelope's probability carries the Student interval over these
+    batches. Extinct batches count as zero; any extinction flags the estimate
+    inconclusive. ``trajectories`` counts initial particles and restarts.
+    """
+
+    target: str
+    seed: int
+    batches: tuple[SplittingBatch, ...]
+    extinct_batches: int
+    estimate_inconclusive: bool
+    trajectories: int
+
+    @classmethod
+    def _from_dict(cls, raw: dict[str, Any]) -> SplittingResult:
+        return cls(
+            target=raw["target"],
+            seed=raw["seed"],
+            batches=tuple(
+                SplittingBatch(
+                    estimate=b["estimate"],
+                    extinct=b["extinct"],
+                    levels=tuple(SplittingLevel(**level) for level in b["levels"]),
+                    trajectories=b["trajectories"],
+                )
+                for b in raw["batches"]
+            ),
+            extinct_batches=raw["extinct_batches"],
+            estimate_inconclusive=raw["estimate_inconclusive"],
+            trajectories=raw["trajectories"],
+        )
+
+
+@dataclass(frozen=True)
 class Quantification:
     """The answer to a :class:`Study` (:func:`quantify`), whatever the
-    method: the ``raichu.quantification`` envelope, version 2 (version 1
+    method: the ``raichu.quantification`` envelope, version 3 (versions 1 and 2
     envelopes read as well).
 
     ``method`` and ``settings`` are the method and the settings it
@@ -254,7 +332,8 @@ class Quantification:
     declared target reached by ``horizon``, with its uncertainty, and
     ``detail`` the method's own result, unchanged: :class:`McEstimates`
     for Monte-Carlo simulation, :class:`Exploration` for the explorations,
-    :class:`CrossEntropyResult` for cross-entropy.
+    :class:`CrossEntropyResult` for cross-entropy, :class:`SplittingResult`
+    for splitting.
     """
 
     format: str
@@ -269,7 +348,7 @@ class Quantification:
     instants: tuple[float, ...] | None
     seed: int | None
     probability: TargetProbability
-    detail: McEstimates | Exploration | CrossEntropyResult
+    detail: McEstimates | Exploration | CrossEntropyResult | SplittingResult
     fmu_units: list[dict[str, Any]] = field(default_factory=list)
     _text: str = field(default="", init=False, compare=False, repr=False)
 
@@ -280,13 +359,15 @@ class Quantification:
         detail = raw["detail"]
         # One branch per detail kind, and no fallback: a kind this reader
         # does not know is refused rather than read as another.
-        parsed: McEstimates | Exploration | CrossEntropyResult
+        parsed: McEstimates | Exploration | CrossEntropyResult | SplittingResult
         if "monte_carlo" in detail:
             parsed = _mc_estimates(detail["monte_carlo"])
         elif "exploration" in detail:
             parsed = Exploration._from_json(json.dumps(detail["exploration"]))
         elif "cross_entropy" in detail:
             parsed = CrossEntropyResult._from_dict(detail["cross_entropy"])
+        elif "splitting" in detail:
+            parsed = SplittingResult._from_dict(detail["splitting"])
         else:
             raise SimulationError(
                 f"detail kind {sorted(detail)!r} is not known to this engine"
@@ -390,7 +471,7 @@ def quantify(
     """Quantify a study on a model, or a fault tree.
 
     **A study on a model**, ``quantify(model, study, method=...,
-    **settings)``: the one entry point to RAICHU's four engines. ``study``
+    **settings)``: the one entry point to RAICHU's five engines. ``study``
     is a :class:`Study` (the feared event, the horizon, and for the methods
     that draw at random the reporting instants and the seed); ``method`` is one of
     :data:`QUANTIFICATION_METHODS`:
@@ -414,6 +495,16 @@ def quantify(
       name to family label). The probability is a weighted estimate with its
       diagnostics and an ``inconclusive`` verdict; a campaign that never
       reaches the target raises :class:`SimulationError`.
+
+    - ``"splitting"``, adaptive multilevel splitting: ``importance`` is
+      required, as ``{"kind": "attribute", "name": "component.score"}``.
+      ``particles``, ``batches``, ``max_iterations`` use driver defaults;
+      ``confidence`` defaults to 0.95 and ``score_grid`` to no extra dates.
+      Scores are read at completed instants and optional grid dates. The
+      probability is a mean over independent batches with a Student interval;
+      extinction is inconclusive, an iteration cap raises without an estimate.
+      Every native law is supported through age-conditioned restarts; FMUs
+      are refused.
 
     Returns a :class:`Quantification`. An unknown method, or a setting that
     belongs to another method, raises :class:`SimulationError` naming the

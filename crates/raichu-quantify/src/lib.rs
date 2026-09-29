@@ -1,7 +1,7 @@
 //! # raichu-quantify: one study, any quantification engine, one envelope
 //!
 //! RAICHU answers "what is the probability that this feared event happens
-//! by this horizon" with four engines:
+//! by this horizon" with five engines:
 //!
 //! - **Monte-Carlo simulation** ([`Method::MonteCarlo`], crate
 //!   `raichu-montecarlo`): replicas drawn at random, the probability
@@ -17,7 +17,10 @@
 //!   `raichu-montecarlo`): a biased Monte-Carlo campaign whose
 //!   exponential rates are multiplied by factors fitted by cross-entropy,
 //!   each replica weighted by its likelihood ratio, for feared events too
-//!   rare for a plain campaign.
+//!   rare for a plain campaign;
+//! - **splitting** ([`Method::Splitting`], crate `raichu-montecarlo`):
+//!   adaptive selection on a numeric score with age-conditioned restarts,
+//!   a mean over independent batches and a Student interval.
 //!
 //! Each engine keeps its own settings and its own detailed result. This
 //! crate puts one contract above them:
@@ -65,6 +68,7 @@ mod exploration;
 mod hash;
 mod method;
 mod monte_carlo;
+mod splitting;
 mod study;
 
 pub use envelope::{
@@ -75,7 +79,7 @@ pub use error::QuantifyError;
 pub use hash::model_content_hash;
 pub use method::{
     CrossEntropySamplingSettings, DiscretisedExplorationSettings, ExactExplorationSettings, Method,
-    MonteCarloSettings,
+    MonteCarloSettings, SplittingSamplingSettings,
 };
 pub use study::Study;
 
@@ -148,6 +152,7 @@ pub fn quantify(
         Method::Exact(settings) => quantify_with(settings, model, study),
         Method::Discretised(settings) => quantify_with(settings, model, study),
         Method::CrossEntropy(settings) => quantify_with(settings, model, study),
+        Method::Splitting(settings) => quantify_with(settings, model, study),
     }
 }
 
