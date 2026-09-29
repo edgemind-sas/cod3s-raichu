@@ -102,6 +102,10 @@ fn explicit_sequence(model: &Model) -> Vec<String> {
         .map(|step| match step {
             CStep::Equation { target, .. } => compiled.var_names[*target].clone(),
             CStep::Allocate(allocation) => allocation.name.clone(),
+            // The evaluation order never carries a block: a cycle is
+            // one simultaneous step, formed after this permutation
+            // (only reader-before-producer conflicts are refused).
+            CStep::Block(block) => format!("block {}", block.members.join(", ")),
         })
         .collect()
 }

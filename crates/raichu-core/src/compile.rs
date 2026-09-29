@@ -8,9 +8,11 @@
 use crate::flow::CPolicy;
 use raichu_expr::{AggOp, AttrRef, BoolOp, CmpOp, Expr, PortRef, Value};
 use raichu_model::{
-    Allocation, AllocationPolicy, Distrib, EquationKind, IndicatorTarget, InterruptionPolicy,
-    Model, ModelError, PortDir, ProgramSense, ProgramTieBreak, TransitionKind,
+    AlgebraicBlock, Allocation, AllocationPolicy, Distrib, EquationKind, IndicatorTarget,
+    InterruptionPolicy, Model, ModelError, PortDir, ProgramSense, ProgramTieBreak, SingularReason,
+    TransitionKind,
 };
+use raichu_numeric::LuFactorization;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use thiserror::Error;
 
@@ -362,6 +364,36 @@ pub struct MarginIndex {
     pub flow_by_var: Vec<Vec<usize>>,
 }
 
+/// A compiled **algebraic block**: the member equations of one linear
+/// cycle, solved simultaneously.
+///
+/// Row `i` is the i-th member equation arranged as
+/// `targets[i] = constants[i] + Σ coefficients[i][k] · targets[column k]`,
+/// so the block is the system `(I − A)·x = c` with `A` the coefficient
+/// matrix. The engine evaluates the (unknown-free) constants and
+/// coefficients, factorises `I − A` when a coefficient input moved, and
+/// solves: one step of the sweep, wherever the sweep runs.
+#[derive(Debug, Clone)]
+pub struct CBlock {
+    /// Qualified block name, `component.attribute` of the first member
+    /// (journal, diagnostics).
+    pub name: String,
+    /// Member targets in the block's unknown order (one per row).
+    pub targets: Vec<VarIdx>,
+    /// Qualified member names, same order (diagnostics, errors).
+    pub members: Vec<String>,
+    /// Unknown-free part of each right-hand side, one per row.
+    pub constants: Vec<CExpr>,
+    /// Per row, the sparse non-zero coefficients of `A`:
+    /// `(column, coefficient)` with `column` an index into `targets`,
+    /// ascending in column. Coefficients are unknown-free by
+    /// construction.
+    pub coefficients: Vec<Vec<(usize, CExpr)>>,
+    /// Immutable LU of I-A when all coefficients are constant, validated
+    /// during compilation and shared by every trajectory and solver stage.
+    pub constant_factorization: Option<LuFactorization>,
+}
+
 /// One step of the **explicit sweep**, run at every evaluation point in
 /// table order.
 ///
@@ -370,7 +402,8 @@ pub struct MarginIndex {
 /// than a sensitive-function effect. Both live in one table because both
 /// must run inside the solver callbacks: a quantity written outside that
 /// table stays frozen through an integration segment, and a watched
-/// margin reading it would be polled rather than located.
+/// margin reading it would be polled rather than located. A block
+/// writes all of its members at once (it is one step, not `n`).
 #[derive(Debug, Clone)]
 pub enum CStep {
     /// Explicit assignment `target = expr`.
@@ -383,6 +416,8 @@ pub enum CStep {
     /// Conservative distribution of one quantity over the connections of
     /// an out port.
     Allocate(CAllocation),
+    /// A linear algebraic block, solved simultaneously (see [`CBlock`]).
+    Block(CBlock),
 }
 
 /// A compiled sensitive function.
@@ -863,6 +898,12 @@ fn sweep_reads_ahead(explicit: &[CStep]) -> bool {
                     last_writer.insert(var, index);
                 }
             }
+            // The block is one step writing all of its members.
+            CStep::Block(block) => {
+                for &var in &block.targets {
+                    last_writer.insert(var, index);
+                }
+            }
         }
     }
     let (mut vars, mut auts) = (Vec::new(), Vec::new());
@@ -876,24 +917,319 @@ fn sweep_reads_ahead(explicit: &[CStep]) -> bool {
                     .collect_sensitivity(&mut vars, &mut auts);
                 vars.extend_from_slice(&allocation.demands);
             }
+            // A block reads what its constants and coefficients read;
+            // its members appear only as solved columns.
+            CStep::Block(block) => {
+                for expr in &block.constants {
+                    expr.collect_sensitivity(&mut vars, &mut auts);
+                }
+                for row in &block.coefficients {
+                    for (_, coefficient) in row {
+                        coefficient.collect_sensitivity(&mut vars, &mut auts);
+                    }
+                }
+            }
         }
         vars.iter()
             .any(|var| last_writer.get(var).is_some_and(|&writer| writer >= index))
     })
 }
 
+/// One node of the sweep-ordering graph: a surviving step (an equation
+/// or a distribution operator) or a whole algebraic block. `position`
+/// is the index the node inherits from the table the declared order
+/// left (a block inherits the earliest position its members held) and
+/// doubles as the tie-break key, so a step the dependencies leave free
+/// stays where the model put it.
+struct OrderNode {
+    position: usize,
+    /// Attributes whose writers this node waits for.
+    reads: Vec<VarIdx>,
+    /// Attributes this node writes and other steps may wait for. Empty
+    /// for an operator: an allocated quantity sets no ordering
+    /// constraint on its readers (the carve-out of the classification,
+    /// mirrored here).
+    registered_writes: Vec<VarIdx>,
+    step: CStep,
+}
+
+/// Form the classified algebraic blocks into single steps and reorder
+/// the sweep around them.
+///
+/// With no block the table comes back untouched: a model without a
+/// cycle keeps the step table it compiled to before blocks existed,
+/// entry for entry. With at least one, the table is the **stable
+/// topological order of the condensation**: blocks are nodes beside the
+/// remaining equations and operators, an equation's in-edges come from
+/// the writers of what it reads, a block's from the writers of its
+/// coefficient inputs, an operator's from the writers of its available
+/// quantity and its demands : and nothing else. An **allocated
+/// quantity sets no ordering constraint on its readers** (the
+/// carve-out mirrored: the resolution iterates such reads to a
+/// fixpoint), so operators register no writer edges, and declaration
+/// order keeps the steps the graph leaves free where they were.
+///
+/// A member equation is *removed* from the table and folded into its
+/// block: the block takes the earliest position its members held.
+fn form_blocks(
+    resolver: &Resolver,
+    explicit: Vec<CStep>,
+    blocks: Vec<AlgebraicBlock>,
+    declared_order: bool,
+) -> Result<Vec<CStep>, CompileError> {
+    if blocks.is_empty() {
+        return Ok(explicit);
+    }
+
+    // Where each member equation sat in the table the declared order
+    // left: the block inherits the earliest of those positions, which
+    // is what keeps it where its members were whenever the dependencies
+    // leave it free.
+    let mut equation_positions: HashMap<VarIdx, usize> = HashMap::new();
+    for (position, step) in explicit.iter().enumerate() {
+        if let CStep::Equation { target, .. } = step {
+            equation_positions.insert(*target, position);
+        }
+    }
+
+    let mut nodes: Vec<OrderNode> = Vec::new();
+    let mut block_of_member: HashMap<VarIdx, usize> = HashMap::new();
+    for block in &blocks {
+        let mut targets = Vec::with_capacity(block.unknowns.len());
+        for unknown in &block.unknowns {
+            targets.push(resolver.var(&unknown.component, &unknown.attribute)?);
+        }
+        let columns: HashMap<&AttrRef, usize> = block
+            .unknowns
+            .iter()
+            .enumerate()
+            .map(|(column, unknown)| (unknown, column))
+            .collect();
+        let mut members = Vec::with_capacity(block.rows.len());
+        let mut constants = Vec::with_capacity(block.rows.len());
+        let mut coefficients = Vec::with_capacity(block.rows.len());
+        let mut position = usize::MAX;
+        for (row, unknown, &target) in block
+            .rows
+            .iter()
+            .zip(&block.unknowns)
+            .zip(&targets)
+            .map(|((row, unknown), target)| (row, unknown, target))
+        {
+            members.push(format!("{}.{}", unknown.component, unknown.attribute));
+            constants.push(resolver.compile_expr(&row.constant)?);
+            let mut compiled: Vec<(usize, CExpr)> = row
+                .terms
+                .iter()
+                .map(|(term_unknown, coefficient)| {
+                    Ok((columns[term_unknown], resolver.compile_expr(coefficient)?))
+                })
+                .collect::<Result<Vec<_>, CompileError>>()?;
+            compiled.sort_by_key(|(column, _)| *column);
+            coefficients.push(compiled);
+            position = position.min(equation_positions[&target]);
+            block_of_member.insert(target, nodes.len());
+        }
+        let compiled = CBlock {
+            name: members
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "block".to_owned()),
+            targets,
+            members,
+            constants,
+            coefficients,
+            constant_factorization: None,
+        };
+        nodes.push(OrderNode {
+            position,
+            reads: compiled_reads(&compiled),
+            registered_writes: compiled.targets.clone(),
+            step: CStep::Block(compiled),
+        });
+    }
+    for (surviving_position, step) in explicit.into_iter().enumerate() {
+        let (reads, registered_writes) = match &step {
+            CStep::Equation { target, expr } => {
+                // A member has been folded into its block already; the
+                // block carries its row.
+                if block_of_member.contains_key(target) {
+                    continue;
+                }
+                let mut reads = Vec::new();
+                expr.collect_value_reads(&mut reads);
+                (reads, vec![*target])
+            }
+            CStep::Allocate(allocation) => {
+                let mut reads = Vec::new();
+                allocation.available.collect_value_reads(&mut reads);
+                reads.extend_from_slice(&allocation.demands);
+                (reads, Vec::new())
+            }
+            CStep::Block(_) => {
+                return Err(CompileError::Unresolved {
+                    what: "individual step before algebraic block formation",
+                    name: "an algebraic block".to_owned(),
+                })
+            }
+        };
+        nodes.push(OrderNode {
+            position: surviving_position,
+            reads,
+            registered_writes,
+            step,
+        });
+    }
+    order_condensation(nodes, declared_order, resolver)
+}
+
+/// The numeric value of every coefficient of a block when they are all
+/// **constant** (read no attribute, no state, no clock): one dense row of
+/// values per block row, `None` the moment any coefficient depends on
+/// the trajectory (that block's singularities are the run-time pivot
+/// test's business).
+fn constant_coefficients(block: &CBlock) -> Option<Vec<Vec<f64>>> {
+    block
+        .coefficients
+        .iter()
+        .map(|row| {
+            let mut values = vec![0.0; block.targets.len()];
+            for (column, coefficient) in row {
+                values[*column] = coefficient.const_value()?;
+            }
+            Some(values)
+        })
+        .collect()
+}
+
+/// The variables a compiled block reads outside itself: everything its
+/// constants and coefficients read (its members appear only as solved
+/// columns).
+fn compiled_reads(block: &CBlock) -> Vec<VarIdx> {
+    let mut vars = Vec::new();
+    for expr in &block.constants {
+        expr.collect_value_reads(&mut vars);
+    }
+    for row in &block.coefficients {
+        for (_, coefficient) in row {
+            coefficient.collect_value_reads(&mut vars);
+        }
+    }
+    vars
+}
+
+/// Stable topological order of the condensation: Kahn's algorithm over
+/// the nodes' in-edges, the ready set kept by the position each node
+/// inherits from the table the declared order left, so a step the graph
+/// leaves free stays exactly where the model put it.
+///
+/// The condensation of a classified model is acyclic by construction:
+/// every cycle of the read relation is inside a block, and an operator
+/// registers no writer edges. Should a cycle survive anyway, that is a
+/// validator/compiler disagreement and surfaces as a typed error, never
+/// as a half-ordered table.
+fn order_condensation(
+    nodes: Vec<OrderNode>,
+    declared_order: bool,
+    resolver: &Resolver,
+) -> Result<Vec<CStep>, CompileError> {
+    let count = nodes.len();
+    let mut writers: HashMap<VarIdx, Vec<usize>> = HashMap::new();
+    for (id, node) in nodes.iter().enumerate() {
+        for &var in &node.registered_writes {
+            writers.entry(var).or_default().push(id);
+        }
+    }
+    let mut remaining: Vec<usize> = vec![0; count];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (id, node) in nodes.iter().enumerate() {
+        let mut waiting: Vec<usize> = Vec::new();
+        for var in &node.reads {
+            for &writer in writers.get(var).into_iter().flatten() {
+                if writer != id {
+                    if declared_order && nodes[writer].position > node.position {
+                        let name = |node: &OrderNode| match &node.step {
+                            CStep::Equation { target, .. } => resolver
+                                .vars
+                                .iter()
+                                .find_map(|((component, attribute), index)| {
+                                    (*index == *target).then(|| format!("{component}.{attribute}"))
+                                })
+                                .unwrap_or_else(|| format!("variable {target}")),
+                            CStep::Block(block) => block.members.join(", "),
+                            CStep::Allocate(allocation) => allocation.name.clone(),
+                        };
+                        return Err(CompileError::Invalid(ModelError::AlgebraicOrderConflict {
+                            first: name(node),
+                            second: name(&nodes[writer]),
+                        }));
+                    }
+                    waiting.push(writer);
+                }
+            }
+        }
+        waiting.sort_unstable();
+        waiting.dedup();
+        remaining[id] = waiting.len();
+        for writer in waiting {
+            dependents[writer].push(id);
+        }
+    }
+    let mut ready: BTreeSet<(usize, usize)> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(id, _)| remaining[*id] == 0)
+        .map(|(id, node)| (node.position, id))
+        .collect();
+    let mut ordered = Vec::with_capacity(count);
+    while let Some((_, id)) = ready.pop_first() {
+        ordered.push(nodes[id].step.clone());
+        for &dependent in &dependents[id] {
+            remaining[dependent] -= 1;
+            if remaining[dependent] == 0 {
+                ready.insert((nodes[dependent].position, dependent));
+            }
+        }
+    }
+    if ordered.len() != count {
+        return Err(CompileError::Unresolved {
+            what: "acyclic sweep order (a cycle survived the block classification)",
+            name: "the explicit sweep".to_owned(),
+        });
+    }
+    Ok(ordered)
+}
 impl CExpr {
     /// Collect the attribute and automaton sensitivity sets of this
     /// expression (which changes must re-trigger a function reading it).
     pub(crate) fn collect_sensitivity(&self, vars: &mut Vec<VarIdx>, auts: &mut Vec<AutIdx>) {
+        self.collect_dependencies(vars, auts, true);
+    }
+
+    /// Sweep ordering follows values, whereas the historical sensitivity
+    /// relation also subscribes to sources of a topology-only `count`.
+    fn collect_value_reads(&self, vars: &mut Vec<VarIdx>) {
+        self.collect_dependencies(vars, &mut Vec::new(), false);
+    }
+
+    fn collect_dependencies(
+        &self,
+        vars: &mut Vec<VarIdx>,
+        auts: &mut Vec<AutIdx>,
+        count_sources: bool,
+    ) {
         match self {
             CExpr::Const(_) => {}
             CExpr::Var(idx) => vars.push(*idx),
             CExpr::StateActive { automaton, .. } => auts.push(*automaton),
-            CExpr::PortAgg { sources, .. } => vars.extend_from_slice(sources),
+            CExpr::PortAgg { sources, agg } => {
+                if count_sources || *agg != AggOp::Count {
+                    vars.extend_from_slice(sources);
+                }
+            }
             CExpr::Cmp { lhs, rhs, .. } | CExpr::Sub { lhs, rhs } | CExpr::Div { lhs, rhs } => {
-                lhs.collect_sensitivity(vars, auts);
-                rhs.collect_sensitivity(vars, auts);
+                lhs.collect_dependencies(vars, auts, count_sources);
+                rhs.collect_dependencies(vars, auts, count_sources);
             }
             CExpr::Bool { args, .. }
             | CExpr::Add { args }
@@ -901,7 +1237,7 @@ impl CExpr {
             | CExpr::Min { args }
             | CExpr::Max { args } => {
                 for a in args {
-                    a.collect_sensitivity(vars, auts);
+                    a.collect_dependencies(vars, auts, count_sources);
                 }
             }
             CExpr::If {
@@ -909,11 +1245,13 @@ impl CExpr {
                 then,
                 otherwise,
             } => {
-                cond.collect_sensitivity(vars, auts);
-                then.collect_sensitivity(vars, auts);
-                otherwise.collect_sensitivity(vars, auts);
+                cond.collect_dependencies(vars, auts, count_sources);
+                then.collect_dependencies(vars, auts, count_sources);
+                otherwise.collect_dependencies(vars, auts, count_sources);
             }
-            CExpr::Sin(arg) | CExpr::Exp(arg) => arg.collect_sensitivity(vars, auts),
+            CExpr::Sin(arg) | CExpr::Exp(arg) => {
+                arg.collect_dependencies(vars, auts, count_sources);
+            }
             CExpr::Time => {}
         }
     }
@@ -940,6 +1278,58 @@ impl CExpr {
                 otherwise,
             } => cond.reads_time() || then.reads_time() || otherwise.reads_time(),
             CExpr::Sin(arg) | CExpr::Exp(arg) => arg.reads_time(),
+        }
+    }
+
+    /// The value of this expression when it reads no state at all: only
+    /// literals, arithmetic, the clock-independent branches of a
+    /// conditional and the like answer. `None` means "depends on the
+    /// trajectory" and is the compiler's test for *constant* (level-2
+    /// singularity is decided on constants alone).
+    pub(crate) fn const_value(&self) -> Option<f64> {
+        match self {
+            CExpr::Const(Value::Float(value)) => Some(*value),
+            CExpr::Const(Value::Int(value)) => Some(*value as f64),
+            CExpr::Const(Value::Bool(_)) | CExpr::Var(_) => None,
+            CExpr::StateActive { .. } | CExpr::PortAgg { .. } | CExpr::Time => None,
+            CExpr::Cmp { .. } | CExpr::Bool { .. } => None,
+            CExpr::Add { args } => args
+                .iter()
+                .try_fold(0.0, |sum, arg| Some(sum + arg.const_value()?)),
+            CExpr::Sub { lhs, rhs } => Some(lhs.const_value()? - rhs.const_value()?),
+            CExpr::Mul { args } => args
+                .iter()
+                .try_fold(1.0, |product, arg| Some(product * arg.const_value()?)),
+            CExpr::Div { lhs, rhs } => Some(lhs.const_value()? / rhs.const_value()?),
+            CExpr::Min { args } => args
+                .iter()
+                .map(CExpr::const_value)
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .reduce(f64::min),
+            CExpr::Max { args } => args
+                .iter()
+                .map(CExpr::const_value)
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .reduce(f64::max),
+            CExpr::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                // Sound and simple: a conditional is constant only when
+                // both branches agree (a condition that cannot decide
+                // between two constants leaves this `None`, and the
+                // run-time pivot test answers instead).
+                let _ = cond;
+                match (then.const_value(), otherwise.const_value()) {
+                    (Some(same), Some(other)) if same == other => Some(same),
+                    _ => None,
+                }
+            }
+            CExpr::Sin(arg) => Some(arg.const_value()?.sin()),
+            CExpr::Exp(arg) => Some(arg.const_value()?.exp()),
         }
     }
 }
@@ -1061,6 +1451,14 @@ fn order_steps(
             CStep::Allocate(allocation) => {
                 operators.insert(allocation.name.clone(), step);
             }
+            // Blocks form after this permutation; a Block here is a
+            // validator/compiler disagreement, refused as typed.
+            CStep::Block(_) => {
+                return Err(CompileError::Unresolved {
+                    what: "sweep step named by the evaluation order",
+                    name: "an algebraic block".to_owned(),
+                });
+            }
         }
     }
 
@@ -1089,6 +1487,7 @@ fn order_steps(
             name: match step {
                 CStep::Equation { target, .. } => format!("attribute #{target}"),
                 CStep::Allocate(allocation) => allocation.name.clone(),
+                CStep::Block(_) => "an algebraic block".to_owned(),
             },
         });
     }
@@ -1368,6 +1767,84 @@ impl CompiledModel {
             .map(|(i, _)| i)
             .collect();
 
+        // Pass 3-ter: the **declared evaluation order**, applied once,
+        // here, as a permutation of the explicit table.
+        //
+        // The order is a compile-time property of the table, not a
+        // runtime indirection: `recompute_explicit` still walks
+        // `model.explicit` from 0, so the ~23 sweeps an accepted solver
+        // step performs are the same code over the same layout. A model
+        // that declares no order does not enter this branch at all, so
+        // its table keeps the positional order it had before the field
+        // existed, entry for entry.
+        //
+        // Applied to the *individual* equations, before the algebraic
+        // blocks form: members become one simultaneous step. The condensation
+        // check refuses a declared reader-before-producer dependency.
+        //
+        // Placed before 3-bis, whose fixpoint over the explicit table
+        // is order-independent by construction: it iterates to closure.
+        if let Some(order) = &model.evaluation_order {
+            explicit = order_steps(&resolver, order, explicit)?;
+        }
+
+        // Pass 3-quinquies: the **algebraic blocks**. The model
+        // layer has classified every cycle of the explicit equations;
+        // linear ones come back as blocks, which become single steps of
+        // the sweep at the stable topological order of the condensation.
+        // A model without a cycle takes none of this: its table is the
+        // one the passes above produced, byte for byte.
+        let blocks = model.algebraic_blocks()?;
+        if !blocks.is_empty() {
+            explicit = form_blocks(
+                &resolver,
+                explicit,
+                blocks,
+                model.evaluation_order.is_some(),
+            )?;
+            // Level 2 of the singularity analysis: a block whose
+            // coefficients are **constant at build time** is factorised
+            // here, and a rank-deficient factorisation is refused with
+            // the variables it involves (`x = y` with `y = x`, or
+            // `x = x`: the rows are linearly dependent). A block with
+            // state-dependent coefficients keeps its singularities for
+            // the run-time pivot test, which sees the actual state.
+            for step in &mut explicit {
+                let CStep::Block(block) = step else {
+                    continue;
+                };
+                let Some(coefficients) = constant_coefficients(block) else {
+                    continue;
+                };
+                let n = block.targets.len();
+                let mut matrix = vec![0.0; n * n];
+                for (row, values) in matrix.chunks_mut(n).zip(&coefficients) {
+                    for (entry, value) in row.iter_mut().zip(values) {
+                        *entry -= value;
+                    }
+                }
+                for (diagonal, entry) in matrix.iter_mut().enumerate() {
+                    if diagonal % (n + 1) == 0 {
+                        *entry += 1.0;
+                    }
+                }
+                block.constant_factorization = Some(
+                    LuFactorization::decompose(&matrix, n).map_err(|error| match error {
+                        raichu_numeric::LinearSolveError::Singular(_) => {
+                            CompileError::Invalid(ModelError::AlgebraicSingular {
+                                variables: block.members.join(", "),
+                                reason: SingularReason::RankDeficient,
+                            })
+                        }
+                        error => CompileError::Unresolved {
+                            what: "finite algebraic block coefficients",
+                            name: format!("{}: {error}", block.members.join(", ")),
+                        },
+                    })?,
+                );
+            }
+        }
+
         // Pass 3-bis: continuity of state-dependent rates (`reschedule_modifiable`
         // routing). A attribute is *continuous* if the ODE integrates it
         // or an explicit equation ties it (transitively) to one.
@@ -1400,6 +1877,27 @@ impl CompiledModel {
                             }
                         }
                     }
+                    // A block's members move together: all of them are
+                    // functions of the block's coefficient inputs, so
+                    // any input that moves moves the whole block. The
+                    // members appear only as solved columns, never as
+                    // reads of their own rows.
+                    CStep::Block(block) => {
+                        let moving = block
+                            .constants
+                            .iter()
+                            .any(|expr| expr_is_continuous(expr, &continuous_vars))
+                            || block.coefficients.iter().flat_map(|row| row.iter()).any(
+                                |(_, coefficient)| {
+                                    expr_is_continuous(coefficient, &continuous_vars)
+                                },
+                            );
+                        if moving {
+                            for var in &block.targets {
+                                changed |= continuous_vars.insert(*var);
+                            }
+                        }
+                    }
                 }
             }
             if !changed {
@@ -1418,23 +1916,6 @@ impl CompiledModel {
             }
         }
 
-        // Pass 3-ter: the **declared evaluation order**, applied once,
-        // here, as a permutation of the explicit table.
-        //
-        // The order is a compile-time property of the table, not a
-        // runtime indirection: `recompute_explicit` still walks
-        // `model.explicit` from 0, so the ~23 sweeps an accepted solver
-        // step performs are the same code over the same layout. A model
-        // that declares no order does not enter this branch at all, so
-        // its table keeps the positional order it had before the field
-        // existed, entry for entry.
-        //
-        // Placed after 3-bis, whose fixpoint over the explicit table is
-        // order-independent by construction: it iterates to closure.
-        if let Some(order) = &model.evaluation_order {
-            explicit = order_steps(&resolver, order, explicit)?;
-        }
-
         // Pass 3-quater: the **active-set margins**, one entry per
         // distribution operator, indexed against the *final* sweep table
         // (hence after 3-ter, which permutes it).
@@ -1449,7 +1930,7 @@ impl CompiledModel {
             .enumerate()
             .filter_map(|(step, item)| match item {
                 CStep::Allocate(allocation) => Some((step, allocation)),
-                CStep::Equation { .. } => None,
+                CStep::Equation { .. } | CStep::Block(_) => None,
             })
             .map(|(step, allocation)| {
                 let mut deps = Vec::new();
@@ -1762,6 +2243,18 @@ impl CompiledModel {
                 // An allocation distributes a quantity it is handed; it
                 // reads no clock of its own.
                 CStep::Allocate(_) => false,
+                // A block whose constants or coefficients read the
+                // clock moves with it : and its factorisation is
+                // redone every sweep, the coefficient bits having
+                // changed.
+                CStep::Block(block) => {
+                    block.constants.iter().any(CExpr::reads_time)
+                        || block
+                            .coefficients
+                            .iter()
+                            .flat_map(|row| row.iter())
+                            .any(|(_, coefficient)| coefficient.reads_time())
+                }
             }),
             sweep_reads_ahead: sweep_reads_ahead(&explicit),
             explicit,

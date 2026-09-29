@@ -17,7 +17,7 @@
 //! part of the design (reserved API), not exercised in M0.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+mod affine;
 
 /// A runtime value carried by attributes and expressions.
 ///
@@ -258,121 +258,6 @@ pub enum Expr {
 }
 
 impl Expr {
-    /// Decompose this expression into an affine form in `variables`.
-    /// Coefficients remain expressions over quantities outside that set.
-    pub fn affine_in(&self, variables: &HashSet<AttrRef>) -> Result<AffineExpr, NonlinearTerm> {
-        if !self.contains_any(variables) {
-            return Ok(AffineExpr {
-                constant: self.clone(),
-                terms: Vec::new(),
-            });
-        }
-        let zero = || Expr::Const {
-            value: Value::Float(0.0),
-        };
-        match self {
-            Expr::Attr { attr } => Ok(AffineExpr {
-                constant: zero(),
-                terms: vec![(
-                    attr.clone(),
-                    Expr::Const {
-                        value: Value::Float(1.0),
-                    },
-                )],
-            }),
-            Expr::Add { args } => {
-                let mut constants = Vec::with_capacity(args.len());
-                let mut terms = Vec::new();
-                for arg in args {
-                    let part = arg.affine_in(variables)?;
-                    constants.push(part.constant);
-                    terms.extend(part.terms);
-                }
-                Ok(AffineExpr {
-                    constant: Expr::Add { args: constants },
-                    terms,
-                })
-            }
-            Expr::Sub { lhs, rhs } => {
-                let left = lhs.affine_in(variables)?;
-                let right = rhs.affine_in(variables)?;
-                let mut terms = left.terms;
-                terms.extend(right.terms.into_iter().map(|(attr, coefficient)| {
-                    (
-                        attr,
-                        Expr::Sub {
-                            lhs: Box::new(zero()),
-                            rhs: Box::new(coefficient),
-                        },
-                    )
-                }));
-                Ok(AffineExpr {
-                    constant: Expr::Sub {
-                        lhs: Box::new(left.constant),
-                        rhs: Box::new(right.constant),
-                    },
-                    terms,
-                })
-            }
-            Expr::Mul { args } => {
-                let dependent: Vec<_> = args
-                    .iter()
-                    .filter(|arg| arg.contains_any(variables))
-                    .collect();
-                if dependent.len() != 1 {
-                    return Err(NonlinearTerm {
-                        expression: self.clone(),
-                    });
-                }
-                let part = dependent[0].affine_in(variables)?;
-                let free: Vec<_> = args
-                    .iter()
-                    .filter(|arg| !arg.contains_any(variables))
-                    .cloned()
-                    .collect();
-                let scaled = |value: Expr| {
-                    let mut product = free.clone();
-                    product.push(value);
-                    Expr::Mul { args: product }
-                };
-                Ok(AffineExpr {
-                    constant: scaled(part.constant),
-                    terms: part
-                        .terms
-                        .into_iter()
-                        .map(|(attr, coefficient)| (attr, scaled(coefficient)))
-                        .collect(),
-                })
-            }
-            Expr::Div { lhs, rhs } if !rhs.contains_any(variables) => {
-                let part = lhs.affine_in(variables)?;
-                let divide = |value| Expr::Div {
-                    lhs: Box::new(value),
-                    rhs: rhs.clone(),
-                };
-                Ok(AffineExpr {
-                    constant: divide(part.constant),
-                    terms: part
-                        .terms
-                        .into_iter()
-                        .map(|(attr, coefficient)| (attr, divide(coefficient)))
-                        .collect(),
-                })
-            }
-            _ => Err(NonlinearTerm {
-                expression: self.clone(),
-            }),
-        }
-    }
-
-    /// Whether this tree reads one of the selected attributes.
-    #[must_use]
-    pub fn contains_any(&self, variables: &HashSet<AttrRef>) -> bool {
-        let mut found = false;
-        self.for_each_attr_ref(&mut |attr| found |= variables.contains(attr));
-        found
-    }
-
     /// Convenience constructor: boolean constant.
     #[must_use]
     pub fn bool(value: bool) -> Self {
@@ -463,6 +348,108 @@ impl Expr {
         }
         self.for_each_child(&mut |child| child.for_each_state_ref(f));
     }
+
+    /// Render this tree as compact mathematical notation, for
+    /// diagnostics that must name a term the way the modeller wrote it.
+    ///
+    /// This is a rendering, not a parseable form: parenthesisation is
+    /// minimal and the serialised JSON remains the wire format.
+    #[must_use]
+    pub fn render(&self) -> String {
+        match self {
+            Expr::Const { value } => match value {
+                Value::Bool(b) => b.to_string(),
+                Value::Int(i) => i.to_string(),
+                Value::Float(f) => {
+                    let rendered = format!("{f}");
+                    if rendered.contains(['.', 'e', 'E', 'n', 'i']) {
+                        rendered
+                    } else {
+                        // A float that formats integrally: keep the kind
+                        // readable rather than `5` for `5.0`.
+                        format!("{rendered}.0")
+                    }
+                }
+            },
+            Expr::Attr { attr } => format!("{}.{}", attr.component, attr.attribute),
+            Expr::PortAgg { port, agg, channel } => {
+                let operator = match agg {
+                    AggOp::Sum => "sum",
+                    AggOp::Count => "count",
+                    AggOp::All => "all",
+                    AggOp::Any => "any",
+                    AggOp::Mean => "mean",
+                    AggOp::Median => "median",
+                };
+                match channel {
+                    Some(channel) => {
+                        format!("{operator}({}.{}[{channel}])", port.component, port.port)
+                    }
+                    None => format!("{operator}({}.{})", port.component, port.port),
+                }
+            }
+            Expr::Cmp { cmp, lhs, rhs } => {
+                let operator = match cmp {
+                    CmpOp::Eq => "==",
+                    CmpOp::Ne => "!=",
+                    CmpOp::Lt => "<",
+                    CmpOp::Le => "<=",
+                    CmpOp::Gt => ">",
+                    CmpOp::Ge => ">=",
+                };
+                format!("({} {} {})", lhs.render(), operator, rhs.render())
+            }
+            Expr::Bool { bool_op, args } => {
+                let operator = match bool_op {
+                    BoolOp::And => " and ",
+                    BoolOp::Or => " or ",
+                    BoolOp::Not => {
+                        return match args.first() {
+                            Some(operand) => format!("not {}", operand.render()),
+                            None => "not <missing operand>".to_owned(),
+                        };
+                    }
+                };
+                let rendered: Vec<String> = args.iter().map(Expr::render).collect();
+                format!("({})", rendered.join(operator))
+            }
+            Expr::StateActive { state } => {
+                format!("{}.{}.{}", state.component, state.automaton, state.state)
+            }
+            Expr::Add { args } => {
+                let rendered: Vec<String> = args.iter().map(Expr::render).collect();
+                format!("({})", rendered.join(" + "))
+            }
+            Expr::Sub { lhs, rhs } => format!("({} - {})", lhs.render(), rhs.render()),
+            Expr::Mul { args } => {
+                let rendered: Vec<String> = args.iter().map(Expr::render).collect();
+                format!("({})", rendered.join(" * "))
+            }
+            Expr::Div { lhs, rhs } => format!("({} / {})", lhs.render(), rhs.render()),
+            Expr::Min { args } | Expr::Max { args } => {
+                let operator = if matches!(self, Expr::Min { .. }) {
+                    "min"
+                } else {
+                    "max"
+                };
+                let rendered: Vec<String> = args.iter().map(Expr::render).collect();
+                format!("{operator}({})", rendered.join(", "))
+            }
+            Expr::If {
+                cond,
+                then,
+                otherwise,
+            } => format!(
+                "if {} then {} else {}",
+                cond.render(),
+                then.render(),
+                otherwise.render()
+            ),
+            Expr::Sin { arg } => format!("sin({})", arg.render()),
+            Expr::Exp { arg } => format!("exp({})", arg.render()),
+            Expr::Time => "time".to_owned(),
+        }
+    }
 }
 
 /// A direct assignment `target := value`: the M0 form of a
@@ -479,6 +466,7 @@ pub struct Assignment {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn affine_decomposition_distinguishes_coefficients_from_decisions() {
@@ -578,5 +566,180 @@ mod tests {
         let json = serde_json::to_value(Expr::bool(true)).unwrap();
         assert_eq!(json["op"], "const");
         assert_eq!(json["value"]["kind"], "bool");
+    }
+
+    // ---- Conditionals and resolved port aggregations ------------------
+
+    fn selected(name: &str) -> HashSet<AttrRef> {
+        HashSet::from([AttrRef {
+            component: "c".into(),
+            attribute: name.into(),
+        }])
+    }
+
+    fn port_agg(port: &str, agg: AggOp) -> Expr {
+        Expr::PortAgg {
+            port: PortRef {
+                component: "c".into(),
+                port: port.into(),
+            },
+            agg,
+            channel: None,
+        }
+    }
+
+    /// Resolution used by the tests below: `p_in` reads one selected
+    /// unknown (`c.x`) and one free attribute (`c.e`).
+    fn resolve(p: &PortRef, _channel: Option<&str>) -> Vec<AttrRef> {
+        assert_eq!(p.port, "p_in");
+        vec![
+            AttrRef {
+                component: "c".into(),
+                attribute: "x".into(),
+            },
+            AttrRef {
+                component: "c".into(),
+                attribute: "e".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn conditional_over_non_unknowns_is_affine_in_both_branches() {
+        // if(c.on) then 2*x else x + x: affine either way, the branch
+        // difference riding on the condition.
+        let condition = Expr::attr("c", "on");
+        let expr = Expr::If {
+            cond: Box::new(condition.clone()),
+            then: Box::new(Expr::Mul {
+                args: vec![
+                    Expr::Const {
+                        value: Value::Float(2.0),
+                    },
+                    Expr::attr("c", "x"),
+                ],
+            }),
+            otherwise: Box::new(Expr::Add {
+                args: vec![Expr::attr("c", "x"), Expr::attr("c", "x")],
+            }),
+        };
+        let form = expr.affine_in_resolved(&selected("x"), &resolve).unwrap();
+        // One term per occurrence: the else branch contributes two (its
+        // own `x + x`), callers sum them.
+        assert_eq!(form.terms.len(), 3);
+        assert!(form.terms.iter().all(|(attr, _)| attr.attribute == "x"));
+        // The constant carries the condition; both coefficients are
+        // gated by it.
+        let rendered = form.constant.render();
+        assert!(rendered.starts_with("if "), "constant: {rendered}");
+        for (_, coefficient) in &form.terms {
+            assert!(coefficient.render().starts_with("if "));
+        }
+
+        // The same conditional with the unknown in the condition stays
+        // refused, naming the conditional itself.
+        let refused = Expr::If {
+            cond: Box::new(Expr::Cmp {
+                cmp: CmpOp::Lt,
+                lhs: Box::new(Expr::attr("c", "x")),
+                rhs: Box::new(Expr::Const {
+                    value: Value::Float(0.0),
+                }),
+            }),
+            then: Box::new(Expr::attr("c", "x")),
+            otherwise: Box::new(Expr::Const {
+                value: Value::Float(0.0),
+            }),
+        };
+        let term = refused
+            .affine_in_resolved(&selected("x"), &resolve)
+            .unwrap_err();
+        assert_eq!(term.expression, refused);
+    }
+
+    #[test]
+    fn port_aggregations_classify_per_operator() {
+        let unknowns = selected("x");
+        // sum: affine, one term per unknown connection, free ones in the
+        // constant.
+        let sum = port_agg("p_in", AggOp::Sum);
+        let form = sum.affine_in_resolved(&unknowns, &resolve).unwrap();
+        assert_eq!(
+            form.terms,
+            vec![(
+                AttrRef {
+                    component: "c".into(),
+                    attribute: "x".into()
+                },
+                Expr::Const {
+                    value: Value::Float(1.0)
+                },
+            )]
+        );
+        assert_eq!(form.constant, Expr::attr("c", "e"));
+
+        // mean: the same terms at 1/n, the constant divided by n.
+        let mean = port_agg("p_in", AggOp::Mean);
+        let form = mean.affine_in_resolved(&unknowns, &resolve).unwrap();
+        assert_eq!(
+            form.terms[0].1,
+            Expr::Const {
+                value: Value::Float(0.5)
+            }
+        );
+        assert!(matches!(form.constant, Expr::Div { .. }));
+
+        // count reads the topology alone: constant even over unknowns.
+        let count = port_agg("p_in", AggOp::Count);
+        let form = count.affine_in_resolved(&unknowns, &resolve).unwrap();
+        assert!(form.terms.is_empty());
+        assert_eq!(form.constant, count);
+
+        // median is nonlinear in its unknown sources.
+        let median = port_agg("p_in", AggOp::Median);
+        assert!(median.affine_in_resolved(&unknowns, &resolve).is_err());
+        // ... and constant once no source is selected.
+        assert!(median
+            .affine_in_resolved(&selected("y"), &resolve)
+            .unwrap()
+            .terms
+            .is_empty());
+    }
+
+    #[test]
+    fn render_handles_a_missing_not_operand() {
+        let missing = Expr::Bool {
+            bool_op: BoolOp::Not,
+            args: Vec::new(),
+        };
+        assert_eq!(missing.render(), "not <missing operand>");
+        let valid = Expr::Bool {
+            bool_op: BoolOp::Not,
+            args: vec![Expr::bool(true)],
+        };
+        assert_eq!(valid.render(), "not true");
+    }
+
+    #[test]
+    fn render_reads_as_written() {
+        let expr = Expr::Div {
+            lhs: Box::new(Expr::Sub {
+                lhs: Box::new(Expr::attr("r", "v1")),
+                rhs: Box::new(Expr::attr("r", "v2")),
+            }),
+            rhs: Box::new(Expr::Const {
+                value: Value::Float(2.0),
+            }),
+        };
+        assert_eq!(expr.render(), "((r.v1 - r.v2) / 2.0)");
+        let min = Expr::Min {
+            args: vec![
+                Expr::attr("c", "x"),
+                Expr::Const {
+                    value: Value::Float(1.0),
+                },
+            ],
+        };
+        assert_eq!(min.render(), "min(c.x, 1.0)");
     }
 }

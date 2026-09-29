@@ -1606,29 +1606,67 @@ pub enum ModelError {
         /// `component.port`.
         producer: String,
     },
-    /// **Algebraic loop**: explicit equations depend on one another in a
-    /// cycle that no integrated attribute breaks.
+    /// **Nonlinear algebraic cycle**: explicit equations depend on one
+    /// another in a cycle, and at least one right-hand side is not
+    /// linear in the cycle's unknowns.
     ///
-    /// An explicit equation `V = expr` must hold at every instant, so a
-    /// set of them that reads itself is a fixpoint equation. The engine
-    /// does not solve one: it sweeps the equations in declaration order,
-    /// so the value it would report is whatever that order happens to
-    /// produce, and inserting an unrelated equation elsewhere changes
-    /// it. An **ODE-integrated** attribute breaks the loop, because the
-    /// integrator carries its value instead of the cycle recomputing it:
-    /// it is the *capacity* of the flow vocabulary. The refusal
-    /// therefore asks for a capacity, not for a different equation
-    /// order.
+    /// A cycle of explicit equations is a fixpoint equation; a *linear*
+    /// one is solved in place by the engine as one block, a nonlinear
+    /// one has no iteration this engine vouches for (a Newton scheme
+    /// would answer without a convergence argument, and a threshold or
+    /// a `min` inside the cycle turns its answer into a switching
+    /// sequence the sweep cannot settle). The refusal names the term
+    /// that makes the cycle nonlinear. An **ODE-integrated** attribute
+    /// breaks the cycle, because the integrator carries its value
+    /// instead of the algebra recomputing it: it is the *capacity* of
+    /// the flow vocabulary.
     #[error(
-        "explicit equations form a cycle no integrated attribute breaks: \
-         {cycle}; those values have no instantaneous solution: integrate \
-         one of them (an ODE target, that is a capacity) or cut the \
-         dependency"
+        "explicit equations form a cycle that is not linear in its \
+         unknowns: the right-hand side of `{component}.{attribute}` \
+         reads `{term}`, which no linear solve can carry. Integrate one \
+         of the cycle's attributes (an ODE target, that is a capacity) \
+         or cut the dependency"
     )]
-    AlgebraicLoop {
-        /// The cycle, `component.attribute` steps joined by ` -> `, the
-        /// first attribute repeated last so the loop reads closed.
-        cycle: String,
+    AlgebraicNonlinear {
+        /// The component of the offending equation.
+        component: String,
+        /// The target attribute of the offending equation.
+        attribute: String,
+        /// The offending term, rendered as written.
+        term: String,
+    },
+    /// **Singular algebraic cycle**: the cycle's linear system does not
+    /// determine one value per attribute.
+    ///
+    /// Structural (no assignment of equations to unknowns exists on the
+    /// sparsity pattern: some attribute is never determined), or
+    /// rank-deficient with every coefficient constant at build time
+    /// (`x = y`, `y = x`, `x = x`: the rows are linearly dependent). In
+    /// both cases the equations do not determine a unique solution.
+    #[error(
+        "explicit equations form a cycle whose linear system is singular \
+         ({reason}): {variables}. No unique instantaneous solution is determined; \
+         integrate one of the cycle's attributes (an ODE target, that is \
+         a capacity) or cut the dependency"
+    )]
+    AlgebraicSingular {
+        /// The cycle's unknowns, `component.attribute`, comma-joined.
+        variables: String,
+        /// Which of the two levels refused.
+        reason: SingularReason,
+    },
+    /// A declared evaluation order places a reader before a producer
+    /// required by the algebraic-block condensation.
+    #[error(
+        "evaluation order runs `{first}` before `{second}`, but the two \
+         first depends on the second after algebraic blocks form: \
+         reorder those steps, omit the declared order, or cut the dependency"
+    )]
+    AlgebraicOrderConflict {
+        /// The reader placed before its producer.
+        first: String,
+        /// The producer that must run first.
+        second: String,
     },
     /// A connection joins a **discrete** flow (a boolean: present or
     /// absent) and a **continuous** one (a numeric quantity) into the
@@ -1934,15 +1972,218 @@ fn is_discrete(kind: AttrKind) -> bool {
 /// computes.
 type EquationNode = (String, String);
 
-/// Depth-first search marks used by the algebraic-loop detection.
+/// Which level of the singularity analysis refused an algebraic cycle
+/// (see [`ModelError::AlgebraicSingular`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Visit {
-    /// Not reached yet.
-    Unseen,
-    /// On the current path: reaching it again closes a cycle.
-    Open,
-    /// Fully explored, no cycle through it.
-    Done,
+pub enum SingularReason {
+    /// No assignment of equations to unknowns exists on the block's
+    /// sparsity pattern: some attribute nothing determines (or two
+    /// equations determine the same one). Refused by the model layer,
+    /// which sees the pattern.
+    Structural,
+    /// The sparsity pattern admits an assignment, but with every
+    /// coefficient constant at build time the factorisation of the
+    /// system is rank-deficient (`x = y` with `y = x`, or `x = x`).
+    /// Refused by the compiler, which runs the factorisation.
+    RankDeficient,
+}
+
+impl std::fmt::Display for SingularReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SingularReason::Structural => write!(
+                f,
+                "no assignment of equations to unknowns exists on the \
+                 sparsity pattern"
+            ),
+            SingularReason::RankDeficient => write!(
+                f,
+                "every coefficient is constant and the constant system is \
+                 rank-deficient"
+            ),
+        }
+    }
+}
+
+/// Strongly connected components of `edges` (one node per index, edge
+/// `i → j` when `edges[i]` contains `j`), Tarjan's algorithm, iterative
+/// so a deep chain of equations cannot exhaust the stack.
+///
+/// Components come out in reverse topological order (a component before
+/// any component that reaches it), each as its nodes in unspecified
+/// order; a singleton without a self-edge is a node of its own and is
+/// still emitted, letting the caller decide what a component means.
+fn tarjan_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    #[derive(Clone, Copy)]
+    struct Frame {
+        node: usize,
+        child: usize,
+    }
+    let mut next_index = 0usize;
+    let mut index_of = vec![usize::MAX; edges.len()];
+    let mut lowlink = vec![0usize; edges.len()];
+    let mut on_stack = vec![false; edges.len()];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut components: Vec<Vec<usize>> = Vec::new();
+    for root in 0..edges.len() {
+        if index_of[root] != usize::MAX {
+            continue;
+        }
+        let mut frames = vec![Frame {
+            node: root,
+            child: 0,
+        }];
+        while let Some(frame) = frames.pop() {
+            if frame.child == 0 {
+                index_of[frame.node] = next_index;
+                next_index += 1;
+                lowlink[frame.node] = index_of[frame.node];
+                stack.push(frame.node);
+                on_stack[frame.node] = true;
+            }
+            let mut child = frame.child;
+            let mut descended = false;
+            while child < edges[frame.node].len() {
+                let successor = edges[frame.node][child];
+                if index_of[successor] == usize::MAX {
+                    frames.push(Frame {
+                        node: frame.node,
+                        child: child + 1,
+                    });
+                    frames.push(Frame {
+                        node: successor,
+                        child: 0,
+                    });
+                    descended = true;
+                    break;
+                }
+                if on_stack[successor] {
+                    lowlink[frame.node] = lowlink[frame.node].min(index_of[successor]);
+                }
+                child += 1;
+            }
+            if descended {
+                continue;
+            }
+            if lowlink[frame.node] == index_of[frame.node] {
+                let mut component = Vec::new();
+                while let Some(member) = stack.pop() {
+                    on_stack[member] = false;
+                    component.push(member);
+                    if member == frame.node {
+                        break;
+                    }
+                }
+                components.push(component);
+            }
+            if let Some(parent) = frames.last_mut() {
+                lowlink[parent.node] = lowlink[parent.node].min(lowlink[frame.node]);
+            }
+        }
+    }
+    components
+}
+
+/// Whether the `rows × columns` sparsity pattern admits an assignment of
+/// one distinct column to every row (a perfect matching), Kuhn's
+/// augmenting paths, rows in order and candidates ascending, so the
+/// answer : and the refusal that a `false` produces : is a property of
+/// the pattern alone.
+fn has_perfect_matching(pattern: &[Vec<usize>], columns: usize) -> bool {
+    if pattern.len() != columns {
+        return false;
+    }
+    // Column → row currently assigned to it.
+    let mut owner: Vec<Option<usize>> = vec![None; columns];
+    for row in 0..pattern.len() {
+        let mut seen = vec![false; columns];
+        if !assign(row, pattern, &mut owner, &mut seen) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Augmenting-path search for `row` (see [`has_perfect_matching`]).
+fn assign(
+    row: usize,
+    pattern: &[Vec<usize>],
+    owner: &mut [Option<usize>],
+    seen: &mut [bool],
+) -> bool {
+    for &column in &pattern[row] {
+        if seen[column] {
+            continue;
+        }
+        seen[column] = true;
+        match owner[column] {
+            None => {
+                owner[column] = Some(row);
+                return true;
+            }
+            Some(previous) => {
+                if assign(previous, pattern, owner, seen) {
+                    owner[column] = Some(row);
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Whether `expr` is the literal zero: the one coefficient the sparsity
+/// pattern counts as absent. Anything else : a computed expression, an
+/// `if`, an attribute read : counts as non-zero, because whether it can
+/// vanish is a question about the state, and structure is decided
+/// without one.
+fn is_literal_zero(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Const {
+            value: Value::Float(0.0) | Value::Int(0)
+        }
+    )
+}
+
+/// Render `component.attribute` names, comma-joined, for a diagnostic
+/// that names a whole block.
+fn render_variables(variables: &[AttrRef]) -> String {
+    variables
+        .iter()
+        .map(|attr| format!("{}.{}", attr.component, attr.attribute))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One equation of a linear algebraic block: its right-hand side
+/// separated into an unknown-free part and one coefficient per block
+/// unknown it reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockRow {
+    /// The unknown-free part of the right-hand side.
+    pub constant: Expr,
+    /// One `(unknown, coefficient)` pair per block unknown this row
+    /// reads, in first-occurrence order, with repeated coefficients merged.
+    /// Coefficients retain their expression form, including literal zeros.
+    pub terms: Vec<(AttrRef, Expr)>,
+}
+
+/// A cycle of explicit equations that is **linear in its unknowns**: the
+/// unit of simultaneous evaluation the engine solves in place.
+///
+/// The `n` equations write the `n` attributes of [`AlgebraicBlock::unknowns`]
+/// (same order), so the block is the system `x = c + A·x`: row `i` of
+/// [`AlgebraicBlock::rows`] gives the unknown-free part `c_i` and the
+/// non-zero coefficients of `A`'s row `i`. The engine solves
+/// `(I − A)·x = c` wherever the sweep runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlgebraicBlock {
+    /// The block's unknowns: the target attribute of each member
+    /// equation, in the member equations' declaration order.
+    pub unknowns: Vec<AttrRef>,
+    /// One row per member equation, in the same order as `unknowns`.
+    pub rows: Vec<BlockRow>,
 }
 
 /// Component-scope lookup tables used during validation.
@@ -2130,7 +2371,8 @@ impl Model {
         self.check_allocations()?;
         self.check_expressions(&scopes)?;
         self.check_programs(&scopes)?;
-        self.check_algebraic_loops(&scopes)?;
+        self.classify_algebraic(&scopes)?;
+        // The compiler checks declared ordering after simultaneous blocks form.
         self.check_priority_surplus_return(&scopes)?;
         self.check_evaluation_order()?;
         self.check_indicators(&scopes)?;
@@ -2884,8 +3126,8 @@ impl Model {
     /// omitted equation would either never be swept or be swept at a
     /// position nobody chose, and both are silent wrong answers.
     ///
-    /// Runs after the algebraic-loop check: a cycle is a defect no
-    /// order can repair, so it is reported first.
+    /// Runs after cycle classification: a nonlinear or singular cycle
+    /// cannot be repaired by an evaluation order.
     fn check_evaluation_order(&self) -> Result<(), ModelError> {
         let Some(order) = &self.evaluation_order else {
             return Ok(());
@@ -3839,38 +4081,46 @@ impl Model {
         }
     }
 
-    /// Refuse a continuous cycle that no capacity breaks (see
-    /// [`ModelError::AlgebraicLoop`]).
+    /// Classify every cycle of the explicit equations (see
+    /// [`Model::algebraic_blocks`]).
     ///
     /// The graph has **one node per explicit-equation target** and an
     /// edge from a target to every explicit-equation target its
     /// right-hand side reads, in-port aggregations resolved through the
     /// connections feeding them. An ODE target is deliberately *not* a
     /// node: the integrator carries its value, so it breaks any cycle it
-    /// sits on, which is exactly the capacity carve-out. A cycle in this
-    /// graph is therefore a continuous loop with no capacity in it.
+    /// sits on, which is exactly the capacity carve-out. An **allocated
+    /// quantity** ([`Allocation`]) is not a node either, and that
+    /// carve-out is equally deliberate: a conservative flow network is
+    /// cyclic by nature (what a consumer asks for depends on what it was
+    /// given), and refusing it here would refuse the very shape the
+    /// operator exists for.
     ///
-    /// An **allocated quantity** ([`Allocation`]) is not a node either,
-    /// and that carve-out is equally deliberate: a conservative flow
-    /// network is cyclic by nature (what a consumer asks for depends on
-    /// what it was given), and refusing it here would refuse the very
-    /// shape the operator exists for. One sweep of such a network reads
-    /// the previous evaluation point's quantities; iterating it to a
-    /// fixpoint is the network resolution, not this check.
-    fn check_algebraic_loops(&self, scopes: &HashMap<&str, Scope<'_>>) -> Result<(), ModelError> {
+    /// Strongly connected components of this graph are the cycles.
+    /// Tarjan's algorithm partitions them in one depth-first pass, in a
+    /// deterministic order for a fixed declaration order. Each component
+    /// is then classified: nonlinear in its unknowns (refused, naming
+    /// the term), structurally singular (refused, naming the
+    /// variables), or a linear block handed back to the compiler.
+    fn classify_algebraic(
+        &self,
+        scopes: &HashMap<&str, Scope<'_>>,
+    ) -> Result<Vec<AlgebraicBlock>, ModelError> {
         let mut nodes: Vec<EquationNode> = Vec::new();
         let mut index: HashMap<EquationNode, usize> = HashMap::new();
+        let mut equations: HashMap<EquationNode, &Equation> = HashMap::new();
         for component in &self.components {
             for equation in &component.equations {
                 if equation.kind == EquationKind::Explicit {
                     let node = (component.name.clone(), equation.target.clone());
                     index.insert(node.clone(), nodes.len());
+                    equations.insert(node.clone(), equation);
                     nodes.push(node);
                 }
             }
         }
         if nodes.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         // Connections indexed by destination in port, once: a resolved
@@ -3886,6 +4136,11 @@ impl Model {
                 .or_default()
                 .push(connection);
         }
+        // The resolution every read of an in port goes through, shared
+        // by this classification and `collect_reads`.
+        let port_sources = |port: &PortRef, channel: Option<&str>| {
+            Self::resolve_port_sources(scopes, &feeds, port, channel)
+        };
 
         let mut edges: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
         for component in &self.components {
@@ -3909,26 +4164,143 @@ impl Model {
             }
         }
 
-        // Declaration order in, declaration order out: the reported
-        // cycle is the first one a depth-first walk closes, so the same
-        // model always yields the same diagnostic.
-        let mut marks = vec![Visit::Unseen; nodes.len()];
-        let mut path = Vec::new();
-        for start in 0..nodes.len() {
-            if marks[start] != Visit::Unseen {
+        // Declaration order in, declaration order out: Tarjan emits the
+        // components in a fixed order for a fixed declaration order, and
+        // the first refused one is always the same.
+        let mut blocks = Vec::new();
+        for members in tarjan_components(&edges) {
+            let self_loop = members.len() == 1 && edges[members[0]].contains(&members[0]);
+            if members.len() == 1 && !self_loop {
                 continue;
             }
-            if let Some(cycle) = Self::find_cycle(start, &edges, &mut marks, &mut path) {
-                let rendered: Vec<String> = cycle
-                    .iter()
-                    .map(|&node| format!("{}.{}", nodes[node].0, nodes[node].1))
-                    .collect();
-                return Err(ModelError::AlgebraicLoop {
-                    cycle: rendered.join(" -> "),
+            // Members in declaration order: the block's unknown order.
+            let mut members = members;
+            members.sort_unstable();
+            let unknowns: Vec<AttrRef> = members
+                .iter()
+                .map(|&node| AttrRef {
+                    component: nodes[node].0.clone(),
+                    attribute: nodes[node].1.clone(),
+                })
+                .collect();
+            let selected: HashSet<AttrRef> = unknowns.iter().cloned().collect();
+
+            // Affinity of every member, coefficients merged per unknown:
+            // one entry per (row, unknown), which is the sparsity
+            // pattern and, past this point, the compiled block.
+            let mut rows: Vec<BlockRow> = Vec::with_capacity(members.len());
+            for &node in &members {
+                let equation = equations[&nodes[node]];
+                let form = equation
+                    .expr
+                    .affine_in_resolved(&selected, &port_sources)
+                    .map_err(|term| ModelError::AlgebraicNonlinear {
+                        component: nodes[node].0.clone(),
+                        attribute: nodes[node].1.clone(),
+                        term: term.expression.render(),
+                    })?;
+                let mut merged: Vec<(AttrRef, Expr)> = Vec::with_capacity(form.terms.len());
+                for (unknown, coefficient) in form.terms {
+                    if let Some(seen) = merged.iter_mut().find(|(seen, _)| *seen == unknown) {
+                        let previous = std::mem::replace(
+                            &mut seen.1,
+                            Expr::Const {
+                                value: Value::Float(0.0),
+                            },
+                        );
+                        seen.1 = Expr::Add {
+                            args: vec![previous, coefficient],
+                        };
+                    } else {
+                        merged.push((unknown, coefficient));
+                    }
+                }
+                rows.push(BlockRow {
+                    constant: form.constant,
+                    terms: merged,
                 });
             }
+
+            // Structural singularity: no perfect matching on the
+            // pattern, where any coefficient that is not the literal 0
+            // counts as non-zero. A column is an unknown's position in
+            // the block, not a term's position in its row.
+            let columns: HashMap<&AttrRef, usize> = unknowns
+                .iter()
+                .enumerate()
+                .map(|(column, unknown)| (unknown, column))
+                .collect();
+            // The solved matrix is I-A. Keep the identity diagonal unless
+            // a literal coefficient 1 cancels it. State-dependent or
+            // computed coefficients stay conservative; the LU rank test
+            // handles their cancellations on the actual matrix.
+            let pattern: Vec<Vec<usize>> = rows
+                .iter()
+                .enumerate()
+                .map(|(row_index, row)| {
+                    let diagonal_cancels = row.terms.iter().any(|(unknown, coefficient)| {
+                        columns[unknown] == row_index
+                            && matches!(
+                                coefficient,
+                                Expr::Const {
+                                    value: Value::Float(1.0) | Value::Int(1)
+                                }
+                            )
+                    });
+                    let mut entries = if diagonal_cancels {
+                        Vec::new()
+                    } else {
+                        vec![row_index]
+                    };
+                    entries.extend(
+                        row.terms
+                            .iter()
+                            .filter(|(unknown, coefficient)| {
+                                columns[unknown] != row_index && !is_literal_zero(coefficient)
+                            })
+                            .map(|(unknown, _)| columns[unknown]),
+                    );
+                    entries.sort_unstable();
+                    entries.dedup();
+                    entries
+                })
+                .collect();
+            if !has_perfect_matching(&pattern, unknowns.len()) {
+                return Err(ModelError::AlgebraicSingular {
+                    variables: render_variables(&unknowns),
+                    reason: SingularReason::Structural,
+                });
+            }
+            blocks.push(AlgebraicBlock { unknowns, rows });
         }
-        Ok(())
+        Ok(blocks)
+    }
+
+    /// The linear blocks of this model: every cycle of the explicit
+    /// equations, classified and solved-in-place ready.
+    ///
+    /// A cycle **linear in its unknowns** comes back as one
+    /// [`AlgebraicBlock`]; the engine evaluates its coefficients and
+    /// right-hand sides and solves the system `(I − A)·x = c` wherever
+    /// the sweep runs. A cycle that is not linear (a `min`, a
+    /// threshold, a `median`, an `if` condition reading an unknown) is
+    /// refused with the term that makes it so, and a cycle whose system
+    /// is structurally singular is refused with the variables it
+    /// involves ([`ModelError::AlgebraicSingular`] at the
+    /// [`SingularReason::Structural`] level; the rank-deficient level
+    /// needs a factorisation and is raised by the compiler).
+    ///
+    /// An ODE target and an allocated quantity are deliberately absent
+    /// from the graph: the integrator and the distribution operator
+    /// carry them, and a cycle they sit on is well posed.
+    ///
+    /// # Errors
+    /// [`ModelError::AlgebraicNonlinear`] and
+    /// [`ModelError::AlgebraicSingular`], first refusal in a
+    /// deterministic order.
+    pub fn algebraic_blocks(&self) -> Result<Vec<AlgebraicBlock>, ModelError> {
+        let scopes = self.check_components()?;
+        self.classify_algebraic(&scopes)
     }
 
     /// Refuse a **priority split combined with surplus return** (see
@@ -3938,7 +4310,7 @@ impl Model {
     /// consumer returns surplus when the demand it publishes on an edge
     /// depends, through the instantaneous reads of the explicit sweep, on
     /// a quantity that same operator allocated. That is precisely the
-    /// cycle [`Model::check_algebraic_loops`] deliberately allows, which
+    /// cycle [`Model::algebraic_blocks`] deliberately allows, which
     /// is why it has to be recognised here instead.
     ///
     /// The search runs over the same read relation the loop detection
@@ -4084,39 +4456,6 @@ impl Model {
         None
     }
 
-    /// Depth-first search for a cycle reachable from `node`, returning
-    /// its nodes with the entry point repeated last (so the rendered
-    /// diagnostic reads as a closed loop).
-    fn find_cycle(
-        node: usize,
-        edges: &[Vec<usize>],
-        marks: &mut [Visit],
-        path: &mut Vec<usize>,
-    ) -> Option<Vec<usize>> {
-        marks[node] = Visit::Open;
-        path.push(node);
-        for &next in &edges[node] {
-            match marks[next] {
-                Visit::Open => {
-                    // `next` is on the current path by construction.
-                    let entry = path.iter().position(|&seen| seen == next)?;
-                    let mut cycle = path[entry..].to_vec();
-                    cycle.push(next);
-                    return Some(cycle);
-                }
-                Visit::Unseen => {
-                    if let Some(cycle) = Self::find_cycle(next, edges, marks, path) {
-                        return Some(cycle);
-                    }
-                }
-                Visit::Done => {}
-            }
-        }
-        path.pop();
-        marks[node] = Visit::Done;
-        None
-    }
-
     /// Attributes an expression reads at the instant it is evaluated,
     /// with in-port aggregations resolved through the connections that
     /// feed them (a named channel reads the per-connection attributes
@@ -4138,23 +4477,12 @@ impl Model {
                 if *agg == AggOp::Count {
                     return;
                 }
-                let key = (port.component.as_str(), port.port.as_str());
-                for connection in feeds.get(&key).into_iter().flatten() {
-                    match channel {
-                        Some(channel) => into.push((
-                            connection.from.component.clone(),
-                            channel_attribute_name(connection, channel),
-                        )),
-                        None => {
-                            let exported = scopes
-                                .get(connection.from.component.as_str())
-                                .and_then(|scope| scope.ports.get(connection.from.port.as_str()))
-                                .and_then(|source| source.attr.as_ref());
-                            if let Some(attribute) = exported {
-                                into.push((connection.from.component.clone(), attribute.clone()));
-                            }
-                        }
-                    }
+                for AttrRef {
+                    component,
+                    attribute,
+                } in Self::resolve_port_sources(scopes, feeds, port, channel.as_deref())
+                {
+                    into.push((component, attribute));
                 }
             }
             Expr::Cmp { lhs, rhs, .. } | Expr::Sub { lhs, rhs } | Expr::Div { lhs, rhs } => {
@@ -4183,6 +4511,38 @@ impl Model {
                 Self::collect_reads(scopes, feeds, arg, into);
             }
         }
+    }
+
+    /// The attributes one in-port aggregation reads: one per incoming
+    /// connection, in connection declaration order : the exported
+    /// attribute of the producer, or the per-connection attribute
+    /// materialised for the named channel.
+    fn resolve_port_sources(
+        scopes: &HashMap<&str, Scope<'_>>,
+        feeds: &HashMap<(&str, &str), Vec<&Connection>>,
+        port: &PortRef,
+        channel: Option<&str>,
+    ) -> Vec<AttrRef> {
+        let key = (port.component.as_str(), port.port.as_str());
+        feeds
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter_map(|connection| match channel {
+                Some(channel) => Some(AttrRef {
+                    component: connection.from.component.clone(),
+                    attribute: channel_attribute_name(connection, channel),
+                }),
+                None => scopes
+                    .get(connection.from.component.as_str())
+                    .and_then(|scope| scope.ports.get(connection.from.port.as_str()))
+                    .and_then(|source| source.attr.as_ref())
+                    .map(|attribute| AttrRef {
+                        component: connection.from.component.clone(),
+                        attribute: attribute.clone(),
+                    }),
+            })
+            .collect()
     }
 
     fn check_indicators(&self, scopes: &HashMap<&str, Scope<'_>>) -> Result<(), ModelError> {

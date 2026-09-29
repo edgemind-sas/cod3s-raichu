@@ -998,34 +998,14 @@ fn fan_in_model(second: AttrKind) -> Model {
 }
 
 #[test]
-fn rejects_continuous_cycle_with_no_capacity() {
-    let model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
-    assert_eq!(
-        model.validate(),
-        Err(ModelError::AlgebraicLoop {
-            cycle: "a.level -> b.rate -> a.level".into(),
-        })
-    );
-}
-
-#[test]
-fn accepts_continuous_cycle_broken_by_an_integrated_attribute() {
-    // Same topology, one attribute now integrated: the capacity that
-    // makes the loop well-posed, whichever side carries it.
-    continuous_cycle_model(EquationKind::Ode, EquationKind::Explicit)
-        .validate()
-        .unwrap();
-    continuous_cycle_model(EquationKind::Explicit, EquationKind::Ode)
-        .validate()
-        .unwrap();
-}
-
-#[test]
-fn rejects_self_referential_explicit_equation() {
-    let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Ode);
-    model.components[0].equations[0].expr = Expr::Add {
+fn rejects_nonlinear_continuous_cycle_naming_the_term() {
+    // The capacity-less cycle, made nonlinear where the refusal lives
+    // today: `b.rate` clamps what it reads with a `min`. A linear solve
+    // cannot carry the kink, and the diagnostic names it.
+    let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
+    model.components[1].equations[0].expr = Expr::Min {
         args: vec![
-            Expr::attr("a", "level"),
+            sum_of("b", "level_in"),
             Expr::Const {
                 value: Value::Float(1.0),
             },
@@ -1033,10 +1013,378 @@ fn rejects_self_referential_explicit_equation() {
     };
     assert_eq!(
         model.validate(),
-        Err(ModelError::AlgebraicLoop {
-            cycle: "a.level -> a.level".into(),
+        Err(ModelError::AlgebraicNonlinear {
+            component: "b".into(),
+            attribute: "rate".into(),
+            term: "min(sum(b.level_in), 1.0)".into(),
         })
     );
+    // A threshold is nonlinear the same way: the comparison rides on
+    // the cycle's own unknown.
+    let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
+    model.components[1].equations[0].expr = Expr::Cmp {
+        cmp: CmpOp::Gt,
+        lhs: Box::new(sum_of("b", "level_in")),
+        rhs: Box::new(Expr::Const {
+            value: Value::Float(0.0),
+        }),
+    };
+    assert!(matches!(
+        model.validate(),
+        Err(ModelError::AlgebraicNonlinear { .. })
+    ));
+}
+
+#[test]
+fn a_linear_cycle_classifies_as_one_block() {
+    // The same topology, linear: `a.level = sum(rate_in)` and
+    // `b.rate = sum(level_in)` is level = rate, rate = level, one 2x2
+    // block the engine solves simultaneously.
+    let model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
+    model.validate().unwrap();
+    let blocks = model.algebraic_blocks().unwrap();
+    assert_eq!(blocks.len(), 1);
+    let block = &blocks[0];
+    assert_eq!(
+        block.unknowns,
+        vec![
+            AttrRef {
+                component: "a".into(),
+                attribute: "level".into()
+            },
+            AttrRef {
+                component: "b".into(),
+                attribute: "rate".into()
+            },
+        ]
+    );
+    // Row `level`: constant 0, coefficient 1 on `rate`; row `rate`:
+    // constant 0, coefficient 1 on `level`. Both rows read their
+    // unknown through the connection's port aggregation.
+    assert_eq!(
+        block.rows[0].constant,
+        Expr::Const {
+            value: Value::Float(0.0)
+        }
+    );
+    assert_eq!(
+        block.rows[0].terms,
+        vec![(
+            AttrRef {
+                component: "b".into(),
+                attribute: "rate".into()
+            },
+            Expr::Const {
+                value: Value::Float(1.0)
+            },
+        )]
+    );
+    assert_eq!(
+        block.rows[1].terms,
+        vec![(
+            AttrRef {
+                component: "a".into(),
+                attribute: "level".into()
+            },
+            Expr::Const {
+                value: Value::Float(1.0)
+            },
+        )]
+    );
+}
+
+#[test]
+fn a_literal_identity_equation_is_structurally_singular() {
+    let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Ode);
+    model.components[0].equations[0].expr = Expr::attr("a", "level");
+    assert_eq!(
+        model.validate(),
+        Err(ModelError::AlgebraicSingular {
+            variables: "a.level".into(),
+            reason: SingularReason::Structural,
+        })
+    );
+}
+
+#[test]
+fn a_contracting_self_reference_is_a_solvable_block() {
+    // `x = 0.5·x + 1`: the coefficient 0.5 is not the literal zero, the
+    // 1x1 system (I − A) = 0.5 is invertible, so nothing refuses and
+    // the block carries the contraction. The decomposition folds the
+    // free factor into the coefficient: (0.5 * 1).
+    let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Ode);
+    model.components[0].equations[0].expr = Expr::Add {
+        args: vec![
+            Expr::Mul {
+                args: vec![
+                    Expr::Const {
+                        value: Value::Float(0.5),
+                    },
+                    Expr::attr("a", "level"),
+                ],
+            },
+            Expr::Const {
+                value: Value::Float(1.0),
+            },
+        ],
+    };
+    model.validate().unwrap();
+    let blocks = model.algebraic_blocks().unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(
+        blocks[0].unknowns,
+        vec![AttrRef {
+            component: "a".into(),
+            attribute: "level".into()
+        }]
+    );
+    assert_eq!(
+        blocks[0].rows[0].terms,
+        vec![(
+            AttrRef {
+                component: "a".into(),
+                attribute: "level".into()
+            },
+            Expr::Mul {
+                args: vec![
+                    Expr::Const {
+                        value: Value::Float(0.5),
+                    },
+                    Expr::Const {
+                        value: Value::Float(1.0),
+                    },
+                ],
+            },
+        )]
+    );
+    // The constant keeps the decomposition's shape: the free part of
+    // the product (0.5 * 0) plus the literal 1, which evaluates to 1.
+    assert_eq!(
+        blocks[0].rows[0].constant,
+        Expr::Add {
+            args: vec![
+                Expr::Mul {
+                    args: vec![
+                        Expr::Const {
+                            value: Value::Float(0.5),
+                        },
+                        Expr::Const {
+                            value: Value::Float(0.0),
+                        },
+                    ],
+                },
+                Expr::Const {
+                    value: Value::Float(1.0),
+                },
+            ],
+        }
+    );
+}
+
+#[test]
+fn a_copy_cycle_is_structurally_sound_and_refused_by_the_compiler() {
+    // `x = y`, `y = x`: the anti-diagonal pattern admits the
+    // assignment, so the model layer returns the block and the
+    // compiler's constant factorisation refuses it (rank-deficient).
+    let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
+    // Rate the cycle down to a plain copy on both sides.
+    model.components[0].equations[0].expr = Expr::Mul {
+        args: vec![
+            Expr::Const {
+                value: Value::Float(1.0),
+            },
+            Expr::attr("b", "rate"),
+        ],
+    };
+    model.components[1].equations[0].expr = Expr::attr("a", "level");
+    let blocks = model.algebraic_blocks().unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].unknowns.len(), 2);
+}
+
+#[test]
+fn a_vanishing_read_still_closes_the_cycle_and_solves() {
+    // `x = 0·y`, `y = x`: the read relation still closes the cycle (a
+    // read is a read, whatever its coefficient), and the decomposition
+    // folds the zero into a computed coefficient (`0 * 1`), which is
+    // not the literal zero: the pattern admits the assignment and the
+    // constant system (I − A) = [[1, 0], [−1, 1]] is invertible. The
+    // model is a valid block solving to x = 0, y = 0; nothing refuses.
+    // The structural guard itself is pinned at unit level above
+    // (`has_perfect_matching_rejects_a_deficient_pattern`): no strongly
+    // connected component of the read relation reaches it, every
+    // unknown-reading term either contributing a pattern entry or being
+    // refused as nonlinear first.
+    let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
+    model.components[0].equations[0].expr = Expr::Mul {
+        args: vec![
+            Expr::Const {
+                value: Value::Float(0.0),
+            },
+            Expr::attr("b", "rate"),
+        ],
+    };
+    model.components[1].equations[0].expr = Expr::attr("a", "level");
+    model.validate().unwrap();
+    let blocks = model.algebraic_blocks().unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].unknowns.len(), 2);
+}
+
+#[test]
+fn a_cycle_through_median_is_refused_and_one_through_sum_is_linear() {
+    // `median` of what a cycle's unknowns feed is nonlinear: the two
+    // central values are an order statistics, no linear solve carries
+    // it. `sum` of the same connections is affine.
+    for (agg, refused) in [
+        (AggOp::Median, true),
+        (AggOp::Sum, false),
+        (AggOp::Mean, false),
+        (AggOp::Count, false),
+    ] {
+        let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
+        model.components[1].equations[0].expr = Expr::PortAgg {
+            port: PortRef {
+                component: "b".into(),
+                port: "level_in".into(),
+            },
+            agg,
+            channel: None,
+        };
+        let classification = model.algebraic_blocks();
+        assert_eq!(
+            classification.is_err(),
+            refused,
+            "{agg:?}: classification {classification:?}"
+        );
+    }
+}
+
+#[test]
+fn a_cycle_through_a_port_aggregation_over_a_connection_is_found() {
+    // The cycle closes through the connections, not through a direct
+    // attribute read: exactly what the old depth-first check saw, now
+    // classified instead of refused (a `sum` here is linear).
+    let model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
+    let blocks = model.algebraic_blocks().unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].unknowns.len(), 2);
+}
+
+#[test]
+fn a_cycle_through_an_allocation_is_still_carved_out() {
+    // A consumer's demand depends on what it was given: a conservative
+    // flow network is cyclic by nature, and the classification leaves
+    // it to the operator. Here the consumer publishes its demand (the
+    // materialised `demand` channel attribute) as a function of the
+    // share it was allocated (the materialised `flow` channel): a
+    // genuine cycle *through* the operator, whose writes are no nodes
+    // of the classification graph. The model validates and no block
+    // comes back; the operator's own refusals are another check's
+    // business.
+    let model = allocation_cycle_model();
+    model.validate().unwrap();
+    assert!(model.algebraic_blocks().unwrap().is_empty());
+}
+
+/// One producer distributing `stock` over one consumer whose published
+/// demand reads the share it was allocated.
+fn allocation_cycle_model() -> Model {
+    Model {
+        programs: vec![],
+        name: "allocation_cycle".into(),
+        components: vec![
+            Component {
+                name: "p".into(),
+                attributes: vec![float_attribute("stock")],
+                ports: vec![
+                    Port {
+                        name: "out".into(),
+                        dir: PortDir::Out,
+                        attr: Some("stock".into()),
+                        channels: vec![
+                            Channel {
+                                name: "demand".into(),
+                                init: 0.0,
+                            },
+                            Channel {
+                                name: "flow".into(),
+                                init: 0.0,
+                            },
+                        ],
+                    },
+                    in_port("back"),
+                ],
+                interfaces: vec![],
+                automata: vec![],
+                sensitive_functions: vec![],
+                allocations: vec![Allocation {
+                    name: "share".into(),
+                    port: "out".into(),
+                    available: Expr::attr("p", "stock"),
+                    demand: "demand".into(),
+                    allocated: "flow".into(),
+                    policy: AllocationPolicy::Proportional,
+                }],
+                equations: vec![Equation {
+                    // The demand `p` publishes on the edge is what the
+                    // consumer sent back: a cycle through the operator.
+                    target: "out__demand__c__feed".into(),
+                    kind: EquationKind::Explicit,
+                    expr: sum_of("p", "back"),
+                }],
+            },
+            Component {
+                name: "c".into(),
+                attributes: vec![float_attribute("need")],
+                ports: vec![in_port("feed"), out_port("need_out", "need")],
+                interfaces: vec![],
+                automata: vec![],
+                sensitive_functions: vec![],
+                allocations: vec![],
+                equations: vec![Equation {
+                    // The consumer's need is the share it was given.
+                    target: "need".into(),
+                    kind: EquationKind::Explicit,
+                    expr: Expr::PortAgg {
+                        port: PortRef {
+                            component: "c".into(),
+                            port: "feed".into(),
+                        },
+                        agg: AggOp::Sum,
+                        channel: Some("flow".into()),
+                    },
+                }],
+            },
+        ],
+        connections: vec![
+            connect(("p", "out"), ("c", "feed")),
+            connect(("c", "need_out"), ("p", "back")),
+        ],
+        indicators: vec![],
+        targets: vec![],
+        evaluation_order: None,
+        unbounded_rate: None,
+        fmu_units: vec![],
+    }
+}
+
+#[test]
+fn a_declared_order_lists_block_members_for_the_compiler_to_condense() {
+    let mut model = continuous_cycle_model(EquationKind::Explicit, EquationKind::Explicit);
+    model.evaluation_order = Some(vec![order_entry("a", "level"), order_entry("b", "rate")]);
+    model.validate().unwrap();
+}
+
+#[test]
+fn has_perfect_matching_rejects_a_deficient_pattern() {
+    // Two rows reaching for the same column cannot both be assigned.
+    // The model-level literal-identity test exercises the refusal path;
+    // this test covers matching shapes independently of expression parsing.
+    assert!(has_perfect_matching(&[vec![1], vec![0]], 2));
+    assert!(!has_perfect_matching(&[vec![1], vec![1], vec![0, 2]], 3));
+    assert!(!has_perfect_matching(&[vec![], vec![0]], 2));
+    assert!(has_perfect_matching(&[vec![0, 1], vec![0, 1]], 2));
 }
 
 #[test]

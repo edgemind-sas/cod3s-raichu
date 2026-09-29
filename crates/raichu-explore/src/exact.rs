@@ -242,6 +242,18 @@ pub fn exact_domain_report(model: &CompiledModel) -> Vec<DomainViolation> {
                     site: format!("distribution operator `{}`", allocation.name),
                 });
             }
+            CStep::Block(block)
+                if block.constants.iter().any(reads_time)
+                    || block
+                        .coefficients
+                        .iter()
+                        .flat_map(|row| row.iter())
+                        .any(|(_, coefficient)| reads_time(coefficient)) =>
+            {
+                report.push(DomainViolation::ReadsTime {
+                    site: format!("algebraic block `{}`", block.name),
+                });
+            }
             _ => {}
         }
     }

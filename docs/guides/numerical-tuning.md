@@ -338,3 +338,24 @@ it has no run-time counterpart to fall back on: see
 - Hairer, E., Nørsett, S. P. and Wanner, G. (1987). *Solving Ordinary
   Differential Equations I*. Springer Series in Computational Mathematics,
   Springer. DOI [10.1007/978-3-662-12607-3](https://doi.org/10.1007/978-3-662-12607-3).
+
+## Algebraic block pivots
+
+Linear explicit cycles use dense LU with partial pivoting. A pivot at or
+below `1e-12` times the largest entry magnitude of the original `I - A`
+matrix is refused as numerically singular. The ratio is dimensionless:
+uniformly scaling the matrix does not change the decision. This fixed
+engine policy is separate from ODE error and flow convergence tolerances;
+there is no Python simulation setting for it. The Rust numeric solver
+also offers an explicit-tolerance factorisation API.
+
+Partial pivoting does not guarantee accurate solutions for every matrix,
+and this threshold is not a condition-number estimate. Poorly scaled or
+nearly singular equations should be reformulated in physical units.
+A singularity names the block variables; when coefficients depend on the
+trajectory, its typed engine error also carries the date. Non-finite
+coefficients, right-hand sides or numerical results fail explicitly.
+
+The engine keeps caller-owned solve buffers and reuses the factorisation
+while coefficient values are unchanged. A breaker or other changed input
+causes refactorisation on the next sweep, including an integrator stage.
