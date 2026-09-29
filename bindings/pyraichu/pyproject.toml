@@ -39,3 +39,4 @@ raichu = "pyraichu.muscadet.engine:register"
 python-source = "python"
 module-name = "pyraichu._pyraichu"
 features = ["pyo3/extension-module"]
+include = [{ path = "pyraichu/runtime/**/*", format = "wheel" }]

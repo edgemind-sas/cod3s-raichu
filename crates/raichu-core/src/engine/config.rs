@@ -244,6 +244,28 @@ impl Default for EngineConfig {
 /// Typed runtime errors. The engine never panics on a library path.
 #[derive(Debug, Error)]
 pub enum EngineError {
+    /// An external clock request is outside the current trajectory horizon.
+    #[error("cannot advance to t={date} from t={time} with horizon t={horizon}")]
+    AdvanceTimeInvalid {
+        /// Requested date.
+        date: f64,
+        /// Current date.
+        time: f64,
+        /// Configured horizon.
+        horizon: f64,
+    },
+    /// The requested attribute is absent or is not declared as an input.
+    #[error("attribute `{attribute}` is not a declared writable input")]
+    InputNotAllowed {
+        /// Qualified attribute name.
+        attribute: String,
+    },
+    /// The supplied input value has a different kind from the attribute.
+    #[error("input `{attribute}` has the wrong value kind")]
+    InputType {
+        /// Qualified attribute name.
+        attribute: String,
+    },
     /// The native-only snapshot API cannot capture or restore FMU state.
     #[error("FMU unit `{unit}` requires `{alternative}` for {operation}")]
     FmuSnapshotApi {

@@ -78,6 +78,10 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
 - **FMI co-simulation import**: opt-in execution of FMI 2.0 or 3.0
   co-simulation units with model-attribute bindings and scheduled
   communication points. See the [FMI import guide](docs/guides/fmi-co-simulation.md).
+- **FMI co-simulation export**: package a RAICHU model as an FMI 3.0 FMU
+  with explicit input, output and parameter attributes. Each wheel carries
+  its platform runtime, and fixed seeds replay stochastic trajectories.
+  See the [FMI co-simulation guide](docs/guides/fmi-co-simulation.md).
 - **Explainability**: an optional, queryable causal journal (event →
   triggered functions → variable changes → rescheduling), zero-cost when
   disabled.

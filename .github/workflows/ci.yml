@@ -9,6 +9,83 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  fmu-export:
+    name: FMI 3 export (${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: linux-x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { name: linux-aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { name: macos-arm64, runner: macos-latest, target: aarch64-apple-darwin }
+          - { name: windows-x86_64, runner: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native Linux build prerequisites
+        if: startsWith(matrix.platform.name, 'linux-')
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev cmake g++
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test tools
+        run: python -m pip install maturin pytest fmpy==0.3.32
+      - name: Build native FMU runtime and Python wheel
+        run: |
+          python scripts/build_fmu_runtime.py --target ${{ matrix.platform.target }} --release
+          maturin build --release -m bindings/pyraichu/Cargo.toml --out dist
+      - name: Install Python wheel
+        shell: bash
+        run: python -m pip install dist/pyraichu-*.whl
+      - name: Install independent FMI validator
+        shell: bash
+        run: |
+          if [[ "${{ matrix.platform.name }}" == linux-aarch64 ]]; then
+            # The upstream 0.12.0 release has no Linux aarch64 binary.
+            # fmi-rs 0.2.0 assumes signed c_char when reading schema messages.
+            # Patch its pinned source for aarch64's unsigned c_char.
+            git clone --quiet --depth 1 --branch v0.12.0 \
+              https://github.com/modelica/fmusim.git "$RUNNER_TEMP/fmusim-src"
+            git clone --quiet https://github.com/CATIA-Systems/fmi-rs.git \
+              "$RUNNER_TEMP/fmi-rs-src"
+            git -C "$RUNNER_TEMP/fmi-rs-src" checkout --quiet --detach \
+              762741440ca8564a5fc9de998ee5146038da5404
+            FMI_RS_SRC="$RUNNER_TEMP/fmi-rs-src" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["FMI_RS_SRC"]) / "src/schema/mod.rs"
+          original = "std::ffi::CStr::from_ptr(msg_ptr)"
+          assert source.read_text().count(original) == 1
+          source.write_text(source.read_text().replace(original, "std::ffi::CStr::from_ptr(msg_ptr.cast())"))
+          PY
+            printf '\n[patch.crates-io]\nfmi-rs = { path = "%s" }\n' \
+              "$RUNNER_TEMP/fmi-rs-src" >> "$RUNNER_TEMP/fmusim-src/Cargo.toml"
+            cargo update --manifest-path "$RUNNER_TEMP/fmusim-src/Cargo.toml" -p fmi-rs
+            cargo install --path "$RUNNER_TEMP/fmusim-src/fmusim" \
+              --locked --root "$RUNNER_TEMP/fmusim"
+            echo "RAICHU_FMUSIM=$RUNNER_TEMP/fmusim/bin/fmusim" >> "$GITHUB_ENV"
+          else
+            case "${{ matrix.platform.name }}" in
+              linux-x86_64) asset=fmusim-x86_64-linux.zip; binary=fmusim ;;
+              macos-arm64) asset=fmusim-aarch64-darwin.zip; binary=fmusim ;;
+              windows-x86_64) asset=fmusim-x86_64-windows.zip; binary=fmusim.exe ;;
+            esac
+            mkdir -p .fmusim
+            curl -fsSL "https://github.com/modelica/fmusim/releases/download/v0.12.0/$asset" -o .fmusim/fmusim.zip
+            unzip -q .fmusim/fmusim.zip -d .fmusim
+            chmod +x ".fmusim/$binary"
+            validator="$PWD/.fmusim/$binary"
+            if [[ "${{ matrix.platform.name }}" == windows-x86_64 ]]; then
+              validator=$(cygpath -w "$validator")
+            fi
+            echo "RAICHU_FMUSIM=$validator" >> "$GITHUB_ENV"
+          fi
+      - name: Validate and execute exported FMUs under independent importers
+        run: python -m pytest python/tests/unit/test_fmi_roundtrip.py -q
+
   fmi:
     name: FMI import (${{ matrix.os }})
     strategy:
@@ -54,7 +131,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Build wheel
-        run: pipx run maturin build -m bindings/pyraichu/Cargo.toml
+        run: |
+          python scripts/build_fmu_runtime.py --target x86_64-unknown-linux-gnu --release
+          pipx run maturin build -m bindings/pyraichu/Cargo.toml
       - name: Smoke-test import
         run: |
           pip install target/wheels/pyraichu-*.whl
@@ -78,6 +157,7 @@ jobs:
           python-version: "3.11"
       - name: Build and install the wheel
         run: |
+          python scripts/build_fmu_runtime.py --target x86_64-unknown-linux-gnu --release
           pipx run maturin build -m bindings/pyraichu/Cargo.toml
           pip install target/wheels/pyraichu-*.whl pytest
       - name: Run the unit suite
@@ -97,6 +177,7 @@ jobs:
           python-version: "3.11"
       - name: Build and install the wheel
         run: |
+          python scripts/build_fmu_runtime.py --target x86_64-unknown-linux-gnu --release
           pipx run maturin build -m bindings/pyraichu/Cargo.toml
           pip install target/wheels/pyraichu-*.whl pytest
       # Executes every runnable code block in the documentation, guarding

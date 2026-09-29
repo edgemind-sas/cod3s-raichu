@@ -1,0 +1,28 @@
+[package]
+name = "raichu-fmu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Generic FMI 3 co-simulation runtime for RAICHU models"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+raichu-model.workspace = true
+raichu-core.workspace = true
+raichu-expr.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+self_cell = "1.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

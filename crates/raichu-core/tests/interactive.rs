@@ -16,7 +16,8 @@
 use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError, FireableKind};
 use raichu_expr::{Assignment, AttrRef, Expr, StateRef, Value};
 use raichu_model::{
-    AttrKind, Attribute, Automaton, Component, Distrib, Model, SensitiveFunction, Transition,
+    AttrKind, Attribute, Automaton, Component, Distrib, Equation, EquationKind, Model,
+    SensitiveFunction, Transition,
 };
 
 /// A component with a single two-state failure automaton `fail`
@@ -496,6 +497,123 @@ fn bounded(compiled: &CompiledModel, t_max: f64) -> Engine<'_> {
         },
     )
     .unwrap()
+}
+
+#[test]
+fn advance_to_completes_events_and_moves_clock() {
+    let compiled = compile(&two_component_model());
+    let expected = bounded(&compiled, 18.0).run().unwrap();
+    let mut engine = bounded(&compiled, 18.0);
+    engine.advance_to(3.0).unwrap();
+    assert_eq!(engine.current_time(), 3.0);
+    engine.advance_to(8.0).unwrap();
+    assert_eq!(engine.current_time(), 8.0);
+    engine.advance_to(18.0).unwrap();
+    assert_eq!(engine.history(), expected.events.as_slice());
+    assert!(engine.advance_to(17.0).is_err());
+}
+
+#[test]
+fn input_requires_explicit_permission_and_replays_from_snapshot() {
+    let compiled = compile(&two_component_model());
+    let mut engine = bounded(&compiled, 20.0);
+    assert!(engine.set_input("A.up", Value::Bool(false), &[]).is_err());
+    assert!(engine
+        .set_input("A.up", Value::Int(1), &["A.up".to_owned()])
+        .is_err());
+    engine
+        .set_input("A.up", Value::Bool(false), &["A.up".to_owned()])
+        .unwrap();
+    assert_eq!(engine.attribute("A.up"), Some(Value::Bool(false)));
+    let snap = engine.snapshot().unwrap();
+    engine.advance_to(20.0).unwrap();
+    let first = engine.history().to_vec();
+    engine.restore(&snap).unwrap();
+    engine.advance_to(20.0).unwrap();
+    assert_eq!(engine.history(), first.as_slice());
+}
+
+#[test]
+fn input_change_fires_watched_guard_at_current_point() {
+    let mut model = two_component_model();
+    model.components[0].attributes.push(Attribute {
+        name: "trigger".into(),
+        kind: AttrKind::Float,
+        init: Value::Float(0.0),
+    });
+    let transition = &mut model.components[0].automata[0].transitions[0];
+    transition.distrib = Distrib::Watched;
+    transition.guard = Some(Expr::Cmp {
+        cmp: raichu_expr::CmpOp::Ge,
+        lhs: Box::new(Expr::attr("A", "trigger")),
+        rhs: Box::new(Expr::Const {
+            value: Value::Float(0.5),
+        }),
+    });
+    let compiled = compile(&model);
+    let mut engine = bounded(&compiled, 10.0);
+    engine
+        .set_input("A.trigger", Value::Float(1.0), &["A.trigger".into()])
+        .unwrap();
+    assert_eq!(engine.current_time(), 0.0);
+    assert_eq!(engine.history().len(), 1);
+    assert_eq!(engine.history()[0].time, 0.0);
+    assert_eq!(engine.state("A.fail"), Some("nok"));
+}
+
+#[test]
+fn stepped_ode_matches_native_horizon() {
+    let mut model = two_component_model();
+    model.components[0].attributes.push(Attribute {
+        name: "stock".into(),
+        kind: AttrKind::Float,
+        init: Value::Float(0.0),
+    });
+    model.components[0].equations.push(Equation {
+        target: "stock".into(),
+        kind: EquationKind::Ode,
+        expr: Expr::Const {
+            value: Value::Float(1.0),
+        },
+    });
+    let compiled = compile(&model);
+    let native = bounded(&compiled, 3.0).run().unwrap();
+    let mut engine = bounded(&compiled, 3.0);
+    for point in 1..=30 {
+        engine.advance_to(f64::from(point) / 10.0).unwrap();
+    }
+    assert_eq!(engine.current_time(), 3.0);
+    assert_eq!(engine.history(), native.events.as_slice());
+    let Some(Value::Float(stock)) = engine.attribute("A.stock") else {
+        panic!("missing ODE stock");
+    };
+    assert!((stock - 3.0).abs() < 1e-9);
+}
+
+#[test]
+fn seeded_advance_replays_identically_after_restore() {
+    let mut model = two_component_model();
+    model.components[0].automata[0].transitions[0].distrib = Distrib::Exp {
+        rate: Some(0.8),
+        rate_expr: None,
+    };
+    let compiled = compile(&model);
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            seed: 42,
+            t_max: 10.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    engine.advance_to(1.0).unwrap();
+    let snap = engine.snapshot().unwrap();
+    engine.advance_to(10.0).unwrap();
+    let first = engine.history().to_vec();
+    engine.restore(&snap).unwrap();
+    engine.advance_to(10.0).unwrap();
+    assert_eq!(engine.history(), first.as_slice());
 }
 
 #[test]
