@@ -473,6 +473,22 @@ def test_splitting_exposes_batches_and_round_trips():
         pyraichu.read_quantification(json.dumps(older))
 
 
+def test_splitting_cut_sets_importance_runs_and_echoes():
+    result = pyraichu.quantify(
+        _splitting_pair(), pyraichu.Study("lost", 1.0, seed=7), method="splitting",
+        importance={"kind": "cut_sets"},
+        particles=200, batches=4, confidence=0.99,
+    )
+    p = result.probability
+    assert p.kind == "splitting_estimate" and p.interval_method == "batch_student"
+    assert p.batches == 4
+    assert p.low <= (1 - math.exp(-0.1)) ** 2 <= p.high
+    assert isinstance(result.detail, pyraichu.SplittingResult)
+    # The settings are echoed with the cap default resolved.
+    assert result.settings["importance"] == {"kind": "cut_sets", "max_cut_sets": 1000}
+    assert pyraichu.read_quantification(result.to_json()) == result
+
+
 def test_splitting_errors_name_settings_and_caps():
     model = _splitting_pair()
     study = pyraichu.Study("lost", 1.0)
@@ -482,3 +498,18 @@ def test_splitting_errors_name_settings_and_caps():
         pyraichu.quantify(model, study, method="splitting",
                          importance={"kind": "attribute", "name": "sys.score"},
                          particles=200, batches=2, max_iterations=0)
+
+
+def test_splitting_cut_set_cap_applies_after_absorption():
+    doc = json.loads(_splitting_pair().json)
+    doc["components"][2]["automata"][0]["transitions"][0]["guard"] = {
+        "op": "bool", "bool_op": "or", "args": [
+            _nok("A"), {"op": "bool", "bool_op": "and", "args": [_nok("A"), _nok("B")]}]
+    }
+    model = pyraichu.load_model(doc)
+    result = pyraichu.quantify(
+        model, pyraichu.Study("lost", 1.0), method="splitting",
+        importance={"kind": "cut_sets", "max_cut_sets": 1}, particles=20, batches=2,
+    )
+    assert result.settings["importance"]["max_cut_sets"] == 1
+    assert len(result.detail.batches) == 2

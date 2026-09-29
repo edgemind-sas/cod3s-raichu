@@ -38,7 +38,8 @@ pub enum Method {
     /// `raichu-montecarlo`): the method for feared events too rare for a
     /// plain campaign.
     CrossEntropy(CrossEntropySamplingSettings),
-    /// Adaptive splitting with independent batches and a numeric importance attribute.
+    /// Adaptive splitting with independent batches and an importance
+    /// source: a numeric attribute or the automatic minimal-cut-set score.
     Splitting(SplittingSamplingSettings),
 }
 
@@ -465,7 +466,11 @@ impl CrossEntropySamplingSettings {
 /// Adaptive splitting settings; target, horizon, seed and threads come from the study.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SplittingSamplingSettings {
-    /// Numeric model attribute used as the importance score.
+    /// Importance source: a numeric model attribute (`{"kind": "attribute",
+    /// "name": "component.score"}`) or the automatic score built from the
+    /// target's minimal cut sets (`{"kind": "cut_sets"}`, optional
+    /// `max_cut_sets`). The cut-set kind is refused when fault-tree
+    /// generation refuses the model.
     pub importance: ImportanceSource,
     /// Particles per independent batch, at least two.
     #[serde(default = "splitting_defaults::particles")]

@@ -37,7 +37,7 @@ flowchart LR
 | `"exact"` | exact exploration | the Markov family (instantaneous branchings, zero delays, exponential laws whose rate is constant between jumps, no continuous evolution) | guaranteed lower and upper bounds, closed-form probabilities |
 | `"discretised"` | discretised exploration | every law and continuous evolution | bounds on the discretised model, and an estimate of the discretisation error |
 | `"cross_entropy"` | biased Monte-Carlo, factors fitted by cross-entropy | every model; biases constant-rate exponential laws only, the rest runs unbiased | a weighted estimate with a confidence interval and its diagnostics |
-| `"splitting"` | adaptive multilevel splitting | native models with a numeric importance attribute, all laws; no imported FMUs | a mean over independent batches, a Student interval and extinction diagnostics |
+| `"splitting"` | adaptive multilevel splitting | native models with a numeric importance attribute or a coherent fault tree, all laws; no imported FMUs | a mean over independent batches, a Student interval and extinction diagnostics |
 
 Exploration pays off when the feared event is rare, since it enumerates
 paths instead of waiting for replicas to reach them. Monte-Carlo
@@ -338,6 +338,31 @@ assert p.kind == "splitting_estimate" and p.low <= truth <= p.high
 assert not p.inconclusive
 assert len(split.detail.batches) == 20
 assert pyraichu.read_quantification(split.to_json()) == split
+```
+
+The `importance` setting decides what ranks the intermediate states. A
+declared attribute (`{"kind": "attribute", "name": "sys.score"}`) is the
+choice when the model already carries a natural score, or when its logic
+is not monotone in the states. The automatic source (`{"kind":
+"cut_sets"}`) needs no designed score: it generates the target's fault
+tree once, keeps its minimal cut sets, and scores each completed instant
+with the largest share of one cut set's basic events currently realised,
+a heuristic inspired by the minimal-cut-set committor approximations of
+Chennetier et al. (2024), rather than their exact formula or an optimal
+committor. It refuses, quoting the reason, when fault-tree generation
+refuses the model (a state read under a negation, a guard it cannot
+explain): declare an attribute then. `max_cut_sets` (default 1000) caps
+how many cut sets are kept, since every completed instant scores them
+all; the cap applies to the final minimal family after absorption, and a
+target with more is refused naming the cap.
+
+```python
+auto = pyraichu.quantify(
+    split_pair, pyraichu.Study("lost", 1.0, seed=7), method="splitting",
+    importance={"kind": "cut_sets"}, particles=200, batches=20, confidence=0.99,
+)
+print(auto.settings["importance"])
+assert auto.probability.low <= truth <= auto.probability.high
 ```
 
 The mean includes every independent batch, including extinct batches as

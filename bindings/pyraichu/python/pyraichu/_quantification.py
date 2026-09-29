@@ -497,14 +497,20 @@ def quantify(
       reaches the target raises :class:`SimulationError`.
 
     - ``"splitting"``, adaptive multilevel splitting: ``importance`` is
-      required, as ``{"kind": "attribute", "name": "component.score"}``.
-      ``particles``, ``batches``, ``max_iterations`` use driver defaults;
-      ``confidence`` defaults to 0.95 and ``score_grid`` to no extra dates.
-      Scores are read at completed instants and optional grid dates. The
-      probability is a mean over independent batches with a Student interval;
-      extinction is inconclusive, an iteration cap raises without an estimate.
-      Every native law is supported through age-conditioned restarts; FMUs
-      are refused.
+      required, as ``{"kind": "attribute", "name": "component.score"}`` for a
+      declared numeric attribute, or ``{"kind": "cut_sets"}`` for the
+      automatic score built from the target's minimal cut sets (optional
+      ``max_cut_sets``, default 1000; beyond the cap the campaign is refused
+      by name, and a model fault-tree generation refuses, a non-monotone
+      state read for instance, refuses ``cut_sets`` quoting its reason:
+      declare an attribute then). ``particles``, ``batches``,
+      ``max_iterations`` use driver defaults; ``confidence`` defaults to 0.95
+      and ``score_grid`` to no extra dates. Scores are read at completed
+      instants and optional grid dates. The probability is a mean over
+      independent batches with a Student interval; extinction is
+      inconclusive, an iteration cap raises without an estimate. Every
+      native law is supported through age-conditioned restarts; FMUs are
+      refused.
 
     Returns a :class:`Quantification`. An unknown method, or a setting that
     belongs to another method, raises :class:`SimulationError` naming the

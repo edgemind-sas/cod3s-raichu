@@ -3,15 +3,21 @@
 //! branching at the first strictly higher completed-instant score.
 //! Independent batches provide a Student interval with explicit extinction
 //! diagnostics. A finite iteration cap produces an error, never an estimate.
+//!
+//! The importance is declared as a numeric attribute, or derived
+//! automatically from the target's minimal cut sets
+//! ([`ImportanceSource::CutSets`], inspired by Chennetier et al. 2024).
 
 use crate::confidence::{batch_interval, is_valid_level, BatchInterval, DEFAULT_CONFIDENCE};
 use raichu_core::{
-    CompiledModel, Engine, EngineConfig, EngineError, FlowConfig, Snapshot, SolverParams,
+    CompiledModel, Engine, EngineConfig, EngineError, FaultTreeError, FaultTreeSettings,
+    FlowConfig, Snapshot, SolverParams,
 };
-use raichu_expr::Value;
+use raichu_expr::{Expr, StateRef, Value};
 use rand::Rng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Default particles in each independent batch, calibrated on the 2oo3 witness.
@@ -22,6 +28,12 @@ pub const DEFAULT_SPLITTING_BATCHES: u64 = 20;
 pub const DEFAULT_SPLITTING_MAX_ITERATIONS: u64 = 10_000;
 /// No continuous score sampling unless a grid is declared.
 pub const DEFAULT_SPLITTING_SCORE_GRID: &[f64] = &[];
+/// Default cap on the number of minimal cut sets of an automatic importance.
+pub const DEFAULT_SPLITTING_MAX_CUT_SETS: usize = 1_000;
+
+fn default_max_cut_sets() -> usize {
+    DEFAULT_SPLITTING_MAX_CUT_SETS
+}
 
 /// Source of the importance score, read only after a complete instant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +43,25 @@ pub enum ImportanceSource {
     Attribute {
         /// Qualified attribute name.
         name: String,
+    },
+    /// Automatic score built once from the target's minimal cut sets: after
+    /// each completed instant, the score is the largest fraction, over cut
+    /// sets, of their basic events currently realised (their target state
+    /// active), capped at 1. This heuristic is inspired by the committor
+    /// approximations built from minimal cut sets in Chennetier, Chraibi,
+    /// Dutfoy & Garnier (2024),
+    /// *Adaptive importance sampling based on fault tree analysis for
+    /// piecewise deterministic Markov process*, SIAM/ASA JUQ,
+    /// DOI `10.1137/22m1522838`.
+    ///
+    /// Refused when fault-tree generation refuses the model (a non-monotone
+    /// state read among other reasons): declare an [`ImportanceSource::Attribute`]
+    /// instead.
+    CutSets {
+        /// Cap on the number of minimal cut sets compiled; beyond it the
+        /// campaign is refused rather than slowed at every instant.
+        #[serde(default = "default_max_cut_sets")]
+        max_cut_sets: usize,
     },
 }
 /// Settings for a splitting campaign. Particles is the population per batch.
@@ -46,7 +77,7 @@ pub struct SplittingSettings {
     pub particles: u64,
     /// Independent batches, at least two.
     pub batches: u64,
-    /// Numeric importance source.
+    /// Declared attribute or automatically derived minimal-cut-set importance.
     pub importance: ImportanceSource,
     /// Strictly increasing finite times in `[0, t_max]` for continuous scores.
     pub score_grid: Vec<f64>,
@@ -196,18 +227,6 @@ fn validate(m: &CompiledModel, s: &SplittingSettings) -> Result<(), SplittingErr
             "expected strictly increasing finite dates inside the horizon",
         ));
     }
-    let ImportanceSource::Attribute { name } = &s.importance;
-    let idx = m
-        .var_names
-        .iter()
-        .position(|n| n == name)
-        .ok_or_else(|| invalid("importance", format!("unknown attribute `{name}`")))?;
-    if !matches!(m.var_init[idx], Value::Int(_) | Value::Float(_)) {
-        return Err(invalid(
-            "importance",
-            format!("attribute `{name}` is not numeric"),
-        ));
-    }
     if let Some(unit) = m.fmu_units.first() {
         return Err(EngineError::FmuSnapshotApi {
             unit: unit.name.clone(),
@@ -217,6 +236,251 @@ fn validate(m: &CompiledModel, s: &SplittingSettings) -> Result<(), SplittingErr
         .into());
     }
     Ok(())
+}
+/// The kinds of [`CompiledImportance`].
+#[derive(Debug, Clone)]
+enum CompiledKind {
+    /// The attribute name, checked present and numeric at compile time.
+    Attribute {
+        /// Qualified attribute name.
+        name: String,
+    },
+    /// The target's minimal cut sets over shared basic-event conditions.
+    CutSets(CutSetScore),
+}
+/// The importance of a campaign, compiled once against the model: the
+/// declared attribute, or the minimal cut sets the target's fault tree
+/// yields. Build it with [`compile_importance`]; [`run_splitting`] does
+/// this before its first draw.
+#[derive(Debug, Clone)]
+struct CompiledImportance {
+    /// The first-hit target the +infinity latch answers to.
+    target: String,
+    kind: CompiledKind,
+}
+/// Minimal cut sets over shared basic-event conditions: each basic event
+/// stands for the (automaton, state) pair the generator explained, and a
+/// condition is realised when that state is currently active.
+#[derive(Debug, Clone)]
+struct CutSetScore {
+    /// Distinct conditions, qualified automaton then state name.
+    conditions: Vec<(String, String)>,
+    /// Minimal cut sets as sorted index lists into `conditions`.
+    cuts: Vec<Vec<usize>>,
+}
+impl CutSetScore {
+    /// Largest fraction of realised basic events over the cut sets. Each
+    /// cut set contributes the share of its conditions currently active,
+    /// so the score lies in `[0, 1]` (the cap the fraction's own
+    /// definition gives).
+    fn score(&self, e: &Engine<'_>, realised: &mut [bool]) -> f64 {
+        for (active, (automaton, state)) in realised.iter_mut().zip(&self.conditions) {
+            *active = e.state(automaton) == Some(state.as_str());
+        }
+        self.cuts
+            .iter()
+            .map(|cut| cut.iter().filter(|c| realised[**c]).count() as f64 / cut.len() as f64)
+            .fold(0.0, f64::max)
+    }
+}
+impl CompiledImportance {
+    /// The importance score of a completed instant: the attribute's value,
+    /// or the largest realised fraction over the minimal cut sets
+    /// (a heuristic inspired by Chennetier et al. 2024). A
+    /// reached target scores +infinity, above every finite score.
+    ///
+    /// # Errors
+    /// [`SplittingError::InvalidSetting`] when a declared attribute is not
+    /// numeric where it is read.
+    fn score(&self, e: &Engine<'_>, realised: &mut [bool]) -> Result<f64, SplittingError> {
+        if e.reached_target()
+            .is_some_and(|(target, _)| target == self.target)
+        {
+            return Ok(f64::INFINITY);
+        }
+        match &self.kind {
+            CompiledKind::Attribute { name } => {
+                let v = match e.attribute(name) {
+                    Some(Value::Float(v)) => v,
+                    Some(Value::Int(v)) => v as f64,
+                    _ => {
+                        return Err(invalid(
+                            "importance",
+                            format!("attribute `{name}` is not numeric"),
+                        ))
+                    }
+                };
+                if !v.is_finite() {
+                    return Err(invalid(
+                        "importance",
+                        format!(
+                            "attribute `{name}` has non-finite score at time {}",
+                            e.current_time()
+                        ),
+                    ));
+                }
+                Ok(v)
+            }
+            CompiledKind::CutSets(cut_sets) => Ok(cut_sets.score(e, realised)),
+        }
+    }
+}
+/// Resolve a campaign's importance against the model: the declared
+/// attribute checked present and numeric, or the target's fault tree
+/// generated once and narrowed to its minimal cut sets. Each cut set is
+/// compiled to the (automaton, state) conditions its basic events stand
+/// for.
+///
+/// # Errors
+/// [`SplittingError::InvalidSetting`] for an unknown or non-numeric
+/// attribute, a model fault-tree generation refuses or cannot explain (its
+/// own reason is quoted, naming the declared-attribute alternative), or a
+/// target with more minimal cut sets than the declared cap.
+fn compile_importance(
+    m: &CompiledModel,
+    s: &SplittingSettings,
+) -> Result<CompiledImportance, SplittingError> {
+    let importance = match &s.importance {
+        ImportanceSource::Attribute { name } => {
+            let idx = m
+                .var_names
+                .iter()
+                .position(|n| n == name)
+                .ok_or_else(|| invalid("importance", format!("unknown attribute `{name}`")))?;
+            if !matches!(m.var_init[idx], Value::Int(_) | Value::Float(_)) {
+                return Err(invalid(
+                    "importance",
+                    format!("attribute `{name}` is not numeric"),
+                ));
+            }
+            CompiledKind::Attribute { name: name.clone() }
+        }
+        ImportanceSource::CutSets { max_cut_sets } => {
+            CompiledKind::CutSets(compile_cut_sets(m, s, *max_cut_sets)?)
+        }
+    };
+    Ok(CompiledImportance {
+        target: s.target.clone(),
+        kind: importance,
+    })
+}
+/// Generate the target's fault tree and keep its minimal cut sets as
+/// shared (automaton, state) conditions, under the declared cap.
+fn compile_cut_sets(
+    m: &CompiledModel,
+    s: &SplittingSettings,
+    max_cut_sets: usize,
+) -> Result<CutSetScore, SplittingError> {
+    let target = m
+        .targets
+        .iter()
+        .find(|t| t.name == s.target)
+        .ok_or_else(|| invalid("target", format!("unknown target `{}`", s.target)))?;
+    let automaton = &m.automata[target.automaton];
+    let (component, name) = automaton.name.rsplit_once('.').ok_or_else(|| {
+        invalid(
+            "importance",
+            format!(
+                "automaton `{}` is not qualified as `component.automaton`",
+                automaton.name
+            ),
+        )
+    })?;
+    let top = Expr::StateActive {
+        state: StateRef {
+            component: component.to_owned(),
+            automaton: name.to_owned(),
+            state: automaton.states[target.state].clone(),
+        },
+    };
+    let refused = |e: FaultTreeError| {
+        invalid(
+            "importance",
+            format!(
+                "fault-tree generation refused the model: {e}; declare an \
+                 attribute importance instead (`{{\"kind\": \"attribute\", \
+                 \"name\": ...}}`)"
+            ),
+        )
+    };
+    let tree = raichu_core::fault_tree(m, &top, &FaultTreeSettings::default()).map_err(refused)?;
+    // Reuse exact BDD extraction: the core expansion cap bounds intermediate
+    // products, whereas this setting bounds the final minimal family. In
+    // particular, A OR (A AND B) must fit a cap of one after absorption.
+    let mut structure = raichu_fta::Tree::from_generated(&tree, &s.target);
+    // Only the Boolean structure is needed. Neutral probabilities prevent
+    // unrelated CDF evaluation (and its numerical limits) from restricting
+    // an otherwise valid structural score; event indices stay unchanged.
+    for event in &mut structure.events {
+        event.law = raichu_fta::Law::Constant { probability: 0.5 };
+    }
+    let quantified = raichu_fta::quantify(
+        &structure,
+        &raichu_fta::QuantifySettings {
+            engine: raichu_fta::Engine::Exact,
+            cut_set_limit: max_cut_sets,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| {
+        invalid(
+            "importance",
+            format!(
+                "exact minimal-cut-set extraction refused the model: {e}; \
+                 declare an attribute importance instead"
+            ),
+        )
+    })?;
+    let sets = quantified.minimal_cut_sets.ok_or_else(|| {
+        invalid(
+            "max_cut_sets",
+            format!(
+                "the target counts {} minimal cut sets, above the cap of \
+                 {max_cut_sets}; raise `max_cut_sets` or explain a narrower \
+                 target",
+                quantified.cut_set_count.unwrap_or(0)
+            ),
+        )
+    })?;
+    if sets.is_empty() {
+        // A constant-false top: generation found no way for the target to
+        // become true, typically because its guard reads attributes it
+        // holds constant. A cut-set score would sit at zero for ever.
+        return Err(invalid(
+            "importance",
+            format!(
+                "fault-tree generation explains no way for the target `{}` \
+                 to become true (a guard reading only attributes is held at \
+                 its initial value); declare an attribute importance instead",
+                s.target
+            ),
+        ));
+    }
+    let mut conditions: Vec<(String, String)> = Vec::new();
+    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+    let mut cuts = Vec::with_capacity(sets.len());
+    for set in sets {
+        let mut cut = Vec::with_capacity(set.len());
+        for event in set {
+            let basic = &tree.basic_events[event];
+            let key = (basic.automaton.clone(), basic.target.clone());
+            let index = *seen.entry(key).or_insert_with_key(|key| {
+                let index = conditions.len();
+                conditions.push(key.clone());
+                index
+            });
+            cut.push(index);
+        }
+        cut.sort_unstable();
+        cut.dedup();
+        // A condition-free cut set explains a top that holds
+        // unconditionally: such a target is reached at once and latches
+        // +infinity before any cut-set score is read.
+        if !cut.is_empty() {
+            cuts.push(cut);
+        }
+    }
+    Ok(CutSetScore { conditions, cuts })
 }
 fn config(s: &SplittingSettings, stream: u64) -> EngineConfig {
     EngineConfig {
@@ -238,37 +502,10 @@ struct Particle {
     crossings: Vec<Crossing>,
     level: f64,
 }
-fn score(e: &Engine<'_>, s: &SplittingSettings) -> Result<f64, SplittingError> {
-    if e.reached_target()
-        .is_some_and(|(target, _)| target == s.target)
-    {
-        return Ok(f64::INFINITY);
-    }
-    let ImportanceSource::Attribute { name } = &s.importance;
-    let v = match e.attribute(name) {
-        Some(Value::Float(v)) => v,
-        Some(Value::Int(v)) => v as f64,
-        _ => {
-            return Err(invalid(
-                "importance",
-                format!("attribute `{name}` is not numeric"),
-            ))
-        }
-    };
-    if !v.is_finite() {
-        return Err(invalid(
-            "importance",
-            format!(
-                "attribute `{name}` has non-finite score at time {}",
-                e.current_time()
-            ),
-        ));
-    }
-    Ok(v)
-}
 fn trajectory(
     m: &CompiledModel,
     s: &SplittingSettings,
+    imp: &CompiledImportance,
     id: u64,
     branch: Option<Crossing>,
 ) -> Result<Particle, SplittingError> {
@@ -281,8 +518,14 @@ fn trajectory(
     let mut crossings = branch.into_iter().collect::<Vec<_>>();
     let mut level = crossings.last().map_or(f64::NEG_INFINITY, |c| c.level);
     let mut grid = s.score_grid.partition_point(|t| *t <= e.current_time());
+    // Each trajectory owns its scratch space; scoring shares only the
+    // immutable compiled importance across parallel launches.
+    let mut realised = match &imp.kind {
+        CompiledKind::Attribute { .. } => Vec::new(),
+        CompiledKind::CutSets(cuts) => vec![false; cuts.conditions.len()],
+    };
     loop {
-        let value = score(&e, s)?;
+        let value = imp.score(&e, &mut realised)?;
         if value > level {
             level = value;
             e.forget_history();
@@ -303,7 +546,7 @@ fn trajectory(
             grid += usize::from(grid < s.score_grid.len());
         }
         if event.is_none() && until == s.t_max {
-            let value = score(&e, s)?;
+            let value = imp.score(&e, &mut realised)?;
             if value > level {
                 level = value;
                 e.forget_history();
@@ -320,6 +563,7 @@ fn trajectory(
 fn batch(
     m: &CompiledModel,
     s: &SplittingSettings,
+    imp: &CompiledImportance,
     b: u64,
 ) -> Result<SplittingBatch, SplittingError> {
     // Rank zero belongs to parent selection. Every trajectory launch uses
@@ -327,7 +571,7 @@ fn batch(
     let mut selection = raichu_rng::replica_rng(s.seed, stream(b, 0)?);
     let initial: Vec<_> = (1..=s.particles)
         .into_par_iter()
-        .map(|rank| trajectory(m, s, stream(b, rank)?, None))
+        .map(|rank| trajectory(m, s, imp, stream(b, rank)?, None))
         .collect();
     let mut particles = initial.into_iter().collect::<Result<Vec<_>, _>>()?;
     let mut rank = s.particles + 1;
@@ -385,14 +629,16 @@ fn batch(
                 .find(|c| c.level > minimum)
                 .cloned()
                 .ok_or_else(|| invalid("importance", "survivor has no strict crossing"))?;
-            particles[i] = trajectory(m, s, stream(b, rank)?, Some(crossing))?;
+            particles[i] = trajectory(m, s, imp, stream(b, rank)?, Some(crossing))?;
             rank += 1;
         }
     }
 }
 /// Estimate a first-hit target probability by generalized AMS.
 ///
-/// Initial waves and independent batches run in parallel; reductions and clone
+/// The importance is compiled once before sampling: a declared
+/// attribute, or the minimal cut sets of the target's fault tree. Initial
+/// waves and independent batches run in parallel; reductions and clone
 /// launch ranks are serial. Equal seeds therefore give byte-identical results
 /// at every thread count. Invalid settings fail before any random draw.
 ///
@@ -404,10 +650,11 @@ pub fn run_splitting(
     s: &SplittingSettings,
 ) -> Result<SplittingEstimate, SplittingError> {
     validate(m, s)?;
+    let importance = compile_importance(m, s)?;
     let compute = || {
         let batches: Vec<_> = (0..s.batches)
             .into_par_iter()
-            .map(|b| batch(m, s, b))
+            .map(|b| batch(m, s, &importance, b))
             .collect();
         batches.into_iter().collect::<Result<Vec<_>, _>>()
     };
@@ -441,4 +688,86 @@ pub fn run_splitting(
         estimate_inconclusive,
         trajectories,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
+    use super::*;
+    use raichu_model::Model;
+    use serde_json::json;
+
+    #[test]
+    fn automatic_score_covers_every_two_out_of_three_state() {
+        let state = |i: usize| {
+            json!({"op":"state_active","state":{
+            "component":format!("u{i}"),"automaton":"life","state":"down"}})
+        };
+        let vote = json!({"op":"cmp","cmp":"ge","lhs":{"op":"add","args":
+            (0..3).map(|i| json!({"op":"if","cond":state(i),
+                "then":{"op":"const","value":{"kind":"float","value":1.0}},
+                "otherwise":{"op":"const","value":{"kind":"float","value":0.0}}})).collect::<Vec<_>>()},
+            "rhs":{"op":"const","value":{"kind":"float","value":2.0}}});
+        let mut components: Vec<_> = (0..3)
+            .map(|i| {
+                json!({"name":format!("u{i}"),
+            "automata":[{"name":"life","states":["up","down"],"init":"up",
+                "transitions":[{"name":"fail","source":"up","targets":["down"],
+                    "distrib":"exp","rate":0.2}]}]})
+            })
+            .collect();
+        components.push(json!({"name":"sys","automata":[{"name":"target",
+            "states":["safe","lost"],"init":"safe","transitions":[{"name":"loss",
+            "source":"safe","targets":["lost"],"distrib":"inst","probs":[],"guard":vote}]}]}));
+        let model: Model = serde_json::from_value(json!({"name":"two_out_of_three",
+            "components":components,"targets":[{"name":"lost","component":"sys",
+                "automaton":"target","state":"lost"}]}))
+        .unwrap();
+        let m = CompiledModel::compile(&model).unwrap();
+        let settings = SplittingSettings {
+            target: "lost".into(),
+            importance: ImportanceSource::CutSets { max_cut_sets: 3 },
+            ..Default::default()
+        };
+        let importance = compile_importance(&m, &settings).unwrap();
+        let CompiledKind::CutSets(cuts) = &importance.kind else {
+            panic!("expected cut sets")
+        };
+        let mut realised = vec![false; cuts.conditions.len()];
+        for mask in 0u32..8 {
+            let mut e = Engine::new(
+                &m,
+                EngineConfig {
+                    t_max: 100.0,
+                    stop_at_targets: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for i in 0..3 {
+                if mask & (1 << i) != 0 {
+                    let name = format!("u{i}.life.fail");
+                    let transition = m.transitions.iter().position(|t| t.name == name).unwrap();
+                    e.fire_now(transition, None).unwrap();
+                }
+            }
+            e.advance_to(e.current_time()).unwrap();
+            let expected = (mask.count_ones() as f64 / 2.0).min(1.0);
+            assert_eq!(
+                cuts.score(&e, &mut realised),
+                expected,
+                "state mask {mask:03b}"
+            );
+            let effective = if mask.count_ones() >= 2 {
+                f64::INFINITY
+            } else {
+                expected
+            };
+            assert_eq!(
+                importance.score(&e, &mut realised).unwrap(),
+                effective,
+                "target latch mask {mask:03b}"
+            );
+        }
+    }
 }
