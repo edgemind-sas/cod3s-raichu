@@ -132,7 +132,7 @@ One JSON document.
 | `exact` | exact exploration (Markov family) | `min_probability`, `max_length`, `max_failures`, `max_branches` (cut-offs, each optional), `gap_tolerance`, `rel_precision`, `max_terms` |
 | `discretised` | discretised exploration | the four cut-offs (`max_branches` defaults to 1 000 000), `gap_tolerance`, `level` (default 8), `refine` (default `true`) |
 | `cross_entropy` | biased Monte-Carlo, factors fitted by cross-entropy | `nb_runs` (final replicas, at least 1, required), `pilot_runs` (default 1 000), `max_iterations` (default 20), `smoothing` (default 0.7), `tolerance` (default 0.02), `confidence` (default `0.95`), `initial_factor` (default 10), `escalation_ratio` (default 10), `factor_min` (default 0.01), `factor_max` (default 10 000), `fit` (default `true`), `min_effective_sample_size` (default 50), `families` (qualified transition name to family label, default none) |
-| `splitting` | adaptive multilevel splitting | `importance` (required: `{"kind":"attribute","name":"component.score"}`), `particles` (per batch, default 16 000), `batches` (default 20), `score_grid` (default empty), `max_iterations` (default 10 000), `confidence` (default `0.95`) |
+| `splitting` | adaptive multilevel splitting | `importance` (required: `{"kind":"attribute","name":"component.score"}` for a declared numeric attribute, or `{"kind":"cut_sets","max_cut_sets":1000}` for the automatic minimal-cut-set score, `max_cut_sets` optional, default 1 000), `particles` (per batch, default 16 000), `batches` (default 20), `score_grid` (default empty), `max_iterations` (default 10 000), `confidence` (default `0.95`) |
 
 A setting given to a method it does not belong to is refused, naming the
 methods that do take it. The Monte-Carlo campaign always stops each
@@ -227,6 +227,10 @@ magnitude off.
 An iteration cap raises a splitting error and returns no envelope. The
 study's reporting instants are unused; `score_grid` supplies extra score
 observations between completed event instants. Imported FMUs are refused.
+The `cut_sets` importance is refused, also before any draw, when
+fault-tree generation refuses the model (its reason is quoted, the
+declared-attribute alternative named) or when the target counts more
+minimal cut sets than `max_cut_sets`.
 
 **`bounds`** (exact and discretised exploration):
 

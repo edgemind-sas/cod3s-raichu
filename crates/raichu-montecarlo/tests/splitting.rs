@@ -2,7 +2,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use raichu_core::CompiledModel;
 use raichu_model::Model;
-use raichu_montecarlo::{run_splitting, ImportanceSource, SplittingSettings};
+use raichu_montecarlo::{
+    run_splitting, ImportanceSource, SplittingSettings, DEFAULT_SPLITTING_MAX_CUT_SETS,
+};
 use serde_json::{json, Value};
 
 fn constant(value: f64) -> Value {
@@ -43,6 +45,51 @@ fn settings(particles: u64) -> SplittingSettings {
         },
         ..Default::default()
     }
+}
+fn cut_settings(particles: u64, max_cut_sets: usize) -> SplittingSettings {
+    SplittingSettings {
+        target: "lost".into(),
+        t_max: 1.0,
+        particles,
+        importance: ImportanceSource::CutSets { max_cut_sets },
+        ..Default::default()
+    }
+}
+/// The same witness whose target guard reads the failed-unit count
+/// directly from the states (`sum(if(down, 1, 0)) >= k`), the form
+/// fault-tree generation explains: the vote is the top expression, so the
+/// minimal cut sets are the failing combinations. The dynamics are the
+/// attribute guard's; the tree is what differs.
+fn system_vote(n: usize, k: usize, law: Value) -> Model {
+    use raichu_expr::{CmpOp, Expr, StateRef, Value as V};
+    let mut model = system(n, k, law, None);
+    let vote = Expr::Cmp {
+        cmp: CmpOp::Ge,
+        lhs: Box::new(Expr::Add {
+            args: (0..n)
+                .map(|i| Expr::If {
+                    cond: Box::new(Expr::StateActive {
+                        state: StateRef {
+                            component: format!("u{i}"),
+                            automaton: "life".into(),
+                            state: "down".into(),
+                        },
+                    }),
+                    then: Box::new(Expr::Const {
+                        value: V::Float(1.0),
+                    }),
+                    otherwise: Box::new(Expr::Const {
+                        value: V::Float(0.0),
+                    }),
+                })
+                .collect(),
+        }),
+        rhs: Box::new(Expr::Const {
+            value: V::Float(k as f64),
+        }),
+    };
+    model.components.last_mut().unwrap().automata[0].transitions[0].guard = Some(vote);
+    model
 }
 fn binomial_cdf(k: u64, n: u64, p: f64) -> f64 {
     let mut term = (1.0 - p).powi(n as i32);
@@ -517,4 +564,193 @@ fn weibull_clones_have_distinct_residual_futures() {
         dates.push(child.step().unwrap().unwrap().time);
     }
     assert!(dates.windows(2).all(|pair| pair[0] != pair[1]));
+}
+
+/// The cut-set fractions rank completed states like the declared count.
+/// Their different numeric levels must yield identical replacement decisions.
+#[test]
+fn cut_sets_rank_states_like_the_declared_count() {
+    let m = CompiledModel::compile(&system_vote(3, 2, exp(0.2))).unwrap();
+    let mut attribute = settings(200);
+    attribute.seed = 11;
+    attribute.batches = 4;
+    let mut automatic = attribute.clone();
+    automatic.importance = ImportanceSource::CutSets {
+        max_cut_sets: DEFAULT_SPLITTING_MAX_CUT_SETS,
+    };
+    let declared = run_splitting(&m, &attribute).unwrap();
+    let derived = run_splitting(&m, &automatic).unwrap();
+    assert_eq!(declared.interval, derived.interval);
+    for (a, c) in declared.batches.iter().zip(&derived.batches) {
+        assert_eq!(a.estimate, c.estimate);
+        assert_eq!(a.levels.len(), c.levels.len());
+        for (la, lc) in a.levels.iter().zip(&c.levels) {
+            assert_eq!(la.killed, lc.killed);
+            assert_eq!(la.survival_fraction, lc.survival_fraction);
+            assert!([0.0, 1.0].contains(&la.level));
+            assert!([0.0, 0.5].contains(&lc.level));
+        }
+    }
+}
+
+/// The automatic source covers the same 1e-6 closed form as the hand
+/// declared count, over the same 100-seed witness. The full budget of the
+/// declared-score test is kept: the cut-set score costs a few state lookups
+/// per completed instant, which moves the wall clock by a small factor only.
+#[test]
+fn cut_sets_source_covers_the_one_in_a_million_closed_form() {
+    let rate: f64 = 0.0005775;
+    let q = -(-rate).exp_m1();
+    let truth = 3.0 * q * q - 2.0 * q * q * q;
+    let model = CompiledModel::compile(&system_vote(3, 2, exp(rate))).unwrap();
+    let mut conclusive = 0;
+    let mut covered = 0;
+    let mut extinct = 0;
+    for seed in 0..100 {
+        let mut s = cut_settings(16_000, DEFAULT_SPLITTING_MAX_CUT_SETS);
+        s.seed = seed;
+        let r = run_splitting(&model, &s).unwrap();
+        extinct += u64::from(r.extinct_batches > 0);
+        if !r.estimate_inconclusive {
+            conclusive += 1;
+            covered += u64::from(r.interval.low <= truth && truth <= r.interval.high);
+        }
+    }
+    eprintln!(
+        "2oo3 cut-set coverage={covered}/{conclusive}, inconclusive={}, extinct={extinct}/100",
+        100 - conclusive
+    );
+    assert!(conclusive >= 90);
+    assert!(binomial_cdf(covered, conclusive, 0.95) >= 0.01);
+}
+
+/// Fault-tree generation explains a value becoming true through states
+/// being entered, so a negated state read is refused with its own reason
+/// quoted, and the declared attribute named as the way out.
+#[test]
+fn a_non_monotone_state_read_is_refused_with_the_generation_reason() {
+    use raichu_expr::{BoolOp, Expr, StateRef};
+    let mut model = system(3, 2, exp(0.2), None);
+    model.components.last_mut().unwrap().automata[0].transitions[0].guard = Some(Expr::Bool {
+        bool_op: BoolOp::Not,
+        args: vec![Expr::StateActive {
+            state: StateRef {
+                component: "u0".into(),
+                automaton: "life".into(),
+                state: "down".into(),
+            },
+        }],
+    });
+    let m = CompiledModel::compile(&model).unwrap();
+    let err = run_splitting(&m, &cut_settings(10, DEFAULT_SPLITTING_MAX_CUT_SETS))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("fault-tree generation refused the model"),
+        "{err}"
+    );
+    assert!(err.contains("negation"), "{err}");
+    assert!(err.contains("attribute"), "{err}");
+}
+
+/// A target with more minimal cut sets than the cap is refused naming the
+/// cap, and runs once the cap is raised.
+#[test]
+fn more_cut_sets_than_the_cap_is_refused_by_name() {
+    // 3-of-5: ten three-event minimal cut sets.
+    let m = CompiledModel::compile(&system_vote(5, 3, exp(0.2))).unwrap();
+    let err = run_splitting(&m, &cut_settings(10, 4))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("max_cut_sets"), "{err}");
+    let mut generous = cut_settings(20, 16);
+    generous.batches = 2;
+    let r = run_splitting(&m, &generous).unwrap();
+    assert_eq!(r.batches.len(), 2);
+}
+
+#[test]
+fn automatic_importance_setting_round_trips_and_defaults_its_cap() {
+    let source: ImportanceSource = serde_json::from_value(json!({"kind": "cut_sets"})).unwrap();
+    assert_eq!(
+        serde_json::to_value(source).unwrap(),
+        json!({"kind": "cut_sets", "max_cut_sets": 1000})
+    );
+    assert!(serde_json::from_value::<ImportanceSource>(
+        json!({"kind": "cut_sets", "unexpected": true})
+    )
+    .is_err());
+}
+
+/// Absorption removes the redundant conjunction before the cap is applied.
+#[test]
+fn cut_set_cap_counts_final_minimal_sets_after_absorption() {
+    let mut doc = serde_json::to_value(system_vote(2, 1, exp(1.0))).unwrap();
+    let state = |name: &str| json!({"op":"state_active","state":{"component":name,"automaton":"life","state":"down"}});
+    doc["components"][2]["automata"][0]["transitions"][0]["guard"] = json!({
+        "op":"bool", "bool_op":"or", "args":[state("u0"),
+            {"op":"bool", "bool_op":"and", "args":[state("u0"),state("u1")]}]
+    });
+    let model: Model = serde_json::from_value(doc).unwrap();
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let mut settings = cut_settings(20, 1);
+    settings.batches = 2;
+    let capped = run_splitting(&compiled, &settings).unwrap();
+    settings.importance = ImportanceSource::CutSets { max_cut_sets: 2 };
+    assert_eq!(capped, run_splitting(&compiled, &settings).unwrap());
+}
+
+/// Empty cuts represent a certain target, whereas no cuts explain no path.
+#[test]
+fn cut_set_constant_targets_preserve_first_hit_and_refuse_no_path() {
+    for initially_lost in [true, false] {
+        let mut doc = serde_json::to_value(system_vote(1, 1, exp(1.0))).unwrap();
+        if initially_lost {
+            doc["components"][1]["automata"][0]["init"] = json!("lost");
+        } else {
+            doc["components"][1]["automata"][0]["transitions"][0]["guard"] =
+                json!({"op":"const","value":{"kind":"bool","value":true}});
+        }
+        let model: Model = serde_json::from_value(doc).unwrap();
+        let compiled = CompiledModel::compile(&model).unwrap();
+        let mut settings = cut_settings(10, 1);
+        settings.batches = 2;
+        let result = run_splitting(&compiled, &settings).unwrap();
+        assert_eq!(result.interval.estimate, 1.0);
+        assert_eq!(result.extinct_batches, 0);
+        assert!(result
+            .batches
+            .iter()
+            .all(|b| b.estimate == 1.0 && !b.extinct && b.levels.is_empty()));
+    }
+    // This guard reads a constant-valued attribute, not the states that
+    // change the explicit score. Generation cannot explain that dependency.
+    let model = CompiledModel::compile(&system(1, 1, exp(1.0), None)).unwrap();
+    let error = run_splitting(&model, &cut_settings(10, 1))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no way"), "{error}");
+    assert!(error.contains("attribute importance"), "{error}");
+}
+
+/// Structural extraction imposes no mission-time/CDF condition on rich laws.
+#[test]
+fn cut_set_structure_accepts_rich_laws_at_zero_horizon() {
+    for law in [
+        exp(0.2),
+        json!({"distrib":"weibull","shape":2.0,"scale":10.0}),
+        json!({"distrib":"lognormal","mu":2.0,"sigma":0.7}),
+        json!({"distrib":"gamma","shape":3.0,"scale":2.0}),
+        json!({"distrib":"uniform","low":2.0,"high":8.0}),
+        json!({"distrib":"empirical","points":[[0.0,0.0],[3.0,0.4],[9.0,1.0]]}),
+        json!({"distrib":"delay","time":1.0}),
+    ] {
+        let model = CompiledModel::compile(&system_vote(1, 1, law.clone())).unwrap();
+        let mut settings = cut_settings(10, 1);
+        settings.t_max = 0.0;
+        settings.batches = 2;
+        let result = run_splitting(&model, &settings).unwrap();
+        assert_eq!(result.interval.estimate, 0.0, "{law}");
+        assert_eq!(result.batches.len(), 2);
+    }
 }

@@ -173,3 +173,33 @@ fn splitting_settings_are_named_and_caps_return_no_estimate() {
         ))
     ));
 }
+
+#[test]
+fn automatic_importance_is_echoed_and_round_trips() {
+    let method = Method::from_parts(
+        "splitting",
+        &json!({
+            "importance": {"kind": "cut_sets"}, "particles": 100,
+            "batches": 4, "confidence": 0.99
+        }),
+    )
+    .unwrap();
+    let result = quantify(&model(), &Study::new("lost", 1.0), &method).unwrap();
+    assert_eq!(
+        serde_json::to_value(&result.method).unwrap()["settings"]["importance"],
+        json!({"kind": "cut_sets", "max_cut_sets": 1000})
+    );
+    let encoded = result.to_json().unwrap();
+    let decoded = read_quantification(&encoded).unwrap();
+    assert_eq!(decoded, result);
+    assert_eq!(decoded.to_json().unwrap(), encoded);
+    let err = Method::from_parts(
+        "splitting",
+        &json!({
+            "importance": {"kind": "cut_sets", "cap_typo": 3}
+        }),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("cap_typo"), "{err}");
+}
