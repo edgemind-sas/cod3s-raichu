@@ -68,6 +68,9 @@ pub enum QuantifyError {
     /// estimate is returned in place of a zero.
     #[error(transparent)]
     NoHit(raichu_montecarlo::CrossEntropyError),
+    /// Splitting refused the campaign or reached a cap without an estimate.
+    #[error(transparent)]
+    Splitting(#[from] raichu_montecarlo::SplittingError),
     /// The model could not be serialized for its content hash.
     #[error("the model could not be serialized for its content hash: {0}")]
     ModelSerialization(String),

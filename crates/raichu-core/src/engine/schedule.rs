@@ -125,7 +125,7 @@ pub(super) fn validate_rate_factors(
 /// Whether a compiled law is stochastic in the sense of
 /// [`StochasticDates`]: its firing date is drawn in drawn mode, deferred
 /// in deferred mode.
-fn is_stochastic(distrib: &CLaw) -> bool {
+pub(super) fn is_stochastic(distrib: &CLaw) -> bool {
     matches!(fireable_kind(distrib), FireableKind::Stochastic)
 }
 
@@ -213,6 +213,7 @@ impl<'m> Engine<'m> {
                 self.refresh_deferred(trans_idx, in_source, guard_ok)?;
                 continue;
             }
+            self.refresh_drawn_clock(trans_idx, in_source, guard_ok);
             match self.pending[trans_idx] {
                 Some(_) if !in_source => {
                     self.pending[trans_idx] = None;
@@ -309,6 +310,10 @@ impl<'m> Engine<'m> {
                     }
                 }
                 None if in_source && guard_ok => {
+                    if self.clocks[trans_idx].is_some_and(|clock| clock.redraw) {
+                        self.redraw_clock(trans_idx, false)?;
+                        continue;
+                    }
                     // `schedule_stochastic` for a state-dependent rate: draw the
                     // `Exp(1)` threshold (fresh arming) or keep the
                     // banked hazard (resume re-arm), then schedule

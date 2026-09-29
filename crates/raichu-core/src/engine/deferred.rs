@@ -5,23 +5,23 @@
 
 use super::*;
 
-/// Age bookkeeping of a stochastic transition armed in deferred mode
-/// ([`StochasticDates::Deferred`]).
+/// Active age of a stochastic clock, reused by deferred draws and
+/// independent restarts of drawn dates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct DeferredAge {
     /// Instant the transition was armed (kept across `resume` pauses).
-    armed_at: f64,
+    pub(super) armed_at: f64,
     /// Age banked by the running stretches that ended before `since`.
-    banked: f64,
+    pub(super) banked: f64,
     /// Start of the current running stretch (or of the pause).
-    since: f64,
+    pub(super) since: f64,
     /// `false` while paused by a `resume` interruption.
     pub(super) running: bool,
 }
 
 impl DeferredAge {
     /// Age at `now`: time spent armed and running.
-    fn age(&self, now: f64) -> f64 {
+    pub(super) fn age(&self, now: f64) -> f64 {
         if self.running {
             self.banked + (now - self.since)
         } else {

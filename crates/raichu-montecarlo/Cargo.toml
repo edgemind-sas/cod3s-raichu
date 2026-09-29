@@ -15,6 +15,7 @@ raichu-expr.workspace = true
 raichu-model.workspace = true
 raichu-rng.workspace = true
 rayon = "1"
+rand.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 

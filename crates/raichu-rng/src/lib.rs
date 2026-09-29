@@ -14,6 +14,11 @@
 //! `rand_distr` is used with `std_math` **off** so sampled values are
 //! identical across platforms (deliberate stack decision).
 //!
+//! Adaptive splitting also uses the final range, indexed by batch and
+//! serial launch rank. Its independent campaigns never share draws with
+//! a cross-entropy campaign; allocation must keep all launches distinct
+//! and below [`MAX_FINAL_REPLICAS`].
+//!
 //! # Stream partition of a biased campaign
 //!
 //! A biased (cross-entropy) study draws from one master seed in two

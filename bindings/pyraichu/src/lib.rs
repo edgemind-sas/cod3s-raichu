@@ -1050,7 +1050,7 @@ fn exploration_minimal_sequences_json(result_json: &str) -> PyResult<String> {
 ///
 /// `study_json` is the study (`target`, `horizon`, optional `instants`,
 /// `seed`, `threads`); `method` names the engine (`monte_carlo`, `exact`,
-/// `discretised`) and `settings_json` holds the settings that belong to it
+/// `discretised`, `cross_entropy`, `splitting`) and `settings_json` holds the settings that belong to it
 /// (an object, `None` for every default). An unknown method, or a setting
 /// of another method, is refused naming the valid ones before anything
 /// runs. The GIL is released while the engine runs.

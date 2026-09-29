@@ -6,7 +6,9 @@ use raichu_explore::{
 };
 use std::collections::BTreeMap;
 
-use raichu_montecarlo::{CrossEntropySettings, DEFAULT_CONFIDENCE};
+use raichu_montecarlo::{
+    CrossEntropySettings, ImportanceSource, SplittingSettings, DEFAULT_CONFIDENCE,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -17,7 +19,7 @@ use crate::{QuantifyError, Study};
 /// the [`Study`]).
 ///
 /// Serialized as `{"name": <method>, "settings": {...}}`, the names being
-/// `monte_carlo`, `exact`, `discretised` and `cross_entropy`. Non-exhaustive: a later
+/// `monte_carlo`, `exact`, `discretised`, `cross_entropy` and `splitting`. Non-exhaustive: a later
 /// engine adds a variant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "settings", rename_all = "snake_case")]
@@ -36,12 +38,20 @@ pub enum Method {
     /// `raichu-montecarlo`): the method for feared events too rare for a
     /// plain campaign.
     CrossEntropy(CrossEntropySamplingSettings),
+    /// Adaptive splitting with independent batches and a numeric importance attribute.
+    Splitting(SplittingSamplingSettings),
 }
 
 impl Method {
     /// The method names this engine provides, in the order the
     /// documentation presents them.
-    pub const NAMES: [&'static str; 4] = ["monte_carlo", "exact", "discretised", "cross_entropy"];
+    pub const NAMES: [&'static str; 5] = [
+        "monte_carlo",
+        "exact",
+        "discretised",
+        "cross_entropy",
+        "splitting",
+    ];
 
     /// The method's name, as serialized.
     #[must_use]
@@ -51,6 +61,7 @@ impl Method {
             Method::Exact(_) => "exact",
             Method::Discretised(_) => "discretised",
             Method::CrossEntropy(_) => "cross_entropy",
+            Method::Splitting(_) => "splitting",
         }
     }
 
@@ -63,6 +74,7 @@ impl Method {
             "exact" => Some(ExactExplorationSettings::NAMES),
             "discretised" => Some(DiscretisedExplorationSettings::NAMES),
             "cross_entropy" => Some(CrossEntropySamplingSettings::NAMES),
+            "splitting" => Some(SplittingSamplingSettings::NAMES),
             _ => None,
         }
     }
@@ -450,6 +462,82 @@ impl CrossEntropySamplingSettings {
     }
 }
 
+/// Adaptive splitting settings; target, horizon, seed and threads come from the study.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SplittingSamplingSettings {
+    /// Numeric model attribute used as the importance score.
+    pub importance: ImportanceSource,
+    /// Particles per independent batch, at least two.
+    #[serde(default = "splitting_defaults::particles")]
+    pub particles: u64,
+    /// Independent batches, at least two.
+    #[serde(default = "splitting_defaults::batches")]
+    pub batches: u64,
+    /// Additional observation dates for continuously evolving scores.
+    #[serde(default = "splitting_defaults::score_grid")]
+    pub score_grid: Vec<f64>,
+    /// Replacement iteration cap; reaching it returns an error without an estimate.
+    #[serde(default = "splitting_defaults::max_iterations")]
+    pub max_iterations: u64,
+    /// Two-sided confidence level, strictly inside `(0, 1)`.
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+mod splitting_defaults {
+    pub(super) fn score_grid() -> Vec<f64> {
+        raichu_montecarlo::DEFAULT_SPLITTING_SCORE_GRID.to_vec()
+    }
+    pub(super) fn particles() -> u64 {
+        raichu_montecarlo::DEFAULT_SPLITTING_PARTICLES
+    }
+    pub(super) fn batches() -> u64 {
+        raichu_montecarlo::DEFAULT_SPLITTING_BATCHES
+    }
+    pub(super) fn max_iterations() -> u64 {
+        raichu_montecarlo::DEFAULT_SPLITTING_MAX_ITERATIONS
+    }
+}
+impl SplittingSamplingSettings {
+    /// Accepted serialized setting names.
+    pub const NAMES: &'static [&'static str] = &[
+        "importance",
+        "particles",
+        "batches",
+        "score_grid",
+        "max_iterations",
+        "confidence",
+    ];
+    /// Construct a campaign with the driver's documented defaults.
+    #[must_use]
+    pub fn new(importance: ImportanceSource) -> Self {
+        Self {
+            importance,
+            particles: splitting_defaults::particles(),
+            batches: splitting_defaults::batches(),
+            score_grid: splitting_defaults::score_grid(),
+            max_iterations: splitting_defaults::max_iterations(),
+            confidence: DEFAULT_CONFIDENCE,
+        }
+    }
+    /// Driver settings for this study, using the default solver and flow policy.
+    #[must_use]
+    pub fn to_engine(&self, study: &Study) -> SplittingSettings {
+        SplittingSettings {
+            target: study.target.clone(),
+            t_max: study.horizon,
+            seed: study.seed,
+            threads: study.threads,
+            importance: self.importance.clone(),
+            particles: self.particles,
+            batches: self.batches,
+            score_grid: self.score_grid.clone(),
+            max_iterations: self.max_iterations,
+            confidence: self.confidence,
+            ..SplittingSettings::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -469,11 +557,20 @@ mod tests {
         let mut disc =
             keys(&serde_json::to_value(DiscretisedExplorationSettings::default()).unwrap());
         let mut ce = keys(&serde_json::to_value(CrossEntropySamplingSettings::new(1)).unwrap());
+        let mut splitting = keys(
+            &serde_json::to_value(SplittingSamplingSettings::new(
+                ImportanceSource::Attribute {
+                    name: "sys.score".into(),
+                },
+            ))
+            .unwrap(),
+        );
         for (found, declared) in [
             (&mut mc, MonteCarloSettings::NAMES),
             (&mut exact, ExactExplorationSettings::NAMES),
             (&mut disc, DiscretisedExplorationSettings::NAMES),
             (&mut ce, CrossEntropySamplingSettings::NAMES),
+            (&mut splitting, SplittingSamplingSettings::NAMES),
         ] {
             found.sort();
             let mut declared: Vec<String> = declared.iter().map(|&n| n.to_owned()).collect();
@@ -489,6 +586,11 @@ mod tests {
             Method::Exact(ExactExplorationSettings::default()),
             Method::Discretised(DiscretisedExplorationSettings::default()),
             Method::CrossEntropy(CrossEntropySamplingSettings::new(1)),
+            Method::Splitting(SplittingSamplingSettings::new(
+                ImportanceSource::Attribute {
+                    name: "sys.score".into(),
+                },
+            )),
         ];
         for (method, name) in methods.iter().zip(Method::NAMES) {
             assert_eq!(method.name(), name);

@@ -27,11 +27,14 @@
 
 pub mod confidence;
 pub mod cross_entropy;
+pub mod splitting;
+pub use splitting::*;
 
 pub use confidence::{
-    constant_sample_bounds, is_valid_level, normal_bounds, normal_quantile,
-    unobserved_frequency_bound, weighted_interval, wilson_bounds, z_of, ConfidenceInterval,
-    Departure, IntervalMethod, WeightedInterval, DEFAULT_CONFIDENCE,
+    batch_interval, constant_sample_bounds, is_valid_level, normal_bounds, normal_quantile,
+    student_critical, unobserved_frequency_bound, weighted_interval, wilson_bounds, z_of,
+    BatchInterval, ConfidenceInterval, Departure, IntervalMethod, WeightedInterval,
+    DEFAULT_CONFIDENCE,
 };
 pub use cross_entropy::{
     cross_entropy_families, run_cross_entropy, CrossEntropyError, CrossEntropyEstimate,

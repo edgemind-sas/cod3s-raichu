@@ -1,15 +1,15 @@
-# Quantifying a study: one question, four engines
+# Quantifying a study: one question, five engines
 
 RAICHU answers "what is the probability that this feared event happens by
-this horizon" with four engines: **Monte-Carlo simulation**, **exact
-exploration**, **discretised exploration** and **cross-entropy** (a biased
-Monte-Carlo campaign for rare events). `pyraichu.quantify` is the one
-entry point to the four: the question is stated once, as a
+this horizon" with five engines: **Monte-Carlo simulation**, **exact
+exploration**, **discretised exploration**, **cross-entropy** (a biased
+Monte-Carlo campaign for rare events) and **adaptive splitting**. `pyraichu.quantify` is the one
+entry point to the five: the question is stated once, as a
 `pyraichu.Study`, and each engine answers it in the same envelope, so
 switching engine means changing one argument.
 
 This guide runs one study through the first three engines, then a rare
-event through the fourth, and reads what comes back. The envelope's fields are specified in the
+event through cross-entropy and splitting, and reads what comes back. The envelope's fields are specified in the
 [quantification envelope format](../reference/quantification-format.md);
 each engine has its own guide for what it does beyond this common
 question (see [Further reading](#further-reading)).
@@ -25,6 +25,8 @@ flowchart LR
     EX --> ENV
     DI --> ENV
     CE --> ENV
+    Q -->|splitting| SP["adaptive splitting"]
+    SP --> ENV
 ```
 
 ## Choosing an engine
@@ -35,6 +37,7 @@ flowchart LR
 | `"exact"` | exact exploration | the Markov family (instantaneous branchings, zero delays, exponential laws whose rate is constant between jumps, no continuous evolution) | guaranteed lower and upper bounds, closed-form probabilities |
 | `"discretised"` | discretised exploration | every law and continuous evolution | bounds on the discretised model, and an estimate of the discretisation error |
 | `"cross_entropy"` | biased Monte-Carlo, factors fitted by cross-entropy | every model; biases constant-rate exponential laws only, the rest runs unbiased | a weighted estimate with a confidence interval and its diagnostics |
+| `"splitting"` | adaptive multilevel splitting | native models with a numeric importance attribute, all laws; no imported FMUs | a mean over independent batches, a Student interval and extinction diagnostics |
 
 Exploration pays off when the feared event is rare, since it enumerates
 paths instead of waiting for replicas to reach them. Monte-Carlo
@@ -281,13 +284,84 @@ nominal law, which keeps the estimate unbiased but brings no variance
 reduction through them. Repairs start unbiased; a family can be merged or
 named by hand with `families={"comp.automaton.transition": "label"}`.
 
+## Rare feared events: splitting
+
+Choose splitting when progress towards the feared event passes through
+intermediate states that a numeric attribute can rank. Cross-entropy instead
+changes constant exponential rates; it can help a rare single jump where
+splitting has no intermediate state to clone. Neither method establishes
+an estimate merely because its returned interval looks narrow. Fast repair
+cycles may defeat both methods; inspect `inconclusive`.
+
+Splitting observes the attribute after each complete instant, including all
+simultaneous transitions and propagation, plus optional `score_grid` dates
+for a continuously evolving score. It replaces every particle tied at the
+lowest running maximum and restarts at a survivor's first strictly higher
+score. The target always ranks above every finite score.
+
+This pair illustrates a graded score, the number of failed units. Its
+probability at one hour is `(1 - exp(-0.1))**2`. The smaller explicit budget
+keeps this example quick; omitted budgets use the driver's calibrated
+defaults, recorded in `result.settings`.
+
+```python
+def number(value):
+    return {"op": "const", "value": {"kind": "float", "value": value}}
+
+
+split_pair = pyraichu.load_model({
+    "name": "graded_pair",
+    "components": [unit("E", 0.1), unit("F", 0.1), {
+        "name": "sys",
+        "attributes": [{"name": "score", "kind": "float",
+                        "init": {"kind": "float", "value": 0.0}}],
+        "equations": [{"target": "score", "kind": "explicit", "expr": {
+            "op": "add", "args": [
+                {"op": "if", "cond": nok(name), "then": number(1.0),
+                 "otherwise": number(0.0)} for name in ("E", "F")
+            ]}}],
+        "automata": [{"name": "watch", "states": ["ok", "lost"], "init": "ok",
+            "transitions": [{"name": "loss", "source": "ok", "targets": ["lost"],
+                "distrib": "inst", "probs": [], "guard": both(nok("E"), nok("F"))}]}],
+    }],
+    "targets": [{"name": "lost", "component": "sys", "automaton": "watch", "state": "lost"}],
+})
+split = pyraichu.quantify(
+    split_pair, pyraichu.Study("lost", 1.0, seed=7), method="splitting",
+    importance={"kind": "attribute", "name": "sys.score"},
+    particles=200, batches=20, confidence=0.99,
+)
+truth = (1 - math.exp(-0.1)) ** 2
+p = split.probability
+print(p.estimate, p.low, p.high, truth)
+assert p.kind == "splitting_estimate" and p.low <= truth <= p.high
+assert not p.inconclusive
+assert len(split.detail.batches) == 20
+assert pyraichu.read_quantification(split.to_json()) == split
+```
+
+The mean includes every independent batch, including extinct batches as
+zero. The interval uses Student's distribution across batch estimates;
+particles within one batch are related and are not independent observations.
+Any extinct batch, nonpositive lower bound or relative half-width above one
+marks the result `inconclusive`. The detail exposes each batch's estimate,
+level history, killed counts and trajectory count. Reaching `max_iterations`
+raises `SimulationError` without returning an estimate.
+
+Restarts draw fresh stochastic futures conditional on elapsed age for every
+native law, including Weibull and state-dependent hazards. A `resume` clock
+keeps its frozen age and is redrawn when rearmed. Deterministic and watched
+dates remain fixed. Imported FMUs are refused because their snapshots cannot
+provide this restart contract. A constant score provides no useful graded
+progress and may go extinct; a numeric score alone does not ensure precision.
+
 ## Provenance and detail
 
 The rest of the envelope says where the answer comes from. `method` and
 `settings` record what ran, defaults resolved; `engine_version`, `model`
 and `model_hash` identify the engine and the model; `seed` and `instants`
 are recorded for the methods that use them: both for Monte-Carlo
-simulation, the seed alone for cross-entropy, neither for the
+simulation, the seed alone for cross-entropy and splitting, neither for the
 explorations.
 
 ```python

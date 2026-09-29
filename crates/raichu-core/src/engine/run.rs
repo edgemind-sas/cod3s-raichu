@@ -400,6 +400,7 @@ impl<'m> Engine<'m> {
             tally.stats[trans_idx].firings += 1;
         }
         self.pending[trans_idx] = None;
+        self.clocks[trans_idx] = None;
         self.frozen[trans_idx] = None;
         self.hazards[trans_idx] = None;
         self.deferred[trans_idx] = None;

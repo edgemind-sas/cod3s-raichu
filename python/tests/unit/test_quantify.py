@@ -1,4 +1,4 @@
-"""One study, four engines, one envelope, from Python.
+"""One study, five engines, one envelope, from Python.
 
 `pyraichu.quantify(model, study, method=...)` hands the same `Study` to
 Monte-Carlo simulation, exact exploration or discretised exploration and
@@ -204,8 +204,8 @@ def test_the_envelope_reads_back_equal(tmp_path):
 def test_the_reader_refuses_a_future_version():
     q = pyraichu.quantify(_pair(), STUDY, method="exact")
     document = json.loads(q.to_json())
-    # Version 2 is the current one (it added the cross-entropy method).
-    document["version"] = 3
+    # Version 3 added adaptive splitting.
+    document["version"] = 4
     with pytest.raises(pyraichu.SimulationError, match="version"):
         pyraichu.read_quantification(json.dumps(document))
 
@@ -335,7 +335,7 @@ def test_cross_entropy_estimates_a_rare_pair_within_its_interval():
         pilot_runs=500,
     )
     assert q.method == "cross_entropy"
-    assert q.version == 2
+    assert q.version == 3
     assert q.seed == 11
     assert q.instants is None
     p = q.probability
@@ -382,6 +382,7 @@ def test_cross_entropy_settings_are_its_own():
         "exact",
         "discretised",
         "cross_entropy",
+        "splitting",
     )
 
 
@@ -425,3 +426,59 @@ def test_cross_entropy_flags_the_regime_static_factors_cannot_handle():
     )
     assert q.probability.inconclusive is True
     assert all(isinstance(it.effective_sample_size, float) for it in q.detail.history)
+
+
+def _splitting_pair():
+    components = [_unit("A", 0.1), _unit("B", 0.1)]
+    components.append({
+        "name": "sys",
+        "attributes": [{"name": "score", "kind": "float", "init": {"kind": "float", "value": 0.0}}],
+        "equations": [{"target": "score", "kind": "explicit", "expr": {
+            "op": "add", "args": [
+                {"op": "if", "cond": _nok(name),
+                 "then": {"op": "const", "value": {"kind": "float", "value": 1.0}},
+                 "otherwise": {"op": "const", "value": {"kind": "float", "value": 0.0}}}
+                for name in ("A", "B")
+            ]}}],
+        "automata": [{"name": "target", "states": ["safe", "lost"], "init": "safe",
+                      "transitions": [{"name": "loss", "source": "safe", "targets": ["lost"],
+                                       "distrib": "inst", "probs": [], "guard": {
+                                           "op": "bool", "bool_op": "and", "args": [_nok("A"), _nok("B")]
+                                       }}]}],
+    })
+    return pyraichu.load_model({"name": "graded_pair", "components": components,
+                               "targets": [{"name": "lost", "component": "sys", "automaton": "target", "state": "lost"}]})
+
+
+def test_splitting_exposes_batches_and_round_trips():
+    result = pyraichu.quantify(
+        _splitting_pair(), pyraichu.Study("lost", 1.0, seed=7), method="splitting",
+        importance={"kind": "attribute", "name": "sys.score"},
+        particles=200, batches=20, confidence=0.99,
+    )
+    p = result.probability
+    assert result.version == 3 and result.instants is None and result.seed == 7
+    assert p.kind == "splitting_estimate" and p.interval_method == "batch_student"
+    assert p.batches == 20
+    assert p.low <= (1 - math.exp(-0.1)) ** 2 <= p.high
+    assert isinstance(result.detail, pyraichu.SplittingResult)
+    assert len(result.detail.batches) == 20
+    assert all(isinstance(b, pyraichu.SplittingBatch) for b in result.detail.batches)
+    assert all(isinstance(level, pyraichu.SplittingLevel) for b in result.detail.batches for level in b.levels)
+    assert p.extinct_batches == sum(b.extinct for b in result.detail.batches)
+    assert pyraichu.read_quantification(result.to_json()) == result
+    older = json.loads(result.to_json())
+    older["version"] = 2
+    with pytest.raises(pyraichu.SimulationError, match="version 3"):
+        pyraichu.read_quantification(json.dumps(older))
+
+
+def test_splitting_errors_name_settings_and_caps():
+    model = _splitting_pair()
+    study = pyraichu.Study("lost", 1.0)
+    with pytest.raises(pyraichu.SimulationError, match="`typo`"):
+        pyraichu.quantify(model, study, method="splitting", typo=3)
+    with pytest.raises(pyraichu.SimulationError, match="no estimate"):
+        pyraichu.quantify(model, study, method="splitting",
+                         importance={"kind": "attribute", "name": "sys.score"},
+                         particles=200, batches=2, max_iterations=0)

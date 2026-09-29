@@ -10,6 +10,47 @@ impl<'m> Engine<'m> {
         self.time
     }
 
+    /// Fire at most one event, without advancing beyond `date`.
+    ///
+    /// Returns the next event at or before the bound. If none remains,
+    /// evolves the continuous state and clock to `date` and returns `None`.
+    /// The configured study horizon is preserved, including on errors.
+    /// Call [`Engine::advance_to`] at the returned event's date to finish
+    /// its simultaneous reactions before observing a completed instant.
+    ///
+    /// # Errors
+    /// Refuses a non-finite bound, a bound before the current time or beyond
+    /// the study horizon, and propagates ordinary stepping errors.
+    pub fn step_until(&mut self, date: f64) -> Result<Option<Event>, EngineError> {
+        if !date.is_finite() || date < self.time || date > self.config.t_max {
+            return Err(EngineError::AdvanceTimeInvalid {
+                date,
+                time: self.time,
+                horizon: self.config.t_max,
+            });
+        }
+        let horizon = self.config.t_max;
+        self.config.t_max = date;
+        let result = (|| {
+            let event = self.step()?;
+            if event.is_none() {
+                // `step` already integrated to its temporary horizon. Pure
+                // discrete trajectories still need their clock moved there.
+                if self.time < date {
+                    self.flush_samples_before(date);
+                    self.time = date;
+                    self.note_time_change();
+                    self.watched_streak = (date, 0);
+                }
+                self.flush_samples_through(date);
+                self.record_indicators();
+            }
+            Ok(event)
+        })();
+        self.config.t_max = horizon;
+        result
+    }
+
     /// Advance an interactive trajectory through every event dated at or
     /// before `date`, then leave its clock at `date`. The caller may split
     /// continuous evolution at arbitrary communication points.
@@ -478,6 +519,9 @@ impl<'m> Engine<'m> {
             vars: self.vars.clone(),
             states: self.states.clone(),
             pending: self.pending.clone(),
+            clocks: self.clocks.clone(),
+            stochastic_dates: self.config.stochastic_dates,
+            biased_rates: !self.config.rate_factors.is_empty(),
             frozen: self.frozen.clone(),
             hazards: self.hazards.clone(),
             deferred: self.deferred.clone(),
@@ -559,6 +603,7 @@ impl<'m> Engine<'m> {
         self.vars = snap.vars.clone();
         self.states = snap.states.clone();
         self.pending = snap.pending.clone();
+        self.clocks = snap.clocks.clone();
         self.frozen = snap.frozen.clone();
         self.hazards = snap.hazards.clone();
         self.deferred = snap.deferred.clone();
@@ -627,6 +672,7 @@ impl<'m> Engine<'m> {
         self.vars = self.model.var_init.clone();
         self.states = self.model.automata.iter().map(|a| a.init).collect();
         self.pending = vec![None; n];
+        self.clocks = vec![None; n];
         self.frozen = vec![None; n];
         self.hazards = vec![None; n];
         self.deferred = vec![None; n];

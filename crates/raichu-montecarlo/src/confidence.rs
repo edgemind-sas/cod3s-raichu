@@ -14,7 +14,7 @@
 //! Every estimator of this crate is a mean over `n` independent replicas,
 //! so each one carries a two-sided interval at a **declared** level, kept
 //! next to the bounds so an artefact can never state a figure without
-//! stating its precision. Two constructions are used, and which one
+//! stating its precision. Several constructions are used, and which one
 //! applies is decided from the **declared type of the indicator**, never
 //! from a scan of the sampled values:
 //!
@@ -81,7 +81,8 @@
 //!
 //! # What is deliberately not done
 //!
-//! **No Student `t`.** Substituting `t_{n−1}` for `z` would correct the
+//! **No Student `t` for ordinary replica means.** Independent splitting
+//! batches use [`IntervalMethod::BatchStudent`] separately. Substituting `t_{n−1}` for `z` would correct the
 //! one term that is *not* the dominant error: `t` is exact only when the
 //! per-replica quantity is itself Gaussian, which a sojourn time or an
 //! occurrence count never is. At the sizes a campaign runs the two
@@ -142,6 +143,8 @@ pub enum IntervalMethod {
     /// distinct name records that the estimate is a weighted mean, not
     /// a proportion. Not clamped, per the crate policy.
     WeightedNormal,
+    /// Student interval on independent splitting batch estimates.
+    BatchStudent,
     /// No interval could be formed: fewer than two replicas, so no
     /// dispersion is observable (or, on a weighted indicator, no replica
     /// hit at all). The bounds repeat the point estimate
@@ -721,4 +724,172 @@ pub fn normal_quantile(p: f64) -> f64 {
     } else {
         value
     }
+}
+
+/// Student interval over independent, equally weighted splitting batches.
+/// Its coverage is asymptotic in the particle budget, not exact for skewed batches.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BatchInterval {
+    /// Declared two-sided confidence level.
+    pub level: f64,
+    /// Construction, always `BatchStudent` for at least two batches.
+    pub method: IntervalMethod,
+    /// Arithmetic mean of batch estimates.
+    pub estimate: f64,
+    /// Standard error from the ddof-1 sample variance.
+    pub standard_error: f64,
+    /// Unclamped lower bound.
+    pub low: f64,
+    /// Unclamped upper bound.
+    pub high: f64,
+}
+
+/// Form an unclamped Student interval from independent batch estimates.
+/// The caller validates finite values and a confidence level in `(0, 1)`.
+#[must_use]
+pub fn batch_interval(values: &[f64], level: f64) -> BatchInterval {
+    let n = values.len() as f64;
+    let estimate = if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / n
+    };
+    let standard_error = if values.len() < 2 {
+        0.0
+    } else {
+        (values.iter().map(|x| (x - estimate).powi(2)).sum::<f64>() / (n * (n - 1.0))).sqrt()
+    };
+    let half = if values.len() < 2 {
+        0.0
+    } else {
+        student_critical(level, values.len() - 1) * standard_error
+    };
+    BatchInterval {
+        level,
+        method: if values.len() < 2 {
+            IntervalMethod::Undefined
+        } else {
+            IntervalMethod::BatchStudent
+        },
+        estimate,
+        standard_error,
+        low: estimate - half,
+        high: estimate + half,
+    }
+}
+
+// Lanczos log-gamma, positive arguments. Used only once per quantile setup.
+fn log_gamma(z: f64) -> f64 {
+    const C: [f64; 8] = [
+        676.5203681218851,
+        -1259.1392167224028,
+        771.3234287776531,
+        -176.6150291621406,
+        12.507343278686905,
+        -0.13857109526572012,
+        9.984369578019572e-6,
+        1.5056327351493116e-7,
+    ];
+    let z = z - 1.0;
+    let mut x = 0.9999999999998099;
+    for (i, c) in C.iter().enumerate() {
+        x += c / (z + i as f64 + 1.0);
+    }
+    let t = z + 7.5;
+    0.9189385332046727 + (z + 0.5) * t.ln() - t + x.ln()
+}
+
+// Modified Lentz evaluation of the incomplete-beta continued fraction
+// (NIST DLMF 8.17.22), reflecting x when needed for convergence.
+fn beta_fraction(a: f64, b: f64, x: f64) -> f64 {
+    let tiny = 1e-300;
+    let mut c = 1.0;
+    let mut d = 1.0 - (a + b) * x / (a + 1.0);
+    if d.abs() < tiny {
+        d = tiny;
+    }
+    d = 1.0 / d;
+    let mut h = d;
+    for m in 1..=10_000 {
+        let m = m as f64;
+        let m2 = 2.0 * m;
+        for (term, aa) in [
+            m * (b - m) * x / ((a + m2 - 1.0) * (a + m2)),
+            -(a + m) * (a + b + m) * x / ((a + m2) * (a + m2 + 1.0)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            d = 1.0 + aa * d;
+            if d.abs() < tiny {
+                d = tiny;
+            }
+            c = 1.0 + aa / c;
+            if c.abs() < tiny {
+                c = tiny;
+            }
+            d = 1.0 / d;
+            let delta = d * c;
+            h *= delta;
+            if term == 1 && (delta - 1.0).abs() < 4.0 * f64::EPSILON {
+                return h;
+            }
+        }
+    }
+    f64::NAN
+}
+fn beta_regularized(x: f64, a: f64, b: f64, log_norm: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let factor = (a * x.ln() + b * (-x).ln_1p() - log_norm).exp();
+    if x < (a + 1.0) / (a + b + 2.0) {
+        factor * beta_fraction(a, b, x) / a
+    } else {
+        1.0 - factor * beta_fraction(b, a, 1.0 - x) / b
+    }
+}
+/// Positive Student critical value for a two-sided `level` and integer degrees
+/// of freedom. Inverts `I_(nu/(nu+t²))(nu/2, 1/2) = 1-level` by bracketing.
+/// Reference: NIST DLMF 8.17 and NIST Engineering Statistics Handbook 1.3.6.7.2.
+#[must_use]
+pub fn student_critical(level: f64, degrees: usize) -> f64 {
+    if !is_valid_level(level) || degrees == 0 {
+        return f64::NAN;
+    }
+    let nu = degrees as f64;
+    let a = nu / 2.0;
+    let log_norm = log_gamma(a) + log_gamma(0.5) - log_gamma(a + 0.5);
+    let tail = |t: f64| beta_regularized(nu / (nu + t * t), a, 0.5, log_norm);
+    let mut lo = 0.0;
+    let mut hi = 1.0;
+    loop {
+        let probability = tail(hi);
+        if !probability.is_finite() {
+            return f64::NAN;
+        }
+        if probability <= 1.0 - level {
+            break;
+        }
+        hi *= 2.0;
+        if !hi.is_finite() {
+            return f64::NAN;
+        }
+    }
+    for _ in 0..100 {
+        let mid = lo + (hi - lo) / 2.0;
+        let probability = tail(mid);
+        if !probability.is_finite() {
+            return f64::NAN;
+        }
+        if probability > 1.0 - level {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo + (hi - lo) / 2.0
 }
