@@ -72,7 +72,6 @@ to reconcile afterwards: the numbers are the same.
 
 ## Scope
 
-This is shared-memory parallelism within one machine. It scales
-Monte-Carlo to all local cores; distributing a campaign across machines
-is not built in, but the independent-replica structure makes it
-straightforward to split a run by replica range and combine the results.
+Parallelism uses shared memory on one machine and scales Monte-Carlo to
+its local cores. Distributed campaigns are shelved. The API provides no
+replica-range partitioning or result-merging operation across machines.
