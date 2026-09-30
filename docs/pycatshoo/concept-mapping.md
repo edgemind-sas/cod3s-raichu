@@ -52,7 +52,9 @@ deliberate departures.
 | silent hang on instantaneous loops | typed errors (fixpoint-iteration cap, Zeno guard) | fail loudly, not silently |
 | order-dependent simultaneous effects (modeller's job) | optional non-confluence probe (`confluence_check`) | diagnoses order-dependence instead of hiding it |
 | `setDtCond` (event-location step) | explicit integrator tolerances (`rtol`, `tol_event`, …) | recorded in the run's provenance |
+| sequential Monte-Carlo (user manual V1.3.7.2, sections 5.5.4 and 9.3.38.4) | [`quantify(method="splitting")`](../guides/quantification.md#rare-feared-events-splitting), with a numeric attribute or minimal-cut-set importance | generalized adaptive multilevel splitting selects at strict score-level crossings; independent batches provide the interval. This departs from the reference engine's fixed time intervals; numerical parity of the algorithms is not claimed. |
 | FMU co-simulation import (developer manual, section 4.1.11.2) | `fmu_units` with attribute bindings and an explicit import grant | outputs are held between scheduled communication points; crossing dates on those outputs have the declared step resolution |
+| Standalone FMU construction (developer manual V1.3.7.2, sections 4.3, 4.3.1 and 4.3.2) | [`pyraichu.fmi.export`](../guides/fmi-co-simulation.md#export-a-raichu-model) | FMI 3 co-simulation packages the model and native runtime; outputs are held at communication points. The export guide states the platform and model boundaries. |
 
 ### Result files
 
