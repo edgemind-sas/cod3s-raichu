@@ -79,6 +79,7 @@ __all__ = [
     "Model",
     "ModelError",
     "Observation",
+    "OperatorAdvance",
     "PilotIteration",
     "Quantification",
     "SequenceCampaign",
@@ -1650,8 +1651,26 @@ class Fireable:
         return f"Fireable({self.transition} [{self.kind}] @ {when})"
 
 
+@dataclass(frozen=True)
+class OperatorAdvance:
+    """Native outcome of a bounded operator-controlled advance.
+
+    ``stop`` is ``target``, ``event``, ``choice`` or ``incomplete``.
+    ``choice`` names the pending transition without selecting its branch.
+    """
+
+    requested_time: float
+    reached_time: float
+    stop: str
+    events: list[Event]
+    choice: str | None
+
+
 class Interactive:
     """Step-by-step interactive simulation over a RAICHU model.
+
+    With ``operator_control=True``, stochastic dates are not drawn and
+    ``advance_operator_to`` stops before unresolved probabilistic choices.
 
     Drive the engine one event at a time under your own control, rather
     than running it to the horizon in one shot:
@@ -1684,13 +1703,22 @@ class Interactive:
         seed: int = 0,
         rng_stream: int = 0,
         flow: FlowConfig | None = None,
+        operator_control: bool = False,
     ) -> None:
         if not isinstance(model, Model):
             model = load_model(model)
         self._model = model
         self._raw = _RawInteractive(
-            model.json, t_max, journal, confluence_check, seed, rng_stream, flow,
-            model.allow_fmu_import, str(model.base_dir),
+            model.json,
+            t_max,
+            journal,
+            confluence_check,
+            seed,
+            rng_stream,
+            flow,
+            model.allow_fmu_import,
+            str(model.base_dir),
+            operator_control,
         )
 
     @property
@@ -1726,12 +1754,33 @@ class Interactive:
         """Fire every event through ``date`` and leave the clock there."""
         self._raw.advance_to(date)
 
+    def advance_operator_to(
+        self, date: float, *, max_events: int = 10_000
+    ) -> OperatorAdvance:
+        """Stop at the first event or unresolved choice without drawing dates.
+
+        Requires ``operator_control=True``. Numerical errors restore the
+        preceding state; an ``incomplete`` outcome commits bounded progress.
+        """
+        raw = json.loads(self._raw.advance_operator_to(date, max_events))
+        return OperatorAdvance(
+            requested_time=raw["requested_time"],
+            reached_time=raw["reached_time"],
+            stop=raw["stop"],
+            events=[self._event_from_dict(e) for e in raw["events"]],
+            choice=raw["choice"],
+        )
+
     def set_input(
-        self, qualified: str, value: bool | int | float,
+        self,
+        qualified: str,
+        value: bool | int | float,
         allowed_inputs: list[str],
     ) -> None:
         """Set an attribute explicitly named by the export input manifest."""
-        self._raw.set_input(qualified, json.dumps(_profile_value(value)), allowed_inputs)
+        self._raw.set_input(
+            qualified, json.dumps(_profile_value(value)), allowed_inputs
+        )
 
     def set_date(self, name: str, date: float) -> None:
         """Override an armed transition's firing date (``>=`` current time)."""
@@ -1786,6 +1835,7 @@ def interactive(
     seed: int = 0,
     rng_stream: int = 0,
     flow: FlowConfig | None = None,
+    operator_control: bool = False,
 ) -> Interactive:
     """Open an :class:`Interactive` session over ``model`` (a
     :class:`Model`, a JSON string, or a dict; plugins are expanded and
@@ -1798,6 +1848,7 @@ def interactive(
         seed=seed,
         rng_stream=rng_stream,
         flow=flow,
+        operator_control=operator_control,
     )
 
 

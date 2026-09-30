@@ -112,7 +112,7 @@ impl<'m> Engine<'m> {
     }
 
     /// The deterministic advance of [`Engine::probe_deferred`].
-    fn probe_inner(&mut self, limit: f64) -> Result<(f64, ProbeStop), EngineError> {
+    pub(super) fn probe_inner(&mut self, limit: f64) -> Result<(f64, ProbeStop), EngineError> {
         if let Some(watched) = self.immediate_watched()? {
             return Ok((self.time, ProbeStop::Watched { index: watched }));
         }
@@ -171,6 +171,15 @@ impl<'m> Engine<'m> {
     /// and [`EngineError::DateInPast`] for `t` before the current time or
     /// not finite; the engine is unchanged in all these cases.
     pub fn fire_deferred_at(
+        &mut self,
+        trans_idx: TransIdx,
+        t: f64,
+        branch: Option<usize>,
+    ) -> Result<Event, EngineError> {
+        self.operator_transaction(|engine| engine.fire_deferred_inner(trans_idx, t, branch))
+    }
+
+    fn fire_deferred_inner(
         &mut self,
         trans_idx: TransIdx,
         t: f64,
@@ -377,7 +386,7 @@ impl<'m> Engine<'m> {
 
     /// Whether `trans_idx` is armed in deferred mode with its age
     /// running (not paused by a `resume` interruption).
-    fn deferred_running(&self, trans_idx: TransIdx) -> bool {
+    pub(super) fn deferred_running(&self, trans_idx: TransIdx) -> bool {
         self.deferred[trans_idx].is_some_and(|age| age.running)
     }
 
@@ -458,6 +467,115 @@ mod deferred_rng_tests {
             ),
         );
         Model::from_json(&json).unwrap()
+    }
+
+    #[test]
+    fn operator_commands_leave_rng_untouched_and_restore_hazards() {
+        let compiled = CompiledModel::compile(&model()).unwrap();
+        let config = EngineConfig {
+            seed: 42,
+            stochastic_dates: StochasticDates::Operator,
+            ..EngineConfig::default()
+        };
+        let fresh = raichu_rng::replica_rng(config.seed, config.rng_stream);
+        let mut engine = Engine::new(&compiled, config).unwrap();
+        assert_eq!(engine.rng, fresh);
+        engine.set_date("A.fail.occ", 8.0).unwrap();
+        let before = engine.snapshot().unwrap();
+        engine.advance_operator_to(4.0, 100).unwrap();
+        let hazard = engine
+            .deferred()
+            .into_iter()
+            .find(|t| t.transition == "B.fail.occ")
+            .unwrap()
+            .hazard;
+        assert_eq!(hazard, Some(2.0));
+        assert_eq!(engine.rng, fresh);
+        engine.advance_operator_to(10.0, 100).unwrap();
+        assert_eq!(engine.rng, fresh);
+        engine.restore(&before).unwrap();
+        assert_eq!(
+            engine
+                .deferred()
+                .into_iter()
+                .find(|t| t.transition == "B.fail.occ")
+                .unwrap()
+                .hazard,
+            Some(0.0)
+        );
+        engine.advance_operator_to(4.0, 100).unwrap();
+        assert_eq!(
+            engine
+                .deferred()
+                .into_iter()
+                .find(|t| t.transition == "B.fail.occ")
+                .unwrap()
+                .hazard,
+            hazard
+        );
+        assert_eq!(engine.rng, fresh);
+    }
+
+    #[test]
+    fn operator_choice_consumes_no_draw_before_or_after_explicit_selection() {
+        let model = Model::from_json(r#"{"name":"choice_rng","components":[{"name":"C","automata":[{"name":"A","states":["pending","ok","failed"],"init":"pending","transitions":[{"name":"resolve","source":"pending","targets":["ok","failed"],"distrib":"inst","probs":[0.7]}]}]}]}"#).unwrap();
+        let compiled = CompiledModel::compile(&model).unwrap();
+        let config = EngineConfig {
+            seed: 42,
+            stochastic_dates: StochasticDates::Operator,
+            ..EngineConfig::default()
+        };
+        let fresh = raichu_rng::replica_rng(config.seed, config.rng_stream);
+        let mut engine = Engine::new(&compiled, config).unwrap();
+        assert_eq!(
+            engine.advance_operator_to(5.0, 100).unwrap().stop,
+            super::OperatorStop::Choice
+        );
+        assert_eq!(engine.rng, fresh);
+        engine.fire_named_to("C.A.resolve", "failed").unwrap();
+        engine.advance_operator_to(5.0, 100).unwrap();
+        assert_eq!(engine.rng, fresh);
+    }
+
+    #[test]
+    fn operator_state_dependent_rate_change_preserves_explicit_deadline() {
+        let compiled = CompiledModel::compile(&model()).unwrap();
+        let mut engine = Engine::new(
+            &compiled,
+            EngineConfig {
+                stochastic_dates: StochasticDates::Operator,
+                ..EngineConfig::default()
+            },
+        )
+        .unwrap();
+        engine.set_date("A.fail.occ", 8.0).unwrap();
+        engine.set_date("B.fail.occ", 12.0).unwrap();
+        assert_eq!(
+            engine.advance_operator_to(14.0, 100).unwrap().reached_time,
+            8.0
+        );
+        assert_eq!(
+            engine
+                .fireable()
+                .into_iter()
+                .find(|f| f.transition == "B.fail.occ")
+                .unwrap()
+                .date,
+            Some(12.0)
+        );
+        assert_eq!(
+            engine
+                .deferred()
+                .into_iter()
+                .find(|t| t.transition == "B.fail.occ")
+                .unwrap()
+                .hazard,
+            Some(4.0)
+        );
+        assert_eq!(
+            engine.advance_operator_to(14.0, 100).unwrap().reached_time,
+            12.0
+        );
     }
 
     #[test]

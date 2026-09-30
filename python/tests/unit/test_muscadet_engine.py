@@ -1531,3 +1531,18 @@ def test_reaching_the_feared_event_does_not_end_an_interactive_session():
     reached = session.time
     assert session.step() is not None, "the session steps past its feared event"
     assert session.time > reached
+
+
+def test_interactive_adapter_forwards_operator_control():
+    session = engine.isimu_start(
+        campaign_declaration(),
+        {"nb_runs": 1, "schedule": [0.0, 50.0]},
+        targets=[FEARED_EVENT],
+        operator_control=True,
+    )
+    assert session.time == 0.0
+    result = session.advance_operator_to(1.0)
+    assert result.stop in ("target", "event", "choice")
+    assert result.reached_time <= 1.0
+    with pytest.raises(pyraichu.SimulationError, match="advance_operator_to"):
+        session.step()

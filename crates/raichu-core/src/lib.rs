@@ -38,8 +38,9 @@ pub use compile::{
 pub use engine::{
     CoSimulationHost, DeferredProbe, DeferredTransition, DropReason, Engine, EngineConfig,
     EngineError, Event, Fireable, FireableKind, FlowConfig, FlowStall, FmuProvenance, HazardSample,
-    IndicatorSeries, JournalRecord, PreparedCoSimulation, ProbeStop, Provenance, SeqEvent,
-    Sequence, SimulationResult, Snapshot, StochasticDates, TransitionExposure, WorkCounters,
+    IndicatorSeries, JournalRecord, OperatorAdvance, OperatorStop, PreparedCoSimulation, ProbeStop,
+    Provenance, SeqEvent, Sequence, SimulationResult, Snapshot, StochasticDates,
+    TransitionExposure, WorkCounters,
 };
 pub use fault_tree::{
     fault_tree, BasicLaw, FaultTree, FaultTreeError, FaultTreeSettings, FtNode, GateOp, TreeEvent,

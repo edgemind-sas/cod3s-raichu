@@ -55,6 +55,12 @@ impl<'m> Engine<'m> {
     /// before `date`, then leave its clock at `date`. The caller may split
     /// continuous evolution at arbitrary communication points.
     pub fn advance_to(&mut self, date: f64) -> Result<(), EngineError> {
+        if self.config.stochastic_dates == StochasticDates::Operator {
+            return Err(EngineError::InteractivePolicy {
+                operation: "advance_to",
+                policy: "advance_operator_to in operator mode",
+            });
+        }
         if !date.is_finite() || date < self.time || date > self.config.t_max {
             return Err(EngineError::AdvanceTimeInvalid {
                 date,
@@ -91,6 +97,15 @@ impl<'m> Engine<'m> {
     /// point and complete its discrete reaction before returning. The
     /// allowlist comes from the export manifest, not model naming rules.
     pub fn set_input(
+        &mut self,
+        qualified: &str,
+        value: Value,
+        allowed_inputs: &[String],
+    ) -> Result<(), EngineError> {
+        self.operator_transaction(|engine| engine.set_input_inner(qualified, value, allowed_inputs))
+    }
+
+    fn set_input_inner(
         &mut self,
         qualified: &str,
         value: Value,
@@ -135,7 +150,12 @@ impl<'m> Engine<'m> {
         self.refresh_schedule()?;
         self.record_indicators();
         self.check_targets();
-        self.advance_to(self.time)
+        if self.config.stochastic_dates == StochasticDates::Operator {
+            self.advance_operator_checked(self.time, usize::MAX)
+                .map(|_| ())
+        } else {
+            self.advance_to(self.time)
+        }
     }
 
     /// Next FMU communication point, or `None` for a native-only model.
@@ -190,8 +210,8 @@ impl<'m> Engine<'m> {
     #[must_use]
     pub fn fireable(&self) -> Vec<Fireable> {
         let mut out: Vec<Fireable> = Vec::new();
-        for (idx, pending) in self.pending.iter().enumerate() {
-            if let Some(date) = *pending {
+        for idx in 0..self.pending.len() {
+            if let Some(date) = self.scheduled_date(idx) {
                 out.push(Fireable {
                     index: idx,
                     transition: self.model.transitions[idx].name.clone(),
@@ -201,7 +221,9 @@ impl<'m> Engine<'m> {
             }
         }
         for (idx, age) in self.deferred.iter().enumerate() {
-            if age.is_some_and(|age| age.running) {
+            if age.is_some_and(|age| age.running)
+                && self.operator_dates.get(idx).is_none_or(Option::is_none)
+            {
                 out.push(Fireable {
                     index: idx,
                     transition: self.model.transitions[idx].name.clone(),
@@ -336,6 +358,14 @@ impl<'m> Engine<'m> {
         trans_idx: TransIdx,
         branch: Option<usize>,
     ) -> Result<Event, EngineError> {
+        self.operator_transaction(|engine| engine.fire_now_inner(trans_idx, branch))
+    }
+
+    fn fire_now_inner(
+        &mut self,
+        trans_idx: TransIdx,
+        branch: Option<usize>,
+    ) -> Result<Event, EngineError> {
         let Some(transition) = self.model.transitions.get(trans_idx) else {
             return Err(EngineError::UnknownTransition {
                 transition: format!("<index {trans_idx}>"),
@@ -447,6 +477,31 @@ impl<'m> Engine<'m> {
             });
         };
         let name = transition.name.clone();
+        if self.config.stochastic_dates == StochasticDates::Operator {
+            if !date.is_finite() || date < self.time || date > self.config.t_max {
+                return Err(EngineError::AdvanceTimeInvalid {
+                    date,
+                    time: self.time,
+                    horizon: self.config.t_max,
+                });
+            }
+            let scheduled = self.pending[trans_idx].is_some() || self.deferred_running(trans_idx);
+            if !scheduled {
+                return Err(EngineError::NotFireable {
+                    transition: name,
+                    time: self.time,
+                });
+            }
+            self.operator_dates[trans_idx] = Some(OperatorDate::Active(date));
+            if self.config.journal {
+                self.journal.push(JournalRecord::TransitionRescheduled {
+                    time: self.time,
+                    transition: name,
+                    firing_at: date,
+                });
+            }
+            return Ok(());
+        }
         if self.deferred[trans_idx].is_some() {
             return Err(EngineError::DeferredDate { transition: name });
         }
@@ -510,6 +565,7 @@ impl<'m> Engine<'m> {
 
     fn capture_rust_snapshot(&self) -> Snapshot {
         Snapshot {
+            model_identity: self.model.cache_id,
             fmu_states: None,
             fmu_positions: self
                 .host
@@ -525,6 +581,7 @@ impl<'m> Engine<'m> {
             frozen: self.frozen.clone(),
             hazards: self.hazards.clone(),
             deferred: self.deferred.clone(),
+            operator_dates: self.operator_dates.clone(),
             events: self.events.clone(),
             journal: self.journal.clone(),
             seq_events: self.seq_events.clone(),
@@ -560,6 +617,7 @@ impl<'m> Engine<'m> {
     /// # Errors
     /// Refuses a checkpoint without serialized state for imported units.
     pub fn try_restore(&mut self, snapshot: &Snapshot) -> Result<(), EngineError> {
+        self.check_operator_snapshot(snapshot)?;
         if let Some(host) = self.host.as_deref_mut() {
             let states =
                 snapshot
@@ -587,6 +645,7 @@ impl<'m> Engine<'m> {
     /// # Errors
     /// Refuses an FMU model before changing either state.
     pub fn restore(&mut self, snap: &Snapshot) -> Result<(), EngineError> {
+        self.check_operator_snapshot(snap)?;
         if let Some(unit) = self.model.fmu_units.first() {
             return Err(EngineError::FmuSnapshotApi {
                 unit: unit.name.clone(),
@@ -607,6 +666,7 @@ impl<'m> Engine<'m> {
         self.frozen = snap.frozen.clone();
         self.hazards = snap.hazards.clone();
         self.deferred = snap.deferred.clone();
+        self.operator_dates = snap.operator_dates.clone();
         self.events = snap.events.clone();
         self.journal = snap.journal.clone();
         self.seq_events = snap.seq_events.clone();
@@ -664,6 +724,10 @@ impl<'m> Engine<'m> {
     /// initialization axiom. A run restarted from here is identical to a
     /// fresh [`Engine::new`].
     pub fn reset(&mut self) -> Result<(), EngineError> {
+        self.operator_transaction(Self::reset_inner)
+    }
+
+    fn reset_inner(&mut self) -> Result<(), EngineError> {
         if let Some(host) = self.host.as_deref_mut() {
             host.start(&self.model.var_init)?;
         }
@@ -676,6 +740,17 @@ impl<'m> Engine<'m> {
         self.frozen = vec![None; n];
         self.hazards = vec![None; n];
         self.deferred = vec![None; n];
+        self.operator_dates = if self.config.stochastic_dates == StochasticDates::Operator {
+            vec![None; n]
+        } else {
+            Vec::new()
+        };
+        if self.config.stochastic_dates == StochasticDates::Operator {
+            self.firings.fill(0);
+            self.first_firing.fill(f64::NAN);
+            self.flow_restarts = 0;
+            self.first_flow_restart = f64::NAN;
+        }
         self.events.clear();
         self.journal.clear();
         self.seq_events.clear();
@@ -717,13 +792,31 @@ impl<'m> Engine<'m> {
         trans_idx: TransIdx,
         forced: Option<StateIdx>,
     ) -> Result<Event, EngineError> {
+        self.operator_transaction(|engine| engine.fire_idx_unchecked(trans_idx, forced))
+    }
+
+    fn fire_idx_unchecked(
+        &mut self,
+        trans_idx: TransIdx,
+        forced: Option<StateIdx>,
+    ) -> Result<Event, EngineError> {
         let Some(transition) = self.model.transitions.get(trans_idx) else {
             return Err(EngineError::UnknownTransition {
                 transition: format!("<index {trans_idx}>"),
             });
         };
         let name = transition.name.clone();
-        if let Some(date) = self.pending.get(trans_idx).copied().flatten() {
+        let operator = match self.operator_dates.get(trans_idx).copied().flatten() {
+            Some(OperatorDate::Active(date)) => Some(date),
+            _ => None,
+        };
+        let explicit_now = (self.config.stochastic_dates == StochasticDates::Operator
+            && self.deferred_running(trans_idx))
+        .then_some(self.time);
+        if let Some(date) = operator
+            .or(self.pending.get(trans_idx).copied().flatten())
+            .or(explicit_now)
+        {
             if !date.is_finite() {
                 return Err(EngineError::NotFireable {
                     transition: name,
@@ -829,5 +922,192 @@ impl<'m> Engine<'m> {
             return Ok(false);
         };
         eval_bool(self.model, &self.vars, &self.states, self.time, guard)
+    }
+}
+
+impl<'m> Engine<'m> {
+    pub(super) fn operator_choice(&self, idx: TransIdx) -> bool {
+        matches!(&self.model.transitions[idx].distrib, CLaw::Inst(probs)
+            if probs.iter().filter(|prob| **prob > 0.0).count() > 1)
+    }
+
+    fn check_operator_snapshot(&self, snapshot: &Snapshot) -> Result<(), EngineError> {
+        if (self.config.stochastic_dates == StochasticDates::Operator)
+            != (snapshot.stochastic_dates == StochasticDates::Operator)
+        {
+            return Err(EngineError::OperatorSnapshotPolicy);
+        }
+        if self.config.stochastic_dates == StochasticDates::Operator
+            && snapshot.model_identity != self.model.cache_id
+        {
+            return Err(EngineError::OperatorSnapshotModel);
+        }
+        Ok(())
+    }
+
+    pub(super) fn operator_transaction<T>(
+        &mut self,
+        command: impl FnOnce(&mut Self) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        if self.config.stochastic_dates != StochasticDates::Operator {
+            return command(self);
+        }
+        let before = self.try_snapshot()?;
+        match command(self) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.try_restore(&before)?;
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn refresh_operator_date(&mut self, idx: TransIdx, in_source: bool, guard: bool) {
+        let Some(date) = self.operator_dates.get(idx).copied().flatten() else {
+            return;
+        };
+        use raichu_model::InterruptionPolicy;
+        self.operator_dates[idx] = match (
+            in_source,
+            guard,
+            self.model.transitions[idx].on_interruption,
+            date,
+        ) {
+            (false, _, _, _) | (_, false, InterruptionPolicy::Reset, _) => None,
+            (_, false, InterruptionPolicy::Resume, OperatorDate::Active(at)) => {
+                Some(OperatorDate::Paused((at - self.time).max(0.0)))
+            }
+            (_, true, _, OperatorDate::Paused(remaining)) => {
+                Some(OperatorDate::Active(self.time + remaining))
+            }
+            _ => Some(date),
+        };
+    }
+
+    /// Advance an operator-controlled trajectory to its first relevant instant.
+    ///
+    /// Stochastic clocks without explicit dates stay armed without any RNG
+    /// draw. Deterministic simultaneous reactions complete before returning,
+    /// unless a probabilistic branch requires an explicit destination or
+    /// `max_events` firings have been committed. The latter is successful
+    /// incomplete progress, so the caller may continue from the returned state.
+    /// Dates and continuous quantities use the model's time units. No dense
+    /// exploration hazard trace is allocated.
+    ///
+    /// # Errors
+    /// Requires [`StochasticDates::Operator`], a finite forward date no later
+    /// than the horizon, and propagates numerical/fixpoint failures. Any error
+    /// restores the complete trajectory checkpoint, including RNG and dates.
+    pub fn advance_operator_to(
+        &mut self,
+        date: f64,
+        max_events: usize,
+    ) -> Result<OperatorAdvance, EngineError> {
+        // Validate before checkpointing, as invalid commands mutate no state.
+        self.validate_operator_advance(date)?;
+        self.operator_transaction(|engine| engine.advance_operator_inner(date, max_events))
+    }
+
+    fn advance_operator_checked(
+        &mut self,
+        date: f64,
+        max_events: usize,
+    ) -> Result<OperatorAdvance, EngineError> {
+        self.validate_operator_advance(date)?;
+        self.advance_operator_inner(date, max_events)
+    }
+
+    fn validate_operator_advance(&self, date: f64) -> Result<(), EngineError> {
+        if self.config.stochastic_dates != StochasticDates::Operator {
+            return Err(EngineError::InteractivePolicy {
+                operation: "advance_operator_to",
+                policy: "operator stochastic dates",
+            });
+        }
+        if !date.is_finite() || date < self.time || date > self.config.t_max {
+            return Err(EngineError::AdvanceTimeInvalid {
+                date,
+                time: self.time,
+                horizon: self.config.t_max,
+            });
+        }
+        Ok(())
+    }
+
+    fn advance_operator_inner(
+        &mut self,
+        date: f64,
+        max_events: usize,
+    ) -> Result<OperatorAdvance, EngineError> {
+        let mut events = Vec::new();
+        let mut event_instant = None;
+        let stop;
+        let mut choice = None;
+        loop {
+            if events.len() >= max_events {
+                stop = OperatorStop::Incomplete;
+                break;
+            }
+            // Close the current native instant before committing the FMU's
+            // zero-order-held inputs. A choice or remaining same-date firing
+            // must be resolved first, including after a bounded continuation.
+            if self.host.is_some()
+                && self.immediate_watched()?.is_none()
+                && !self
+                    .next_pending()
+                    .is_some_and(|(_, pending)| pending <= self.time)
+            {
+                self.sample_fmu_inputs_at_current_point();
+            }
+            // A communication point is relevant too; never integrate through
+            // external outputs. The host's existing serialized state joins
+            // the transaction checkpoint.
+            let fmu_point = self.next_fmu_point();
+            let bound = event_instant
+                .unwrap_or(date)
+                .min(fmu_point.unwrap_or(f64::INFINITY));
+            let (_, reason) = self.probe_inner(bound)?;
+            let idx = match reason {
+                ProbeStop::Watched { index } | ProbeStop::Deterministic { index } => Some(index),
+                _ => None,
+            };
+            if let Some(idx) = idx {
+                if self.operator_choice(idx) {
+                    choice = Some(self.model.transitions[idx].name.clone());
+                    stop = OperatorStop::Choice;
+                    break;
+                }
+                if matches!(reason, ProbeStop::Watched { .. }) {
+                    self.note_watched_firing()?;
+                }
+                events.push(self.fire(idx, None)?);
+                event_instant = Some(self.time);
+            } else if fmu_point.is_some_and(|point| point <= bound) {
+                self.process_fmu_point()?;
+                events.push(Event {
+                    time: self.time,
+                    transition: "fmi.communication".to_owned(),
+                    from: String::new(),
+                    to: String::new(),
+                });
+                event_instant = Some(self.time);
+            } else {
+                stop = if event_instant.is_some() {
+                    OperatorStop::Event
+                } else {
+                    OperatorStop::Target
+                };
+                break;
+            }
+        }
+        self.flush_samples_through(self.time);
+        self.record_indicators();
+        Ok(OperatorAdvance {
+            requested_time: date,
+            reached_time: self.time,
+            stop,
+            events,
+            choice,
+        })
     }
 }

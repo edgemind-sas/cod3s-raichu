@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use raichu_core::compile::CLaw;
 use raichu_core::{
     fault_tree, CoSimulationHost, CompiledModel, Engine, EngineConfig, EngineError, FaultTreeError,
-    FaultTreeSettings, PreparedCoSimulation,
+    FaultTreeSettings, OperatorStop, PreparedCoSimulation, StochasticDates,
 };
 use raichu_expr::{Expr, Value};
 use raichu_model::Model;
@@ -330,9 +330,8 @@ fn dahlquist_initial_output_and_first_step_reach_the_model() {
     );
 }
 
-#[test]
-fn watched_reaction_to_fmu_output_precedes_next_input_sample() {
-    let document = json!({
+fn watched_input_model(choice: bool) -> CompiledModel {
+    let mut document = json!({
         "name": "fmi_watched_input",
         "components": [{
             "name": "plant",
@@ -370,8 +369,21 @@ fn watched_reaction_to_fmu_output_precedes_next_input_sample() {
             }
         ]
     });
+    if choice {
+        let automaton = &mut document["components"][0]["automata"][0];
+        automaton["states"] = json!(["off", "on", "other"]);
+        let transition = &mut automaton["transitions"][0];
+        transition["targets"] = json!(["on", "other"]);
+        transition["distrib"] = json!("inst");
+        transition["probs"] = json!([0.5]);
+    }
     let model: Model = serde_json::from_value(document).unwrap();
-    let compiled = CompiledModel::compile(&model).unwrap();
+    CompiledModel::compile(&model).unwrap()
+}
+
+#[test]
+fn watched_reaction_to_fmu_output_precedes_next_input_sample() {
+    let compiled = watched_input_model(false);
     let mut host = CoSimulationHost::prepare_authorized(&compiled, &base_dir(), true).unwrap();
     let config = EngineConfig {
         t_max: 0.2,
@@ -512,4 +524,66 @@ fn chained_feedthrough_trajectory_is_independent_of_unit_declaration_order() {
     assert!(forward
         .iter()
         .any(|(time, _, output)| { (*time - 0.3).abs() < 1e-12 && *output == Value::Float(1.0) }));
+}
+
+#[test]
+fn operator_fmu_inputs_follow_converged_grid_events_and_budget_continuations() {
+    for max_events in [1, 100] {
+        for policy in [StochasticDates::Drawn, StochasticDates::Operator] {
+            let mut compiled = model("Float64_continuous_output", true);
+            compiled.transitions[0].distrib = CLaw::Delay(0.1);
+            let mut host =
+                CoSimulationHost::prepare_authorized(&compiled, &base_dir(), true).unwrap();
+            let mut engine = Engine::new_with_host(
+                &compiled,
+                EngineConfig {
+                    t_max: 0.3,
+                    allow_fmu_import: true,
+                    stochastic_dates: policy,
+                    ..EngineConfig::default()
+                },
+                &mut host,
+            )
+            .unwrap();
+            if policy == StochasticDates::Operator {
+                while engine.current_time() < 0.2 {
+                    let result = engine.advance_operator_to(0.2, max_events).unwrap();
+                    assert_ne!(result.stop, OperatorStop::Choice);
+                }
+            } else {
+                engine.advance_to(0.2).unwrap();
+            }
+            assert_eq!(engine.attribute("plant.input"), Some(Value::Float(1.0)));
+            assert_eq!(
+                engine.attribute("plant.output"),
+                Some(Value::Float(1.0)),
+                "policy={policy:?}, max_events={max_events}"
+            );
+        }
+    }
+}
+
+#[test]
+fn operator_fmu_inputs_follow_explicit_branch_resolution() {
+    let compiled = watched_input_model(true);
+    let mut host = CoSimulationHost::prepare_authorized(&compiled, &base_dir(), true).unwrap();
+    let mut engine = Engine::new_with_host(
+        &compiled,
+        EngineConfig {
+            t_max: 0.2,
+            allow_fmu_import: true,
+            stochastic_dates: StochasticDates::Operator,
+            ..EngineConfig::default()
+        },
+        &mut host,
+    )
+    .unwrap();
+    let choice = engine.advance_operator_to(0.2, 100).unwrap();
+    assert_eq!(choice.stop, OperatorStop::Choice);
+    assert_eq!(choice.reached_time, 0.1);
+    assert_eq!(engine.attribute("plant.input"), Some(Value::Float(0.0)));
+    engine.fire_named_to("plant.watch.switch", "on").unwrap();
+    assert_eq!(engine.attribute("plant.input"), Some(Value::Float(1.0)));
+    engine.advance_operator_to(0.2, 100).unwrap();
+    assert_eq!(engine.attribute("plant.output"), Some(Value::Float(1.0)));
 }

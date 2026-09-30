@@ -961,6 +961,10 @@ def isimu_start(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
     ``stop_at_targets`` to set. Whoever drives it decides what reaching a
     feared event means, which is the point of driving by hand.
 
+    ``operator_control=True`` forwards the explicit native operator policy:
+    stochastic dates are not drawn and probabilistic branches await a choice.
+    Advance with ``advance_operator_to``; automatic defaults remain unchanged.
+
     Returns
     -------
     pyraichu.Interactive
