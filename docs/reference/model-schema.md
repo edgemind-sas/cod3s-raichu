@@ -394,6 +394,40 @@ during numerical integration.
 `target` is a local `float` attribute; `ode` means `d(target)/dt = expr`,
 `explicit` means `target = expr`.
 
+### Linear algebraic cycles
+
+A cycle of explicit equations that is affine in its own target attributes
+is solved simultaneously as one block of the sweep, including during ODE
+right-hand-side evaluation. For example, `v = 10 - i` and `i = v` give
+`v = i = 5`; a breaker changing an outside coefficient automatically
+changes the next solution. No solve call or new equation kind is needed.
+
+`sum` and `mean` over connected numeric ports are affine, and `count` is
+constant. Products of two unknowns, unknown-dependent denominators,
+`min`, `max`, comparisons and conditions reading a block unknown are
+refused, naming the offending term. `if` conditions over outside inputs
+or automaton states are accepted; only the selected branch is evaluated.
+`median`, `all` and `any` over block unknowns are refused.
+
+The solved matrix is `I - A` for `x = A*x + b`. Structural singularity
+uses a conservative sparsity pattern: literal zeros are absent, including
+an identity diagonal cancelled by a literal coefficient one. Computed
+cancellations are handled by LU. Constant rank-deficient systems are
+refused at compilation; state-dependent singularities raise a typed error
+with the variables and simulation date. An ODE target or allocated channel
+still cuts the algebraic dependency graph.
+
+Only a model containing a block is reordered, by stable topological order
+of the condensed dependency graph. Independent steps retain declaration
+order. A declared `evaluation_order` lists each original step once;
+block members become simultaneous, and a reader-before-producer conflict
+is refused. Allocated channels impose no ordering edge on their readers,
+which retain their position where other dependencies allow it. Models
+without a block retain their original compiled sweep exactly.
+
+See [numerical tuning](../guides/numerical-tuning.md#algebraic-block-pivots)
+for the pivot policy.
+
 ## Allocation
 
 The **conservative distribution operator**: it reads one available
@@ -522,8 +556,8 @@ A consumer **returns surplus** when the demand it publishes on an edge
 depends, through the explicit sweep, on the quantity that same operator
 allocated it. That shape is legal and useful: it is what lets a consumer
 limited elsewhere hand back what it cannot use, within the same
-resolution. It is also the one cycle the
-[algebraic-loop refusal](#allocation) deliberately allows.
+resolution. Allocated quantities are deliberately excluded from
+[algebraic block classification](#linear-algebraic-cycles).
 
 Combined with `priority` it is **refused at build time**, naming the
 component, the operator, the demand channel and the allocated channel it
@@ -618,8 +652,8 @@ targeted; a component may not give one name to both, which is refused.
 
 By default the order is **positional**: components in declaration order,
 and inside each, the explicit equations in declaration order followed by
-the distribution operators. Every model written without the field keeps
-exactly that order.
+the distribution operators. A model without an algebraic block keeps
+exactly that order. Blocks use the condensation order described above.
 
 `evaluation_order` overrides it with an explicit list of
 `{ "component": string, "attribute": string }`, and must cover the

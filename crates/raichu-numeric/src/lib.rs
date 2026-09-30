@@ -32,9 +32,11 @@
 //! every delay law the engine carries, with in-crate special functions).
 
 pub mod laws;
+pub mod linear;
 pub mod phase_type;
 
 pub use laws::{Law, LawError};
+pub use linear::{LinearSolveError, LuFactorization, SingularMatrix, DEFAULT_PIVOT_TOLERANCE};
 pub use phase_type::{
     Absorption, AbsorptionMethod, PhaseTypeAccumulator, PhaseTypeError, PhaseTypeSettings,
 };

@@ -458,6 +458,20 @@ pub enum EngineError {
         /// The stuck instant.
         time: f64,
     },
+    /// An algebraic block's coefficient matrix had no inverse at the
+    /// current state: the relative pivot test found no usable pivot, so
+    /// the instantaneous solution does not exist *here* (the compile-time
+    /// levels of the same analysis are [`raichu_model::ModelError`]
+    /// refusals; this one depends on the trajectory).
+    #[error(
+        "the algebraic block on {variables} is singular at t={time}: the          coefficient matrix has no inverse in this state, so no          instantaneous solution exists"
+    )]
+    AlgebraicSingular {
+        /// Simulation time of the failing solve.
+        time: f64,
+        /// Qualified member names of the block, comma separated.
+        variables: String,
+    },
     /// The conservative flow network did not settle within its sweep
     /// budget (see `Engine::resolve_flows`).
     #[error(

@@ -1,8 +1,11 @@
-//! Flow resolution: the explicit sweep (equations and distribution
-//! operators), its active-set termination test, and the resolution loop
-//! that settles the continuous flows before and during integration.
+//! Flow resolution: the explicit sweep (equations, distribution
+//! operators and algebraic blocks), its active-set termination test, and
+//! the resolution loop that settles the continuous flows before and
+//! during integration.
 
 use super::*;
+use crate::compile::CBlock;
+use raichu_numeric::LuFactorization;
 
 /// Reusable scratch of the explicit sweep: the demand and allocation
 /// vectors of the conservative distribution operators, and their capping
@@ -24,6 +27,17 @@ pub(super) struct FlowScratch {
     /// Set only by the boundary resolution. The per-stage path leaves it
     /// `None` and pays nothing.
     classes: Option<Vec<EdgeClass>>,
+    /// Reusable algebraic buffers, indexed by final sweep position.
+    blocks: Vec<BlockScratch>,
+    block_model: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct BlockScratch {
+    coefficients: Vec<f64>,
+    factored_coefficients: Vec<f64>,
+    right: Vec<f64>,
+    factorization: Option<LuFactorization>,
 }
 
 /// Read an attribute as a number, refusing a boolean where a quantity is
@@ -122,6 +136,7 @@ fn run_allocation(
             allocated,
             capped,
             classes,
+            ..
         } = scratch;
         if let Some(sink) = classes.as_mut() {
             classify(&allocation.policy, demands, allocated, capped, sink);
@@ -167,7 +182,7 @@ pub(super) fn recompute_explicit(
     ctx: &mut PassContext<'_>,
 ) -> Result<(), EngineError> {
     ctx.work.explicit_evaluations += 1;
-    for step in &model.explicit {
+    for (index, step) in model.explicit.iter().enumerate() {
         match step {
             CStep::Equation { target, expr } => {
                 let value = eval_f64(model, vars, states, time, expr)?;
@@ -176,9 +191,119 @@ pub(super) fn recompute_explicit(
             CStep::Allocate(allocation) => {
                 run_allocation(model, vars, states, time, allocation, ctx)?;
             }
+            CStep::Block(block) => {
+                run_block(model, vars, states, time, index, block, ctx)?;
+            }
         }
     }
     Ok(())
+}
+
+/// Solve the block simultaneously, reusing caller-owned buffers and LU
+/// factors while coefficient values are unchanged. Scratch is not
+/// trajectory state: restore and restart evaluate the current inputs.
+fn run_block(
+    model: &CompiledModel,
+    vars: &mut [Value],
+    states: &[StateIdx],
+    time: f64,
+    index: usize,
+    block: &CBlock,
+    ctx: &mut PassContext<'_>,
+) -> Result<(), EngineError> {
+    let scratch = &mut ctx.scratch;
+    if scratch.block_model != Some(model.cache_id) {
+        scratch.blocks.clear();
+        scratch
+            .blocks
+            .resize_with(model.explicit.len(), BlockScratch::default);
+        scratch.block_model = Some(model.cache_id);
+    }
+    let scratch = &mut scratch.blocks[index];
+    if block.constant_factorization.is_none() {
+        scratch.coefficients.clear();
+        for row in &block.coefficients {
+            for (_, expr) in row {
+                let value = eval_f64(model, vars, states, time, expr)?;
+                if !value.is_finite() {
+                    return Err(EngineError::TypeError {
+                        time,
+                        detail: format!(
+                            "coefficient of algebraic block on {} is {value}",
+                            block.members.join(", ")
+                        ),
+                    });
+                }
+                scratch.coefficients.push(value);
+            }
+        }
+    }
+    scratch.right.clear();
+    for expr in &block.constants {
+        let value = eval_f64(model, vars, states, time, expr)?;
+        if !value.is_finite() {
+            return Err(EngineError::TypeError {
+                time,
+                detail: format!(
+                    "right-hand side of algebraic block on {} is {value}",
+                    block.members.join(", ")
+                ),
+            });
+        }
+        scratch.right.push(value);
+    }
+    if block.constant_factorization.is_none()
+        && (scratch.factorization.is_none()
+            || scratch.coefficients != scratch.factored_coefficients)
+    {
+        let n = block.targets.len();
+        let mut matrix = vec![0.0; n * n];
+        let mut cursor = 0;
+        for (row, entries) in block.coefficients.iter().enumerate() {
+            for (column, _) in entries {
+                matrix[row * n + column] -= scratch.coefficients[cursor];
+                cursor += 1;
+            }
+            matrix[row * n + row] += 1.0;
+        }
+        scratch.factorization = Some(
+            LuFactorization::decompose(&matrix, n)
+                .map_err(|error| block_solve_error(block, time, error))?,
+        );
+        scratch
+            .factored_coefficients
+            .clone_from(&scratch.coefficients);
+    }
+    if let Some(factors) = block
+        .constant_factorization
+        .as_ref()
+        .or(scratch.factorization.as_ref())
+    {
+        factors
+            .solve_into(&mut scratch.right)
+            .map_err(|error| block_solve_error(block, time, error))?;
+    }
+    for (&target, &value) in block.targets.iter().zip(&scratch.right) {
+        ctx.changed.write(vars, target, Value::Float(value));
+    }
+    Ok(())
+}
+
+fn block_solve_error(
+    block: &CBlock,
+    time: f64,
+    error: raichu_numeric::LinearSolveError,
+) -> EngineError {
+    match error {
+        raichu_numeric::LinearSolveError::Singular(_) => EngineError::AlgebraicSingular {
+            time,
+            variables: block.members.join(", "),
+        },
+        other => EngineError::TypeError {
+            time,
+            detail: format!("algebraic block on {}: {other}", block.members.join(", ")),
+        },
+    }
 }
 
 /// Record which branch of every comparison the sweep resolves, into a
@@ -363,6 +488,16 @@ pub fn active_set_budget(model: &CompiledModel) -> usize {
             CStep::Equation { expr, .. } => budget += decision_sites(expr),
             CStep::Allocate(allocation) => {
                 budget += 2 * allocation.allocated.len() + decision_sites(&allocation.available);
+            }
+            CStep::Block(block) => {
+                for expr in &block.constants {
+                    budget += decision_sites(expr);
+                }
+                for row in &block.coefficients {
+                    for (_, coefficient) in row {
+                        budget += decision_sites(coefficient);
+                    }
+                }
             }
         }
     }
@@ -766,6 +901,36 @@ impl<'m> Engine<'m> {
                     &allocation.available,
                     &mut branches,
                 )?,
+                // The block's constants and coefficients are its
+                // decision surface: the Ifs they carry are over
+                // non-unknowns (conditions reading a member are
+                // refused at build time), so they are active-set
+                // branches like an operator's. The walk keeps the lazy
+                // traversal: only the taken branch is visited.
+                CStep::Block(block) => {
+                    for expr in &block.constants {
+                        record_branches(
+                            self.model,
+                            &self.vars,
+                            &self.states,
+                            self.time,
+                            expr,
+                            &mut branches,
+                        )?;
+                    }
+                    for row in &block.coefficients {
+                        for (_, coefficient) in row {
+                            record_branches(
+                                self.model,
+                                &self.vars,
+                                &self.states,
+                                self.time,
+                                coefficient,
+                                &mut branches,
+                            )?;
+                        }
+                    }
+                }
             }
         }
         Ok(ActiveSet { edges, branches })

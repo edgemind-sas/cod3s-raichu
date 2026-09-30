@@ -99,7 +99,8 @@ pub fn switching_loops(model: &CompiledModel) -> Vec<SwitchingLoop> {
         }
         if automata.is_empty() {
             // A cycle among variables alone is an algebraic loop, which
-            // the flow resolution owns and diagnoses on its own terms.
+            // the model layer classifies and the sweep solves or refuses
+            // on its own terms.
             continue;
         }
         let bandless: Vec<usize> = automata
@@ -158,6 +159,23 @@ fn build_graph(model: &CompiledModel) -> HashMap<Node, Vec<Node>> {
         match step {
             CStep::Equation { target, expr } => written(*target, expr, &mut graph),
             CStep::Allocate(allocation) => allocate_edges(allocation, &mut graph),
+            // Every member of a block is a function of the block's
+            // coefficient inputs: each member leads to everything the
+            // rows read (its own rows never read the other members, so
+            // a solved cycle no longer connects variables to each other
+            // here: the algebraic loop it came from is now a block).
+            CStep::Block(block) => {
+                for &target in &block.targets {
+                    for expr in &block.constants {
+                        written(target, expr, &mut graph);
+                    }
+                    for row in &block.coefficients {
+                        for (_, coefficient) in row {
+                            written(target, coefficient, &mut graph);
+                        }
+                    }
+                }
+            }
         }
     }
     for (target, expr) in &model.ode {

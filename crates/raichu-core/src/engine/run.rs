@@ -862,6 +862,9 @@ impl<'m> Engine<'m> {
                 CStep::Allocate(allocation) if allocation.allocated.contains(&diverging) => {
                     Some(allocation.name.clone())
                 }
+                CStep::Block(block) if block.targets.contains(&diverging) => {
+                    Some(format!("algebraic block `{}`", block.name))
+                }
                 _ => None,
             });
             let mut writers = self

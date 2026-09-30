@@ -8,13 +8,17 @@ use super::*;
 
 /// How one integration segment ended.
 ///
-/// Three outcomes, not two: besides reaching the requested date and
+/// Besides reaching the requested date and
 /// locating a watched transition, a segment can end because the **active
 /// set** it froze stopped holding. That third outcome fires no
 /// transition; it re-resolves the network at the crossing instant and
-/// integration continues from there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// integration continues from there. A discarded trial can also request
+/// reintegration of its prefix without committing state.
+#[derive(Debug)]
 enum Segment {
+    /// Discard a trial that probed beyond an earlier event and integrate
+    /// its prefix again before committing any continuous state.
+    Retry { failed_at: f64, error: EngineError },
     /// The requested date was reached.
     Reached,
     /// A watched boundary (or a continuously-varying hazard) was
@@ -49,11 +53,29 @@ impl<'m> Engine<'m> {
     ) -> Result<Option<TransIdx>, EngineError> {
         let mut stuck_at = f64::NEG_INFINITY;
         let mut stuck: Vec<usize> = Vec::new();
+        let mut segment_target = t_target;
+        let mut pending_error: Option<(f64, EngineError)> = None;
         loop {
-            match self.integrate_to(t_target)? {
-                Segment::Reached => return Ok(None),
+            let mut retrying = false;
+            match self.integrate_to(segment_target)? {
+                Segment::Retry { failed_at, error } => {
+                    retrying = true;
+                    // Keep the earliest failed probe as a barrier. A new
+                    // clean prefix does not prove that this singularity
+                    // disappeared: it may simply not probe the same date.
+                    if pending_error
+                        .as_ref()
+                        .is_none_or(|(time, _)| failed_at < *time)
+                    {
+                        pending_error = Some((failed_at, error));
+                    }
+                }
+                Segment::Reached if pending_error.is_none() => return Ok(None),
+                Segment::Reached => {}
                 Segment::Watched(trans_idx) => return Ok(Some(trans_idx)),
                 Segment::Resolved(edge) => {
+                    pending_error = None;
+                    segment_target = t_target;
                     if self.time > stuck_at + self.config.ode.tol_event {
                         stuck_at = self.time;
                         stuck.clear();
@@ -70,7 +92,25 @@ impl<'m> Engine<'m> {
                     if self.time >= t_target {
                         return Ok(None);
                     }
+                    continue;
                 }
+            }
+            if let Some((failed_at, error)) = pending_error.take() {
+                // Do not use an event estimate from the failed trial:
+                // its guard may have read stale explicit values, giving
+                // either a false crossing or a false absence of one.
+                // Approach the barrier through fresh, clean prefixes.
+                // Only a validated event can end this frozen segment;
+                // without one, the original typed error remains fatal.
+                let ceiling = if retrying { segment_target } else { t_target };
+                let until = self.time + (failed_at.min(ceiling) - self.time) * 0.5;
+                if until <= self.time + self.config.ode.tol_event
+                    || (retrying && until >= segment_target)
+                {
+                    return Err(error);
+                }
+                segment_target = until;
+                pending_error = Some((failed_at, error));
             }
         }
     }
@@ -269,17 +309,7 @@ impl<'m> Engine<'m> {
                 t_target,
                 &segment_samples,
                 &mut on_sample,
-            )?;
-
-            if let (Some(recorded), Some((_, samples))) =
-                (self.hazard_trace.as_mut(), system.trace.take())
-            {
-                for sample in samples {
-                    if recorded.last().is_none_or(|last| sample.time > last.time) {
-                        recorded.push(sample);
-                    }
-                }
-            }
+            );
 
             self.work.explicit_evaluations +=
                 system.work.explicit_evaluations + sample_work.explicit_evaluations;
@@ -293,8 +323,33 @@ impl<'m> Engine<'m> {
             // interval, not a located instant, and it is reported as it
             // stands rather than being rewritten to the segment's
             // committed time, which would name a state that never failed.
-            if let Some(error) = system.error.take().or(sample_error) {
-                return Err(error);
+            let outcome = match (outcome, system.error.take().or(sample_error)) {
+                // A solver stage may evaluate the frozen mode beyond a
+                // protective event. Never trust this trial's interpolant
+                // or event date: later callbacks may read stale values.
+                // Retain the singularity as a barrier while reintegrating
+                // fresh prefixes, even when the trial missed the event.
+                (_, Some(error @ EngineError::AlgebraicSingular { time, .. })) => {
+                    return Ok(Segment::Retry {
+                        failed_at: time,
+                        error,
+                    });
+                }
+                // Preserve the historical solver-error priority for all
+                // other callback failures, including models without blocks.
+                (Err(error), _) => return Err(error.into()),
+                (Ok(_), Some(error)) => return Err(error),
+                (Ok(outcome), None) => outcome,
+            };
+
+            if let (Some(recorded), Some((_, samples))) =
+                (self.hazard_trace.as_mut(), system.trace.take())
+            {
+                for sample in samples {
+                    if recorded.last().is_none_or(|last| sample.time > last.time) {
+                        recorded.push(sample);
+                    }
+                }
             }
 
             // Commit the reached continuous state. Three families of
