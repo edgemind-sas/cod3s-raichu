@@ -25,7 +25,7 @@ It owns five entry points, over three scales:
   describes, which is one scale further out than the system: it holds what is
   in ``components`` and is no part of the flow graph.
 
-**A component declaration takes three shapes**, and states which under
+**A component declaration takes four shapes**, and states which under
 :data:`COMPONENT_KIND_KEY`. Absent, or ``"flow"``, it is a component holding
 flows, which is what every declaration written before the key existed means and
 what the sections below describe. ``"two_state_mode"`` is a component of
@@ -33,7 +33,8 @@ what the sections below describe. ``"two_state_mode"`` is a component of
 ``"controller"`` is a ``muscadet.ObjCtrl``, a PEER of ``ObjFlow`` and not a
 subclass of it: it carries no flow either, and what it holds is two sections,
 the quantities it OBSERVES and the signals it PUBLISHES, each signal with the
-emission grammar that computes it.
+emission grammar that computes it. ``"logic_gate"`` is an ``ObjLogicGate``
+whose ``logic_kind`` selects OR, AND, or k/n over declared equality conditions.
 
 That second shape covers THREE families, and the kind names the two states
 they share rather than the nature of the most common one. Two of them apply
@@ -52,7 +53,7 @@ Skipping a controller would be the same loss and worse in one way: a controller
 is WIRED, so a document that dropped it would keep the connections naming it
 and rebuild into a system whose commanded equipment is never told anything.
 
-The three shapes are read by the same functions and built by different ones.
+The four shapes are read by the same functions and built by different ones.
 Neither a standalone mode nor a controller becomes an ``ObjFlow``: each becomes
 a ``pyraichu.muscadet.plugin`` object -- an ``ObjFM`` or an ``ObjEvent`` for
 the mode, an ``ObjCtrl`` for the controller -- expanded ONCE THE FLOW
@@ -106,11 +107,10 @@ Examples
 
 from __future__ import annotations
 
-import math
-
 import copy
 import inspect
 import itertools
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -126,11 +126,12 @@ __all__ = [
     "AVAILABILITY_SUFFIX",
     "COMPONENT_CLASSES",
     "COMPONENT_KEYS",
+    "COMPONENT_KINDS",
     "COMPONENT_KIND_CONTROLLER",
     "COMPONENT_KIND_FLOW",
     "COMPONENT_KIND_KEY",
+    "COMPONENT_KIND_LOGIC_GATE",
     "COMPONENT_KIND_TWO_STATE_MODE",
-    "COMPONENT_KINDS",
     "CONTROLLER_KEYS",
     "CONTROLLER_SECTIONS",
     "DECLARATION_SECTIONS",
@@ -152,6 +153,7 @@ __all__ = [
     "capacity_absent_variables",
     "capacity_content_variables",
     "check_controller_spec",
+    "check_logic_gate_spec",
     "check_mode_spec",
     "check_spec",
     "check_system_spec",
@@ -162,6 +164,7 @@ __all__ = [
     "entry_call",
     "event_automaton",
     "event_occurrence_state",
+    "logic_gate_object",
     "mode_object",
     "register_component_class",
 ]
@@ -262,7 +265,11 @@ COMPONENT_KIND_TWO_STATE_MODE = "two_state_mode"
 #: section below.
 COMPONENT_KIND_CONTROLLER = "controller"
 
+#: An automaton-free combinational OR, AND or k-of-n gate.
+COMPONENT_KIND_LOGIC_GATE = "logic_gate"
+
 COMPONENT_KINDS = (
+    COMPONENT_KIND_LOGIC_GATE,
     COMPONENT_KIND_FLOW,
     COMPONENT_KIND_TWO_STATE_MODE,
     COMPONENT_KIND_CONTROLLER,
@@ -2128,10 +2135,10 @@ def check_spec(spec: Any, classes: dict[str, type] | None = None) -> str:
     answer: that a rule names a declared flow, that a capacity holds one, that a
     conduit does not meter what a rule already carries.
 
-    **All three shapes are validated here.** A declaration says which of
+    **All four shapes are validated here.** A declaration says which of
     :data:`COMPONENT_KINDS` it is under :data:`COMPONENT_KIND_KEY`; a standalone
     failure mode goes to :func:`check_mode_spec` and a controller to
-    :func:`check_controller_spec`. It is the readers that read the three shapes
+    :func:`check_controller_spec`. It is the readers that read the four shapes
     and the builders that do not: this one answers "is this declaration well
     formed", which is a question a mode and a controller both have an answer to.
 
@@ -2154,6 +2161,8 @@ def check_spec(spec: Any, classes: dict[str, type] | None = None) -> str:
         On any fault reachable from the mapping alone.
     """
     kind = component_kind(spec)
+    if kind == COMPONENT_KIND_LOGIC_GATE:
+        return check_logic_gate_spec(spec)
     if kind == COMPONENT_KIND_TWO_STATE_MODE:
         return check_mode_spec(spec)
     if kind == COMPONENT_KIND_CONTROLLER:
@@ -3384,6 +3393,130 @@ def check_controller_spec(spec: Any, name: Any = None) -> str:
     return declared_name
 
 
+LOGIC_GATE_KEYS = frozenset(
+    {
+        "name",
+        "kind",
+        "cls",
+        "source_cls",
+        "label",
+        "description",
+        "metadata",
+        "logic_kind",
+        "k",
+        "cond",
+        "out_elements",
+    }
+)
+
+
+def check_logic_gate_spec(spec: Any, name: Any = None) -> str:
+    """Validate a portable combinational gate without creating engine objects."""
+    if not isinstance(spec, dict):
+        raise ComponentSpecError("A logic gate declaration is a mapping")
+    name = spec.get("name", name)
+    where = f"Logic gate {name}"
+    if not isinstance(name, str) or not name:
+        raise ComponentSpecError(f"{where}: 'name' must be a nonempty string")
+    unknown = set(spec) - LOGIC_GATE_KEYS
+    if unknown:
+        raise ComponentSpecError(f"{where}: unknown keys {sorted(unknown)}")
+    if spec.get("cls", "ObjLogicGate") != "ObjLogicGate":
+        raise ComponentSpecError(f"{where}: cls must be 'ObjLogicGate'")
+    kind = spec.get("logic_kind", "or")
+    if kind not in ("or", "and", "k"):
+        raise ComponentSpecError(f"{where}: unknown logic_kind {kind!r}")
+    k = spec.get("k")
+    if kind == "k" and (not isinstance(k, int) or isinstance(k, bool) or k < 1):
+        raise ComponentSpecError(f"{where}: k must be an integer >= 1, got {k!r}")
+    cond = spec.get("cond", [])
+    if not isinstance(cond, (dict, list)):
+        raise ComponentSpecError(f"{where}: cond must be a mapping or list")
+    if isinstance(cond, dict):
+        groups = [[cond]]
+    elif all(isinstance(leaf, dict) for leaf in cond):
+        groups = [cond] if cond else []
+    elif all(
+        isinstance(group, list) and all(isinstance(leaf, dict) for leaf in group)
+        for group in cond
+    ):
+        groups = cond
+    else:
+        raise ComponentSpecError(f"{where}: cond must list groups of source mappings")
+    for group in groups:
+        for leaf in group:
+            if set(leaf) - {"obj", "attr", "value", "ope"}:
+                raise ComponentSpecError(f"{where}: unsupported cond leaf {leaf!r}")
+            for key in ("obj", "attr"):
+                if not isinstance(leaf.get(key), str) or not leaf[key]:
+                    raise ComponentSpecError(f"{where}: cond {key} must name a source")
+            if leaf.get("ope", "==") != "==":
+                raise ComponentSpecError(f"{where}: cond comparisons use equality only")
+            value = leaf.get("value", True)
+            if not isinstance(value, (bool, int, float)) or (
+                isinstance(value, float) and not math.isfinite(value)
+            ):
+                raise ComponentSpecError(
+                    f"{where}: cond value must be boolean or numeric"
+                )
+    outputs = spec.get("out_elements", [])
+    if not isinstance(outputs, list) or any(
+        not isinstance(item, str) or not item for item in outputs
+    ):
+        raise ComponentSpecError(f"{where}: out_elements must list nonempty names")
+    if len(outputs) != len(set(outputs)):
+        raise ComponentSpecError(f"{where}: duplicate out_elements")
+
+    return name
+
+
+def logic_gate_object(
+    spec: Any, name: Any = None, components: dict | None = None
+) -> dict:
+    """Translate a portable gate to the existing Muscadet plugin object."""
+    declared_name = check_logic_gate_spec(spec, name)
+    cond = copy.deepcopy(spec.get("cond", []))
+    if isinstance(cond, dict):
+        cond = [[cond]]
+    elif cond and all(isinstance(leaf, dict) for leaf in cond):
+        cond = [cond]
+    for group in cond:
+        for leaf in group:
+            leaf.setdefault("value", True)
+    if components:
+        named = {
+            str(entry.get("name") or key): entry
+            for key, entry in components.items()
+            if isinstance(entry, dict)
+        }
+        modes = {
+            key: entry
+            for key, entry in named.items()
+            if entry.get("kind") == COMPONENT_KIND_TWO_STATE_MODE
+        }
+        for group in cond:
+            for leaf in group:
+                aliases = controller_signal_variables(named.get(leaf["obj"]))
+                leaf["attr"] = aliases.get(leaf["attr"], leaf["attr"])
+        cond = _mode_cond(
+            f"Logic gate {declared_name}",
+            "cond",
+            cond,
+            [],
+            modes,
+            False,
+            _mode_volumes(components),
+        )
+    return {
+        "type": "ObjLogicGate",
+        "name": declared_name,
+        "kind": spec.get("logic_kind", "or"),
+        "k": spec.get("k"),
+        "cond": cond,
+        "out_elements": list(spec.get("out_elements", [])),
+    }
+
+
 def controller_object(spec: Any, name: Any = None) -> dict:
     """The muscadet-plugin object a controller declaration means.
 
@@ -3871,7 +4004,10 @@ def _wire_controller_link(
 
 
 def _wire_connections(
-    system: authoring.System, entries: list, controllers: dict | None = None
+    system: authoring.System,
+    entries: list,
+    controllers: dict | None = None,
+    gates: dict | None = None,
 ) -> None:
     """Wire every declared connection, refusing what has no counterpart.
 
@@ -3911,6 +4047,7 @@ def _wire_connections(
     own.
     """
     controllers = controllers or {}
+    gates = gates or {}
     absorbed: set[tuple[str, str, str, str]] = set()
     deferred: list[tuple[str, str, str, str]] = []
 
@@ -3918,11 +4055,50 @@ def _wire_connections(
         ends = _connection_ends(entry, index)
         source, source_box, target, target_box = ends
         for name in (source, target):
-            if name not in system.comp and name not in controllers:
+            if (
+                name not in system.comp
+                and name not in controllers
+                and name not in gates
+            ):
                 raise SystemSpecError(
                     f"connection {entry!r}: `{name}` is not a declared "
                     f"component of system `{system.name}`"
                 )
+
+        if source in gates or target in gates:
+            if target in gates:
+                raise SystemSpecError(
+                    f"connection {entry!r}: logic gates read named cond sources, not input boxes"
+                )
+            exports = {f"{name}_out" for name in gates[source]["out_elements"]}
+            if target not in system.comp:
+                raise SystemSpecError(
+                    f"connection {entry!r}: a logic gate export must feed a declared discrete input"
+                )
+            target_flow = target_box.removesuffix("_in")
+            declared_flow = next(
+                (
+                    flow
+                    for flow in system.comp[target].flows_in
+                    if flow.name == target_flow
+                ),
+                None,
+            )
+            if (
+                source_box not in exports
+                or declared_flow is None
+                or not isinstance(declared_flow, authoring._FlowIn)
+            ):
+                raise SystemSpecError(
+                    f"connection {entry!r}: a logic gate export must feed a declared discrete input"
+                )
+            system._connections.append(
+                {
+                    "from": {"component": source, "port": source_box},
+                    "to": {"component": target, "port": target_box},
+                }
+            )
+            continue
 
         if source in controllers or target in controllers:
             _wire_controller_link(system, ends, controllers)
@@ -4034,10 +4210,10 @@ def check_system_spec(spec: Any) -> None:
                 )
 
 
-def _split_kinds(spec: dict) -> tuple[dict, dict, dict]:
-    """The document's components, split into the three shapes they take.
+def _split_kinds(spec: dict) -> tuple[dict, dict, dict, dict]:
+    """The document's components, split into the four shapes they take.
 
-    Named ``(flows, controllers, modes)`` and returned in that order because it
+    Named ``(flows, controllers, gates, modes)`` and returned in that order because it
     is also the order they have to be BUILT in, which is not a preference:
 
     - a controller is wired to the flow components and reads what they publish,
@@ -4062,6 +4238,7 @@ def _split_kinds(spec: dict) -> tuple[dict, dict, dict]:
     return (
         buckets[COMPONENT_KIND_FLOW],
         buckets[COMPONENT_KIND_CONTROLLER],
+        buckets[COMPONENT_KIND_LOGIC_GATE],
         buckets[COMPONENT_KIND_TWO_STATE_MODE],
     )
 
@@ -4117,7 +4294,12 @@ def build_system(
         Through :func:`build_component`, for a component declaration.
     """
     check_system_spec(spec)
-    flows, controllers, modes = _split_kinds(spec)
+    flows, controllers, gates, modes = _split_kinds(spec)
+    if gates:
+        raise SystemSpecError(
+            "Logic gates are document components, not flow components; "
+            "build the whole document with `pyraichu.muscadet.declare.build_document`"
+        )
     if modes:
         raise SystemSpecError(
             f"the document declares the standalone failure mode(s) "
@@ -4276,6 +4458,7 @@ def _build_flow_system(
     system: authoring.System | None,
     classes: dict[str, type] | None,
     controllers: dict | None = None,
+    gates: dict | None = None,
 ) -> authoring.System:
     """The flow components of a document, built and wired.
 
@@ -4306,7 +4489,7 @@ def _build_flow_system(
             system, _publish_wired_rates(declared, wired), classes=classes
         )
 
-    _wire_connections(system, spec.get("connections"), controllers or {})
+    _wire_connections(system, spec.get("connections"), controllers or {}, gates or {})
     return system
 
 
@@ -4370,7 +4553,7 @@ def build_document(
     )
 
     check_system_spec(spec)
-    flows, controllers, modes = _split_kinds(spec)
+    flows, controllers, gates, modes = _split_kinds(spec)
     # Translated BEFORE the wiring, because the wiring needs them: a connection
     # reaching a controller resolves against the ports that controller holds,
     # and those are the object's, not the declaration's.
@@ -4384,8 +4567,16 @@ def build_document(
         controller_object(entry, name=name) for name, entry in controllers.items()
     ]
     controller_objects = {obj["name"]: obj for obj in built_controllers}
-    built = _build_flow_system(flows, spec, system, classes, controller_objects)
-    if not modes and not controllers:
+    declared = {**flows, **controllers, **gates, **modes}
+    built_gates = [
+        logic_gate_object(entry, name=name, components=declared)
+        for name, entry in gates.items()
+    ]
+    gate_objects = {obj["name"]: obj for obj in built_gates}
+    built = _build_flow_system(
+        flows, spec, system, classes, controller_objects, gate_objects
+    )
+    if not modes and not controllers and not gates:
         return built.build_dict()
 
     # Pass 1: the flow components, so a controller has something to read and a
@@ -4414,8 +4605,7 @@ def build_document(
     # name. Left out of this mapping, a mode reaching one was refused as
     # affecting a component "which the document does not declare", which is
     # the blinded-instrument scenario refused at the door.
-    declared = {**flows, **controllers, **modes}
-    objects = list(built_controllers)
+    objects = list(built_controllers) + built_gates
     objects += [
         mode_object(entry, declared, name=name) for name, entry in modes.items()
     ]
@@ -4508,7 +4698,7 @@ def build_document(
 #: engine's vocabulary and the declaration is the modeller's, and it is the
 #: declaration a modeller has to change: an ``ObjCtrl`` refusal that said
 #: "ObjCtrl" would name a class the document never mentions.
-_OBJECT_SUBJECTS = {"ObjCtrl": "Controller"}
+_OBJECT_SUBJECTS = {"ObjCtrl": "Controller", "ObjLogicGate": "Logic gate"}
 
 
 def _object_where(obj: dict) -> str:

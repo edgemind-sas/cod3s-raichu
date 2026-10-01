@@ -907,3 +907,16 @@ One of them is bounded to the window its model's docstring actually states.
 The first version of it ran past that last date and failed against **both**
 engines at once: they agreed with each other, and the witness was the thing
 that was wrong. That is what a closed form is for.
+
+## Portable combinational gates
+
+The portable declaration seam supports `ObjLogicGate` as `kind: logic_gate`.
+The separate `logic_kind` is `or`, `and`, or `k`; `k` requires a positive integer
+threshold. `cond` retains equality conditions over named component variables,
+and `out_elements` names the discrete exports. Live Muscadet read-back carries
+the same declaration; native document building reuses the Muscadet plugin's
+combinational expansion. Gate exports connect to declared discrete flow inputs.
+
+An empty OR gate and an empty k/n gate are false; an empty AND gate is true.
+Conditions and thresholds are validated before model construction. No Python
+callback participates in native simulation.

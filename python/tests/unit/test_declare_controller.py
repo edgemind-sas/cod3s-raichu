@@ -1205,16 +1205,17 @@ def test_build_system_refuses_a_controller_rather_than_dropping_it():
 # --- the three kinds, and the document that carries none of the new ----
 
 
-def test_an_unknown_kind_is_refused_by_its_own_value_and_the_three_it_reads():
+def test_an_unknown_kind_is_refused_by_its_own_value_and_the_kinds_it_reads():
     document = a_filled_tank()
-    document["components"]["PUMP"]["kind"] = "logic_gate"
+    document["components"]["PUMP"]["kind"] = "unknown_gate"
     with pytest.raises(declare.ComponentSpecError) as refused:
         declare.check_system_spec(document)
     message = str(refused.value)
-    assert "kind='logic_gate' is not one of" in message
+    assert "kind='unknown_gate' is not one of" in message
     assert "'flow'" in message
     assert "'two_state_mode'" in message
     assert "'controller'" in message
+    assert "'logic_gate'" in message
 
 
 def test_a_document_carrying_no_controller_reads_exactly_as_before():
