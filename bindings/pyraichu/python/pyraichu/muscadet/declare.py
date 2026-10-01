@@ -3744,6 +3744,48 @@ def capacity_content_variables(spec: Any) -> dict[str, str]:
     return found
 
 
+def flow_demand_variables(spec: Any) -> dict[str, str]:
+    """A continuous flow's demand: muscadet's variable name, then this one's.
+
+    The two layers carry the same demand channel under swapped names
+    (``muscadet/flow_continuous.py``). On muscadet an INPUT publishes what it
+    asks for as ``{f}_demand_out`` and an output reads its consumers back
+    through the reference ``{f}_demand_in``; this layer publishes what an input
+    asks for as ``{f}_demand_in`` and the total asked of an output as
+    ``{f}_demand_out``. A component holding a flow on both sides (a tank, a
+    pass-through) therefore has BOTH names on both layers, meaning opposite
+    things, so an observation written against muscadet's spelling would read
+    the other side's demand here without a word.
+
+    Parameters
+    ----------
+    spec : dict
+        A component declaration. Anything holding no continuous flow answers
+        an empty mapping, so a caller sweeps a document without sorting it.
+
+    Returns
+    -------
+    dict
+        ``{muscadet variable: this layer's attribute}``: for an input ``f``,
+        ``{f}_demand_out -> {f}_demand_in``; for an output ``f``,
+        ``{f}_demand_in -> {f}_demand_out``.
+    """
+    found: dict[str, str] = {}
+    if not isinstance(spec, dict):
+        return found
+    for flow in spec.get("flows") or []:
+        if not isinstance(flow, dict):
+            continue
+        name = flow.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        if flow.get("cls") == "FlowContinuousIn":
+            found[f"{name}_demand_out"] = f"{name}_demand_in"
+        elif flow.get("cls") == "FlowContinuousOut":
+            found[f"{name}_demand_in"] = f"{name}_demand_out"
+    return found
+
+
 def capacity_absent_variables(spec: Any) -> dict[str, str]:
     """The capacity variables muscadet creates and this layer has none of, with
     what replaces each.
