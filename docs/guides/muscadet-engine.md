@@ -719,6 +719,31 @@ a suffix: a variable ending in `_qty` on a component holding no volume of that
 name, or holding one another component declares, is left exactly as the
 document wrote it.
 
+## A continuous flow's demand, swapped between the two layers
+
+The demand channel is carried under **swapped** names. On muscadet an input
+publishes what it asks for as `{flow}_demand_out`, and an output reads its
+consumers back through the reference `{flow}_demand_in`. This layer publishes
+what an input asks for as `{flow}_demand_in`, and the total asked of an output
+as `{flow}_demand_out`. The quantities are the same; the names point the other
+way.
+
+An indicator naming muscadet's spelling is **translated**, like a capacity's
+level: `add_indicator_var(component="^PIPE$", var="^feed_demand_out$")`
+observes `PIPE.feed_demand_in`, what the pipe asks upstream, and comes back
+under `PIPE_feed_demand_out`. The correspondence is published as
+`pyraichu.muscadet.declare.flow_demand_variables`, so a caller reading this
+layer's attributes (an interactive session, for one) translates without
+restating the rule.
+
+The generated indicator set keeps this layer's own spelling. On a component
+holding a flow on **both** sides (a tank, a pass-through) the generated
+`{c}_{flow}_demand_out` observes the output's demand, so a declaration of the
+same name, which means the input's, would collide with it. The declaration
+wins: the generated homonym steps aside and the model runs, as it does on the
+reference engine. Every other collision between a declaration and the
+generated set is still refused.
+
 ## An instrument that republishes what it reads
 
 `measurements_out` (muscadet's `add_measurement_out`, R37) is carried. An

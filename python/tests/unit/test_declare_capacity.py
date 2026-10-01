@@ -357,3 +357,29 @@ def test_a_condition_on_an_absent_capacity_variable_is_refused_by_its_name():
     document = a_document(a_tank(), event)
     with pytest.raises(declare.ComponentSpecError, match="q_fed_in"):
         declare.build_document(document)
+
+
+# --- a continuous flow's demand, the other name the two layers swap ---------
+
+
+def test_a_flow_demand_is_swapped_between_the_two_sides_of_a_flow():
+    """muscadet: an input publishes `{f}_demand_out`, an output reads
+    `{f}_demand_in`. This layer: an input publishes `{f}_demand_in`, an
+    output totals `{f}_demand_out`."""
+    spec = {
+        "flows": [
+            {"cls": "FlowContinuousIn", "name": "q"},
+            {"cls": "FlowContinuousOut", "name": "r"},
+            {"cls": "FlowIn", "name": "call"},
+        ]
+    }
+    assert declare.flow_demand_variables(spec) == {
+        "q_demand_out": "q_demand_in",
+        "r_demand_in": "r_demand_out",
+    }
+
+
+def test_a_component_without_continuous_flow_answers_nothing():
+    discrete = {"flows": [{"cls": "FlowOut", "name": "x"}]}
+    assert declare.flow_demand_variables(discrete) == {}
+    assert declare.flow_demand_variables(None) == {}

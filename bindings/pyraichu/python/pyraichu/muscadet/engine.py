@@ -70,6 +70,7 @@ from .declare import (
     capacity_content_variables,
     controller_signal_variables,
     derived_out_states,
+    flow_demand_variables,
     event_automaton,
     event_occurrence_state,
 )
@@ -357,6 +358,16 @@ def _capacity_contents(components: Any) -> dict[str, dict[str, str]]:
     return _per_component(components, capacity_content_variables)
 
 
+def _flow_demands(components: Any) -> dict[str, dict[str, str]]:
+    """The demand variables the two layers spell apart, by component.
+
+    Read through :func:`pyraichu.muscadet.declare.flow_demand_variables`: the
+    demand channel carries swapped names on the two layers, so an observation
+    of muscadet's ``{f}_demand_out`` on an input reads ``{f}_demand_in`` here.
+    """
+    return _per_component(components, flow_demand_variables)
+
+
 def _capacity_absences(components: Any) -> dict[str, dict[str, str]]:
     """The capacity variables muscadet creates and this layer has none of, with
     what replaces each, by component.
@@ -519,6 +530,7 @@ def _indicator(
     derived: Mapping[str, set[str]],
     signals: Mapping[str, Mapping[str, str]],
     contents: Mapping[str, Mapping[str, str]],
+    demands: Mapping[str, Mapping[str, str]],
     absent: Mapping[str, Mapping[str, str]],
 ) -> dict[str, Any]:
     """One declared indicator, as RAICHU names the same observation."""
@@ -548,7 +560,8 @@ def _indicator(
             f"component and the variable it observes"
         )
     # The attributes the two layers name differently: a controller's boolean
-    # signal, and the quantity a capacity holds. Read here rather than at the
+    # signal, the quantity a capacity holds, and a continuous flow's demand
+    # (swapped between the two sides of a flow). Read here rather than at the
     # declaration, because it is the OBSERVATION that carries the muscadet
     # spelling: both components are translated whole, and an indicator is the
     # only thing that names one of their attributes from outside. Both tables
@@ -563,9 +576,11 @@ def _indicator(
             f"capacity variable muscadet creates and this layer has no "
             f"attribute for: {unavailable}"
         )
-    renamed = signals.get(component, {}).get(subject) or contents.get(
-        component, {}
-    ).get(subject)
+    renamed = (
+        signals.get(component, {}).get(subject)
+        or contents.get(component, {}).get(subject)
+        or demands.get(component, {}).get(subject)
+    )
     attr = {"component": component, "attribute": renamed or subject}
     # The THRESHOLD, which is what makes this an observation of a
     # condition rather than of a value. See :func:`_threshold` for why it
@@ -591,6 +606,7 @@ def _merge_indicators(
     derived: Mapping[str, set[str]],
     signals: Mapping[str, Mapping[str, str]],
     contents: Mapping[str, Mapping[str, str]],
+    demands: Mapping[str, Mapping[str, str]],
     absent: Mapping[str, Mapping[str, str]],
 ) -> None:
     """Add the document's indicators to the generated model, in place.
@@ -645,11 +661,31 @@ def _merge_indicators(
     document never declared, and two names for one observation is exactly what
     the refusal above exists to prevent.
     """
+    declared = list(declared or [])
+    generated = list(body.get("indicators") or [])
+    # **A declared demand displaces the generated homonym.** The demand
+    # channel's names are SWAPPED between the two layers
+    # (:func:`pyraichu.muscadet.declare.flow_demand_variables`), so on a
+    # component holding a flow on both sides -- a tank, a pass-through -- the
+    # generated `{c}_{f}_demand_out` observes what its OUTPUT is asked while a
+    # declaration of the same name means, in muscadet's spelling, what its
+    # INPUT asks. The declaration is the document's explicit request and is
+    # translated above; the generated entry is a convenience under this
+    # layer's own spelling, so it steps aside rather than refusing a model the
+    # reference engine runs. Every other collision still refuses.
+    displaced = {
+        f"{spec.get('component')}_{subject}"
+        for spec in declared
+        for subject in [spec.get(_INDICATOR_SUBJECT.get(spec.get("kind"), ""))]
+        if subject is not None
+        and spec.get("name") == f"{spec.get('component')}_{subject}"
+        and subject in demands.get(str(spec.get("component")), {})
+    }
     body["indicators"] = merge_indicators(
-        list(body.get("indicators") or []),
+        [entry for entry in generated if entry.get("name") not in displaced],
         (
-            _indicator(spec, events, derived, signals, contents, absent)
-            for spec in declared or []
+            _indicator(spec, events, derived, signals, contents, demands, absent)
+            for spec in declared
         ),
         collision=lambda name, wanted, already: SystemSpecError(
             f"indicator {name!r} is declared on {wanted} while the generated "
@@ -775,6 +811,7 @@ def build_model(
         _derived_states(components),
         _controller_signals(components),
         _capacity_contents(components),
+        _flow_demands(components),
         _capacity_absences(components),
     )
     declared = _targets(components, _target_names(targets))

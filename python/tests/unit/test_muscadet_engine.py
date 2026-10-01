@@ -985,6 +985,60 @@ def test_an_indicator_on_a_tank_level_reaches_the_attribute_behind_it():
     }
 
 
+def test_an_indicator_on_an_input_demand_reads_what_this_input_asks_for():
+    """muscadet publishes an input's demand as `{f}_demand_out`; this layer
+    calls the same quantity `{f}_demand_in`. Read untranslated, the name would
+    reach nothing on a pure consumer and the OUTPUT's demand on a tank."""
+    spec = stocked_declaration()
+    spec["indicators"][0].update(name="TANK_q_demand_out", var="q_demand_out")
+    assert indicator_named(spec, "TANK_q_demand_out")["attr"] == {
+        "component": "TANK",
+        "attribute": "q_demand_in",
+    }
+
+
+def test_a_pass_through_reads_each_side_of_its_demand_under_its_own_name():
+    """A tank that also delivers `q` holds both names on both layers, meaning
+    opposite things: the swap is total, never a one-way rewrite."""
+    spec = stocked_declaration()
+    spec["components"]["TANK"]["flows"].append(
+        {
+            "cls": "FlowContinuousOut",
+            "name": "q",
+            "var_type": "float",
+            "component_authorized": [{"class_name_bkd": ".*"}],
+        }
+    )
+    spec["indicators"] = [
+        dict(spec["indicators"][0], name="TANK_asks", var="q_demand_out"),
+        dict(spec["indicators"][0], name="TANK_is_asked", var="q_demand_in"),
+    ]
+    assert indicator_named(spec, "TANK_asks")["attr"]["attribute"] == "q_demand_in"
+    assert indicator_named(spec, "TANK_is_asked")["attr"]["attribute"] == "q_demand_out"
+
+
+def test_a_declared_demand_displaces_the_generated_homonym():
+    """On a component holding `q` on both sides, the generated set already
+    observes `TANK_q_demand_out` (what its OUTPUT is asked, in this layer's
+    spelling). A declaration of that name in muscadet's spelling asks for what
+    its INPUT asks: the declaration wins, rather than refusing the model."""
+    spec = stocked_declaration()
+    spec["components"]["TANK"]["flows"].append(
+        {
+            "cls": "FlowContinuousOut",
+            "name": "q",
+            "var_type": "float",
+            "component_authorized": [{"class_name_bkd": ".*"}],
+        }
+    )
+    spec["generated_indicators"] = True
+    spec["indicators"][0].update(name="TANK_q_demand_out", var="q_demand_out")
+    assert indicator_named(spec, "TANK_q_demand_out")["attr"] == {
+        "component": "TANK",
+        "attribute": "q_demand_in",
+    }
+
+
 def test_an_indicator_on_one_constituent_reaches_that_constituent():
     """The per-flow half of the same disagreement: a mixture is observed term
     by term, and the sum is not one of its terms."""
