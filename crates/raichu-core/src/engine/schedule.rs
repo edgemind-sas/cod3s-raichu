@@ -207,12 +207,14 @@ impl<'m> Engine<'m> {
                 None => true,
                 Some(guard) => eval_bool(self.model, &self.vars, &self.states, self.time, guard)?,
             };
-            if self.config.stochastic_dates == StochasticDates::Deferred
+            if self.config.stochastic_dates != StochasticDates::Drawn
                 && is_stochastic(&transition.distrib)
             {
                 self.refresh_deferred(trans_idx, in_source, guard_ok)?;
+                self.refresh_operator_date(trans_idx, in_source, guard_ok);
                 continue;
             }
+            self.refresh_operator_date(trans_idx, in_source, guard_ok);
             self.refresh_drawn_clock(trans_idx, in_source, guard_ok);
             match self.pending[trans_idx] {
                 Some(_) if !in_source => {

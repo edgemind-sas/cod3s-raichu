@@ -22,7 +22,7 @@ use raichu::raichu_analysis::{
 use raichu::raichu_core::{fault_tree as generate_fault_tree, FaultTreeSettings};
 use raichu::raichu_core::{
     CoSimulationHost, CompiledModel, Engine, EngineConfig, EngineError,
-    FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot, SolverParams,
+    FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot, SolverParams, StochasticDates,
 };
 use raichu::raichu_explore::{
     exact_domain_report, explore_discretised, explore_discretised_with_fmu, explore_exact,
@@ -1167,7 +1167,7 @@ impl Interactive {
 #[pymethods]
 impl Interactive {
     #[new]
-    #[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, seed = 0, rng_stream = 0, flow = None, allow_fmu_import = false, fmu_base_dir = None))]
+    #[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, seed = 0, rng_stream = 0, flow = None, allow_fmu_import = false, fmu_base_dir = None, operator_control = false))]
     #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
     fn new(
         model_json: &str,
@@ -1179,6 +1179,7 @@ impl Interactive {
         flow: Option<FlowConfig>,
         allow_fmu_import: bool,
         fmu_base_dir: Option<&str>,
+        operator_control: bool,
     ) -> PyResult<Self> {
         let model = parse_and_compile(model_json)?;
         let config = EngineConfig {
@@ -1189,6 +1190,11 @@ impl Interactive {
             rng_stream,
             flow: flow_policy(flow),
             allow_fmu_import,
+            stochastic_dates: if operator_control {
+                StochasticDates::Operator
+            } else {
+                StochasticDates::Drawn
+            },
             ..EngineConfig::default()
         };
         let (snap, host) = if model.fmu_units.is_empty() {
@@ -1300,6 +1306,21 @@ impl Interactive {
         Ok(())
     }
 
+    /// Advance without an unsolicited stochastic draw or branch choice.
+    #[pyo3(signature = (date, max_events = 10000))]
+    fn advance_operator_to(&mut self, date: f64, max_events: usize) -> PyResult<String> {
+        let (outcome, snap) = {
+            let mut engine = self.engine()?;
+            let outcome = engine
+                .advance_operator_to(date, max_events)
+                .map_err(engine_error)?;
+            let snap = engine.try_snapshot().map_err(engine_error)?;
+            (outcome, snap)
+        };
+        self.snap = snap;
+        Self::json(&outcome)
+    }
+
     /// Set an attribute named in the caller's explicit input manifest.
     fn set_input(
         &mut self,
@@ -1351,8 +1372,13 @@ impl Interactive {
     }
 
     /// Reinstate a previously captured checkpoint (undo).
-    fn restore(&mut self, snap: &Snapshot) {
+    fn restore(&mut self, snap: &Snapshot) -> PyResult<()> {
+        {
+            let mut engine = self.engine()?;
+            engine.try_restore(&snap.inner).map_err(engine_error)?;
+        }
         self.snap = snap.inner.clone();
+        Ok(())
     }
 }
 

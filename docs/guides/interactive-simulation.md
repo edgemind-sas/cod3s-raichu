@@ -112,3 +112,67 @@ A muscadet system opens the same session with
 `system.isimu_start(engine="raichu")`: see
 [Running a muscadet model](muscadet-engine.md). What comes back is a
 `pyraichu.Interactive`, stepped as described here.
+
+## Operator-controlled continuous advancement
+
+Use `operator_control=True` when stochastic dates and probabilistic choices
+belong to the analyst. The automatic policy above remains the default. In
+operator mode an exponential or other stochastic transition arms without
+consuming a random number, and its `fireable()` date is `None` until
+`set_date` programs it. Continuous state and the native clock still evolve.
+
+```python
+session = pyraichu.interactive(model, t_max=1000.0, seed=1,
+                              operator_control=True)
+choice = session.advance_operator_to(300.0)
+assert choice.stop == "choice" and choice.reached_time == 0.0
+assert choice.choice == "P.mode.start"
+session.fire("P.mode.start", to="running")
+session.set_date("P.mode.fail", 250.0)
+checkpoint = session.snapshot()
+result = session.advance_operator_to(300.0)
+assert result.stop == "event" and result.reached_time == 250.0
+assert result.events[0].transition == "P.mode.fail"
+session.restore(checkpoint)
+assert session.advance_operator_to(300.0) == result
+```
+
+`advance_operator_to(date, *, max_events=10_000)` returns an
+`OperatorAdvance`. Its fields are `requested_time`, `reached_time`, `stop`,
+`events` and `choice`. Dates use the model's time units. The command stops at
+the first relevant instant and completes deterministic reactions at that
+same instant, including located watched boundaries and controller reactions.
+It never continues into the next distinct event instant.
+
+| `stop` | committed state |
+|---|---|
+| `target` | The requested date was reached without an event. |
+| `event` | The first event and its deterministic simultaneous reactions completed. |
+| `choice` | An instantaneous transition needs an explicit destination; `choice` names it. No branch has been drawn. |
+| `incomplete` | The event budget expired. Successful progress remains committed and the caller may continue. |
+
+A probabilistic transition with only one positive-probability destination
+needs no choice. `fire(name, to=...)` resolves an actual choice explicitly;
+`fire(name)` refuses it without changing the session. `step()` and
+`advance_to()` belong to the automatic policy and are refused in operator
+mode, so callers cannot accidentally draw a destination.
+
+An earlier boundary does not consume a programmed stochastic date. Firing
+consumes only the date of the transition that actually fired. Source exit
+cancels its programming. Guard interruption follows the declared policy:
+`reset` cancels the date, `resume` pauses its remaining duration, and
+`continue` retains it through a false guard. State-dependent rate changes
+update hazard bookkeeping without replacing an operator date.
+
+Commands with invalid dates and commands failing during continuous evolution
+or discrete propagation restore the last successful state. Snapshots capture
+operator dates, paused durations, continuous state, hazards and the random
+generator. An operator snapshot belongs to its compiled model and policy;
+restoring another model's or an automatic session's snapshot is refused
+before committing it. `reset()` discards all programming and returns to the
+initial state. Counted work, as in automatic mode, is not rewound.
+
+The same explicit policy is available through
+`pyraichu.muscadet.engine.isimu_start(spec, operator_control=True)`. Platform
+qualification remains separate from this engine API; a native feature alone
+does not establish a deployed platform capability.

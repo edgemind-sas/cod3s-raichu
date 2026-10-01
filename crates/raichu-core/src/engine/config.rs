@@ -137,7 +137,8 @@ pub struct EngineConfig {
     /// drawn when the transition is armed (the default, the Monte-Carlo
     /// semantics), or deferred and left to the caller
     /// ([`StochasticDates::Deferred`], the seam of the discretised
-    /// sequence-tree explorer).
+    /// sequence-tree explorer), or controlled by an interactive operator
+    /// ([`StochasticDates::Operator`]).
     pub stochastic_dates: StochasticDates,
     /// Per-transition multiplicative factors on the rate of constant-rate
     /// exponential laws, indexed like `CompiledModel::transitions`: the
@@ -189,7 +190,8 @@ pub struct TransitionExposure {
 /// How the engine handles the firing date of a **stochastic** transition
 /// (exponential, state-dependent exponential, Weibull, lognormal, gamma,
 /// uniform, empirical). Deterministic delays, instantaneous branchings and
-/// watched transitions are unaffected by this choice.
+/// watched transitions keep their model semantics. Operator mode additionally
+/// requires an explicit choice for probabilistic instantaneous branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StochasticDates {
     /// The date is sampled from the RNG when the transition is armed
@@ -216,6 +218,46 @@ pub enum StochasticDates {
     /// false, `continue` keeps the transition armed and aging, exactly as
     /// drawn mode keeps its date and fires it whatever the guard.
     Deferred,
+    /// Interactive operator control: stochastic clocks arm without a draw,
+    /// explicit dates persist until firing or interruption, and probabilistic
+    /// instantaneous branches require an explicit destination.
+    Operator,
+}
+
+/// Successful outcome of one bounded operator command.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OperatorAdvance {
+    /// Requested absolute date in model time units.
+    pub requested_time: f64,
+    /// Actual native date after the command.
+    pub reached_time: f64,
+    /// Reason continuous advancement stopped.
+    pub stop: OperatorStop,
+    /// Events fired at the first relevant instant, in native order.
+    pub events: Vec<Event>,
+    /// Qualified transition awaiting an explicit destination, if any.
+    pub choice: Option<String>,
+}
+
+/// Stop reason of a bounded operator advance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatorStop {
+    /// The requested date was reached without a relevant event.
+    Target,
+    /// The first event and its deterministic simultaneous reactions completed.
+    Event,
+    /// An instantaneous probabilistic destination remains unresolved.
+    Choice,
+    /// The command budget expired; successful progress is committed.
+    Incomplete,
+}
+
+/// An explicit operator countdown, active or paused by interruption.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum OperatorDate {
+    Active(f64),
+    Paused(f64),
 }
 
 impl Default for EngineConfig {
@@ -244,6 +286,27 @@ impl Default for EngineConfig {
 /// Typed runtime errors. The engine never panics on a library path.
 #[derive(Debug, Error)]
 pub enum EngineError {
+    /// A command is incompatible with the configured date policy.
+    #[error("`{operation}` requires {policy}")]
+    InteractivePolicy {
+        /// Requested command.
+        operation: &'static str,
+        /// Required interactive policy or alternative command.
+        policy: &'static str,
+    },
+    /// Operator control does not choose a probabilistic destination implicitly.
+    #[error("transition `{transition}` requires an explicit destination")]
+    OperatorChoice {
+        /// Qualified transition awaiting a destination.
+        transition: String,
+    },
+    /// Operator scheduling state cannot be restored under another policy.
+    #[error("snapshot operator policy differs from the engine policy")]
+    OperatorSnapshotPolicy,
+    /// The snapshot belongs to another compiled model.
+    #[error("operator snapshot belongs to another compiled model")]
+    OperatorSnapshotModel,
+
     /// An external clock request is outside the current trajectory horizon.
     #[error("cannot advance to t={date} from t={time} with horizon t={horizon}")]
     AdvanceTimeInvalid {
@@ -1020,6 +1083,7 @@ pub struct Fireable {
 /// restore bit-for-bit reproducible.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
+    pub(super) model_identity: u64,
     pub(super) fmu_states: Option<Vec<Vec<u8>>>,
     pub(super) fmu_positions: Vec<(f64, u64, Option<f64>, Vec<Value>)>,
     pub(super) time: f64,
@@ -1032,6 +1096,7 @@ pub struct Snapshot {
     pub(super) frozen: Vec<Option<f64>>,
     pub(super) hazards: Vec<Option<Hazard>>,
     pub(super) deferred: Vec<Option<DeferredAge>>,
+    pub(super) operator_dates: Vec<Option<OperatorDate>>,
     pub(super) events: Vec<Event>,
     pub(super) journal: Vec<JournalRecord>,
     pub(super) seq_events: Vec<SeqEvent>,

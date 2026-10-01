@@ -46,7 +46,7 @@ deliberate departures.
 |---|---|---|
 | one system per process (singleton) | any number of engines per process | deliberate departure |
 | `simulate({nb_runs, seed, schedule})` | `monte_carlo(model, nb_runs, t_max, seed, samples)` | per-replica RNG substreams; estimates byte-identical for 1 or N threads |
-| interactive simulation | [`interactive(model, ...)`](../guides/interactive-simulation.md): `fireable` / `fire(name, to=)` / `step` / `set_date` / `snapshot` / `restore` | a forced branch replaces the random draw; a snapshot is an exact undo |
+| interactive simulation | [`interactive(model, operator_control=True)`](../guides/interactive-simulation.md#operator-controlled-continuous-advancement): `advance_operator_to` / `fireable` / `fire(name, to=)` / `step` / `set_date` / `snapshot` / `restore` | operator mode draws no stochastic date or unsolicited branch; a snapshot is an exact undo |
 | indicators as `"comp.attr"` strings | typed indicator objects (`target: attribute\|state\|predicate`) | mean, std, quantiles, extremes and confidence intervals on the value, sojourn, occurrences and first reach |
 | trace levels | the structured [causal journal](../guides/causal-journal.md) | queryable: `why_not_fired` / `who_changed` / `cascade_after` |
 | silent hang on instantaneous loops | typed errors (fixpoint-iteration cap, Zeno guard) | fail loudly, not silently |

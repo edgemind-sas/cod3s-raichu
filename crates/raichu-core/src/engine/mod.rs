@@ -95,8 +95,8 @@ mod schedule;
 pub use config::{
     DeferredProbe, DeferredTransition, DropReason, EngineConfig, EngineError, Event, Fireable,
     FireableKind, FlowConfig, FlowStall, FmuProvenance, HazardSample, IndicatorSeries,
-    JournalRecord, ProbeStop, Provenance, SeqEvent, Sequence, SimulationResult, Snapshot,
-    StochasticDates, TransitionExposure, WorkCounters,
+    JournalRecord, OperatorAdvance, OperatorStop, ProbeStop, Provenance, SeqEvent, Sequence,
+    SimulationResult, Snapshot, StochasticDates, TransitionExposure, WorkCounters,
 };
 pub use cosim::{CoSimulationHost, PreparedCoSimulation};
 pub use flow::{active_set_budget, FLOW_RELAXATION, FLOW_SWEEP_BUDGET};
@@ -105,6 +105,7 @@ pub(crate) use eval::eval_frozen;
 
 // Items shared across the submodules, which reach them through
 // `use super::*`.
+use config::OperatorDate;
 use config::{attribute_of, state_of};
 use deferred::DeferredAge;
 use eval::{eval_bool, eval_expr, eval_f64, predicate_holds};
@@ -146,6 +147,8 @@ pub struct Engine<'m> {
     /// deferred state-dependent rate keeps its cumulative hazard in
     /// `hazards`, against an infinite threshold.
     deferred: Vec<Option<DeferredAge>>,
+    // Snapshot-owned operator countdowns, absent under automatic policies.
+    operator_dates: Vec<Option<OperatorDate>>,
     /// Dense hazard samples being recorded by [`Engine::probe_deferred`]
     /// (`None` outside a probe): scratch, never part of the trajectory.
     hazard_trace: Option<Vec<HazardSample>>,
@@ -405,6 +408,11 @@ impl<'m> Engine<'m> {
             frozen: vec![None; model.transitions.len()],
             hazards: vec![None; model.transitions.len()],
             deferred: vec![None; model.transitions.len()],
+            operator_dates: if config.stochastic_dates == StochasticDates::Operator {
+                vec![None; model.transitions.len()]
+            } else {
+                Vec::new()
+            },
             hazard_trace: None,
             continuous_rates,
             events: Vec::new(),

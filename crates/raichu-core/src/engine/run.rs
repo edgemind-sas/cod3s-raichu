@@ -117,6 +117,12 @@ impl<'m> Engine<'m> {
     /// index (documented deterministic order; the converged state does
     /// not depend on it for confluent models).
     pub fn step(&mut self) -> Result<Option<Event>, EngineError> {
+        if self.config.stochastic_dates == StochasticDates::Operator {
+            return Err(EngineError::InteractivePolicy {
+                operation: "step",
+                policy: "advance_operator_to in operator mode",
+            });
+        }
         // Watched transition already past its boundary (initial
         // conditions or post-jump state): fires immediately.
         if let Some(trans_idx) = self.immediate_watched()? {
@@ -171,7 +177,7 @@ impl<'m> Engine<'m> {
         }
     }
 
-    fn process_fmu_point(&mut self) -> Result<(), EngineError> {
+    pub(super) fn process_fmu_point(&mut self) -> Result<(), EngineError> {
         // An output may change another unit's input and make that unit due
         // at this same instant. Complete every such step before sampling any
         // inputs for the next interval.
@@ -205,7 +211,7 @@ impl<'m> Engine<'m> {
             }
             // In deferred mode the explorer must branch these reactions
             // itself, including instantaneous choices and their weights.
-            if self.config.stochastic_dates != StochasticDates::Deferred {
+            if self.config.stochastic_dates == StochasticDates::Drawn {
                 loop {
                     if let Some(trans_idx) = self.immediate_watched()? {
                         self.note_watched_firing()?;
@@ -220,7 +226,7 @@ impl<'m> Engine<'m> {
                 }
             }
         }
-        if self.config.stochastic_dates != StochasticDates::Deferred {
+        if self.config.stochastic_dates == StochasticDates::Drawn {
             self.sample_fmu_inputs_at_current_point();
         }
         self.record_indicators();
@@ -399,6 +405,17 @@ impl<'m> Engine<'m> {
             tally.accrue(&self.pending, self.time);
             tally.stats[trans_idx].firings += 1;
         }
+        if self.config.stochastic_dates == StochasticDates::Operator
+            && forced.is_none()
+            && self.operator_choice(trans_idx)
+        {
+            return Err(EngineError::OperatorChoice {
+                transition: self.model.transitions[trans_idx].name.clone(),
+            });
+        }
+        if let Some(slot) = self.operator_dates.get_mut(trans_idx) {
+            *slot = None;
+        }
         self.pending[trans_idx] = None;
         self.clocks[trans_idx] = None;
         self.frozen[trans_idx] = None;
@@ -478,16 +495,24 @@ impl<'m> Engine<'m> {
         Ok(event)
     }
 
+    pub(super) fn scheduled_date(&self, idx: TransIdx) -> Option<f64> {
+        match self.operator_dates.get(idx).copied().flatten() {
+            Some(OperatorDate::Active(date)) => Some(date),
+            Some(OperatorDate::Paused(_)) => None,
+            None => self.pending[idx],
+        }
+    }
+
     pub(super) fn next_pending(&self) -> Option<(TransIdx, f64)> {
         let mut best: Option<(TransIdx, f64)> = None;
-        for (idx, pending) in self.pending.iter().enumerate() {
-            if let Some(date) = pending {
+        for idx in 0..self.pending.len() {
+            if let Some(date) = self.scheduled_date(idx) {
                 let better = match best {
                     None => true,
-                    Some((_, best_date)) => *date < best_date,
+                    Some((_, best_date)) => date < best_date,
                 };
                 if better {
-                    best = Some((idx, *date));
+                    best = Some((idx, date));
                 }
             }
         }

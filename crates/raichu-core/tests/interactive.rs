@@ -701,3 +701,361 @@ fn reset_then_run_matches_a_fresh_run() {
 
     assert_eq!(engine.history(), fresh.events.as_slice());
 }
+
+#[test]
+fn operator_reproducer_stops_before_unresolved_choice() {
+    let compiled = compile(&demand_model(0.7));
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            stochastic_dates: raichu_core::StochasticDates::Operator,
+            t_max: 10.0,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    let result = engine.advance_operator_to(5.0, 100).unwrap();
+    assert_eq!(result.stop, raichu_core::OperatorStop::Choice);
+    assert_eq!(engine.current_time(), 0.0);
+    assert!(engine.history().is_empty());
+    assert_eq!(engine.state("d.req"), Some("pending"));
+}
+
+fn operator_engine(compiled: &CompiledModel) -> Engine<'_> {
+    Engine::new(
+        compiled,
+        EngineConfig {
+            t_max: 20.0,
+            stochastic_dates: raichu_core::StochasticDates::Operator,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap()
+}
+
+fn operator_stock_model() -> Model {
+    Model::from_json(r#"{"name":"operator_stock","components":[
+      {"name":"stock","attributes":[{"name":"level","kind":"float","init":{"kind":"float","value":4.0}}],
+       "equations":[{"target":"level","kind":"ode","expr":{"op":"if","cond":{"op":"state_active","state":{"component":"stock","automaton":"bound","state":"full"}},"then":{"op":"const","value":{"kind":"float","value":-1.0}},"otherwise":{"op":"const","value":{"kind":"float","value":0.0}}}}],
+       "automata":[{"name":"bound","states":["full","empty"],"init":"full","transitions":[{"name":"empty","source":"full","targets":["empty"],"distrib":"watched","guard":{"op":"cmp","cmp":"le","lhs":{"op":"attr","attr":{"component":"stock","attribute":"level"}},"rhs":{"op":"const","value":{"kind":"float","value":0.0}}}}]}]},
+      {"name":"failure","automata":[{"name":"mode","states":["ok","failed"],"init":"ok","transitions":[{"name":"fail","source":"ok","targets":["failed"],"distrib":"exp","rate":0.5}]}]}
+    ]}"#).unwrap()
+}
+
+#[test]
+fn operator_boundary_keeps_programmed_failure_and_restores_exactly() {
+    let compiled = compile(&operator_stock_model());
+    let mut engine = operator_engine(&compiled);
+    assert_eq!(
+        engine
+            .fireable()
+            .iter()
+            .find(|f| f.kind == FireableKind::Stochastic)
+            .unwrap()
+            .date,
+        None
+    );
+    engine.set_date("failure.mode.fail", 8.0).unwrap();
+    let before = engine.snapshot().unwrap();
+    let boundary = engine.advance_operator_to(10.0, 100).unwrap();
+    assert_eq!(boundary.stop, raichu_core::OperatorStop::Event);
+    assert!((boundary.reached_time - 4.0).abs() < 1e-8);
+    assert_eq!(boundary.events[0].transition, "stock.bound.empty");
+    assert_eq!(engine.state("failure.mode"), Some("ok"));
+    assert_eq!(
+        engine
+            .fireable()
+            .iter()
+            .find(|f| f.transition == "failure.mode.fail")
+            .unwrap()
+            .date,
+        Some(8.0)
+    );
+    let result = engine.advance_operator_to(10.0, 100).unwrap();
+    assert_eq!(result.reached_time, 8.0);
+    assert_eq!(result.events[0].transition, "failure.mode.fail");
+    let values = engine.attribute("stock.level");
+    engine.restore(&before).unwrap();
+    assert_eq!(engine.advance_operator_to(10.0, 100).unwrap(), boundary);
+    assert_eq!(engine.advance_operator_to(10.0, 100).unwrap(), result);
+    assert_eq!(engine.attribute("stock.level"), values);
+    assert_eq!(
+        engine.advance_operator_to(10.0, 100).unwrap().stop,
+        raichu_core::OperatorStop::Target
+    );
+    assert_eq!(engine.current_time(), 10.0);
+    engine.reset().unwrap();
+    assert_eq!(engine.current_time(), 0.0);
+    assert_eq!(
+        engine
+            .fireable()
+            .iter()
+            .find(|f| f.transition == "failure.mode.fail")
+            .unwrap()
+            .date,
+        None
+    );
+}
+
+#[test]
+fn operator_unplanned_clock_and_invalid_commands_preserve_state() {
+    let compiled = compile(&operator_stock_model());
+    let mut engine = operator_engine(&compiled);
+    engine.advance_operator_to(10.0, 100).unwrap();
+    engine.advance_operator_to(10.0, 100).unwrap();
+    assert_eq!(engine.state("failure.mode"), Some("ok"));
+    let history = engine.history().to_vec();
+    let level = engine.attribute("stock.level");
+    for invalid in [f64::NAN, f64::INFINITY, -1.0, 9.0, 21.0] {
+        assert!(engine.advance_operator_to(invalid, 100).is_err());
+        assert!(engine.set_date("failure.mode.fail", invalid).is_err());
+        assert_eq!(engine.current_time(), 10.0);
+        assert_eq!(engine.history(), history);
+        assert_eq!(engine.attribute("stock.level"), level);
+    }
+    assert!(engine.advance_to(12.0).is_err());
+    assert!(engine.step().is_err());
+}
+
+#[test]
+fn operator_choice_requires_explicit_destination_and_budget_commits_progress() {
+    let compiled = compile(&demand_model(0.7));
+    let mut engine = operator_engine(&compiled);
+    assert!(engine.fire_named("d.req.resolve").is_err());
+    assert!(engine.history().is_empty());
+    let choice = engine.advance_operator_to(5.0, 100).unwrap();
+    assert_eq!(choice.choice.as_deref(), Some("d.req.resolve"));
+    assert_eq!(
+        engine.fire_named_to("d.req.resolve", "ko").unwrap().to,
+        "ko"
+    );
+    assert_eq!(
+        engine.advance_operator_to(5.0, 100).unwrap().stop,
+        raichu_core::OperatorStop::Target
+    );
+    let compiled = compile(&two_component_model());
+    let mut engine = operator_engine(&compiled);
+    let bounded = engine.advance_operator_to(10.0, 1).unwrap();
+    assert_eq!(bounded.stop, raichu_core::OperatorStop::Incomplete);
+    assert_eq!(bounded.reached_time, 5.0);
+    assert_eq!(engine.history().len(), 1);
+    assert_eq!(
+        engine.advance_operator_to(10.0, 100).unwrap().reached_time,
+        8.0
+    );
+}
+
+#[test]
+fn operator_countdowns_follow_each_interruption_policy() {
+    use raichu_model::InterruptionPolicy;
+    for (policy, expected) in [
+        (InterruptionPolicy::Reset, None),
+        (InterruptionPolicy::Resume, Some(10.0)),
+        (InterruptionPolicy::Continue, Some(8.0)),
+    ] {
+        let mut model = two_component_model();
+        model.components[0] = failing_component("G", 2.0, 2.0);
+        model.components[1] = failing_component("E", 20.0, 20.0);
+        let failure = &mut model.components[1].automata[0].transitions[0];
+        failure.distrib = Distrib::Exp {
+            rate: Some(0.5),
+            rate_expr: None,
+        };
+        failure.guard = Some(Expr::attr("G", "up"));
+        failure.on_interruption = policy;
+        let compiled = compile(&model);
+        let mut engine = operator_engine(&compiled);
+        engine.set_date("E.fail.occ", 8.0).unwrap();
+        engine.advance_operator_to(5.0, 100).unwrap(); // guard false at 2
+        engine.advance_operator_to(5.0, 100).unwrap(); // guard true at 4
+        engine.advance_operator_to(5.0, 100).unwrap();
+        let armed = engine
+            .fireable()
+            .into_iter()
+            .find(|f| f.transition == "E.fail.occ")
+            .unwrap();
+        assert_eq!(armed.date, expected, "{policy:?}");
+        let deferred = engine
+            .deferred()
+            .into_iter()
+            .find(|f| f.transition == "E.fail.occ")
+            .unwrap();
+        let expected_age = match policy {
+            InterruptionPolicy::Reset => 1.0,
+            InterruptionPolicy::Resume => 3.0,
+            InterruptionPolicy::Continue => 5.0,
+        };
+        assert_eq!(deferred.age, expected_age, "{policy:?}");
+    }
+}
+
+#[test]
+fn operator_firing_error_rolls_back_native_mutations() {
+    let mut model = two_component_model();
+    // Initialization is stable; the fired state enables a genuine
+    // sensitive-action oscillation, after native state/time/history changed.
+    model.components[0].attributes.push(Attribute {
+        name: "loop".into(),
+        kind: AttrKind::Bool,
+        init: Value::Bool(false),
+    });
+    model.components[0]
+        .sensitive_functions
+        .push(SensitiveFunction {
+            name: "oscillate".into(),
+            effects: vec![Assignment {
+                target: AttrRef {
+                    component: "A".into(),
+                    attribute: "loop".into(),
+                },
+                value: Expr::If {
+                    cond: Box::new(Expr::StateActive {
+                        state: StateRef {
+                            component: "A".into(),
+                            automaton: "fail".into(),
+                            state: "nok".into(),
+                        },
+                    }),
+                    then: Box::new(Expr::Bool {
+                        bool_op: raichu_expr::BoolOp::Not,
+                        args: vec![Expr::attr("A", "loop")],
+                    }),
+                    otherwise: Box::new(Expr::Const {
+                        value: Value::Bool(false),
+                    }),
+                },
+            }],
+        });
+    let compiled = compile(&model);
+    let mut engine = operator_engine(&compiled);
+    assert!(engine.advance_operator_to(10.0, 100).is_err());
+    assert_eq!(engine.current_time(), 0.0);
+    assert_eq!(engine.state("A.fail"), Some("ok"));
+    assert!(engine.history().is_empty());
+    assert_eq!(engine.fireable()[0].date, Some(5.0));
+    assert!(engine.fire_named("A.fail.occ").is_err());
+    assert_eq!(engine.current_time(), 0.0);
+    assert!(engine.history().is_empty());
+}
+
+#[test]
+fn operator_snapshot_rejects_other_policy_and_model_without_mutation() {
+    let compiled = compile(&two_component_model());
+    let mut engine = operator_engine(&compiled);
+    engine.advance_operator_to(3.0, 100).unwrap();
+    let automatic = bounded(&compiled, 20.0).snapshot().unwrap();
+    assert!(matches!(
+        engine.restore(&automatic),
+        Err(EngineError::OperatorSnapshotPolicy)
+    ));
+    let other_compiled = compile(&two_component_model());
+    let foreign = operator_engine(&other_compiled).snapshot().unwrap();
+    assert!(matches!(
+        engine.restore(&foreign),
+        Err(EngineError::OperatorSnapshotModel)
+    ));
+    assert_eq!(engine.current_time(), 3.0);
+    assert!(engine.history().is_empty());
+}
+
+#[test]
+fn operator_numerical_failure_restores_continuous_projection() {
+    let mut model = operator_stock_model();
+    model.components[0].equations[0].expr = Expr::If {
+        cond: Box::new(Expr::Cmp {
+            cmp: raichu_expr::CmpOp::Ge,
+            lhs: Box::new(Expr::Time),
+            rhs: Box::new(Expr::Const {
+                value: Value::Float(0.5),
+            }),
+        }),
+        then: Box::new(Expr::Div {
+            lhs: Box::new(Expr::Const {
+                value: Value::Float(1.0),
+            }),
+            rhs: Box::new(Expr::Const {
+                value: Value::Float(0.0),
+            }),
+        }),
+        otherwise: Box::new(Expr::Const {
+            value: Value::Float(-1.0),
+        }),
+    };
+    let compiled = compile(&model);
+    let mut engine = operator_engine(&compiled);
+    engine.advance_operator_to(0.25, 100).unwrap();
+    let level = engine.attribute("stock.level");
+    assert!(engine.advance_operator_to(2.0, 100).is_err());
+    assert_eq!(engine.current_time(), 0.25);
+    assert_eq!(engine.attribute("stock.level"), level);
+    assert!(engine.history().is_empty());
+    assert_eq!(engine.state("stock.bound"), Some("full"));
+}
+
+#[test]
+fn operator_simultaneous_boundary_delay_and_explicit_date_converge() {
+    let mut model = operator_stock_model();
+    model.components.push(failing_component("D", 4.0, 20.0));
+    let compiled = compile(&model);
+    let mut engine = operator_engine(&compiled);
+    engine.set_date("failure.mode.fail", 4.0).unwrap();
+    let result = engine.advance_operator_to(10.0, 100).unwrap();
+    assert_eq!(result.stop, raichu_core::OperatorStop::Event);
+    assert_eq!(result.events.len(), 3);
+    assert_eq!(result.events[0].transition, "stock.bound.empty");
+    for event in &result.events {
+        assert!((event.time - 4.0).abs() < 1e-8);
+    }
+    assert_eq!(engine.state("stock.bound"), Some("empty"));
+    assert_eq!(engine.state("failure.mode"), Some("failed"));
+    assert_eq!(engine.state("D.fail"), Some("nok"));
+    assert_eq!(engine.attribute("D.up"), Some(Value::Bool(false)));
+}
+
+#[test]
+fn operator_selected_firing_keeps_its_date_when_boundary_fires_instead() {
+    let compiled = compile(&operator_stock_model());
+    let mut engine = operator_engine(&compiled);
+    engine.set_date("failure.mode.fail", 8.0).unwrap();
+    let event = engine.fire_named("failure.mode.fail").unwrap();
+    assert_eq!(event.transition, "stock.bound.empty");
+    assert_eq!(engine.fireable()[0].date, Some(8.0));
+    assert_eq!(engine.fire_named("failure.mode.fail").unwrap().time, 8.0);
+}
+
+#[test]
+fn operator_reset_restores_transition_safety_budget() {
+    let compiled = compile(&two_component_model());
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 20.0,
+            stochastic_dates: raichu_core::StochasticDates::Operator,
+            max_transition_firings: 2,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    engine.advance_operator_to(5.0, 100).unwrap();
+    engine.reset().unwrap();
+    assert_eq!(
+        engine.advance_operator_to(5.0, 100).unwrap().reached_time,
+        5.0
+    );
+}
+
+#[test]
+fn operator_single_positive_branch_does_not_require_choice() {
+    for probability in [0.0, 1.0] {
+        let compiled = compile(&demand_model(probability));
+        let mut engine = operator_engine(&compiled);
+        let outcome = engine.advance_operator_to(5.0, 100).unwrap();
+        assert_eq!(outcome.stop, raichu_core::OperatorStop::Event);
+        assert_eq!(outcome.choice, None);
+        assert_eq!(outcome.reached_time, 0.0);
+        assert_eq!(
+            outcome.events[0].to,
+            if probability == 1.0 { "ok" } else { "ko" }
+        );
+    }
+}
