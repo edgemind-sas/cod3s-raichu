@@ -2146,7 +2146,9 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
     return [component], [], []
 
 
-def _expand_objlogicgate(spec: dict, model: dict) -> tuple[list[dict], list[dict], list[dict]]:
+def _expand_objlogicgate(
+    spec: dict, model: dict
+) -> tuple[list[dict], list[dict], list[dict]]:
     """muscadet `ObjLogicGate` (`muscadet/obj_logic.py`): a combinational
     boolean gate, **automaton-free**. A `result` attribute is recomputed
     as `kind` over the condition leaves, edge-triggered by a sensitive
@@ -2168,16 +2170,11 @@ def _expand_objlogicgate(spec: dict, model: dict) -> tuple[list[dict], list[dict
     # No carrier: a gate is a combinational function of the sources its
     # leaves name, and it holds nothing a leaf could read instead.
     groups = _cond_groups(
-        spec.get("cond", []), inner, carrier=None, where=f"ObjLogicGate `{name}`: `cond`"
+        spec.get("cond", []),
+        inner,
+        carrier=None,
+        where=f"ObjLogicGate `{name}`: `cond`",
     )
-    if not groups:
-        # An empty condition would silently evaluate as a CONSTANT gate
-        # (empty OR = false, empty AND = true): fail at build time instead.
-        raise ValueError(
-            f"ObjLogicGate `{name}`: empty or missing `cond`, declare at "
-            "least one source leaf"
-        )
-
     if kind == "or":
         value = {"op": "bool", "bool_op": "or", "args": groups}
     elif kind == "and":
@@ -2197,7 +2194,11 @@ def _expand_objlogicgate(spec: dict, model: dict) -> tuple[list[dict], list[dict
                 for g in groups
             ],
         }
-        value = {"op": "cmp", "cmp": "ge", "lhs": count, "rhs": _const(k)}
+        value = (
+            {"op": "cmp", "cmp": "ge", "lhs": count, "rhs": _const(k)}
+            if groups
+            else _const(False)
+        )
     else:
         raise ValueError(
             f"ObjLogicGate `{name}`: unknown kind `{kind}` (expected 'or', 'and' or 'k')"
@@ -2219,13 +2220,65 @@ def _expand_objlogicgate(spec: dict, model: dict) -> tuple[list[dict], list[dict
             {
                 "name": f"recompute_{name}",
                 "effects": [
-                    {"target": {"component": name, "attribute": "result"}, "value": value}
+                    {
+                        "target": {"component": name, "attribute": "result"},
+                        "value": value,
+                    }
                 ],
             }
         ],
         "equations": [],
     }
     return [component], [], []
+
+
+def _lower_logic_gate_equalities(model: dict, specs: list[dict]) -> None:
+    """Preserve Python bool/numeric equality once all gate sources exist.
+
+    Lower only logic-gate comparisons. General native expression type rules
+    stay strict, and later-declared controllers or gates resolve identically.
+    """
+    attributes = {
+        (component["name"], attribute["name"]): attribute["kind"]
+        for component in model.get("components", [])
+        for attribute in component.get("attributes", [])
+    }
+    gates = {spec["name"] for spec in specs if spec.get("type") == "ObjLogicGate"}
+
+    def lower(expression: dict) -> None:
+        if expression["op"] in ("bool", "add"):
+            for argument in expression["args"]:
+                lower(argument)
+        elif expression["op"] == "if":
+            lower(expression["cond"])
+        elif expression["op"] == "cmp":
+            lhs, rhs = expression["lhs"], expression["rhs"]
+            if lhs["op"] not in ("attr", "state_active"):
+                lower(lhs)
+                return
+            if lhs["op"] == "state_active":
+                source_kind = "bool"
+            else:
+                reference = lhs["attr"]
+                source_kind = attributes.get(
+                    (reference["component"], reference["attribute"])
+                )
+            constant_kind = rhs["value"]["kind"]
+            if source_kind == "bool" and constant_kind in ("int", "float"):
+                expression["lhs"] = {
+                    "op": "if",
+                    "cond": lhs,
+                    "then": _const(1),
+                    "otherwise": _const(0),
+                }
+            elif source_kind in ("int", "float") and constant_kind == "bool":
+                expression["rhs"] = _const(int(rhs["value"]["value"]))
+
+    for component in model.get("components", []):
+        if component["name"] in gates:
+            for function in component["sensitive_functions"]:
+                for effect in function["effects"]:
+                    lower(effect["value"])
 
 
 class MuscadetPlugin:
@@ -2317,6 +2370,7 @@ class MuscadetPlugin:
         in one corner of a model is not a statement about what the model is
         for; the key is.
         """
+        _lower_logic_gate_equalities(model, specs)
         _latch_held_writes_on_persistent_gates(
             model, specs, _persistent_availability_gates(specs)
         )
