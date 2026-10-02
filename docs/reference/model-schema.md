@@ -900,7 +900,7 @@ in the same release, which is what keeps the one feature name honest.
 - `target: "predicate"` → `"attr": VarRef`, `"cmp"` (one of `eq`, `ne`,
   `lt`, `le`, `gt`, `ge`), `"value"` (a [Value](#attribute))
 
-Estimators are computed by `monte_carlo`, per schedule instant, on four
+Estimators are computed by `monte_carlo`, per schedule instant, on six
 measures of the observed value:
 
 | measure | fields | what it is |
@@ -909,6 +909,23 @@ measures of the observed value:
 | sojourn | `sojourn_mean`, `sojourn_std`, `sojourn_ci`, `sojourn_quantiles`, `sojourn_extremes` | its cumulated time-integral since `t = 0` |
 | occurrences | `nb_occurrences_mean`, `nb_occurrences_std`, `nb_occurrences_ci`, `nb_occurrences_extremes` | how many times it entered the state or condition, up to the instant |
 | reached | `reached_mean`, `reached_std`, `reached_ci`, `reached_extremes` | the probability of having been active at least once by the instant; unlike the value, it never comes back down |
+| zero departures | `zero_departures_mean`, `zero_departures_std`, `zero_departures_ci`, `zero_departures_extremes` | how many times the value left exactly `0` for any non-zero value, sign ignored, up to the instant; the initial value is never counted |
+| non-zero reached | `nonzero_reached_mean`, `nonzero_reached_std`, `nonzero_reached_ci`, `nonzero_reached_extremes` | the probability of having been non-zero at least once by the instant, the initial value included |
+
+The last two pairs read the same change points as occurrences and reached,
+with another rule. Occurrences count rising edges (from `<= 0` to `> 0`)
+and take an active initial value as the first one; zero departures do not
+count the initial value, count a move to a negative value, and ignore a
+move between two non-zero values. A value that is only ever negative is
+non-zero reached and never reached. On a state, a `predicate` or a `bool`
+attribute that starts inactive the two pairs coincide. Zero departures
+and non-zero reached are what the reference engine's `nb_visits` and
+`realized` computations return, which is why a cod3s or muscadet study
+reads its `nb-occurrences` and `had_value` measures on them
+([Platform import](../guides/platform-import.md#matching-the-studys-measures)).
+Entries the initial propagation records at the series' first date are
+part of the initial value. A result document written before these two
+pairs existed reads back with them empty.
 
 `quantiles` are nearest-rank and computed only when requested
 (`quantiles=[…]`); `extremes` hold the smallest and largest

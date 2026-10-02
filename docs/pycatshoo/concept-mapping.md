@@ -94,7 +94,10 @@ constants of the model.
 ### Indicator measures
 
 An indicator's computation mode (`TComputationType`) maps to one of
-RAICHU's four measures, which are all computed on every indicator. The
+RAICHU's measures, which are all computed on every indicator. A study
+authored through cod3s or muscadet reads `nb-occurrences` and `had_value`
+on the zero-departure pair, which is what the reference engine computes
+for them (`pyraichu.muscadet.engine.MEASURE_SERIES`). The
 equivalences below were **measured** on PyCATSHOO 1.3.8.0 (2026-10-02),
 on a float stepping through zero, positive and negative levels, because
 the user manual V1.3.7.2 describes `res_time`, `nb_visits` and
@@ -105,8 +108,8 @@ the user manual V1.3.7.2 describes `res_time`, `nb_visits` and
 |---|---|---|
 | `simple` | value (`mean`, `std`, …) | identical |
 | `res_time` | sojourn (`sojourn_mean`, …) | identical: both integrate the value over time, sign included. A value held at 2 for 10 time units gives 20 on both |
-| `nb_visits` | occurrences (`nb_occurrences_mean`, …) | **identical only on a value that starts at 0 and never goes negative.** PyCATSHOO counts the departures from exactly 0 to any non-zero value and does not count a non-zero initial value; RAICHU counts every rise from ≤ 0 to > 0, an active initial value included. A state active from `t = 0` and never re-entered counts 0 on PyCATSHOO and 1 here |
-| `realized` | reached (`reached_mean`, …) | identical on a value that never goes negative: PyCATSHOO answers 1 once the value has been non-zero, RAICHU once it has been positive |
+| `nb_visits` | zero departures (`zero_departures_mean`, …) | identical: both count the departures from exactly 0 to any non-zero value, a non-zero initial value not counted. RAICHU's own occurrences (`nb_occurrences_mean`, …) count every rise from ≤ 0 to > 0, an active initial value included: a state active from `t = 0` and never re-entered counts 0 departures and 1 occurrence |
+| `realized` | non-zero reached (`nonzero_reached_mean`, …) | identical: 1 once the value has been non-zero, the initial value included. RAICHU's own reached (`reached_mean`, …) holds once the value has been positive |
 
 PyCATSHOO's `distribution` (bounded histogram) and `pctQuantile` restitutions,
 an indicator computed by an arbitrary method and its restriction by

@@ -185,10 +185,74 @@ pub struct IndicatorEstimate {
     /// Extremes of the reached indicator (0 and 1, or one of them when
     /// every replica agrees).
     pub reached_extremes: Extremes,
+    // The departure measures below default when absent, so a result
+    // document written before they existed (a Monte-Carlo detail of a
+    // `raichu.quantification` envelope, for instance) still reads, with
+    // empty series that no instant can be read off.
+    /// Mean number of **departures from zero** up to each instant: moves
+    /// of the value from exactly `0` to any non-zero value, whatever its
+    /// sign, the initial value never counted. This is the reference
+    /// engine's `nb_visits` computation, the one a cod3s/muscadet
+    /// `nb-occurrences` indicator is defined against. It differs from
+    /// [`Self::nb_occurrences_mean`] on an active initial value (not
+    /// counted here), on a negative value (a departure here, not a rising
+    /// edge there) and on a move between two non-zero values (counted by
+    /// neither).
+    #[serde(default)]
+    pub zero_departures_mean: Vec<f64>,
+    /// Sample standard deviation of the departure count.
+    #[serde(default)]
+    pub zero_departures_std: Vec<f64>,
+    /// Confidence interval on [`Self::zero_departures_mean`], built as the
+    /// one on [`Self::nb_occurrences_mean`] (a count).
+    #[serde(default = "absent_interval")]
+    pub zero_departures_ci: ConfidenceInterval,
+    /// Extremes of the departure count.
+    #[serde(default = "absent_extremes")]
+    pub zero_departures_extremes: Extremes,
+    /// Probability that the value has been **non-zero** at least once by
+    /// each instant, the initial value included: the reference engine's
+    /// `realized` computation, the one a cod3s/muscadet `had_value`
+    /// indicator is defined against. It differs from
+    /// [`Self::reached_mean`] on a value that is only ever negative
+    /// (non-zero, so reached here; never above zero, so not reached
+    /// there).
+    #[serde(default)]
+    pub nonzero_reached_mean: Vec<f64>,
+    /// Sample standard deviation of the non-zero-reached indicator.
+    #[serde(default)]
+    pub nonzero_reached_std: Vec<f64>,
+    /// Confidence interval on [`Self::nonzero_reached_mean`]: a
+    /// proportion, so Wilson whatever the indicator's own kind.
+    #[serde(default = "absent_interval")]
+    pub nonzero_reached_ci: ConfidenceInterval,
+    /// Extremes of the non-zero-reached indicator.
+    #[serde(default = "absent_extremes")]
+    pub nonzero_reached_extremes: Extremes,
     /// Requested quantiles of the sampled value.
     pub quantiles: Vec<QuantileSeries>,
     /// Requested quantiles of the cumulated sojourn.
     pub sojourn_quantiles: Vec<QuantileSeries>,
+}
+
+/// The interval a document written before the departure measures existed
+/// reads back with: no instant and no construction ([`IntervalMethod::Undefined`]),
+/// so it can never be mistaken for a computed one. Its level is the
+/// conventional one only because a level has to be a probability.
+fn absent_interval() -> ConfidenceInterval {
+    ConfidenceInterval {
+        level: DEFAULT_CONFIDENCE,
+        method: IntervalMethod::Undefined,
+        low: Vec::new(),
+        high: Vec::new(),
+        constant_sample: Vec::new(),
+    }
+}
+
+/// The extremes a document written before the departure measures existed
+/// reads back with: no instant.
+fn absent_extremes() -> Extremes {
+    Extremes::empty(0)
 }
 
 /// Full Monte-Carlo result with provenance.
@@ -261,8 +325,83 @@ fn nb_occurrences_at(points: &[(f64, Value)], instant: f64) -> f64 {
     count
 }
 
-/// One replica's samples: `[indicator][instant] → (value, sojourn, nb_occ)`.
-type ReplicaSamples = Vec<Vec<(f64, f64, f64)>>;
+/// The value a change-point series **starts** from: the last entry dated
+/// at the series' first date.
+///
+/// The initial propagation may record more than one entry at that date
+/// (the declared value, then what the start-up fixpoint settles on); the
+/// trajectory starts from the settled one, so the moves between them are
+/// part of the initial value and not departures from it. `None` for an
+/// empty series.
+fn initial_index(points: &[(f64, Value)]) -> Option<usize> {
+    let first = points.first()?.0;
+    Some(points.iter().take_while(|(t, _)| *t == first).count() - 1)
+}
+
+/// Number of **departures from zero** up to `instant`: moves of the value
+/// from exactly `0` to any non-zero value, sign ignored, the initial value
+/// (see [`initial_index`]) never counted. The reference engine's
+/// `nb_visits` computation, measured on PyCATSHOO 1.3.8.0 (2026-10-02).
+/// The bound is inclusive, as in [`nb_occurrences_at`].
+fn zero_departures_at(points: &[(f64, Value)], instant: f64) -> f64 {
+    let Some(start) = initial_index(points) else {
+        return 0.0;
+    };
+    if points[start].0 > instant {
+        return 0.0;
+    }
+    let mut count = 0.0;
+    let mut prev = value_as_f64(points[start].1);
+    for (t_start, value) in &points[start + 1..] {
+        if *t_start > instant {
+            break;
+        }
+        let cur = value_as_f64(*value);
+        if prev == 0.0 && cur != 0.0 {
+            count += 1.0;
+        }
+        prev = cur;
+    }
+    count
+}
+
+/// Whether the value has been **non-zero** at or before `instant`, the
+/// initial value (see [`initial_index`]) included: `1.0` or `0.0`. The
+/// reference engine's `realized` computation, measured on PyCATSHOO
+/// 1.3.8.0 (2026-10-02). The bound is inclusive, as in
+/// [`nb_occurrences_at`].
+fn nonzero_reached_at(points: &[(f64, Value)], instant: f64) -> f64 {
+    let Some(start) = initial_index(points) else {
+        return 0.0;
+    };
+    let reached = points[start..]
+        .iter()
+        .take_while(|(t_start, _)| *t_start <= instant)
+        .any(|(_, value)| value_as_f64(*value) != 0.0);
+    if reached {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// What one replica records of one indicator at one schedule instant.
+#[derive(Debug, Clone, Copy)]
+struct Sample {
+    /// The sampled value.
+    value: f64,
+    /// Its time-integral up to the instant.
+    sojourn: f64,
+    /// Rising edges up to the instant ([`nb_occurrences_at`]).
+    nb_occurrences: f64,
+    /// Departures from zero up to the instant ([`zero_departures_at`]).
+    zero_departures: f64,
+    /// Non-zero at or before the instant ([`nonzero_reached_at`]).
+    nonzero_reached: f64,
+}
+
+/// One replica's samples: `[indicator][instant] → Sample`.
+type ReplicaSamples = Vec<Vec<Sample>>;
 
 /// Whether the sampled value of this indicator is a `{0, 1}` draw **by
 /// declaration**, which makes its mean a probability and its interval a
@@ -347,12 +486,12 @@ fn replica_samples(
                     .samples
                     .iter()
                     .zip(&sampled.points)
-                    .map(|(instant, (_, value))| {
-                        (
-                            value_as_f64(*value),
-                            sojourn_at(&change_points.points, *instant),
-                            nb_occurrences_at(&change_points.points, *instant),
-                        )
+                    .map(|(instant, (_, value))| Sample {
+                        value: value_as_f64(*value),
+                        sojourn: sojourn_at(&change_points.points, *instant),
+                        nb_occurrences: nb_occurrences_at(&change_points.points, *instant),
+                        zero_departures: zero_departures_at(&change_points.points, *instant),
+                        nonzero_reached: nonzero_reached_at(&change_points.points, *instant),
                     })
                     .collect()
             },
@@ -686,14 +825,29 @@ fn reduce(
         let mut sojourn_extremes = Extremes::empty(n_instants);
         let mut nb_occurrences_extremes = Extremes::empty(n_instants);
         let mut reached_extremes = Extremes::empty(n_instants);
+        let mut zero_departures_mean = vec![0.0; n_instants];
+        let mut zero_departures_std = vec![0.0; n_instants];
+        let mut nonzero_reached_mean = vec![0.0; n_instants];
+        let mut nonzero_reached_std = vec![0.0; n_instants];
+        let mut zero_departures_extremes = Extremes::empty(n_instants);
+        let mut nonzero_reached_extremes = Extremes::empty(n_instants);
         for k in 0..n_instants {
             // Serial, replica-ordered accumulation (determinism).
             let (mut sum, mut sum_sq, mut sj_sum, mut sj_sum_sq) = (0.0, 0.0, 0.0, 0.0);
             let (mut oc_sum, mut oc_sum_sq) = (0.0, 0.0);
             // A 0/1 draw, so its sum is also the sum of its squares.
             let mut reached_sum = 0.0;
+            let (mut zd_sum, mut zd_sum_sq) = (0.0, 0.0);
+            // A 0/1 draw as well.
+            let mut nonzero_sum = 0.0;
             for replica in replicas {
-                let (value, sojourn, nb_occ) = replica[idx][k];
+                let Sample {
+                    value,
+                    sojourn,
+                    nb_occurrences: nb_occ,
+                    zero_departures,
+                    nonzero_reached,
+                } = replica[idx][k];
                 sum += value;
                 sum_sq += value * value;
                 sj_sum += sojourn;
@@ -705,6 +859,9 @@ fn reduce(
                 // entry, and its bound is the sample's own.
                 let reached = if nb_occ > 0.0 { 1.0 } else { 0.0 };
                 reached_sum += reached;
+                zd_sum += zero_departures;
+                zd_sum_sq += zero_departures * zero_departures;
+                nonzero_sum += nonzero_reached;
                 // Extremes are order-independent, but folded here, in the
                 // same replica-ordered pass, so a NaN or a signed zero
                 // resolves the same way whatever the thread count.
@@ -712,11 +869,15 @@ fn reduce(
                 sojourn_extremes.fold(k, sojourn);
                 nb_occurrences_extremes.fold(k, nb_occ);
                 reached_extremes.fold(k, reached);
+                zero_departures_extremes.fold(k, zero_departures);
+                nonzero_reached_extremes.fold(k, nonzero_reached);
             }
             mean[k] = sum / n;
             sojourn_mean[k] = sj_sum / n;
             nb_occurrences_mean[k] = oc_sum / n;
             reached_mean[k] = reached_sum / n;
+            zero_departures_mean[k] = zd_sum / n;
+            nonzero_reached_mean[k] = nonzero_sum / n;
             if config.nb_runs > 1 {
                 std[k] = ((sum_sq - n * mean[k] * mean[k]) / (n - 1.0))
                     .max(0.0)
@@ -732,6 +893,16 @@ fn reduce(
                     / (n - 1.0))
                     .max(0.0)
                     .sqrt();
+                zero_departures_std[k] = ((zd_sum_sq
+                    - n * zero_departures_mean[k] * zero_departures_mean[k])
+                    / (n - 1.0))
+                    .max(0.0)
+                    .sqrt();
+                nonzero_reached_std[k] = ((nonzero_sum
+                    - n * nonzero_reached_mean[k] * nonzero_reached_mean[k])
+                    / (n - 1.0))
+                    .max(0.0)
+                    .sqrt();
             }
         }
         // Nearest-rank quantiles (deterministic: total_cmp sort over the
@@ -742,10 +913,14 @@ fn reduce(
             let mut value_rows = vec![0.0; n_instants];
             let mut sojourn_rows = vec![0.0; n_instants];
             for k in 0..n_instants {
-                let mut column: Vec<f64> =
-                    replicas.iter().map(|replica| replica[idx][k].0).collect();
-                let mut sj_column: Vec<f64> =
-                    replicas.iter().map(|replica| replica[idx][k].1).collect();
+                let mut column: Vec<f64> = replicas
+                    .iter()
+                    .map(|replica| replica[idx][k].value)
+                    .collect();
+                let mut sj_column: Vec<f64> = replicas
+                    .iter()
+                    .map(|replica| replica[idx][k].sojourn)
+                    .collect();
                 column.sort_unstable_by(f64::total_cmp);
                 sj_column.sort_unstable_by(f64::total_cmp);
                 let rank = ((q * column.len() as f64).ceil() as usize)
@@ -797,6 +972,15 @@ fn reduce(
             Departure::count(),
         );
         let reached_ci = ConfidenceInterval::on_proportion(level, config.nb_runs, &reached_mean);
+        let zero_departures_ci = ConfidenceInterval::on_mean(
+            level,
+            config.nb_runs,
+            &zero_departures_mean,
+            &zero_departures_std,
+            Departure::count(),
+        );
+        let nonzero_reached_ci =
+            ConfidenceInterval::on_proportion(level, config.nb_runs, &nonzero_reached_mean);
         indicators.push(IndicatorEstimate {
             name: indicator.name.clone(),
             instants: config.samples.clone(),
@@ -816,6 +1000,14 @@ fn reduce(
             sojourn_extremes,
             nb_occurrences_extremes,
             reached_extremes,
+            zero_departures_mean,
+            zero_departures_std,
+            zero_departures_ci,
+            zero_departures_extremes,
+            nonzero_reached_mean,
+            nonzero_reached_std,
+            nonzero_reached_ci,
+            nonzero_reached_extremes,
             quantiles,
             sojourn_quantiles,
         });
@@ -1122,4 +1314,53 @@ fn named_targets(declared: &[(String, raichu_analysis::BasicEvent)]) -> String {
         .map(|(name, _)| format!("`{name}`"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod departure_tests {
+    use super::*;
+
+    fn series(points: &[(f64, f64)]) -> Vec<(f64, Value)> {
+        points.iter().map(|&(t, x)| (t, Value::Float(x))).collect()
+    }
+
+    #[test]
+    fn moves_at_the_first_date_are_part_of_the_initial_value() {
+        // The declared 0 then what the start-up fixpoint settles on, both at
+        // t = 0: the trajectory starts from 1, so no departure, but reached.
+        let points = series(&[(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (2.0, -1.0)]);
+        assert_eq!(zero_departures_at(&points, 0.0), 0.0);
+        assert_eq!(zero_departures_at(&points, 1.5), 0.0);
+        assert_eq!(zero_departures_at(&points, 2.0), 1.0);
+        assert_eq!(nonzero_reached_at(&points, 0.0), 1.0);
+        // The other way round: a transient non-zero value the start-up
+        // fixpoint settles back to 0 was never the trajectory's value.
+        let points = series(&[(0.0, 1.0), (0.0, 0.0), (3.0, 2.0)]);
+        assert_eq!(nonzero_reached_at(&points, 2.0), 0.0);
+        assert_eq!(nonzero_reached_at(&points, 3.0), 1.0);
+        assert_eq!(zero_departures_at(&points, 3.0), 1.0);
+    }
+
+    #[test]
+    fn the_bound_is_inclusive_and_an_empty_series_reads_zero() {
+        let points = series(&[(0.0, 0.0), (2.0, 4.0)]);
+        assert_eq!(zero_departures_at(&points, 2.0), 1.0);
+        assert_eq!(nonzero_reached_at(&points, 2.0), 1.0);
+        assert_eq!(zero_departures_at(&points, 1.999), 0.0);
+        assert_eq!(nonzero_reached_at(&points, 1.999), 0.0);
+        assert_eq!(zero_departures_at(&[], 1.0), 0.0);
+        assert_eq!(nonzero_reached_at(&[], 1.0), 0.0);
+    }
+
+    #[test]
+    fn booleans_read_as_zero_and_one() {
+        let points = vec![
+            (0.0, Value::Bool(true)),
+            (1.0, Value::Bool(false)),
+            (2.0, Value::Bool(true)),
+        ];
+        assert_eq!(zero_departures_at(&points, 2.0), 1.0);
+        assert_eq!(nb_occurrences_at(&points, 2.0), 2.0);
+        assert_eq!(nonzero_reached_at(&points, 0.0), 1.0);
+    }
 }

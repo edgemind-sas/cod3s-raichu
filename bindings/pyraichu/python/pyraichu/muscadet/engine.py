@@ -79,6 +79,8 @@ from ..indicators import merge_indicators
 __all__ = [
     "ENGINE_DESCRIPTION",
     "ENGINE_NAME",
+    "MEASURE_EXTREMES",
+    "MEASURE_SERIES",
     "RUN_TARGETS",
     "build_model",
     "isimu_start",
@@ -111,6 +113,42 @@ ENGINE_DESCRIPTION = (
 #: sent under another name would fall through to :func:`pyraichu.monte_carlo`
 #: and be refused there, by name.
 RUN_TARGETS = "targets"
+
+#: A cod3s/muscadet study measure -> the ``IndicatorEstimate`` series pair
+#: carrying it, in (mean, standard deviation) order.
+#:
+#: A study written through cod3s is defined against the reference engine's
+#: indicator computations, which cod3s selects per measure: ``nb-occurrences``
+#: is ``nb_visits`` and ``had_value`` is ``realized``. Those are not RAICHU's
+#: ``nb_occurrences`` and ``reached``: measured on PyCATSHOO 1.3.8.0
+#: (2026-10-02), ``nb_visits`` counts the moves from exactly 0 to any non-zero
+#: value and never counts an active initial value, and ``realized`` holds once
+#: the value has been non-zero, a negative one included. The pair that
+#: reproduces them is ``zero_departures`` / ``nonzero_reached``, so this route
+#: reads that pair. On a state or a boolean indicator that starts inactive the
+#: two pairs coincide; they part on an initially active one (one occurrence,
+#: no departure) and on a value that goes negative.
+#:
+#: ``sojourn-time`` is the reference ``res_time``, the signed time-integral of
+#: the value, and ``value`` its ``simple`` computation, the sampled value.
+#: Written once here so a launcher reading a muscadet study (the platform
+#: runner, the corpus benches) imports it rather than restating it.
+MEASURE_SERIES: dict[str, tuple[str, str]] = {
+    "nb-occurrences": ("zero_departures_mean", "zero_departures_std"),
+    "sojourn-time": ("sojourn_mean", "sojourn_std"),
+    "value": ("mean", "std"),
+    "had_value": ("nonzero_reached_mean", "nonzero_reached_std"),
+}
+
+#: A cod3s/muscadet study measure -> the ``Extremes`` field carrying its
+#: ``min`` and ``max`` over the replicas, on the same pairing as
+#: :data:`MEASURE_SERIES`.
+MEASURE_EXTREMES: dict[str, str] = {
+    "nb-occurrences": "zero_departures_extremes",
+    "sojourn-time": "sojourn_extremes",
+    "value": "extremes",
+    "had_value": "nonzero_reached_extremes",
+}
 
 #: Run-parameter keys that describe HOW the reference engine draws its
 #: replicas, TRACES them or REPORTS them, rather than what is computed, and
@@ -959,7 +997,8 @@ def simulate(spec: Mapping[str, Any], params: Any = None, **kwargs: Any):
     pyraichu.McEstimates
         RAICHU's own result. muscadet hands an engine's answer back untouched:
         the reference path writes its indicators onto the live system and
-        returns nothing, this one returns the estimates.
+        returns nothing, this one returns the estimates. A study measure is
+        read off them on the series :data:`MEASURE_SERIES` names for it.
     """
     kwargs.pop("postpone_post_proc", None)
     targets = _target_names(kwargs.pop(RUN_TARGETS, None))

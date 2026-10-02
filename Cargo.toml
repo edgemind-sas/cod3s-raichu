@@ -19,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.76.0"
+version = "0.77.0"
 edition = "2021"
 rust-version = "1.83"
 license = "MIT"
@@ -29,20 +29,20 @@ description = "RAICHU: native Rust engine for hybrid (PDMP) simulation of comple
 
 [workspace.dependencies]
 # Internal crates
-raichu-model = { path = "crates/raichu-model", version = "0.76.0" }
-raichu-expr = { path = "crates/raichu-expr", version = "0.76.0" }
-raichu-rng = { path = "crates/raichu-rng", version = "0.76.0" }
-raichu-core = { path = "crates/raichu-core", version = "0.76.0" }
-raichu-analysis = { path = "crates/raichu-analysis", version = "0.76.0" }
-raichu-montecarlo = { path = "crates/raichu-montecarlo", version = "0.76.0" }
-raichu-numeric = { path = "crates/raichu-numeric", version = "0.76.0" }
-raichu-explore = { path = "crates/raichu-explore", version = "0.76.0" }
-raichu-fta = { path = "crates/raichu-fta", version = "0.76.0" }
-raichu-quantify = { path = "crates/raichu-quantify", version = "0.76.0" }
-raichu = { path = "crates/raichu", version = "0.76.0" }
-raichu-fmi = { path = "crates/raichu-fmi", version = "0.76.0" }
-raichu-fmu = { path = "crates/raichu-fmu", version = "0.76.0" }
-raichu-milp = { path = "crates/raichu-milp", version = "0.76.0" }
+raichu-model = { path = "crates/raichu-model", version = "0.77.0" }
+raichu-expr = { path = "crates/raichu-expr", version = "0.77.0" }
+raichu-rng = { path = "crates/raichu-rng", version = "0.77.0" }
+raichu-core = { path = "crates/raichu-core", version = "0.77.0" }
+raichu-analysis = { path = "crates/raichu-analysis", version = "0.77.0" }
+raichu-montecarlo = { path = "crates/raichu-montecarlo", version = "0.77.0" }
+raichu-numeric = { path = "crates/raichu-numeric", version = "0.77.0" }
+raichu-explore = { path = "crates/raichu-explore", version = "0.77.0" }
+raichu-fta = { path = "crates/raichu-fta", version = "0.77.0" }
+raichu-quantify = { path = "crates/raichu-quantify", version = "0.77.0" }
+raichu = { path = "crates/raichu", version = "0.77.0" }
+raichu-fmi = { path = "crates/raichu-fmi", version = "0.77.0" }
+raichu-fmu = { path = "crates/raichu-fmu", version = "0.77.0" }
+raichu-milp = { path = "crates/raichu-milp", version = "0.77.0" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

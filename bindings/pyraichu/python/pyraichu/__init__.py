@@ -407,6 +407,39 @@ class IndicatorEstimate:
     reached_extremes: Extremes
     quantiles: dict[float, list[float]]
     sojourn_quantiles: dict[float, list[float]]
+    #: Mean number of departures from zero by each instant: moves of the
+    #: value from exactly 0 to any non-zero value, sign ignored, the initial
+    #: value never counted (the reference engine's ``nb_visits``, which a
+    #: cod3s/muscadet ``nb-occurrences`` indicator is defined against).
+    #: Unlike ``nb_occurrences_mean`` it does not count an active initial
+    #: value, and it counts a move to a negative value.
+    zero_departures_mean: list[float] = field(default_factory=list)
+    zero_departures_std: list[float] = field(default_factory=list)
+    zero_departures_ci: ConfidenceInterval = field(default_factory=lambda: _absent_interval())
+    zero_departures_extremes: Extremes = field(default_factory=lambda: Extremes(min=[], max=[]))
+    #: Probability of having been non-zero at least once by each instant,
+    #: the initial value included (the reference engine's ``realized``,
+    #: which a cod3s/muscadet ``had_value`` indicator is defined against).
+    #: Unlike ``reached_mean`` it holds for a value that is only ever
+    #: negative.
+    nonzero_reached_mean: list[float] = field(default_factory=list)
+    nonzero_reached_std: list[float] = field(default_factory=list)
+    nonzero_reached_ci: ConfidenceInterval = field(default_factory=lambda: _absent_interval())
+    nonzero_reached_extremes: Extremes = field(default_factory=lambda: Extremes(min=[], max=[]))
+
+
+def _absent_interval() -> ConfidenceInterval:
+    """The interval a result written before the departure measures existed
+    reads back with: no instant and no construction (``"undefined"``)."""
+    return ConfidenceInterval(level=0.95, method="undefined", low=[], high=[], constant_sample=[])
+
+
+def _optional_interval(raw: dict[str, Any] | None) -> ConfidenceInterval:
+    return _absent_interval() if raw is None else _interval(raw)
+
+
+def _optional_extremes(raw: dict[str, Any] | None) -> Extremes:
+    return Extremes(min=[], max=[]) if raw is None else Extremes(**raw)
 
 
 @dataclass(frozen=True)
@@ -453,6 +486,17 @@ def _mc_estimates(raw: dict[str, Any]) -> McEstimates:
             reached_extremes=Extremes(**e["reached_extremes"]),
             quantiles={s["q"]: s["values"] for s in e["quantiles"]},
             sojourn_quantiles={s["q"]: s["values"] for s in e["sojourn_quantiles"]},
+            # Read with a fallback: a result document written before the
+            # departure measures existed (a Monte-Carlo detail of an older
+            # quantification envelope) carries none of them.
+            zero_departures_mean=e.get("zero_departures_mean", []),
+            zero_departures_std=e.get("zero_departures_std", []),
+            zero_departures_ci=_optional_interval(e.get("zero_departures_ci")),
+            zero_departures_extremes=_optional_extremes(e.get("zero_departures_extremes")),
+            nonzero_reached_mean=e.get("nonzero_reached_mean", []),
+            nonzero_reached_std=e.get("nonzero_reached_std", []),
+            nonzero_reached_ci=_optional_interval(e.get("nonzero_reached_ci")),
+            nonzero_reached_extremes=_optional_extremes(e.get("nonzero_reached_extremes")),
         )
         for e in raw["indicators"]
     }
