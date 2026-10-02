@@ -2490,7 +2490,7 @@ def _mode_leaf(
     leaf: Any,
     targets: list[str],
     modes: dict,
-    volumes: dict | None = None,
+    spellings: dict | None = None,
 ) -> dict:
     """One condition leaf, as the plugin's condition tree names the same thing.
 
@@ -2520,13 +2520,20 @@ def _mode_leaf(
       function rather than through a second table of its own. Its other half
       answers here too, the variables muscadet creates and this layer has none
       of (:func:`capacity_absent_variables`), so a condition naming one is
-      refused BY ITS NAME with what stands in its place.
+      refused BY ITS NAME with what stands in its place;
+    - a leaf whose ``attr`` names a CONTINUOUS FLOW'S DEMAND, which the two
+      layers spell the other way round (:func:`flow_demand_variables`). On a
+      tank or a pass-through both names exist on both layers and mean opposite
+      things, so a mode armed on what a tank's input asks for would otherwise
+      read the total asked of its output without a word. The indicators go
+      through that very function, and so does this.
 
-    `volumes` is ``{component: (translated, absent)}`` for the components that
-    hold a volume, keyed on the name the MODEL carries them under, as
-    :func:`_mode_volumes` reads them off the document. Nothing rewrites on a
-    component declaring no capacity, so a variable that happens to end in
-    ``_qty`` elsewhere is left exactly as the document wrote it.
+    `spellings` is ``{component: (translated, absent)}`` for the components
+    whose variables the two layers name apart, keyed on the name the MODEL
+    carries them under, as :func:`_mode_spellings` reads them off the document.
+    Nothing rewrites on a component declaring neither a capacity nor a
+    continuous flow, so a variable that happens to end in ``_qty`` elsewhere is
+    left exactly as the document wrote it.
     """
     if not isinstance(leaf, dict):
         raise ComponentSpecError(
@@ -2549,7 +2556,7 @@ def _mode_leaf(
             # What is rewritten here depends on the component read, so it is
             # rewritten for every target and kept only when they agree.
             readings = [
-                _mode_leaf(where, {**leaf, "obj": target}, [target], modes, volumes)
+                _mode_leaf(where, {**leaf, "obj": target}, [target], modes, spellings)
                 for target in targets
             ]
             shared = [
@@ -2567,7 +2574,7 @@ def _mode_leaf(
             return shared[0]
         leaf["obj"] = targets[0]
 
-    held = (volumes or {}).get(leaf["obj"])
+    held = (spellings or {}).get(leaf["obj"])
     if held is not None and isinstance(leaf.get("attr"), str):
         translated, absent = held
         unavailable = absent.get(leaf["attr"])
@@ -2615,27 +2622,39 @@ def _mode_state_names(spec: dict) -> set[str]:
     }
 
 
-def _mode_volumes(components: dict) -> dict[str, tuple[dict, dict]]:
-    """The volume-holding components of a document, with the two readings a
-    condition needs of each: what to rename, and what to refuse by name.
+def _mode_spellings(components: dict) -> dict[str, tuple[dict, dict]]:
+    """The components of a document whose variables the two layers name apart,
+    with the two readings a condition needs of each: what to rename, and what
+    to refuse by name.
+
+    Two disagreements are swept, the very two the indicators are translated
+    through: the quantity a volume holds (:func:`capacity_content_variables`,
+    with its other half :func:`capacity_absent_variables`) and a continuous
+    flow's demand (:func:`flow_demand_variables`). Their muscadet names never
+    coincide, so one lookup per leaf answers both and nothing is renamed
+    twice.
 
     Keyed on the name the MODEL carries the component under -- its own
     ``name``, not the key the document files it by -- because that is the name
     a condition leaf has to spell for anything downstream to resolve it, and it
     is what :func:`build_component` builds the component as.
 
-    A component declaring no capacity is left out of the mapping entirely, so
-    a lookup on it falls through and the document's own spelling stands.
+    A component declaring neither a capacity nor a continuous flow is left out
+    of the mapping entirely, so a lookup on it falls through and the
+    document's own spelling stands.
     """
-    volumes: dict[str, tuple[dict, dict]] = {}
+    spellings: dict[str, tuple[dict, dict]] = {}
     for name, entry in (components or {}).items():
         if not isinstance(entry, dict):
             continue
-        translated = capacity_content_variables(entry)
+        translated = {
+            **capacity_content_variables(entry),
+            **flow_demand_variables(entry),
+        }
         absent = capacity_absent_variables(entry)
         if translated or absent:
-            volumes[str(entry.get("name") or name)] = (translated, absent)
-    return volumes
+            spellings[str(entry.get("name") or name)] = (translated, absent)
+    return spellings
 
 
 def _mode_cond(
@@ -2645,7 +2664,7 @@ def _mode_cond(
     targets: list[str],
     modes: dict,
     by_flow: bool,
-    volumes: dict | None = None,
+    spellings: dict | None = None,
 ) -> Any:
     """A mode's condition, as the plugin's condition tree.
 
@@ -2689,7 +2708,7 @@ def _mode_cond(
 
     return [
         [
-            _mode_leaf(f"{where}: `{key}`", leaf, targets, modes, volumes)
+            _mode_leaf(f"{where}: `{key}`", leaf, targets, modes, spellings)
             for leaf in group
         ]
         for group in groups
@@ -3039,8 +3058,8 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
         The document's components, by name. What they answer is what the
         declaration alone cannot: which of the objects a condition watches is
         another two-state component, which flows a target holds, and which of
-        them holds a VOLUME, whose level the two layers spell apart
-        (:func:`_mode_volumes`). Given none, a condition on a tank level is
+        them holds a VOLUME or a continuous flow, whose level and demand the
+        two layers spell apart (:func:`_mode_spellings`). Given none, a condition on a tank level is
         left in muscadet's spelling and refused downstream, which is what a
         caller reading a mode out of its document gets.
     """
@@ -3085,11 +3104,11 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
         if key in wire:
             wire[key] = _mode_order_vector(where, key, wire[key])
 
-    volumes = _mode_volumes(components)
+    spellings = _mode_spellings(components)
     for key in ("failure_cond", "repair_cond", "occ_cond", "not_occ_cond", "cond"):
         if key in wire:
             wire[key] = _mode_cond(
-                where, key, wire[key], targets, modes, mode_class.by_flow, volumes
+                where, key, wire[key], targets, modes, mode_class.by_flow, spellings
             )
 
     for key in (
@@ -3522,7 +3541,7 @@ def logic_gate_object(
             [],
             modes,
             False,
-            _mode_volumes(components),
+            _mode_spellings(components),
         )
     return {
         "type": "ObjLogicGate",

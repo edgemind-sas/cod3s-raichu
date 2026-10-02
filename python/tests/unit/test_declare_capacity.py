@@ -383,3 +383,67 @@ def test_a_component_without_continuous_flow_answers_nothing():
     discrete = {"flows": [{"cls": "FlowOut", "name": "x"}]}
     assert declare.flow_demand_variables(discrete) == {}
     assert declare.flow_demand_variables(None) == {}
+
+
+# A condition names the demand in muscadet's spelling too, and on a component
+# holding the flow on both sides both names exist here, meaning the other side:
+# the translation has to reach the conditions, or the mode switches on the
+# wrong quantity without a word.
+
+
+def a_pass_through_tank(name="TANK"):
+    """A volume fed by `q` and serving `q`, so both demand names exist."""
+    entry = a_tank(name=name)
+    entry["flows"].append(
+        {
+            "cls": "FlowContinuousOut",
+            "name": "q",
+            "var_fed_default": 0.0,
+            "var_demand_in_default": 0.0,
+        }
+    )
+    return entry
+
+
+@pytest.mark.parametrize(
+    "spelling, carried",
+    [("q_demand_out", "q_demand_in"), ("q_demand_in", "q_demand_out")],
+    ids=["input-demand", "output-demand"],
+)
+def test_a_condition_on_a_demand_reads_the_side_muscadet_means(spelling, carried):
+    """muscadet's `q_demand_out` on a tank is what its INPUT asks for, which
+    this layer carries as `q_demand_in`, and the other way round."""
+    event = a_watching_event(spelling)
+    obj = declare.mode_object(event, {"TANK": a_pass_through_tank(), "WATCH": event})
+    assert watched(obj) == [("TANK", carried)]
+
+
+def test_a_demand_condition_goes_through_the_indicators_translation():
+    """Never a second table: each direction of a mode reads what
+    :func:`flow_demand_variables` answers, as an indicator does. Checked per
+    direction, because the two names merely swap and a sorted pair would read
+    the same before the translation as after it."""
+    tank = a_pass_through_tank()
+    mode = a_watching_mode("q_demand_out", "tank_qty")
+    obj = declare.mode_object(mode, {"TANK": tank, mode["name"]: mode})
+    demand = declare.flow_demand_variables(tank)
+    occ = [leaf["attr"] for group in obj["failure_cond"] for leaf in group]
+    assert occ == [demand["q_demand_out"]]
+
+
+def test_a_logic_gate_condition_on_a_demand_is_translated_too():
+    gate = {
+        "name": "GATE",
+        "kind": "logic_gate",
+        "cls": "ObjLogicGate",
+        "logic_kind": "or",
+        "cond": [{"obj": "TANK", "attr": "q_demand_out", "value": True}],
+        "out_elements": ["g"],
+    }
+    obj = declare.logic_gate_object(gate, components={"TANK": a_pass_through_tank()})
+    assert watched(obj) == [("TANK", "q_demand_in")]
+
+
+def test_the_document_carrying_a_demand_condition_builds():
+    event = a_watching_event("q_demand_out")
+    declare.build_document(a_document(a_pass_through_tank(), event))
