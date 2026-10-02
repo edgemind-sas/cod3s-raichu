@@ -323,9 +323,11 @@ def test_the_availability_default_is_accepted_only_where_it_says_nothing():
       producer publishes `fed = prod AND is_active AND fed_available`, so
       `fed` entails `available` per producer, and `all`, `any` and
       `sum >= k` are monotone: the second factor cannot change a verdict
-      the first has given. The one construction that would break the
-      implication is a NEGATED output, and an input a negated output feeds
-      reads the availability channel as well.
+      the first has given. A NEGATED output breaks the implication, but the
+      availability term only aggregates what is wired to the separate
+      `{flow}_available_in` box, which this layer never carries: on the
+      reference too, an input a downed negated output feeds reads the feed
+      alone (`test_flow_out_negate.py`).
 
     So `False` would say something this layer cannot honour, and it is
     refused by name rather than dropped."""

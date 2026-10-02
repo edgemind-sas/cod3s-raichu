@@ -2118,6 +2118,11 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
                         "guard": cond,
                         "monitored": True,
                         "cycle_group": name,
+                        # An event observes: among transitions due at the
+                        # same date it fires first, so a state the model
+                        # reaches and leaves within one instant is counted,
+                        # as the reference counts it.
+                        "kind": "observation",
                         "distrib": "delay",
                         "time": float(spec.get("tempo_occ", 0)),
                     },
@@ -2128,6 +2133,7 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
                         "guard": _negate(cond),
                         "monitored": True,
                         "cycle_group": name,
+                        "kind": "observation",
                         "distrib": "delay",
                         "time": float(spec.get("tempo_not_occ", 0)),
                     },

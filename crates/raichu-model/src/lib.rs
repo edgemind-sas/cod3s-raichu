@@ -479,6 +479,14 @@ pub enum TransitionKind {
     /// Firing into the first declared target is a repair (a return to
     /// service).
     Repair,
+    /// The transition belongs to an **observer**: an automaton that watches
+    /// the model (a feared event, a counted alarm) and writes nothing the
+    /// rest of the model reads. Unlike the two roles above it changes the
+    /// trajectory, in one place only: among transitions due at the same
+    /// date, an observer's fires first, so a state the model reaches and
+    /// leaves within one instant is still observed, as the reference engine
+    /// observes it. Requires [`Feature::ObserverPriority`].
+    Observation,
 }
 
 /// A transition of an automaton.
@@ -730,6 +738,11 @@ pub enum Feature {
     Fmi,
     /// Model-level mixed-integer programs solved at discrete fixpoints.
     MixedIntegerProgram,
+    /// Transition-level [`TransitionKind::Observation`]: observers fire first
+    /// among transitions due at the same date. An engine that ignored it
+    /// would fire them in positional order and miss every state the model
+    /// reaches and leaves within one instant, without a word.
+    ObserverPriority,
 }
 
 impl Feature {
@@ -741,6 +754,7 @@ impl Feature {
         Feature::TransitionEffects,
         Feature::Fmi,
         Feature::MixedIntegerProgram,
+        Feature::ObserverPriority,
     ];
 
     /// Serialized name of the feature.
@@ -753,6 +767,7 @@ impl Feature {
             Feature::TransitionEffects => "transition_effects",
             Feature::Fmi => "fmi",
             Feature::MixedIntegerProgram => "mixed_integer_program",
+            Feature::ObserverPriority => "observer_priority",
         }
     }
 
@@ -2299,6 +2314,16 @@ impl Model {
                 .any(|automaton| automaton.transitions.iter().any(|t| !t.effects.is_empty()))
         }) {
             features.insert(Feature::TransitionEffects);
+        }
+        if self.components.iter().any(|component| {
+            component.automata.iter().any(|automaton| {
+                automaton
+                    .transitions
+                    .iter()
+                    .any(|t| t.kind == Some(TransitionKind::Observation))
+            })
+        }) {
+            features.insert(Feature::ObserverPriority);
         }
         if self
             .components

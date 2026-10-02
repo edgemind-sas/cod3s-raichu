@@ -441,19 +441,51 @@ def test_a_document_name_disagreeing_with_the_derived_one_is_refused():
         declare.check_mode_spec(a_delay_mode(name="elsewhere"))
 
 
-def test_a_condition_leaf_with_no_object_is_refused_on_a_common_cause_mode():
-    """cod3s resolves it per combination and one condition is shared by all of
-    them here, so the case is refused rather than resolved to one target."""
-    with pytest.raises(declare.ComponentSpecError, match="names no `obj`"):
-        declare.mode_object(
-            a_delay_mode(
-                name="BX__hw",
-                target_name="BX",
-                targets=["B1", "B2"],
-                failure_param=[4, 7],
-                repair_param=[2, 3],
-                failure_cond=[[{"attr": f"{FLOW}_fed_in", "value": True}]],
-            )
+def test_a_condition_leaf_with_no_object_reads_every_target_of_its_combination():
+    """cod3s resolves such a leaf once per target of each common-cause
+    combination and requires it on all of them: the order-1 combinations read
+    their own target, the order-2 one reads both."""
+    mode = a_delay_mode(
+        name="BX__hw",
+        target_name="BX",
+        targets=["B1", "B2"],
+        failure_param=[4, 7],
+        repair_param=[2, 3],
+        failure_cond=[[{"attr": f"{FLOW}_fed_in", "value": True}]],
+    )
+    feed = [
+        {"source": "S", "source_box": f"{FLOW}_out", "target": block, "target_box": f"{FLOW}_in"}
+        for block in ("B1", "B2")
+    ]
+    document = declare.build_document(
+        a_document(a_source(), a_block("B1"), a_block("B2"), mode, connections=feed)
+    )
+    body = document if "components" in document else pyraichu.model_body(document)
+    guards = {
+        transition["name"]: json.dumps(transition.get("guard"))
+        for component in body["components"]
+        if component["name"] == "BX__hw"
+        for automaton in component["automata"]
+        for transition in automaton["transitions"]
+    }
+    read = {name: ("B1" in guard, "B2" in guard) for name, guard in guards.items() if name.startswith("occ")}
+    assert read == {
+        "occ__cc_1": (True, False),
+        "occ__cc_2": (False, True),
+        "occ__cc_1_2": (True, True),
+    }
+
+
+def test_a_leaf_two_targets_would_read_differently_is_still_refused():
+    """The rewrite depends on the component read; when the targets disagree
+    on it, no single leaf can stand for all of them."""
+    with pytest.raises(declare.ComponentSpecError, match="name it differently"):
+        declare._mode_leaf(
+            "mode `BX__hw`",
+            {"attr": "tank_qty", "value": 0},
+            ["B1", "B2"],
+            {},
+            {"B1": ({"tank_qty": "tank_content"}, {}), "B2": ({}, {})},
         )
 
 

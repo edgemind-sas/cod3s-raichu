@@ -1090,6 +1090,8 @@ pub struct Snapshot {
     pub(super) vars: Vec<Value>,
     pub(super) states: Vec<StateIdx>,
     pub(super) pending: Vec<Option<f64>>,
+    pub(super) armed_wave: Vec<u64>,
+    pub(super) wave: u64,
     pub(super) clocks: Vec<Option<DrawnClock>>,
     pub(super) stochastic_dates: StochasticDates,
     pub(super) biased_rates: bool,

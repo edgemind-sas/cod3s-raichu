@@ -4,6 +4,7 @@
 //! its optional confluence probe.
 
 use super::*;
+use raichu_model::TransitionKind;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
@@ -417,6 +418,7 @@ impl<'m> Engine<'m> {
             *slot = None;
         }
         self.pending[trans_idx] = None;
+        self.wave += 1;
         self.clocks[trans_idx] = None;
         self.frozen[trans_idx] = None;
         self.hazards[trans_idx] = None;
@@ -503,13 +505,35 @@ impl<'m> Engine<'m> {
         }
     }
 
+    /// Schedule `idx` at `date`, recording the firing wave that armed it
+    /// when it was not already scheduled (a re-dated transition keeps the
+    /// wave it was armed in).
+    pub(super) fn arm(&mut self, idx: TransIdx, date: f64) {
+        if self.pending[idx].is_none() {
+            self.armed_wave[idx] = self.wave;
+        }
+        self.pending[idx] = Some(date);
+    }
+
+    /// The earliest pending transition. Among transitions due at the same
+    /// date, PyCATSHOO fires in waves: what was armed before a wave fires
+    /// before what that wave arms. So the earlier-armed transition comes
+    /// first; within one wave an observer's ([`TransitionKind::Observation`])
+    /// comes first, so a state reached and left within one instant is still
+    /// observed; any other tie keeps the positional order.
     pub(super) fn next_pending(&self) -> Option<(TransIdx, f64)> {
+        let rank = |idx: TransIdx| {
+            let observer = self.model.transitions[idx].kind == Some(TransitionKind::Observation);
+            (self.armed_wave[idx], !observer)
+        };
         let mut best: Option<(TransIdx, f64)> = None;
         for idx in 0..self.pending.len() {
             if let Some(date) = self.scheduled_date(idx) {
                 let better = match best {
                     None => true,
-                    Some((_, best_date)) => date < best_date,
+                    Some((best_idx, best_date)) => {
+                        date < best_date || (date == best_date && rank(idx) < rank(best_idx))
+                    }
                 };
                 if better {
                     best = Some((idx, date));

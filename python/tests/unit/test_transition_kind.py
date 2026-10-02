@@ -348,7 +348,9 @@ def test_an_external_mode_declares_its_target_mirror_only(behaviour):
 # --- what is not a failure ------------------------------------------------------
 
 
-def test_a_feared_event_declares_no_kind():
+def test_a_feared_event_declares_its_transitions_as_observations():
+    """An event observes: neither a failure nor a repair, and its edges fire
+    first within one firing wave (`observer_priority`)."""
     event = {
         "type": "ObjEvent",
         "name": "ER",
@@ -358,7 +360,7 @@ def test_a_feared_event_declares_no_kind():
         _model([_mode("fm", ["A"], [{"law": "exp", "rate": 1e-3}], [None]), event])
     )
     ev = _automaton(expanded, "ER", "ev")
-    assert all("kind" not in t for t in ev["transitions"])
+    assert [t.get("kind") for t in ev["transitions"]] == ["observation", "observation"]
 
 
 def test_an_unknown_kind_is_refused_by_the_engine_naming_it():

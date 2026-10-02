@@ -2498,8 +2498,10 @@ def _mode_leaf(
 
     - a leaf carrying no ``obj`` reads the mode's own target, which is what
       cod3s resolves it against. A mode over SEVERAL targets resolves it per
-      combination, and one condition is shared by every combination here, so
-      that case is refused rather than resolved to one of them. An EVENT has
+      common-cause combination, on every target of the combination, and the
+      plugin does the same (``_cond_tree_over``): the leaf is then handed on
+      WITHOUT an ``obj``, rewritten as each target reads it, and refused only
+      when two targets would read it differently. An EVENT has
       no target at all -- cod3s compiles its tree "with a system-wide
       resolution (no per-target ``obj_default``: events observe arbitrary
       components)" -- so there a leaf has to name what it watches, and the
@@ -2541,13 +2543,28 @@ def _mode_leaf(
                 f"the system, so name the `obj` the leaf watches"
             )
         if len(targets) > 1:
-            raise ComponentSpecError(
-                f"{where} carries the leaf {leaf!r}, which names no `obj` and "
-                f"therefore reads the mode's own target. This mode has "
-                f"{len(targets)}, resolved one per common-cause combination, "
-                f"and one condition is shared by all of them here: name the "
-                f"`obj` the leaf watches"
-            )
+            # cod3s resolves such a leaf once per target of each common-cause
+            # combination and requires it on all of them; the plugin does the
+            # same (`_cond_tree_over`), so the leaf travels WITHOUT an `obj`.
+            # What is rewritten here depends on the component read, so it is
+            # rewritten for every target and kept only when they agree.
+            readings = [
+                _mode_leaf(where, {**leaf, "obj": target}, [target], modes, volumes)
+                for target in targets
+            ]
+            shared = [
+                {key: value for key, value in reading.items() if key != "obj"}
+                for reading in readings
+            ]
+            if any(reading != shared[0] for reading in shared[1:]):
+                raise ComponentSpecError(
+                    f"{where} carries the leaf {leaf!r}, which names no `obj` "
+                    f"and is read on each of the mode's {len(targets)} "
+                    f"targets, but those targets name it differently "
+                    f"({[sorted(r.items()) for r in shared]}): name the `obj` "
+                    f"the leaf watches"
+                )
+            return shared[0]
         leaf["obj"] = targets[0]
 
     held = (volumes or {}).get(leaf["obj"])
@@ -4797,25 +4814,37 @@ def _refuse_unreachable_references(obj: dict, body: dict) -> None:
                 )
 
     for key in ("failure_cond", "repair_cond", "cond"):
-        for leaf in _condition_leaves(obj.get(key)):
-            named = leaf.get("obj")
-            if named not in attributes:
-                raise ComponentSpecError(
-                    f"{where}: its `{key}` watches `{named}`, which the model "
-                    f"does not hold"
-                )
-            if "attr" in leaf and leaf["attr"] not in attributes[named]:
-                raise ComponentSpecError(
-                    f"{where}: its `{key}` watches `{named}.{leaf['attr']}`, "
-                    f"which this layer's `{named}` does not carry"
-                )
-            reference = (leaf.get("automaton"), leaf.get("state"))
-            if "attr" not in leaf and reference not in states[named]:
-                raise ComponentSpecError(
-                    f"{where}: its `{key}` watches the state "
-                    f"`{named}.{reference[0]}.{reference[1]}`, which the model "
-                    f"does not hold"
-                )
+        for found in _condition_leaves(obj.get(key)):
+            # A leaf with no `obj` on a common-cause mode reads every target
+            # of the combination it guards (:func:`_mode_leaf`), so it is
+            # checked on each of them.
+            readers = [found.get("obj")] if found.get("obj") else (obj.get("targets") or [None])
+            for named in readers:
+                _refuse_unreachable_leaf(where, key, {**found, "obj": named}, attributes, states)
+
+
+def _refuse_unreachable_leaf(
+    where: str, key: str, leaf: dict, attributes: dict, states: dict
+) -> None:
+    """One condition leaf, with the component it reads named."""
+    named = leaf.get("obj")
+    if named not in attributes:
+        raise ComponentSpecError(
+            f"{where}: its `{key}` watches `{named}`, which the model "
+            f"does not hold"
+        )
+    if "attr" in leaf and leaf["attr"] not in attributes[named]:
+        raise ComponentSpecError(
+            f"{where}: its `{key}` watches `{named}.{leaf['attr']}`, "
+            f"which this layer's `{named}` does not carry"
+        )
+    reference = (leaf.get("automaton"), leaf.get("state"))
+    if "attr" not in leaf and reference not in states[named]:
+        raise ComponentSpecError(
+            f"{where}: its `{key}` watches the state "
+            f"`{named}.{reference[0]}.{reference[1]}`, which the model "
+            f"does not hold"
+        )
 
 
 def _refuse_a_latched_production_a_condition_also_writes(obj: dict, body: dict) -> None:
