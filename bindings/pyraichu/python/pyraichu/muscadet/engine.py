@@ -119,35 +119,46 @@ RUN_TARGETS = "targets"
 #:
 #: A study written through cod3s is defined against the reference engine's
 #: indicator computations, which cod3s selects per measure: ``nb-occurrences``
-#: is ``nb_visits`` and ``had_value`` is ``realized``. Those are not RAICHU's
-#: ``nb_occurrences`` and ``reached``: measured on PyCATSHOO 1.3.8.0
-#: (2026-10-02), ``nb_visits`` counts the moves from exactly 0 to any non-zero
-#: value and never counts an active initial value, and ``realized`` holds once
-#: the value has been non-zero, a negative one included. The pair that
-#: reproduces them is ``zero_departures`` / ``nonzero_reached``, so this route
-#: reads that pair. On a state or a boolean indicator that starts inactive the
-#: two pairs coincide; they part on an initially active one (one occurrence,
-#: no departure) and on a value that goes negative.
+#: is ``nb_visits`` and ``had_value`` is ``realized``. This route reads
+#: RAICHU's ``nb_occurrences`` and ``reached`` for them, which count an
+#: initially active value as one occurrence.
+#:
+#: Measured 2026-10-02 on PyCATSHOO 1.3.8.0. On a natively built model whose
+#: value is set by start methods, ``nb_visits`` never counts the value held
+#: once the start methods have run, and RAICHU's ``zero_departures`` /
+#: ``nonzero_reached`` reproduce ``nb_visits`` / ``realized`` there. A muscadet
+#: model is not that case: a flow's truth at t = 0 usually reaches its
+#: consumer through a sensitive method, and the reference runs sensitive
+#: methods once the start methods are done, so the t = 0 value reaches its
+#: indicator as a departure from 0, which ``nb_occurrences`` counts. On the
+#: platform study that showed it (1000 replicas, a predicate true at t = 0),
+#: ``nb-occurrences`` read 5.665 on PyCATSHOO, 5.701 on ``nb_occurrences``
+#: and 4.701 on ``zero_departures``. The reference count at t = 0 depends on
+#: declaration order: a consumer declared after a source it reads directly
+#: reads the truth in its own start method and the reference counts nothing,
+#: where RAICHU, which runs the initialisation to its fixpoint, counts one
+#: whatever the order. ``reached`` and ``nonzero_reached`` part only on a
+#: value that goes negative, which a boolean predicate never does.
 #:
 #: ``sojourn-time`` is the reference ``res_time``, the signed time-integral of
 #: the value, and ``value`` its ``simple`` computation, the sampled value.
 #: Written once here so a launcher reading a muscadet study (the platform
 #: runner, the corpus benches) imports it rather than restating it.
 MEASURE_SERIES: dict[str, tuple[str, str]] = {
-    "nb-occurrences": ("zero_departures_mean", "zero_departures_std"),
+    "nb-occurrences": ("nb_occurrences_mean", "nb_occurrences_std"),
     "sojourn-time": ("sojourn_mean", "sojourn_std"),
     "value": ("mean", "std"),
-    "had_value": ("nonzero_reached_mean", "nonzero_reached_std"),
+    "had_value": ("reached_mean", "reached_std"),
 }
 
 #: A cod3s/muscadet study measure -> the ``Extremes`` field carrying its
 #: ``min`` and ``max`` over the replicas, on the same pairing as
 #: :data:`MEASURE_SERIES`.
 MEASURE_EXTREMES: dict[str, str] = {
-    "nb-occurrences": "zero_departures_extremes",
+    "nb-occurrences": "nb_occurrences_extremes",
     "sojourn-time": "sojourn_extremes",
     "value": "extremes",
-    "had_value": "nonzero_reached_extremes",
+    "had_value": "reached_extremes",
 }
 
 #: Run-parameter keys that describe HOW the reference engine draws its

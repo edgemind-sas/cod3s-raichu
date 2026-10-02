@@ -1,12 +1,14 @@
 """The zero-departure pair crosses into Python as ``zero_departures_*`` and
 ``nonzero_reached_*``.
 
-They are the reference engine's ``nb_visits`` and ``realized`` computations
+They reproduce the reference engine's ``nb_visits`` and ``realized``
+computations on a natively built model whose value is set by start methods
 (measured on PyCATSHOO 1.3.8.0, 2026-10-02): a count of the moves from
 exactly 0 to any non-zero value, the initial value never counted, and 1 once
 the value has been non-zero, the initial value included. The Rust suite pins
 them on every measured level sequence; this pins the estimate the binding
-hands a launcher, and the muscadet route's choice of series per measure.
+hands a launcher, and the muscadet route's choice of series per measure,
+which is occurrences and reached rather than this pair.
 """
 
 import pyraichu
@@ -90,15 +92,18 @@ def test_a_departure_to_a_negative_value_counts():
     assert indicator.nb_occurrences_mean == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
 
 
-def test_the_muscadet_route_reads_the_reference_computations():
+def test_the_muscadet_route_reads_occurrences_and_reached():
     # cod3s defines `nb-occurrences` as `nb_visits` and `had_value` as
-    # `realized`: the route reads the pair that reproduces them.
-    assert MEASURE_SERIES["nb-occurrences"] == ("zero_departures_mean", "zero_departures_std")
-    assert MEASURE_SERIES["had_value"] == ("nonzero_reached_mean", "nonzero_reached_std")
+    # `realized`. On a muscadet model the t = 0 value reaches the reference
+    # indicator as a departure from 0, which `nb_occurrences` counts, so the
+    # route reads occurrences and reached, not the zero-departure pair
+    # (measured 2026-10-02, see the comment above `MEASURE_SERIES`).
+    assert MEASURE_SERIES["nb-occurrences"] == ("nb_occurrences_mean", "nb_occurrences_std")
+    assert MEASURE_SERIES["had_value"] == ("reached_mean", "reached_std")
     assert MEASURE_SERIES["sojourn-time"] == ("sojourn_mean", "sojourn_std")
     assert MEASURE_SERIES["value"] == ("mean", "std")
-    assert MEASURE_EXTREMES["nb-occurrences"] == "zero_departures_extremes"
-    assert MEASURE_EXTREMES["had_value"] == "nonzero_reached_extremes"
+    assert MEASURE_EXTREMES["nb-occurrences"] == "nb_occurrences_extremes"
+    assert MEASURE_EXTREMES["had_value"] == "reached_extremes"
     fields = pyraichu.IndicatorEstimate.__dataclass_fields__
     for pair in MEASURE_SERIES.values():
         assert set(pair) <= set(fields)
