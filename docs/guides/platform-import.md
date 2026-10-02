@@ -75,19 +75,35 @@ run the Monte-Carlo with `stop_at_targets=True`: see
 the two semantics. Each study indicator carries its own `measure`, and the
 declaration carries it too:
 
-- `nb-occurrences` → `IndicatorEstimate.nb_occurrences_mean` / `_std`
-  (with targets: the probability the event occurred by each instant);
-- `sojourn-time` → `IndicatorEstimate.sojourn_mean` / `_std`
-  (with targets: mean time elapsed since the first occurrence);
-- `had_value` → `IndicatorEstimate.reached_mean` / `_std`: the probability
-  the indicator has been active at least once by each instant. Per
-  trajectory it stays at 1 after the indicator falls back, as the
-  reference engine's `realized` computation does.
+- `nb-occurrences` → `IndicatorEstimate.zero_departures_mean` / `_std`:
+  the number of departures of the value from exactly 0 to a non-zero
+  value by each instant, the initial value not counted, which is the
+  reference engine's `nb_visits` computation that cod3s selects for this
+  measure (with targets: the probability the event occurred by each
+  instant);
+- `sojourn-time` → `IndicatorEstimate.sojourn_mean` / `_std`, the signed
+  time-integral of the value, the reference's `res_time` (with targets:
+  mean time elapsed since the first occurrence);
+- `value` → `IndicatorEstimate.mean` / `std`, the sampled value;
+- `had_value` → `IndicatorEstimate.nonzero_reached_mean` / `_std`: the
+  probability the value has been non-zero at least once by each instant,
+  the initial value included. Per trajectory it stays at 1 after the
+  value falls back, as the reference engine's `realized` computation
+  does.
 
-The `min` and `max` statistics of any measure read the matching
-`*_extremes` field (`extremes`, `sojourn_extremes`,
-`nb_occurrences_extremes`, `reached_extremes`): the smallest and the
-largest value that measure took across the replicas at each instant.
+`pyraichu.muscadet.engine.MEASURE_SERIES` holds this map, and
+`MEASURE_EXTREMES` the `*_extremes` field each measure's `min` and `max`
+statistics read (`extremes`, `sojourn_extremes`,
+`zero_departures_extremes`, `nonzero_reached_extremes`): the smallest and
+the largest value that measure took across the replicas at each instant.
+A launcher imports them rather than restating them.
+
+RAICHU's own `nb_occurrences_*` and `reached_*` series stay what they
+are, rising edges from `<= 0` to `> 0` with an active initial value as
+the first one. They part from the pair above on an indicator that starts
+active (one occurrence, no departure) and on a value that goes negative;
+on a state or boolean indicator that starts inactive, the two give the
+same numbers ([Indicator measures](../reference/model-schema.md#indicator)).
 
 ## Converting the outputs
 

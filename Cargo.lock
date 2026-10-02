@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "pyraichu"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "pyo3",
  "raichu",
@@ -753,7 +753,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "raichu"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "raichu-analysis",
  "raichu-core",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-analysis"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "raichu-core",
  "raichu-expr",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-core"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "divan",
  "raichu-expr",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-explore"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "raichu-analysis",
  "raichu-core",
@@ -822,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-expr"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-fmi"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "cc",
  "libloading",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-fmu"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "raichu-core",
  "raichu-expr",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-fta"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "libm",
  "proptest",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-milp"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "highs-sys",
  "microlp",
@@ -880,7 +880,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-model"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "proptest",
  "raichu-expr",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-montecarlo"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "divan",
  "raichu-analysis",
@@ -909,14 +909,14 @@ dependencies = [
 
 [[package]]
 name = "raichu-numeric"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "raichu-quantify"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "raichu-core",
  "raichu-explore",
@@ -931,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "raichu-rng"
-version = "0.76.0"
+version = "0.77.0"
 dependencies = [
  "rand",
  "rand_chacha",
