@@ -240,7 +240,9 @@ reading the exported `attr`: the producer's total stays visible.
 ### Interface
 
 `{ "name": string, "ports": [string, …] }`: a named bundle of the
-component's ports, for connecting several at once.
+component's ports. Each named port must exist on the component, which is
+checked at build time. A [connection](#connection) still joins two
+ports: an interface does not connect anything by itself.
 
 ### Automaton
 

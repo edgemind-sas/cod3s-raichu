@@ -7,7 +7,7 @@
 //! Design decisions:
 //!
 //! - **In/out ports** are the fundamental connection notion; *interfaces*
-//!   group ports for batch connection.
+//!   group ports under a name (a connection still joins two ports).
 //! - The model layer is pure data (serde), side-effect-free, validated at
 //!   build time with **typed errors: never a crash on bad input**.
 //! - Behaviour (guards, sensitive-function effects) is expressed as
@@ -119,8 +119,9 @@ pub struct Port {
     pub channels: Vec<Channel>,
 }
 
-/// A named group of ports, used to connect components in batch
-/// (grouping only: the ports stay the fundamental notion).
+/// A named group of ports, validated at build time (each port must
+/// exist). Grouping only: a [`Connection`] joins two ports, and the
+/// ports stay the fundamental notion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Interface {
     /// Interface name, unique inside its component.
@@ -206,9 +207,10 @@ pub enum Distrib {
     },
     /// Watched transition (paper rule `schedule_boundary`, M1): fires exactly when
     /// the continuous trajectory makes its guard become true. The guard
-    /// is the boundary predicate: it must be a single ordering
-    /// comparison (`<`, `≤`, `>`, `≥`) between float expressions, so
-    /// the engine can locate the crossing by root-finding on the signed
+    /// is the boundary predicate: it must contain at least one ordering
+    /// comparison (`<`, `≤`, `>`, `≥`) between float expressions,
+    /// possibly composed with and/or/not and discrete gates, so the
+    /// engine can locate the crossing by root-finding on the signed
     /// margin. Exactly one target state.
     Watched,
     /// Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a
