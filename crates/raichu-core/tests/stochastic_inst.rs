@@ -49,6 +49,7 @@ fn demand_model(ok_prob: f64) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 
@@ -148,6 +149,7 @@ fn three_way_branching_covers_every_target() {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let mut seen = std::collections::BTreeSet::new();

@@ -44,6 +44,7 @@ A complete, minimal model that uses most sections:
 | `name` | string | yes | model name (carried into provenance) |
 | `components` | array of [Component](#component) | yes | the system's parts |
 | `connections` | array of [Connection](#connection) | no (default `[]`) | out-port → in-port wiring |
+| `interface_connections` | array of [Interface connection](#interface-connection) | no (default `[]`) | interface ↔ interface wiring, expanded into port connections; requires the `interface_connections` feature |
 | `indicators` | array of [Indicator](#indicator) | no (default `[]`) | what the engine measures |
 | `targets` | array of [Target](#target) | no (default `[]`) | feared-event states for [sequence analysis](../guides/sequence-analysis.md) |
 | `programs` | array of [Program](#program) | no (default `[]`) | discrete mixed-integer optimisation steps |
@@ -171,6 +172,40 @@ destination, which is unambiguous unless two connections join the same
 pair of ports; naming at least one of those is then required, and the
 model is refused otherwise.
 
+### Interface connection
+
+`{ "from": InterfaceRef, "to": InterfaceRef, "name": string }` where an
+**InterfaceRef** is `{ "component": string, "interface": string }`.
+It joins two [interfaces](#interface) at once and stands for one
+[connection](#connection) per port, **paired by port name**: an out port
+on either side is connected to the in port of the same name on the
+other side, so one interface connection can carry flows in both
+directions, as a message box does.
+
+```json
+{"from": {"component": "Pump", "interface": "hydraulic"},
+ "to":   {"component": "Valve", "interface": "hydraulic"}}
+```
+
+With `Pump.hydraulic = [flow, pressure]` (an out port `flow`, an in port
+`pressure`) and `Valve.hydraulic = [pressure, flow]` (an out port
+`pressure`, an in port `flow`), it expands to `Pump.flow → Valve.flow`
+and `Valve.pressure → Pump.pressure`.
+
+The pairing must be exact, and the model is refused otherwise:
+
+- every port of each interface has a partner of the same name on the
+  other side;
+- the two partners have opposite directions.
+
+The engine runs on the expansion: the explicit `connections` first, in
+declaration order, then each interface connection in declaration order,
+its ports in the order the `from` interface lists them. Validation,
+compilation and the pre-run diagnostics all read that one list. The
+document keeps the interface connection as written: it is not rewritten
+into port connections when it is loaded or saved. `name`, optional, is
+given to every port connection the interface connection expands to.
+
 ## Component
 
 Only `name` is required; every collection defaults to empty.
@@ -240,9 +275,8 @@ reading the exported `attr`: the producer's total stays visible.
 ### Interface
 
 `{ "name": string, "ports": [string, …] }`: a named bundle of the
-component's ports. Each named port must exist on the component, which is
-checked at build time. A [connection](#connection) still joins two
-ports: an interface does not connect anything by itself.
+component's ports, which must exist on the component. An
+[interface connection](#interface-connection) joins two of them at once.
 
 ### Automaton
 
@@ -839,6 +873,7 @@ The Python helpers, all in `pyraichu`:
 | `fmi` | model-level [FMU units](#fmu-unit) |
 | `mixed_integer_program` | model-level [programs](#program) |
 | `observer_priority` | transition-level [declared kind](#declared-kind) `observation` |
+| `interface_connections` | model-level [interface connections](#interface-connection) |
 
 The transition-level [declared kind](#declared-kind) `failure` or
 `repair` is a **baseline** construct and has no feature name (the kind

@@ -490,6 +490,7 @@ fn duty(wired: bool, draws: bool, floor: f64, below: bool) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 

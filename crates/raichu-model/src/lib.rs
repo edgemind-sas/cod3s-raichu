@@ -7,7 +7,7 @@
 //! Design decisions:
 //!
 //! - **In/out ports** are the fundamental connection notion; *interfaces*
-//!   group ports under a name (a connection still joins two ports).
+//!   group ports so an [`InterfaceConnection`] joins two groups at once.
 //! - The model layer is pure data (serde), side-effect-free, validated at
 //!   build time with **typed errors: never a crash on bad input**.
 //! - Behaviour (guards, sensitive-function effects) is expressed as
@@ -23,6 +23,7 @@
 
 use raichu_expr::{AggOp, Assignment, AttrRef, CmpOp, Expr, PortRef, Value};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use thiserror::Error;
 
@@ -120,8 +121,9 @@ pub struct Port {
 }
 
 /// A named group of ports, validated at build time (each port must
-/// exist). Grouping only: a [`Connection`] joins two ports, and the
-/// ports stay the fundamental notion.
+/// exist), that an [`InterfaceConnection`] joins to another at once. The
+/// ports stay the fundamental notion: the engine runs on the port
+/// connections an interface connection stands for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Interface {
     /// Interface name, unique inside its component.
@@ -144,6 +146,42 @@ pub struct Connection {
     pub from: PortRef,
     /// Destination (must be an in-port).
     pub to: PortRef,
+}
+
+/// Reference to an interface by hierarchical name (authoring form).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct InterfaceRef {
+    /// Name of the component owning the interface.
+    pub component: String,
+    /// Name of the interface inside the component.
+    pub interface: String,
+}
+
+/// A connection between two [`Interface`]s: the batch form of
+/// [`Connection`], the counterpart of connecting two message boxes.
+///
+/// It stands for one port-to-port connection per port of the two
+/// interfaces, **paired by port name**: an out port of either side is
+/// connected to the in port of the same name on the other side, so one
+/// interface connection can carry flows in both directions. The pairing
+/// must be exact: every port of each interface finds its partner, of the
+/// opposite direction ([`ModelError::InterfacePortUnmatched`],
+/// [`ModelError::InterfacePortDirection`]).
+///
+/// The model never runs on interface connections themselves:
+/// [`Model::resolved_connections`] expands them, after the explicit
+/// [`Model::connections`] and in declaration order, and every consumer
+/// (validation, compilation, diagnostics) reads that one list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InterfaceConnection {
+    /// Optional name, given to every port connection it expands to (see
+    /// [`Connection::name`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// One side.
+    pub from: InterfaceRef,
+    /// The other side.
+    pub to: InterfaceRef,
 }
 
 /// Name of the attribute materialised on the producing component for one
@@ -745,6 +783,11 @@ pub enum Feature {
     /// would fire them in positional order and miss every state the model
     /// reaches and leaves within one instant, without a word.
     ObserverPriority,
+    /// Model-level [`Model::interface_connections`]. An engine that
+    /// ignored the field would leave the ports they connect unfed, and
+    /// run a model whose components never hear from each other without
+    /// a word.
+    InterfaceConnections,
 }
 
 impl Feature {
@@ -757,6 +800,7 @@ impl Feature {
         Feature::Fmi,
         Feature::MixedIntegerProgram,
         Feature::ObserverPriority,
+        Feature::InterfaceConnections,
     ];
 
     /// Serialized name of the feature.
@@ -770,6 +814,7 @@ impl Feature {
             Feature::Fmi => "fmi",
             Feature::MixedIntegerProgram => "mixed_integer_program",
             Feature::ObserverPriority => "observer_priority",
+            Feature::InterfaceConnections => "interface_connections",
         }
     }
 
@@ -993,6 +1038,13 @@ pub struct Model {
     /// Out-port → in-port connections.
     #[serde(default)]
     pub connections: Vec<Connection>,
+    /// Interface-to-interface connections, each expanded into port
+    /// connections by [`Model::resolved_connections`].
+    ///
+    /// Non-baseline construct: a document carrying it must declare
+    /// [`Feature::InterfaceConnections`] in its [`FormatHeader`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interface_connections: Vec<InterfaceConnection>,
     /// Recorded indicators.
     #[serde(default)]
     pub indicators: Vec<Indicator>,
@@ -1206,6 +1258,49 @@ pub enum ModelError {
         port: String,
         /// Which side of the connection (`from` / `to`).
         side: &'static str,
+    },
+    /// An interface connection names an interface that does not exist.
+    #[error("interface connection endpoint `{component}.{interface}` does not exist ({side})")]
+    InterfaceConnectionUnknown {
+        /// The referenced component.
+        component: String,
+        /// The referenced interface.
+        interface: String,
+        /// Which side of the connection (`from` / `to`).
+        side: &'static str,
+    },
+    /// A port of one interface has no port of the same name in the
+    /// interface it is connected to.
+    #[error(
+        "interface connection `{}.{}` ↔ `{}.{}`: port `{port}` of `{component}` has no \
+         port of the same name on the other side (interfaces are paired by port name)",
+        from.component, from.interface, to.component, to.interface
+    )]
+    InterfacePortUnmatched {
+        /// The `from` side.
+        from: Box<InterfaceRef>,
+        /// The `to` side.
+        to: Box<InterfaceRef>,
+        /// The component whose port is left unpaired.
+        component: String,
+        /// The unpaired port.
+        port: String,
+    },
+    /// Two ports paired by name have the same direction.
+    #[error(
+        "interface connection `{}.{}` ↔ `{}.{}`: port `{port}` is an {dir} port on both \
+         sides, and a pair must join an out port to an in port",
+        from.component, from.interface, to.component, to.interface
+    )]
+    InterfacePortDirection {
+        /// The `from` side.
+        from: Box<InterfaceRef>,
+        /// The `to` side.
+        to: Box<InterfaceRef>,
+        /// The port name both sides carry.
+        port: String,
+        /// The direction both carry (`in` / `out`).
+        dir: &'static str,
     },
     /// A connection must go from an out-port to an in-port.
     #[error(
@@ -2303,6 +2398,9 @@ impl Model {
         if !self.programs.is_empty() {
             features.insert(Feature::MixedIntegerProgram);
         }
+        if !self.interface_connections.is_empty() {
+            features.insert(Feature::InterfaceConnections);
+        }
         if self.evaluation_order.is_some() {
             features.insert(Feature::EvaluationOrder);
         }
@@ -2392,6 +2490,9 @@ impl Model {
     /// the fail-fast gate (typed errors at build
     /// time, never mid-simulation surprises).
     pub fn validate(&self) -> Result<(), ModelError> {
+        if !self.interface_connections.is_empty() {
+            return self.with_resolved_connections()?.validate();
+        }
         let scopes = self.check_components()?;
         self.check_fmu_units(&scopes)?;
         self.check_connections(&scopes)?;
@@ -3229,6 +3330,11 @@ impl Model {
     /// connection checks have run.
     #[must_use]
     pub fn channel_attributes(&self) -> Vec<ChannelAttribute> {
+        if !self.interface_connections.is_empty() {
+            if let Ok(resolved) = self.with_resolved_connections() {
+                return resolved.channel_attributes();
+            }
+        }
         let mut out = Vec::new();
         for (index, connection) in self.connections.iter().enumerate() {
             let Some(port) = self
@@ -3828,6 +3934,139 @@ impl Model {
             });
         }
         Ok(())
+    }
+
+    /// Every port connection the model runs on: the explicit
+    /// [`Model::connections`] in declaration order, followed by the
+    /// expansion of each [`InterfaceConnection`] in declaration order.
+    ///
+    /// Borrowed, at no cost, when the model declares no interface
+    /// connection. An interface connection is expanded port by port in
+    /// the order the `from` interface lists its ports, then the `to`
+    /// interface's ports that point back: an out port of `from` becomes
+    /// `from → to`, an in port of `from` becomes `to → from`.
+    ///
+    /// # Errors
+    ///
+    /// The interface does not exist ([`ModelError::InterfaceConnectionUnknown`]),
+    /// or the two interfaces do not pair exactly by port name
+    /// ([`ModelError::InterfacePortUnmatched`],
+    /// [`ModelError::InterfacePortDirection`]). A port an interface lists
+    /// but its component lacks is reported by [`Model::validate`] as
+    /// [`ModelError::InterfaceUnknownPort`].
+    pub fn resolved_connections(&self) -> Result<Cow<'_, [Connection]>, ModelError> {
+        if self.interface_connections.is_empty() {
+            return Ok(Cow::Borrowed(&self.connections));
+        }
+        let mut out = self.connections.clone();
+        for link in &self.interface_connections {
+            out.extend(self.expand_interface_connection(link)?);
+        }
+        Ok(Cow::Owned(out))
+    }
+
+    /// This model with its interface connections expanded into
+    /// [`Model::connections`] and the list emptied: the model the engine
+    /// actually runs. Borrowed when there is nothing to expand.
+    ///
+    /// # Errors
+    ///
+    /// As [`Model::resolved_connections`].
+    pub fn with_resolved_connections(&self) -> Result<Cow<'_, Model>, ModelError> {
+        if self.interface_connections.is_empty() {
+            return Ok(Cow::Borrowed(self));
+        }
+        let connections = self.resolved_connections()?.into_owned();
+        Ok(Cow::Owned(Model {
+            connections,
+            interface_connections: Vec::new(),
+            ..self.clone()
+        }))
+    }
+
+    fn expand_interface_connection(
+        &self,
+        link: &InterfaceConnection,
+    ) -> Result<Vec<Connection>, ModelError> {
+        let side = |reference: &InterfaceRef, side: &'static str| {
+            let unknown = || ModelError::InterfaceConnectionUnknown {
+                component: reference.component.clone(),
+                interface: reference.interface.clone(),
+                side,
+            };
+            let component = self
+                .components
+                .iter()
+                .find(|c| c.name == reference.component)
+                .ok_or_else(unknown)?;
+            let interface = component
+                .interfaces
+                .iter()
+                .find(|i| i.name == reference.interface)
+                .ok_or_else(unknown)?;
+            let ports: Vec<(&str, Option<PortDir>)> = interface
+                .ports
+                .iter()
+                .map(|name| {
+                    let dir = component
+                        .ports
+                        .iter()
+                        .find(|p| &p.name == name)
+                        .map(|p| p.dir);
+                    (name.as_str(), dir)
+                })
+                .collect();
+            Ok::<_, ModelError>(ports)
+        };
+        let from = side(&link.from, "from")?;
+        let to = side(&link.to, "to")?;
+        let unmatched = |component: &str, port: &str| ModelError::InterfacePortUnmatched {
+            from: Box::new(link.from.clone()),
+            to: Box::new(link.to.clone()),
+            component: component.to_owned(),
+            port: port.to_owned(),
+        };
+        for (port, _) in &to {
+            if !from.iter().any(|(name, _)| name == port) {
+                return Err(unmatched(&link.to.component, port));
+            }
+        }
+        let mut out = Vec::with_capacity(from.len());
+        for (port, dir) in &from {
+            let Some((_, other)) = to.iter().find(|(name, _)| name == port) else {
+                return Err(unmatched(&link.from.component, port));
+            };
+            let (source, target) = match (dir, other) {
+                (Some(PortDir::Out), Some(PortDir::In)) => (&link.from, &link.to),
+                (Some(PortDir::In), Some(PortDir::Out)) => (&link.to, &link.from),
+                (Some(same), Some(_)) => {
+                    return Err(ModelError::InterfacePortDirection {
+                        from: Box::new(link.from.clone()),
+                        to: Box::new(link.to.clone()),
+                        port: (*port).to_owned(),
+                        dir: match same {
+                            PortDir::In => "in",
+                            PortDir::Out => "out",
+                        },
+                    });
+                }
+                // A listed port the component lacks: validation reports
+                // it as `InterfaceUnknownPort`, so nothing is expanded.
+                _ => continue,
+            };
+            out.push(Connection {
+                name: link.name.clone(),
+                from: PortRef {
+                    component: source.component.clone(),
+                    port: (*port).to_owned(),
+                },
+                to: PortRef {
+                    component: target.component.clone(),
+                    port: (*port).to_owned(),
+                },
+            });
+        }
+        Ok(out)
     }
 
     fn check_connections(&self, scopes: &HashMap<&str, Scope<'_>>) -> Result<(), ModelError> {

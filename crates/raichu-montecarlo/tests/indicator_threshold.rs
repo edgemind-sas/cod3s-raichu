@@ -102,6 +102,7 @@ fn tank(indicators: Vec<Indicator>) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 
@@ -383,6 +384,7 @@ fn draining(initial: f64) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 

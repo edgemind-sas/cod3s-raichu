@@ -1498,6 +1498,10 @@ impl CompiledModel {
     /// Validate `model` then resolve every name to dense indices.
     pub fn compile(model: &Model) -> Result<Self, CompileError> {
         model.validate()?;
+        // Interface connections are an authoring form: compile the port
+        // connections they stand for, so every pass below reads one list.
+        let resolved = model.with_resolved_connections()?;
+        let model: &Model = &resolved;
 
         // Per-connection channel attributes: derived once, from the model
         // itself, so validation and this pass agree on what exists

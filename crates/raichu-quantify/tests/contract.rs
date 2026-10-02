@@ -181,6 +181,7 @@ fn parallel_pair(a: f64, b: f64) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 
@@ -197,6 +198,7 @@ fn competing_pair(a: f64, b: f64) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 

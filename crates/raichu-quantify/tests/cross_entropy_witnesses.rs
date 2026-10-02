@@ -138,6 +138,7 @@ fn system(name: &str, mut components: Vec<Component>, lost: Expr) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 

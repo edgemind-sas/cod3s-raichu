@@ -58,6 +58,7 @@ fn single_law_model(distrib: Distrib) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 
@@ -276,6 +277,7 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 
@@ -363,6 +365,7 @@ fn expvar_continuous_rate_matches_closed_form() {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     };
     assert_model_matches_cdf(&model, &[4.0, 8.0, 10.0], |t| 1.0 - (-0.01 * t * t).exp());
 }
