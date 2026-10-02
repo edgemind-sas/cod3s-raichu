@@ -741,6 +741,13 @@ under `PIPE_feed_demand_out`. The correspondence is published as
 layer's attributes (an interactive session, for one) translates without
 restating the rule.
 
+A **condition** is translated through the same correspondence: a mode, an
+event or a logic gate whose leaf reads `{"obj": "TANK", "attr": "q_demand_out"}`
+watches what the tank's input asks for, `TANK.q_demand_in` here, exactly as on
+muscadet. Before 0.75.1 only indicators were translated, so on a tank such a
+leaf read the total asked of the output and switched on the wrong quantity
+without a refusal.
+
 The generated indicator set keeps this layer's own spelling. On a component
 holding a flow on **both** sides (a tank, a pass-through) the generated
 `{c}_{flow}_demand_out` observes the output's demand, so a declaration of the
