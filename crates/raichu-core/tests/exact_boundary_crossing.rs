@@ -89,6 +89,7 @@ fn ramp_model(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 

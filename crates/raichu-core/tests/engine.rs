@@ -156,6 +156,7 @@ fn delay_model() -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 
@@ -366,6 +367,7 @@ fn instantaneous_loop_is_detected() {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let result = Engine::new(&compiled, EngineConfig::default());
@@ -434,6 +436,7 @@ fn non_confluence_is_diagnosed() {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let config = EngineConfig {
@@ -507,6 +510,7 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
@@ -568,6 +572,7 @@ fn inst_transition_fires_immediately_on_certain_branch() {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     };
     let result = run(&model, 10.0, false);
     let times: Vec<(f64, &str)> = result
@@ -703,6 +708,7 @@ fn tank_model() -> Model {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 
@@ -911,6 +917,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     }
 }
 
@@ -1034,6 +1041,7 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     };
     let result = run(&model, 30.0, true);
 
@@ -1172,6 +1180,7 @@ fn port_mean_and_median_aggregations() {
         evaluation_order: None,
         unbounded_rate: None,
         fmu_units: vec![],
+        interface_connections: vec![],
     };
     let compiled = CompiledModel::compile(&model).unwrap();
     let engine = Engine::new(&compiled, EngineConfig::default()).unwrap();

@@ -160,6 +160,13 @@ impl UnfedTrigger {
 /// attributes it crosses. Called once at compile time.
 #[must_use]
 pub fn unfed_triggers(model: &Model) -> Vec<UnfedTrigger> {
+    // An interface connection feeds ports too. A model whose interfaces
+    // do not pair is refused by validation; here it is read as written.
+    let resolved = model.with_resolved_connections();
+    let model: &Model = match &resolved {
+        Ok(resolved) => resolved,
+        Err(_) => model,
+    };
     let unfed = unfed_in_ports(model);
     if unfed.is_empty() {
         return Vec::new();
