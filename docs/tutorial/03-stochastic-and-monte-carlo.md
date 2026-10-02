@@ -122,8 +122,7 @@ see [Numerical tuning](../guides/numerical-tuning.md).
   comes back down: a component repaired after its first failure still
   counts as having failed;
 - **`zero_departures_*` / `nonzero_reached_*`**: the same two questions
-  asked the way the reference engine asks them (`nb_visits`,
-  `realized`): departures from exactly 0, the initial value not counted,
+  asked another way: departures from exactly 0, the initial value not counted,
   and having been non-zero, a negative value included. On a state that
   starts inactive they equal `nb_occurrences_*` and `reached_*`; see
   [Indicator](../reference/model-schema.md#indicator);

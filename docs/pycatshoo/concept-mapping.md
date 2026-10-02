@@ -94,12 +94,10 @@ constants of the model.
 ### Indicator measures
 
 An indicator's computation mode (`TComputationType`) maps to one of
-RAICHU's measures, which are all computed on every indicator. A study
-authored through cod3s or muscadet reads `nb-occurrences` and `had_value`
-on the zero-departure pair, which is what the reference engine computes
-for them (`pyraichu.muscadet.engine.MEASURE_SERIES`). The
+RAICHU's measures, which are all computed on every indicator. The
 equivalences below were **measured** on PyCATSHOO 1.3.8.0 (2026-10-02),
-on a float stepping through zero, positive and negative levels, because
+on a natively built model whose float steps through zero, positive and
+negative levels, its initial value set by a start method, because
 the user manual V1.3.7.2 describes `res_time`, `nb_visits` and
 `realized` in terms of a positive or non-zero value (sections 5.4.1 and
 9.3.55) and the engine does not compute the first that way.
@@ -115,6 +113,20 @@ PyCATSHOO's `distribution` (bounded histogram) and `pctQuantile` restitutions,
 an indicator computed by an arbitrary method and its restriction by
 `setCondFct` have no equivalent: an indicator observes an attribute, a
 state or a comparison.
+
+A study authored through cod3s or muscadet reads `nb-occurrences`
+(`nb_visits`) on occurrences and `had_value` (`realized`) on reached, not
+on the zero-departure pair (`pyraichu.muscadet.engine.MEASURE_SERIES`).
+`nb_visits` does not count the value an indicator holds once the start
+methods have run, and on a muscadet model the t = 0 value of a flow
+usually arrives after that, through a sensitive method: the reference
+then counts it as a departure from 0, as occurrences do. Measured on the
+COD3S platform (2026-10-02, 1000 replicas, a predicate true at `t = 0`):
+`nb-occurrences` 5.665 on PyCATSHOO, 5.701 on occurrences, 4.701 on zero
+departures. Where the consumer's own start method already reads the
+truth (a target declared after the source it reads directly), the
+reference counts nothing at `t = 0` and RAICHU counts one: the reference
+count at `t = 0` depends on declaration order, RAICHU's does not.
 
 ### Result files
 
