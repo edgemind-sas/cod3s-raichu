@@ -223,10 +223,15 @@ publishes `not (production and active and available)`, the inverter of a logic
 chain. It is carried on a plain output and refused by name on a temporised or
 triggered one, whose delivery is an automaton's state. One consequence is
 worth knowing: a negated output can publish `fed` while its own availability
-is false, which no other output does, so an input a negated output feeds reads
-the availability channel beside the feed, aggregated under the input's own
-logic, exactly as muscadet computes every input. Every other input keeps the
-feed channel alone, and builds the expression it always built.
+is false, which no other output does. An input it feeds still reads the feed
+alone. muscadet reads `fed AND available` on an input, but the availability
+term only aggregates what is wired to the separate `{flow}_available_in` box,
+and `auto_connect` wires the feed or that channel, never both; this layer
+carries no availability connection at all. So a downstream input of a negated
+output whose gate a mode took down reads `True`, as on the reference engine
+(measured 2026-10-02: an inverter down at t = 1, its consumer reads `True` at
+t = 2). Up to 0.74.0 such an input also read its producers' gates and read
+`False`, which stopped a detection chain from ever starting.
 
 ## An operand that says more than a flow name
 

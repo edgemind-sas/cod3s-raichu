@@ -141,7 +141,7 @@ impl<'m> Engine<'m> {
                     .map_err(invalid)?;
             self.time + residual
         };
-        self.pending[idx] = Some(date);
+        self.arm(idx, date);
         self.frozen[idx] = None;
         if let Some(clock) = self.clocks[idx].as_mut() {
             clock.redraw = false;

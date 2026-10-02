@@ -301,7 +301,7 @@ impl<'m> Engine<'m> {
                         } else {
                             f64::INFINITY
                         };
-                        self.pending[trans_idx] = Some(firing_at);
+                        self.arm(trans_idx, firing_at);
                         if self.config.journal && firing_at != previous {
                             self.journal.push(JournalRecord::TransitionRescheduled {
                                 time: self.time,
@@ -343,7 +343,7 @@ impl<'m> Engine<'m> {
                             self.time + (hazard.threshold - hazard.accumulated) / lambda
                         };
                         self.hazards[trans_idx] = Some(hazard);
-                        self.pending[trans_idx] = Some(firing_at);
+                        self.arm(trans_idx, firing_at);
                         if self.config.journal {
                             self.journal.push(JournalRecord::TransitionScheduled {
                                 time: self.time,
@@ -356,7 +356,7 @@ impl<'m> Engine<'m> {
                     // A paused countdown resumes where it stopped.
                     if let Some(remaining) = self.frozen[trans_idx].take() {
                         let firing_at = self.time + remaining;
-                        self.pending[trans_idx] = Some(firing_at);
+                        self.arm(trans_idx, firing_at);
                         if self.config.journal {
                             self.journal.push(JournalRecord::TransitionScheduled {
                                 time: self.time,
@@ -421,7 +421,7 @@ impl<'m> Engine<'m> {
                             self.time + sample_empirical(points, u)
                         }
                     };
-                    self.pending[trans_idx] = Some(firing_at);
+                    self.arm(trans_idx, firing_at);
                     if self.config.journal {
                         self.journal.push(JournalRecord::TransitionScheduled {
                             time: self.time,

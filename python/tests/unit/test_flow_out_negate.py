@@ -59,12 +59,14 @@ def test_each_inverter_publishes_the_negation_of_its_input():
         assert sampled(result, "T_signal_fed_in", instant) is source, instant
 
 
-def test_an_unavailable_inverter_feeds_nothing_downstream():
-    """What a negated output breaks, and what muscadet reads instead. An
-    inverter whose own gate a mode takes down publishes ``not (prod and
-    active and False)``, which is True, while its availability is False.
-    muscadet's consumer reads the feed AND the availability, so it reads
-    False; reading the feed alone would read True."""
+def test_a_downed_inverter_still_feeds_downstream():
+    """An inverter whose own gate a mode takes down publishes ``not (prod and
+    active and False)``, which is True. muscadet's consumer reads ``fed AND
+    available``, but the availability term only aggregates the separate
+    ``{flow}_available_in`` box, which a feed connection does not wire: the
+    consumer reads True. Measured on the reference engine on 2026-10-02 with
+    exactly this model (consumer True at t = 2); up to 0.74.0 this layer read
+    the producer's gate as well and answered False."""
 
     class Unreliable(mu.ObjFlow):
         def add_flows(self):
@@ -84,9 +86,9 @@ def test_an_unavailable_inverter_feeds_nothing_downstream():
     # Healthy: the source feeds, the inverter publishes False, T reads False.
     assert sampled(result, "INV_signal_fed_out", 0.5) is False
     assert sampled(result, "T_signal_fed_in", 0.5) is False
-    # Down: the inverter publishes True, its gate is False, T reads False.
+    # Down: the inverter publishes True and T reads it.
     assert sampled(result, "INV_signal_fed_out", 2.0) is True
-    assert sampled(result, "T_signal_fed_in", 2.0) is False
+    assert sampled(result, "T_signal_fed_in", 2.0) is True
 
 
 def test_an_output_that_is_not_negated_is_unchanged():

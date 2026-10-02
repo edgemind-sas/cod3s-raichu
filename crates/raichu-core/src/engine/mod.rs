@@ -134,6 +134,12 @@ pub struct Engine<'m> {
     /// Pending firing date per transition (`None` = not scheduled;
     /// watched transitions are monitored, never date-scheduled).
     pending: Vec<Option<f64>>,
+    /// The firing wave in which each pending transition was armed (see
+    /// [`Engine::next_pending`]): a counter of fired transitions, read
+    /// when a transition goes from unscheduled to scheduled.
+    armed_wave: Vec<u64>,
+    /// Number of transitions fired so far: the current firing wave.
+    wave: u64,
     /// Ages of drawn stochastic clocks, including paused clocks.
     clocks: Vec<Option<DrawnClock>>,
     /// Remaining countdown of paused transitions
@@ -404,6 +410,8 @@ impl<'m> Engine<'m> {
             vars: model.var_init.clone(),
             states: model.automata.iter().map(|a| a.init).collect(),
             pending: vec![None; model.transitions.len()],
+            armed_wave: vec![0; model.transitions.len()],
+            wave: 0,
             clocks: vec![None; model.transitions.len()],
             frozen: vec![None; model.transitions.len()],
             hazards: vec![None; model.transitions.len()],

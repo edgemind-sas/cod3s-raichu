@@ -575,6 +575,8 @@ impl<'m> Engine<'m> {
             vars: self.vars.clone(),
             states: self.states.clone(),
             pending: self.pending.clone(),
+            armed_wave: self.armed_wave.clone(),
+            wave: self.wave,
             clocks: self.clocks.clone(),
             stochastic_dates: self.config.stochastic_dates,
             biased_rates: !self.config.rate_factors.is_empty(),
@@ -662,6 +664,8 @@ impl<'m> Engine<'m> {
         self.vars = snap.vars.clone();
         self.states = snap.states.clone();
         self.pending = snap.pending.clone();
+        self.armed_wave = snap.armed_wave.clone();
+        self.wave = snap.wave;
         self.clocks = snap.clocks.clone();
         self.frozen = snap.frozen.clone();
         self.hazards = snap.hazards.clone();
@@ -736,6 +740,8 @@ impl<'m> Engine<'m> {
         self.vars = self.model.var_init.clone();
         self.states = self.model.automata.iter().map(|a| a.init).collect();
         self.pending = vec![None; n];
+        self.armed_wave = vec![0; n];
+        self.wave = 0;
         self.clocks = vec![None; n];
         self.frozen = vec![None; n];
         self.hazards = vec![None; n];

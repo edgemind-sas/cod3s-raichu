@@ -904,13 +904,6 @@ class _FlowIn:
     # the aggregating expression, so the declaration decides out of
     # connection and the aggregate decides once a wire is there.
     var_in_default: bool | None = None
-    # The availability gates this input also reads, ``(producer, attribute)``:
-    # set by :meth:`System._negated_supplies` when the model is generated, for
-    # an input fed by a NEGATED output, never declared. muscadet computes an
-    # input as the feed aggregate AND the availability aggregate; a plain
-    # output publishes `fed` only when available, so the second factor can be
-    # left out, and a negated one can publish `fed` while unavailable.
-    availability_sources: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -5837,33 +5830,6 @@ class ObjFlow:
                 }
             else:
                 agg = {"op": "port_agg", "port": port_ref, "agg": "any"}
-            if flow.availability_sources:
-                # Fed by a negated output: the availability channel is read
-                # beside the feed, aggregated under the same logic, as
-                # muscadet reads it (`var_fed AND var_fed_available`).
-                gates = [_var(p, a) for p, a in flow.availability_sources]
-                if flow.logic == "and":
-                    available = {"op": "bool", "bool_op": "and", "args": gates}
-                elif flow.logic == "k":
-                    available = {
-                        "op": "cmp",
-                        "cmp": "ge",
-                        "lhs": _sum(
-                            [
-                                {
-                                    "op": "if",
-                                    "cond": gate,
-                                    "then": _float(1.0),
-                                    "otherwise": _float(0.0),
-                                }
-                                for gate in gates
-                            ]
-                        ),
-                        "rhs": _float(float(flow.k)),
-                    }
-                else:
-                    available = {"op": "bool", "bool_op": "or", "args": gates}
-                agg = {"op": "bool", "bool_op": "and", "args": [agg, available]}
             if flow.var_in_default:
                 # A declared always-fed boundary input: what it reads out
                 # of connection is the declaration, not the aggregate.
@@ -9185,45 +9151,6 @@ class System:
                 return True
         return False
 
-    def _negated_supplies(self) -> None:
-        """Mark every boolean input a NEGATED output feeds with the
-        availability gates of all its producers, so it reads the two channels
-        muscadet reads. Recomputed from scratch at every generation; an input
-        no negated output feeds keeps the feed channel alone, and the
-        expression it always had."""
-        for obj in self.comp.values():
-            for flow in obj.flows_in:
-                flow.availability_sources = []
-        feeding: dict[tuple[str, str], list[tuple[str, str]]] = {}
-        negated: set[tuple[str, str]] = set()
-        for connection in self._connections:
-            source = connection["from"]["component"]
-            target = connection["to"]["component"]
-            out_port = connection["from"]["port"]
-            in_port = connection["to"]["port"]
-            if source not in self.comp or target not in self.comp:
-                continue
-            if not (out_port.endswith("_out") and in_port.endswith("_in")):
-                continue
-            out_flow = next(
-                (f for f in self.comp[source].flows_out if f"{f.name}_out" == out_port),
-                None,
-            )
-            in_flow = next(
-                (f for f in self.comp[target].flows_in if f"{f.name}_in" == in_port),
-                None,
-            )
-            if out_flow is None or in_flow is None:
-                continue
-            feeding.setdefault((target, in_flow.name), []).append(
-                (source, f"{out_flow.name}_fed_available_out")
-            )
-            if out_flow.negate:
-                negated.add((target, in_flow.name))
-        for target, flow_name in negated:
-            flow = next(f for f in self.comp[target].flows_in if f.name == flow_name)
-            flow.availability_sources = list(feeding[(target, flow_name)])
-
     def _resolve_mixture_groups(self, edges: list[_ContinuousEdge]) -> None:
         """Bind every mixture group to the one volume that composes for it
         (muscadet's `resolve_mixture_groups`, R51), and write what the group
@@ -9341,7 +9268,6 @@ class System:
         edges = self._continuous_edges()
         self._validate_rules(edges)
         self._resolve_mixture_groups(edges)
-        self._negated_supplies()
         reading: dict[str, set[str]] = {}
         for edge in edges:
             reading.setdefault(edge.producer, set()).add(edge.flow_out)

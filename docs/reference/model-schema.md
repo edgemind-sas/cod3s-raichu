@@ -282,9 +282,10 @@ carrying the field declares the `transition_effects` feature.
 
 #### Declared kind
 
-`kind` declares what firing the transition means for reliability:
-`"failure"` (something fails) or `"repair"` (something returns to
-service). Absent, the transition has no declared role, which is the
+`kind` declares what firing the transition means: `"failure"`
+(something fails), `"repair"` (something returns to service) or
+`"observation"` (the transition belongs to an observer, see below).
+Absent, the transition has no declared role, which is the
 reading of every model written before the field existed. Any other value
 is refused at load, naming it.
 
@@ -311,7 +312,19 @@ The muscadet plugin declares them on the failure-mode edges it emits:
   automaton, where its sequence events live, and leaves its own automaton
   undeclared, so one occurrence counts once per target and never twice.
 
-Feared events (`ObjEvent`) declare no kind.
+Feared events (`ObjEvent`) declare their two edges `observation`.
+
+**`observation` changes the firing order, and nothing else.** Transitions
+due at the same date fire in **waves**: a transition armed before a wave
+fires before the transitions that wave arms, which is how the reference
+engine orders them (two failures due at one date both fire before the feared
+event they cause). Within one wave an `observation` transition fires first,
+then any other in positional order. An observer writes nothing the rest of
+the model reads, so firing it first changes no converged state; what it
+changes is what the observer sees: a state the model reaches and leaves
+within one instant (an alarm raised then cleared by a zero-delay repair) is
+observed and counted, as the reference counts it. Unlike the two
+reliability roles, it therefore requires the feature `observer_priority`.
 
 ### Target
 
@@ -823,9 +836,11 @@ The Python helpers, all in `pyraichu`:
 | `transition_effects` | transition-level [edge effects](#edge-effects) |
 | `fmi` | model-level [FMU units](#fmu-unit) |
 | `mixed_integer_program` | model-level [programs](#program) |
+| `observer_priority` | transition-level [declared kind](#declared-kind) `observation` |
 
-The transition-level [declared kind](#declared-kind) is a **baseline**
-construct and has no feature name: an engine that ignored it would
+The transition-level [declared kind](#declared-kind) `failure` or
+`repair` is a **baseline** construct and has no feature name (the kind
+`observation` is the exception, `observer_priority`): an engine that ignored it would
 simulate exactly the same trajectories, since only the exploration's
 failure-count cut-off reads it, and that cut-off refuses a model with no
 declared kind instead of counting nothing. A bare body may carry it.
