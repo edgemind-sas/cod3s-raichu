@@ -284,7 +284,10 @@ impl<'m> Engine<'m> {
                 // The target is reached: FINISH the hit instant first,
                 // fire every transition still due at it, so the latched
                 // state is the completed instant, not a half-propagated
-                // one (PyCATSHOO completes the step before stopping).
+                // one. A deliberate departure: PyCATSHOO records an
+                // instantaneous transition the hit instant still owes yet
+                // latches the state without its effect (a start refusal
+                // drawn at the hit reads as a running backup to t_max).
                 let t_hit = *t_hit;
                 let still_due = self.pending.iter().flatten().any(|d| *d <= t_hit)
                     || self
