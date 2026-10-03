@@ -7999,21 +7999,47 @@ class System:
                 # operator, and the two totals above stand at zero.
                 if not served:
                     continue
+                # What is there to distribute: the capability of a flow
+                # nothing transforms, what the rule actually made when
+                # one does, and a mixed volume's pooled draw
+                # (:meth:`ObjFlow._pooled_serve`).
+                available = (
+                    _var(name, f"{flow.name}_produced_out")
+                    if flow.name in produced_by_rules
+                    else _var(name, f"{flow.name}_pooled_out")
+                    if flow.name in mixed
+                    else capability
+                )
+                # What the split weighs each consumer at: its demand,
+                # truncated at the quantity available, which is the most
+                # it could ever receive. Weighed at its raw demand, a
+                # claim far above the supply outweighed everyone else,
+                # and the split depended on how far past the supply it
+                # went. The demand channel itself stays as asked, since
+                # the producer's total demand is read against it.
+                declared_port = next(
+                    declared for declared in component["ports"]
+                    if declared["name"] == port
+                )
+                declared_port["channels"].append({"name": "claim"})
+                for edge in served:
+                    component["equations"].append(
+                        {
+                            "target": _channel_attr(port, "claim", edge.name),
+                            "kind": "explicit",
+                            "expr": _min(
+                                [
+                                    _var(name, _channel_attr(port, "demand", edge.name)),
+                                    available,
+                                ]
+                            ),
+                        }
+                    )
                 allocation: dict[str, Any] = {
                     "name": f"{flow.name}_alloc",
                     "port": port,
-                    # What is there to distribute: the capability of a
-                    # flow nothing transforms, what the rule actually
-                    # made when one does, and a mixed volume's pooled
-                    # draw (:meth:`ObjFlow._pooled_serve`).
-                    "available": (
-                        _var(name, f"{flow.name}_produced_out")
-                        if flow.name in produced_by_rules
-                        else _var(name, f"{flow.name}_pooled_out")
-                        if flow.name in mixed
-                        else capability
-                    ),
-                    "demand": "demand",
+                    "available": available,
+                    "demand": "claim",
                     "allocated": "alloc",
                     "policy": flow.allocation,
                 }
@@ -8529,6 +8555,10 @@ class System:
                 if flow.name in produced_by_rules:
                     step(producer, f"{flow.name}_produced_out")
                 if served:
+                    # The claims read what is available, settled just
+                    # above, and the split reads the claims.
+                    for edge in served:
+                        step(producer, _channel_attr(f"{flow.name}_out", "claim", edge.name))
                     step(producer, f"{flow.name}_alloc")
                 if any((edge.consumer, edge.flow_in) in releasing for edge in served):
                     # Only what the release scales waits: every OTHER
