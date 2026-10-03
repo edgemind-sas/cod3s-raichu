@@ -367,8 +367,10 @@ reliability roles, it therefore requires the feature `observer_priority`.
 `{ "name": string, "component": string, "automaton": string, "state":
 string }`: a **feared event**: when the named state activates, a
 sequence-recording trajectory records `name` as its end cause and stops
-(after completing the current instant). Ignored unless sequence
-recording / `stop_at_targets` is enabled.
+(after completing the current instant, every transition still due at it
+included, so the state held through the remaining sample instants is the
+instant's converged state). Ignored unless sequence recording /
+`stop_at_targets` is enabled.
 
 ## Distributions
 
