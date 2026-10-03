@@ -223,7 +223,7 @@ point accepts and the other refuses does not exist.
 | Section | Declares |
 |---|---|
 | `flows_continuous_in` | a real-valued input: `var_in_default` (what it reads unconnected), `var_demand_default` (what a pure consumer asks for), a `profile` scaling that demand over time, `publish_rate` to make what it receives observable |
-| `flows_continuous_out` | a real-valued output: `var_fed_default`, a `max_rate` ceiling, a `profile` (a declared function of time), `publish_rate` to make what it delivers observable, and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`) |
+| `flows_continuous_out` | a real-valued output: `var_fed_default`, a `max_rate` ceiling, a `profile` (a declared function of time), `publish_rate` to make what it delivers observable, and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`); each consumer's claim is truncated at the quantity available before the split weighs it, as muscadet does since 5.11.0, while the demand it publishes stays as declared |
 | `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `transmits`, `serve_rate`, `serve_cond` (the discharge command), `side`, `hysteresis`. A volume holding more than one flow also publishes each constituent's `ratio`, its fraction of the mixture |
 | `measurements_in` | the reading side of a measurement link: a channel observing a published level, carrying no quantity |
 | `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow |

@@ -905,6 +905,10 @@ def test_a_model_declaring_none_of_these_is_unchanged():
         "power_out__demand__C__power_in",
         "power_demand_out",
         "power_fed_out",
+        # The claim the split weighs the consumer at: its demand,
+        # truncated at what is available. Not one of the three
+        # mechanisms: every allocated connection carries it.
+        "power_out__claim__C__power_in",
     ]
 
 
