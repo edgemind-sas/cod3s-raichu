@@ -43,7 +43,8 @@ pub use engine::{
     TransitionExposure, WorkCounters,
 };
 pub use fault_tree::{
-    fault_tree, BasicLaw, FaultTree, FaultTreeError, FaultTreeSettings, FtNode, GateOp, TreeEvent,
+    explain, fault_tree, fault_tree_for_targets, BasicLaw, Explanation, FaultTree, FaultTreeError,
+    FaultTreeSettings, FtNode, GateOp, TreeEvent,
 };
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
 pub use loops::{switching_loops, SwitchingLoop};

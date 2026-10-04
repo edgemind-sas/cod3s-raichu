@@ -113,12 +113,31 @@ def explore_json(
 def exploration_domain_json(model_json: str) -> str: ...
 def fault_tree_json(
     model_json: str,
-    top_json: str,
+    top_json: str | None = None,
     profile_json: str | None = None,
     max_nodes: int | None = None,
     cut_set_limit: int = 100_000,
     name: str = "fault_tree",
+    targets_json: str | None = None,
 ) -> str: ...
+def fault_tree_envelope_json(
+    model_json: str,
+    mission_times: list[float],
+    top_json: str | None = None,
+    targets_json: str | None = None,
+    profile_json: str | None = None,
+    max_nodes: int | None = None,
+    name: str = "fault_tree",
+    max_bdd_nodes: int = 10_000_000,
+    cut_set_limit: int = 100_000,
+    cut_sets: bool = True,
+    engine: str = "auto",
+    max_order: int | None = None,
+    min_cut_probability: float = 0.0,
+    max_cut_sets: int = 1_000_000,
+    max_expansions: int = 100_000_000,
+) -> str: ...
+def validate_fault_tree_envelope(envelope_json: str) -> None: ...
 def fault_tree_quantify_json(
     open_psa: str,
     top: str | None = None,

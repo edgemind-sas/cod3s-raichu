@@ -149,13 +149,22 @@ fn a_guard_on_another_state_is_a_cascade() {
 }
 
 #[test]
-fn a_guard_on_a_frozen_attribute_is_a_constant_a_profile_moves() {
+fn a_guard_on_a_constant_attribute_degenerates_and_a_profile_moves_it() {
     let guard = json!({"op": "cmp", "cmp": "gt",
         "lhs": {"op": "attr", "attr": {"component": "B", "attribute": "x"}},
         "rhs": {"op": "const", "value": {"kind": "float", "value": 5.0}}});
     let m = model(vec![unit("B", 2e-3, None, Some(guard))]);
-    // Frozen at its initial 0: the transition can never fire.
-    assert!(cuts(&m, nok("B"), &FaultTreeSettings::default()).is_empty());
+    // Nothing writes `x`: it stays at 0, the transition can never fire,
+    // and a tree that is the constant false is refused, not returned.
+    let error = fault_tree(&m, &expr(nok("B")), &FaultTreeSettings::default()).unwrap_err();
+    match &error {
+        FaultTreeError::Degenerate { value, cause } => {
+            assert!(!value);
+            assert!(cause.contains("B.health.fail"), "{cause}");
+        }
+        other => panic!("expected a degenerate tree, got {other}"),
+    }
+    assert!(error.to_string().contains("degenerate"), "{error}");
     // Held at 10 by a profile: it can.
     let profile = FaultTreeSettings {
         profile: vec![("B.x".to_owned(), Value::Float(10.0))],
@@ -165,14 +174,30 @@ fn a_guard_on_a_frozen_attribute_is_a_constant_a_profile_moves() {
 }
 
 #[test]
-fn a_negated_state_is_refused() {
+fn a_negated_state_is_the_other_states() {
     let m = model(vec![unit("A", 1e-3, None, None)]);
     let ok = json!({"op": "state_active", "state": {"component": "A", "automaton": "health", "state": "ok"}});
     let top = json!({"op": "bool", "bool_op": "not", "args": [ok]});
-    let error = fault_tree(&m, &expr(top), &FaultTreeSettings::default()).unwrap_err();
-    assert!(matches!(error, FaultTreeError::NonCoherent(_)), "{error}");
+    assert_eq!(
+        cuts(&m, top, &FaultTreeSettings::default()),
+        names(&[&["A.health.fail"]])
+    );
 }
 
+#[test]
+fn a_top_needing_an_initial_state_to_persist_is_refused() {
+    let m = model(vec![
+        unit("A", 1e-3, None, None),
+        unit("B", 1e-3, None, None),
+    ]);
+    let ok = json!({"op": "state_active", "state": {"component": "A", "automaton": "health", "state": "ok"}});
+    let top = json!({"op": "bool", "bool_op": "and", "args": [ok, nok("B")]});
+    let error = fault_tree(&m, &expr(top), &FaultTreeSettings::default()).unwrap_err();
+    assert!(
+        matches!(&error, FaultTreeError::NonCoherent(d) if d.contains("A.health.ok")),
+        "{error}"
+    );
+}
 #[test]
 fn an_unknown_state_is_refused_by_name() {
     let m = model(vec![unit("A", 1e-3, None, None)]);

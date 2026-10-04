@@ -76,6 +76,7 @@ nav:
   - Model schema reference: reference/model-schema.md
   - Raw sequence corpus format: reference/sequence-format.md
   - Quantification envelope format: reference/quantification-format.md
+  - Fault-tree envelope format: reference/fault-tree-format.md
   - Advanced guides:
       - Mixed-integer optimisation: guides/optimisation.md
       - Reproducibility: guides/reproducibility.md

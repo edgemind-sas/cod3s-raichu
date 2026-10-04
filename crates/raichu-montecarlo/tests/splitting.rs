@@ -624,23 +624,20 @@ fn cut_sets_source_covers_the_one_in_a_million_closed_form() {
     assert!(binomial_cdf(covered, conclusive, 0.95) >= 0.01);
 }
 
-/// Fault-tree generation explains a value becoming true through states
-/// being entered, so a negated state read is refused with its own reason
-/// quoted, and the declared attribute named as the way out.
+/// Fault-tree generation refuses a target guard it cannot explain: here a
+/// weighted count of failed units, which is not a vote. The generation's
+/// own reason is quoted, and the declared attribute named as the way out.
 #[test]
-fn a_non_monotone_state_read_is_refused_with_the_generation_reason() {
-    use raichu_expr::{BoolOp, Expr, StateRef};
+fn an_unexplained_guard_is_refused_with_the_generation_reason() {
+    use raichu_expr::Expr;
     let mut model = system(3, 2, exp(0.2), None);
-    model.components.last_mut().unwrap().automata[0].transitions[0].guard = Some(Expr::Bool {
-        bool_op: BoolOp::Not,
-        args: vec![Expr::StateActive {
-            state: StateRef {
-                component: "u0".into(),
-                automaton: "life".into(),
-                state: "down".into(),
-            },
-        }],
-    });
+    let weighted: Expr = serde_json::from_value(json!({"op": "cmp", "cmp": "ge",
+        "lhs": {"op": "add", "args": [{"op": "if",
+            "cond": {"op": "state_active", "state": {"component": "u0", "automaton": "life", "state": "down"}},
+            "then": constant(2.0), "otherwise": constant(0.0)}]},
+        "rhs": constant(2.0)}))
+    .unwrap();
+    model.components.last_mut().unwrap().automata[0].transitions[0].guard = Some(weighted);
     let m = CompiledModel::compile(&model).unwrap();
     let err = run_splitting(&m, &cut_settings(10, DEFAULT_SPLITTING_MAX_CUT_SETS))
         .unwrap_err()
@@ -649,7 +646,7 @@ fn a_non_monotone_state_read_is_refused_with_the_generation_reason() {
         err.contains("fault-tree generation refused the model"),
         "{err}"
     );
-    assert!(err.contains("negation"), "{err}");
+    assert!(err.contains("not a vote"), "{err}");
     assert!(err.contains("attribute"), "{err}");
 }
 
@@ -723,9 +720,12 @@ fn cut_set_constant_targets_preserve_first_hit_and_refuse_no_path() {
             .iter()
             .all(|b| b.estimate == 1.0 && !b.extinct && b.levels.is_empty()));
     }
-    // This guard reads a constant-valued attribute, not the states that
-    // change the explicit score. Generation cannot explain that dependency.
-    let model = CompiledModel::compile(&system(1, 1, exp(1.0), None)).unwrap();
+    // This guard reads an attribute nothing computes (the score's equation
+    // removed): it stays at zero, and no failure can reach the target.
+    let mut doc = serde_json::to_value(system(1, 1, exp(1.0), None)).unwrap();
+    doc["components"][1]["equations"] = json!([]);
+    let model: Model = serde_json::from_value(doc).unwrap();
+    let model = CompiledModel::compile(&model).unwrap();
     let error = run_splitting(&model, &cut_settings(10, 1))
         .unwrap_err()
         .to_string();

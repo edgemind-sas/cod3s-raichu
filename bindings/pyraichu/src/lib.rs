@@ -19,7 +19,9 @@ use raichu::raichu_analysis::{
     clean as clean_sequences, minimal_sequences, read_raw_corpus, write_raw_corpus,
     ObservedCondition, RawCorpus, RawHeader, RawObservation,
 };
-use raichu::raichu_core::{fault_tree as generate_fault_tree, FaultTreeSettings};
+use raichu::raichu_core::{
+    fault_tree as generate_fault_tree, fault_tree_for_targets, FaultTree, FaultTreeSettings,
+};
 use raichu::raichu_core::{
     CoSimulationHost, CompiledModel, Engine, EngineConfig, EngineError,
     FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot, SolverParams, StochasticDates,
@@ -31,7 +33,8 @@ use raichu::raichu_explore::{
 };
 use raichu::raichu_expr::{AttrRef, CmpOp};
 use raichu::raichu_fta::{
-    quantify as quantify_tree, read_open_psa, Engine as FtaEngine, QuantifySettings,
+    fault_tree_envelope, quantify as quantify_tree, read_fault_tree_envelope, read_open_psa,
+    Engine as FtaEngine, EnvelopeTop, QuantifySettings,
 };
 use raichu::raichu_model::Model;
 use raichu::raichu_model::{Indicator, IndicatorTarget};
@@ -902,32 +905,73 @@ fn exploration_domain_json(model_json: &str) -> PyResult<String> {
     serde_json::to_string(&report).map_err(|e| SimulationError::new_err(e.to_string()))
 }
 
-/// Generate the fault tree explaining `top_json` (an expression over the
-/// model's states) by backward chaining, attributes held at their initial
-/// value or at `profile_json` (`[[qualified name, value], ...]`). Answers
-/// `{"tree": {top, basic_events}, "minimal_cut_sets": [[event index, ...]],
-/// "open_psa": "<document>"}`.
-#[pyfunction]
-#[pyo3(signature = (model_json, top_json, profile_json = None, max_nodes = None, cut_set_limit = 100_000, name = "fault_tree"))]
-fn fault_tree_json(
+/// Generate a fault tree from `model_json`: explaining `top_json` (an
+/// expression over the model's states and attributes) or, when
+/// `targets_json` is given instead, the model's declared targets of those
+/// names (`["name", ...]`). Attributes are unrolled into the states that
+/// compute them; `profile_json` (`[[qualified name, value], ...]`) holds
+/// some at a value instead.
+fn generate_tree(
     model_json: &str,
-    top_json: &str,
+    top_json: Option<&str>,
+    targets_json: Option<&str>,
     profile_json: Option<&str>,
     max_nodes: Option<usize>,
-    cut_set_limit: usize,
-    name: &str,
-) -> PyResult<String> {
+) -> PyResult<(FaultTree, EnvelopeTop)> {
     let compiled = parse_and_compile(model_json)?;
-    let top = serde_json::from_str(top_json)
-        .map_err(|e| SimulationError::new_err(format!("fault tree: the top expression: {e}")))?;
     let profile = match profile_json {
         None => Vec::new(),
         Some(text) => serde_json::from_str(text)
             .map_err(|e| SimulationError::new_err(format!("fault tree: the profile: {e}")))?,
     };
     let settings = FaultTreeSettings { profile, max_nodes };
-    let tree = generate_fault_tree(&compiled, &top, &settings)
-        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    let (tree, top) = match (top_json, targets_json) {
+        (Some(top_json), None) => {
+            let top = serde_json::from_str(top_json).map_err(|e| {
+                SimulationError::new_err(format!("fault tree: the top expression: {e}"))
+            })?;
+            let expression = serde_json::from_str(top_json).map_err(|e| {
+                SimulationError::new_err(format!("fault tree: the top expression: {e}"))
+            })?;
+            (
+                generate_fault_tree(&compiled, &top, &settings),
+                EnvelopeTop::Expression { expression },
+            )
+        }
+        (None, Some(targets_json)) => {
+            let targets: Vec<String> = serde_json::from_str(targets_json)
+                .map_err(|e| SimulationError::new_err(format!("fault tree: the targets: {e}")))?;
+            (
+                fault_tree_for_targets(&compiled, &targets, &settings),
+                EnvelopeTop::Targets { targets },
+            )
+        }
+        _ => {
+            return Err(SimulationError::new_err(
+                "fault tree: give either a top expression or targets, not both and not neither",
+            ))
+        }
+    };
+    let tree = tree.map_err(|e| SimulationError::new_err(e.to_string()))?;
+    Ok((tree, top))
+}
+
+/// Generate the fault tree explaining `top_json`, or the targets named by
+/// `targets_json` (see `generate_tree`). Answers `{"tree": {top,
+/// basic_events, warnings}, "minimal_cut_sets": [[event index, ...]],
+/// "open_psa": "<document>"}`.
+#[pyfunction]
+#[pyo3(signature = (model_json, top_json = None, profile_json = None, max_nodes = None, cut_set_limit = 100_000, name = "fault_tree", targets_json = None))]
+fn fault_tree_json(
+    model_json: &str,
+    top_json: Option<&str>,
+    profile_json: Option<&str>,
+    max_nodes: Option<usize>,
+    cut_set_limit: usize,
+    name: &str,
+    targets_json: Option<&str>,
+) -> PyResult<String> {
+    let (tree, _) = generate_tree(model_json, top_json, targets_json, profile_json, max_nodes)?;
     let cuts = tree
         .minimal_cut_sets(cut_set_limit)
         .map_err(|e| SimulationError::new_err(e.to_string()))?;
@@ -937,6 +981,80 @@ fn fault_tree_json(
         "open_psa": tree.to_open_psa(name),
     });
     serde_json::to_string(&answer).map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
+fn fta_engine(engine: &str) -> PyResult<FtaEngine> {
+    match engine {
+        "auto" => Ok(FtaEngine::Auto),
+        "exact" => Ok(FtaEngine::Exact),
+        "cut_sets" => Ok(FtaEngine::CutSets),
+        other => Err(SimulationError::new_err(format!(
+            "fault tree: engine `{other}` is not one of auto, exact, cut_sets"
+        ))),
+    }
+}
+
+/// Generate the fault tree of `top_json` or `targets_json` (see
+/// `generate_tree`) and quantify it at each of `mission_times` (at most
+/// 20, strictly increasing; the last is the horizon, where the minimal
+/// cut sets and the importance measures are computed). Answers the
+/// `raichu.fault_tree` envelope as JSON. The GIL is released while the
+/// tree is quantified.
+#[pyfunction]
+#[pyo3(signature = (model_json, mission_times, top_json = None, targets_json = None, profile_json = None, max_nodes = None, name = "fault_tree", max_bdd_nodes = 10_000_000, cut_set_limit = 100_000, cut_sets = true, engine = "auto", max_order = None, min_cut_probability = 0.0, max_cut_sets = 1_000_000, max_expansions = 100_000_000))]
+#[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
+fn fault_tree_envelope_json(
+    py: Python<'_>,
+    model_json: &str,
+    mission_times: Vec<f64>,
+    top_json: Option<&str>,
+    targets_json: Option<&str>,
+    profile_json: Option<&str>,
+    max_nodes: Option<usize>,
+    name: &str,
+    max_bdd_nodes: usize,
+    cut_set_limit: usize,
+    cut_sets: bool,
+    engine: &str,
+    max_order: Option<usize>,
+    min_cut_probability: f64,
+    max_cut_sets: usize,
+    max_expansions: u64,
+) -> PyResult<String> {
+    let engine = fta_engine(engine)?;
+    if !(0.0..=1.0).contains(&min_cut_probability) {
+        return Err(SimulationError::new_err(format!(
+            "fault tree: min_cut_probability {min_cut_probability} is outside [0, 1]"
+        )));
+    }
+    let (tree, top) = generate_tree(model_json, top_json, targets_json, profile_json, max_nodes)?;
+    let settings = QuantifySettings {
+        mission_time: None,
+        max_bdd_nodes,
+        cut_set_limit,
+        cut_sets,
+        engine,
+        max_order,
+        min_cut_probability,
+        max_cut_sets,
+        max_expansions,
+    };
+    let envelope = py
+        .detach(|| fault_tree_envelope(&tree, name, top, &mission_times, &settings))
+        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    envelope
+        .to_json()
+        .map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
+/// Validate a `raichu.fault_tree` envelope (its `format`, its `version`
+/// and its fields); raise `SimulationError` when it is not one this
+/// engine reads.
+#[pyfunction]
+fn validate_fault_tree_envelope(envelope_json: &str) -> PyResult<()> {
+    read_fault_tree_envelope(envelope_json)
+        .map(|_| ())
+        .map_err(|e| SimulationError::new_err(e.to_string()))
 }
 
 /// Quantify the fault tree an OpenPSA document defines, exactly: the
@@ -964,16 +1082,7 @@ fn fault_tree_quantify_json(
     max_cut_sets: usize,
     max_expansions: u64,
 ) -> PyResult<String> {
-    let engine = match engine {
-        "auto" => FtaEngine::Auto,
-        "exact" => FtaEngine::Exact,
-        "cut_sets" => FtaEngine::CutSets,
-        other => {
-            return Err(SimulationError::new_err(format!(
-                "fault tree: engine `{other}` is not one of auto, exact, cut_sets"
-            )))
-        }
-    };
+    let engine = fta_engine(engine)?;
     if !(0.0..=1.0).contains(&min_cut_probability) {
         return Err(SimulationError::new_err(format!(
             "fault tree: min_cut_probability {min_cut_probability} is outside [0, 1]"
@@ -1410,6 +1519,8 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(exploration_domain_json, module)?)?;
     module.add_function(wrap_pyfunction!(fault_tree_json, module)?)?;
     module.add_function(wrap_pyfunction!(fault_tree_quantify_json, module)?)?;
+    module.add_function(wrap_pyfunction!(fault_tree_envelope_json, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_fault_tree_envelope, module)?)?;
     module.add_function(wrap_pyfunction!(validate_exploration, module)?)?;
     module.add_function(wrap_pyfunction!(quantify_json, module)?)?;
     module.add_function(wrap_pyfunction!(validate_quantification, module)?)?;
