@@ -280,9 +280,10 @@ cheaper.
 | Line repair ten times faster | Estimate | Interval | Wall clock |
 |---|---|---|---|
 | RAICHU Monte-Carlo, 2e7 histories | 4.10e-6 (82 histories) | 95 % [3.30e-6, 5.09e-6] | 6 min 17 s |
+| RAICHU Monte-Carlo, 5e8 histories | 3.84e-6 (1918 histories) | 95 % [3.67e-6, 4.01e-6] | 1 h 39 min |
 | RAICHU cross-entropy, 1e6 histories | 4.03e-6, **inconclusive** | [2.66e-6, 5.41e-6] | 3 min 6 s |
 | RAICHU splitting, seed 2017 | 3.25e-6 | 95 % [2.62e-6, 3.88e-6] | 6 s |
-| RAICHU splitting, mean of 10 seeds | 3.38e-6 | standard error 0.22e-6 | 90 s |
+| RAICHU splitting, mean of 100 seeds | 3.76e-6 | standard error 0.17e-6 | 9 min 24 s |
 | FIGSEQ ("NRI"), cut-off 1e-11 (2020) | 3.85e-6 | | 8 min |
 | I&AB (2020) | 1.46e-5 | | 7 s |
 
@@ -303,25 +304,28 @@ family.
 
 Splitting is the fastest method by far, a few seconds per estimate, and
 it needs a careful reading. Its interval is a Student interval over
-independent batches, and on this model it can be too narrow. A first run with
-20 batches returned, on the published model, an interval that excluded
-every other value on this page while being flagged conclusive; the
-scripts therefore use 100 batches. Repeating the run over ten seeds
-(`run_splitting_seeds.py`) then measures the spread directly:
+independent batches, and on this model it can be too narrow. A first run
+with 20 batches returned, on the published model, an interval that
+excluded every other value on this page while being flagged conclusive;
+the scripts therefore use 100 batches. Repeating the run over 100 seeds
+(`run_splitting_seeds.py`) then measures the estimator itself:
 
-| Splitting over ten seeds | Mean | Standard error | Intervals containing the Monte-Carlo estimate | Intervals containing FIGSEQ |
-|---|---|---|---|---|
-| published model | 3.60e-5 | 0.06e-5 | 9 of 10 | 7 of 10 |
-| line repair ten times faster | 3.38e-6 | 0.22e-6 | 4 of 10 | 5 of 10 |
+| Splitting over 100 seeds | Mean | Standard error | Single intervals containing the Monte-Carlo estimate |
+|---|---|---|---|
+| published model | 3.73e-5 | 0.03e-5 | 93 of 100 (2e7 histories) |
+| line repair ten times faster | 3.76e-6 | 0.17e-6 | 66 of 100 (5e8 histories) |
 
-On the published model the mean agrees with Monte-Carlo and
-cross-entropy. On the sensitivity case it sits 1.4 standard errors below
-the Monte-Carlo estimate and 2.1 below FIGSEQ, and only half of the
-single-seed intervals contain either value, against the 95 % they
-announce. One splitting interval alone overstates its own precision on
-this model. Whether a small bias remains as well cannot be settled with
-these campaigns; it would take a Monte-Carlo campaign ten times longer
-than the one above.
+**The estimator is right.** On both variants the mean over 100 seeds
+agrees with the Monte-Carlo reference: 0.1 and 0.4 standard errors away.
+A first sweep over ten seeds had put the sensitivity case 1.9 standard
+errors low; the 5e8-history campaign and the hundred seeds show that this
+was a fluctuation, not a bias. **A single interval is not.** On the
+sensitivity case, an interval announced at 95 % contains the reference two
+times out of three: the estimates are heavy-tailed (their spread between
+seeds, 1.7e-6, is 2.2 times the half-width a typical run announces, and
+one seed in a hundred returned 1.5e-5, four times the reference), and a
+Student interval over 100 batches does not see the tail. On this kind of model, read a splitting estimate through several
+seeds, as above, rather than through its own interval.
 
 ## Reading the results
 
@@ -341,16 +345,20 @@ than the one above.
   widens until it says nothing, and RAICHU says so. Plain Monte-Carlo is
   unbiased and simple, and at 3.7e-5 it costs six minutes on 24 threads.
   Cross-entropy cuts the cost when one family factor captures the
-  scenario, and reports when it does not. Splitting is the cheapest, and
-  its single interval should be checked against several seeds.
+  scenario, and reports when it does not. Splitting is the cheapest and
+  its mean is right, but its single interval overstates its precision on
+  the rarer case: average it over several seeds.
 - **What this example does not show.** The data are fictitious. The
   comparison is with values printed by others, from their own runs and
   machines, so the wall-clock times compare orders of magnitude only. The
   unavailability, which the benchmark also asks for, is not computed here.
-- **A limitation found on the way.** A Monte-Carlo campaign holds about
-  170 bytes per history until the end, because the replicas are reduced in
-  replica order so that the result does not depend on the thread count.
-  2e7 histories take 3.4 GB; 1e8 did not fit in 10 GB.
+- **A limitation found on the way, and lifted.** Up to RAICHU 0.78, a
+  Monte-Carlo campaign held about 170 bytes per history until the end:
+  2e7 histories took 3.4 GB and 1e8 did not fit in 10 GB. Since 0.79 the
+  histories are folded chunk by chunk, with the same bytes as before
+  whatever the thread count (see [Parallelism](../guides/parallelism.md)):
+  the 5e8-history campaign above peaked at 69 MB. It is the campaign that
+  settled the splitting question.
 
 ## Reproducing
 
@@ -359,8 +367,8 @@ files under
 [`examples/emergency_power_supply/results`](https://github.com/edgemind-sas/cod3s-raichu/tree/main/examples/emergency_power_supply/results),
 written by the scripts beside them; the folder's README lists the
 commands. Two side measurements are not: the 262 344 cut sets of the
-expanded static tree, and the memory footprint of a Monte-Carlo
-campaign. The seeds are fixed. Each result has a `.meta.json` with its
+expanded static tree, and the memory footprints of the Monte-Carlo
+campaigns. The seeds are fixed. Each result has a `.meta.json` with its
 wall-clock time and machine.
 
 ## References

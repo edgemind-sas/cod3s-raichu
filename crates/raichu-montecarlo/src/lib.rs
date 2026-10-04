@@ -8,10 +8,15 @@
 //! - replica `r` uses the RNG substream `r` of the master seed
 //!   (`raichu-rng` policy): replicas are independent by construction
 //!   and each one replays bit-identically;
-//! - replica results are collected **in replica order** and reduced by
-//!   a **serial, index-ordered fold**: floating-point addition is not
-//!   associative, so this is what makes 1-thread and N-thread runs
-//!   produce *identical bytes*, not just statistically equal numbers;
+//! - replica results are reduced by a **serial, index-ordered fold**:
+//!   floating-point addition is not associative, so this is what makes
+//!   1-thread and N-thread runs produce *identical bytes*, not just
+//!   statistically equal numbers;
+//! - the replicas run in parallel **chunks** whose samples are folded,
+//!   in replica order, as each chunk completes: a campaign's memory does
+//!   not grow with its number of replicas (quantiles excepted, which need
+//!   the whole column), and the fold is the same sequence of additions as
+//!   over the whole campaign at once;
 //! - `rayon` only parallelises the embarrassingly parallel trajectory
 //!   loop: the single-trajectory engine stays single-threaded.
 //!
@@ -52,6 +57,7 @@ use raichu_core::{
 };
 use raichu_expr::Value;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Monte-Carlo run parameters.
@@ -430,21 +436,12 @@ fn is_declared_binary(model: &CompiledModel, indicator: &CIndicator) -> bool {
     }
 }
 
-fn run_replica(
-    model: &CompiledModel,
-    config: &McConfig,
-    replica: u64,
-    prepared: Option<&PreparedCoSimulation>,
-) -> Result<ReplicaSamples, EngineError> {
-    replica_samples(model, config, replica, false, prepared, None).map(|(samples, _)| samples)
-}
-
 /// One replica's samples, plus how it ended when `record_end` is set.
 ///
 /// `record_end` switches the engine's sequence record on, which is the
 /// only place a finished run states its end cause; the record observes
-/// the trajectory and never changes it, so the samples are the ones
-/// [`run_replica`] reads.
+/// the trajectory and never changes it, so the samples are the same with
+/// or without it.
 fn replica_samples(
     model: &CompiledModel,
     config: &McConfig,
@@ -535,8 +532,6 @@ fn run_internal(
     base_dir: Option<&Path>,
     require_parallel: bool,
 ) -> Result<McEstimates, EngineError> {
-    use rayon::prelude::*;
-
     check_level(config)?;
 
     let PreparedCampaign {
@@ -545,38 +540,59 @@ fn run_internal(
         prepared,
     } = prepare_campaign(model, base_dir, require_parallel)?;
 
-    if serial_fallback_unit.is_some() {
-        let mut host = prepared.as_ref().map(PreparedCoSimulation::spawn_host);
-        let replicas = (0..config.nb_runs)
-            .map(|replica| {
-                replica_samples(
-                    model,
-                    config,
-                    replica,
-                    false,
-                    prepared.as_ref(),
-                    host.as_mut(),
-                )
-                .map(|(samples, _)| samples)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        return Ok(reduce(
-            model,
-            config,
-            &replicas,
-            fmu_units,
-            serial_fallback_unit,
-        ));
-    }
+    let mut reducer = Reducer::new(model, config);
+    stream_replicas(
+        model,
+        config,
+        prepared.as_ref(),
+        serial_fallback_unit.is_some(),
+        false,
+        |samples, _| reducer.push(&samples),
+    )?;
+    Ok(reducer.finish(model, config, fmu_units, serial_fallback_unit))
+}
 
-    let compute = || -> Result<Vec<ReplicaSamples>, EngineError> {
-        (0..config.nb_runs)
-            .into_par_iter()
-            .map(|replica| run_replica(model, config, replica, prepared.as_ref()))
-            .collect()
-    };
-    let replicas = in_pool(config.threads, compute)?;
-    Ok(reduce(model, config, &replicas, fmu_units, None))
+/// Simulate every replica of a campaign and hand each one to `sink`, in
+/// replica order: in parallel chunks of [`CHUNK`] replicas, or one at a
+/// time when an FMU that allows a single instance makes the campaign
+/// serial. Only one chunk of samples is alive at a time.
+fn stream_replicas<F>(
+    model: &CompiledModel,
+    config: &McConfig,
+    prepared: Option<&PreparedCoSimulation>,
+    serial: bool,
+    record_end: bool,
+    mut sink: F,
+) -> Result<(), EngineError>
+where
+    F: FnMut(ReplicaSamples, Option<ReplicaEnd>) + Send,
+{
+    use rayon::prelude::*;
+
+    if serial {
+        let mut host = prepared.map(PreparedCoSimulation::spawn_host);
+        for replica in 0..config.nb_runs {
+            let (samples, end) =
+                replica_samples(model, config, replica, record_end, prepared, host.as_mut())?;
+            sink(samples, end);
+        }
+        return Ok(());
+    }
+    in_pool(config.threads, || {
+        let mut first = 0;
+        while first < config.nb_runs {
+            let last = (first + CHUNK).min(config.nb_runs);
+            let chunk = (first..last)
+                .into_par_iter()
+                .map(|replica| replica_samples(model, config, replica, record_end, prepared, None))
+                .collect::<Result<Vec<_>, _>>()?;
+            for (samples, end) in chunk {
+                sink(samples, end);
+            }
+            first = last;
+        }
+        Ok(())
+    })
 }
 
 struct PreparedCampaign {
@@ -749,8 +765,95 @@ fn run_to_targets_internal(
     base_dir: Option<&Path>,
     require_parallel: bool,
 ) -> Result<TargetCampaign, EngineError> {
-    use rayon::prelude::*;
+    let mut ends = Vec::new();
+    let estimates = targets_campaign(model, config, base_dir, require_parallel, |end| {
+        ends.push(end);
+    })?;
+    Ok(TargetCampaign { estimates, ends })
+}
 
+/// A stop-at-targets campaign reduced to counts: its estimates, and how
+/// many replicas ended at each target.
+///
+/// The same campaign as [`run_to_targets`], byte for byte, without the
+/// one [`ReplicaEnd`] per replica: what a probability of reaching a target
+/// needs is a count, and a count keeps the memory of a campaign
+/// independent of its number of replicas.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetCounts {
+    /// The estimates, equal to those of [`run_to_targets`].
+    pub estimates: McEstimates,
+    /// Number of replicas whose first target reached is the key; a target
+    /// no replica reached is absent.
+    pub reached: BTreeMap<String, u64>,
+}
+
+impl TargetCounts {
+    /// Number of replicas whose first target reached is `target`.
+    #[must_use]
+    pub fn count_reached(&self, target: &str) -> u64 {
+        self.reached.get(target).copied().unwrap_or(0)
+    }
+}
+
+/// Run one **stop-at-targets** campaign and count, beside its estimates,
+/// the replicas that ended at each target: [`run_to_targets`] without the
+/// per-replica ends, for campaigns too large to keep one per replica.
+///
+/// # Errors
+/// As [`run`].
+pub fn count_to_targets(
+    model: &CompiledModel,
+    config: &McConfig,
+) -> Result<TargetCounts, EngineError> {
+    count_to_targets_internal(model, config, None, false)
+}
+
+/// Count a target-stopped campaign with explicitly authorized FMU imports.
+///
+/// # Errors
+/// Returns a typed permission, capability, FMU or engine error.
+pub fn count_to_targets_with_fmu(
+    model: &CompiledModel,
+    config: &McConfig,
+    base_dir: &Path,
+    allow_fmu_import: bool,
+    require_parallel: bool,
+) -> Result<TargetCounts, EngineError> {
+    if !allow_fmu_import {
+        return count_to_targets(model, config);
+    }
+    count_to_targets_internal(model, config, Some(base_dir), require_parallel)
+}
+
+fn count_to_targets_internal(
+    model: &CompiledModel,
+    config: &McConfig,
+    base_dir: Option<&Path>,
+    require_parallel: bool,
+) -> Result<TargetCounts, EngineError> {
+    let mut reached = BTreeMap::new();
+    let estimates = targets_campaign(model, config, base_dir, require_parallel, |end| {
+        if let Some(target) = end.end_cause {
+            *reached.entry(target).or_insert(0) += 1;
+        }
+    })?;
+    Ok(TargetCounts { estimates, reached })
+}
+
+/// The campaign behind [`run_to_targets`] and [`count_to_targets`]: every
+/// trajectory stops at its first target, and `on_end` receives how each
+/// replica ended, in replica order.
+fn targets_campaign<F>(
+    model: &CompiledModel,
+    config: &McConfig,
+    base_dir: Option<&Path>,
+    require_parallel: bool,
+    mut on_end: F,
+) -> Result<McEstimates, EngineError>
+where
+    F: FnMut(ReplicaEnd) + Send,
+{
     let config = McConfig {
         stop_at_targets: true,
         ..config.clone()
@@ -761,266 +864,338 @@ fn run_to_targets_internal(
         fmu_units,
         prepared,
     } = prepare_campaign(model, base_dir, require_parallel)?;
-    let config = &config;
-    let per = if serial_fallback_unit.is_some() {
-        let mut host = prepared.as_ref().map(PreparedCoSimulation::spawn_host);
-        (0..config.nb_runs)
-            .map(|replica| {
-                replica_samples(
-                    model,
-                    config,
-                    replica,
-                    true,
-                    prepared.as_ref(),
-                    host.as_mut(),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        let compute = || -> Result<Vec<(ReplicaSamples, Option<ReplicaEnd>)>, EngineError> {
-            (0..config.nb_runs)
-                .into_par_iter()
-                .map(|replica| {
-                    replica_samples(model, config, replica, true, prepared.as_ref(), None)
-                })
-                .collect()
-        };
-        in_pool(config.threads, compute)?
-    };
-    let (replicas, ends): (Vec<ReplicaSamples>, Vec<Option<ReplicaEnd>>) = per.into_iter().unzip();
-    let ends = ends
-        .into_iter()
-        .map(|end| end.unwrap_or_else(|| replica_end(None, config.t_max)))
-        .collect();
-    Ok(TargetCampaign {
-        estimates: reduce(model, config, &replicas, fmu_units, serial_fallback_unit),
-        ends,
-    })
+    let mut reducer = Reducer::new(model, &config);
+    let horizon = config.t_max;
+    stream_replicas(
+        model,
+        &config,
+        prepared.as_ref(),
+        serial_fallback_unit.is_some(),
+        true,
+        |samples, end| {
+            reducer.push(&samples);
+            on_end(end.unwrap_or_else(|| replica_end(None, horizon)));
+        },
+    )?;
+    Ok(reducer.finish(model, &config, fmu_units, serial_fallback_unit))
 }
 
-/// The serial, replica-ordered reduction of a campaign's samples into
-/// its estimates (the determinism contract of the crate docs).
-fn reduce(
-    model: &CompiledModel,
-    config: &McConfig,
-    replicas: &[ReplicaSamples],
-    fmu_units: Vec<FmuProvenance>,
-    serial_fallback_unit: Option<String>,
-) -> McEstimates {
-    let n_indicators = model.indicators.len();
-    let n_instants = config.samples.len();
-    let n = config.nb_runs as f64;
+/// Replicas simulated together before their samples are folded into the
+/// estimates. A campaign holds at most one chunk of replica samples at a
+/// time, so its memory does not grow with `nb_runs`; only the quantile
+/// columns, when quantiles are asked, keep one value per replica.
+const CHUNK: u64 = 1 << 16;
 
-    let mut indicators = Vec::with_capacity(n_indicators);
-    for (idx, indicator) in model.indicators.iter().enumerate() {
-        let mut mean = vec![0.0; n_instants];
-        let mut std = vec![0.0; n_instants];
-        let mut sojourn_mean = vec![0.0; n_instants];
-        let mut sojourn_std = vec![0.0; n_instants];
-        let mut nb_occurrences_mean = vec![0.0; n_instants];
-        let mut nb_occurrences_std = vec![0.0; n_instants];
-        let mut reached_mean = vec![0.0; n_instants];
-        let mut reached_std = vec![0.0; n_instants];
-        let mut extremes = Extremes::empty(n_instants);
-        let mut sojourn_extremes = Extremes::empty(n_instants);
-        let mut nb_occurrences_extremes = Extremes::empty(n_instants);
-        let mut reached_extremes = Extremes::empty(n_instants);
-        let mut zero_departures_mean = vec![0.0; n_instants];
-        let mut zero_departures_std = vec![0.0; n_instants];
-        let mut nonzero_reached_mean = vec![0.0; n_instants];
-        let mut nonzero_reached_std = vec![0.0; n_instants];
-        let mut zero_departures_extremes = Extremes::empty(n_instants);
-        let mut nonzero_reached_extremes = Extremes::empty(n_instants);
-        for k in 0..n_instants {
-            // Serial, replica-ordered accumulation (determinism).
-            let (mut sum, mut sum_sq, mut sj_sum, mut sj_sum_sq) = (0.0, 0.0, 0.0, 0.0);
-            let (mut oc_sum, mut oc_sum_sq) = (0.0, 0.0);
-            // A 0/1 draw, so its sum is also the sum of its squares.
-            let mut reached_sum = 0.0;
-            let (mut zd_sum, mut zd_sum_sq) = (0.0, 0.0);
-            // A 0/1 draw as well.
-            let mut nonzero_sum = 0.0;
-            for replica in replicas {
+/// Running sums of one indicator at one instant, folded in replica order.
+#[derive(Clone, Copy, Default)]
+struct InstantSums {
+    sum: f64,
+    sum_sq: f64,
+    sj_sum: f64,
+    sj_sum_sq: f64,
+    oc_sum: f64,
+    oc_sum_sq: f64,
+    /// A 0/1 draw, so its sum is also the sum of its squares.
+    reached_sum: f64,
+    zd_sum: f64,
+    zd_sum_sq: f64,
+    /// A 0/1 draw as well.
+    nonzero_sum: f64,
+}
+
+/// What the reduction keeps of one indicator while the replicas stream in.
+struct IndicatorFold {
+    sums: Vec<InstantSums>,
+    extremes: Extremes,
+    sojourn_extremes: Extremes,
+    nb_occurrences_extremes: Extremes,
+    reached_extremes: Extremes,
+    zero_departures_extremes: Extremes,
+    nonzero_reached_extremes: Extremes,
+    /// `[instant][replica]` sampled values and sojourns, in replica order,
+    /// kept only when quantiles are asked: a quantile needs the whole
+    /// column, every other estimator a running sum.
+    value_columns: Vec<Vec<f64>>,
+    sojourn_columns: Vec<Vec<f64>>,
+}
+
+/// The serial, replica-ordered reduction of a campaign's samples into its
+/// estimates (the determinism contract of the crate docs), fed one replica
+/// at a time.
+///
+/// Each running sum receives the replicas in replica order, whatever the
+/// chunking and the thread count, so it performs the same floating-point
+/// additions in the same order as a fold over the whole collected campaign:
+/// the estimates are the same bytes, at a memory that no longer depends on
+/// the number of replicas.
+struct Reducer {
+    folds: Vec<IndicatorFold>,
+    keep_columns: bool,
+    folded: u64,
+}
+
+impl Reducer {
+    fn new(model: &CompiledModel, config: &McConfig) -> Self {
+        let n_instants = config.samples.len();
+        let keep_columns = !config.quantiles.is_empty();
+        let folds = model
+            .indicators
+            .iter()
+            .map(|_| IndicatorFold {
+                sums: vec![InstantSums::default(); n_instants],
+                extremes: Extremes::empty(n_instants),
+                sojourn_extremes: Extremes::empty(n_instants),
+                nb_occurrences_extremes: Extremes::empty(n_instants),
+                reached_extremes: Extremes::empty(n_instants),
+                zero_departures_extremes: Extremes::empty(n_instants),
+                nonzero_reached_extremes: Extremes::empty(n_instants),
+                value_columns: vec![Vec::new(); if keep_columns { n_instants } else { 0 }],
+                sojourn_columns: vec![Vec::new(); if keep_columns { n_instants } else { 0 }],
+            })
+            .collect();
+        Self {
+            folds,
+            keep_columns,
+            folded: 0,
+        }
+    }
+
+    /// Fold the next replica, in replica order.
+    fn push(&mut self, replica: &ReplicaSamples) {
+        for (fold, samples) in self.folds.iter_mut().zip(replica) {
+            for (k, sample) in samples.iter().enumerate() {
                 let Sample {
                     value,
                     sojourn,
                     nb_occurrences: nb_occ,
                     zero_departures,
                     nonzero_reached,
-                } = replica[idx][k];
-                sum += value;
-                sum_sq += value * value;
-                sj_sum += sojourn;
-                sj_sum_sq += sojourn * sojourn;
-                oc_sum += nb_occ;
-                oc_sum_sq += nb_occ * nb_occ;
+                } = *sample;
+                let s = &mut fold.sums[k];
+                s.sum += value;
+                s.sum_sq += value * value;
+                s.sj_sum += sojourn;
+                s.sj_sum_sq += sojourn * sojourn;
+                s.oc_sum += nb_occ;
+                s.oc_sum_sq += nb_occ * nb_occ;
                 // Reached by `instant` exactly when it occurred by then: the
                 // occurrence count takes an active initial value as its first
                 // entry, and its bound is the sample's own.
                 let reached = if nb_occ > 0.0 { 1.0 } else { 0.0 };
-                reached_sum += reached;
-                zd_sum += zero_departures;
-                zd_sum_sq += zero_departures * zero_departures;
-                nonzero_sum += nonzero_reached;
+                s.reached_sum += reached;
+                s.zd_sum += zero_departures;
+                s.zd_sum_sq += zero_departures * zero_departures;
+                s.nonzero_sum += nonzero_reached;
                 // Extremes are order-independent, but folded here, in the
                 // same replica-ordered pass, so a NaN or a signed zero
                 // resolves the same way whatever the thread count.
-                extremes.fold(k, value);
-                sojourn_extremes.fold(k, sojourn);
-                nb_occurrences_extremes.fold(k, nb_occ);
-                reached_extremes.fold(k, reached);
-                zero_departures_extremes.fold(k, zero_departures);
-                nonzero_reached_extremes.fold(k, nonzero_reached);
-            }
-            mean[k] = sum / n;
-            sojourn_mean[k] = sj_sum / n;
-            nb_occurrences_mean[k] = oc_sum / n;
-            reached_mean[k] = reached_sum / n;
-            zero_departures_mean[k] = zd_sum / n;
-            nonzero_reached_mean[k] = nonzero_sum / n;
-            if config.nb_runs > 1 {
-                std[k] = ((sum_sq - n * mean[k] * mean[k]) / (n - 1.0))
-                    .max(0.0)
-                    .sqrt();
-                sojourn_std[k] = ((sj_sum_sq - n * sojourn_mean[k] * sojourn_mean[k]) / (n - 1.0))
-                    .max(0.0)
-                    .sqrt();
-                nb_occurrences_std[k] =
-                    ((oc_sum_sq - n * nb_occurrences_mean[k] * nb_occurrences_mean[k]) / (n - 1.0))
-                        .max(0.0)
-                        .sqrt();
-                reached_std[k] = ((reached_sum - n * reached_mean[k] * reached_mean[k])
-                    / (n - 1.0))
-                    .max(0.0)
-                    .sqrt();
-                zero_departures_std[k] = ((zd_sum_sq
-                    - n * zero_departures_mean[k] * zero_departures_mean[k])
-                    / (n - 1.0))
-                    .max(0.0)
-                    .sqrt();
-                nonzero_reached_std[k] = ((nonzero_sum
-                    - n * nonzero_reached_mean[k] * nonzero_reached_mean[k])
-                    / (n - 1.0))
-                    .max(0.0)
-                    .sqrt();
+                fold.extremes.fold(k, value);
+                fold.sojourn_extremes.fold(k, sojourn);
+                fold.nb_occurrences_extremes.fold(k, nb_occ);
+                fold.reached_extremes.fold(k, reached);
+                fold.zero_departures_extremes.fold(k, zero_departures);
+                fold.nonzero_reached_extremes.fold(k, nonzero_reached);
+                if self.keep_columns {
+                    fold.value_columns[k].push(value);
+                    fold.sojourn_columns[k].push(sojourn);
+                }
             }
         }
-        // Nearest-rank quantiles (deterministic: total_cmp sort over the
-        // replica-ordered column).
-        let mut quantiles = Vec::new();
-        let mut sojourn_quantiles = Vec::new();
-        for &q in &config.quantiles {
-            let mut value_rows = vec![0.0; n_instants];
-            let mut sojourn_rows = vec![0.0; n_instants];
-            for k in 0..n_instants {
-                let mut column: Vec<f64> = replicas
-                    .iter()
-                    .map(|replica| replica[idx][k].value)
-                    .collect();
-                let mut sj_column: Vec<f64> = replicas
-                    .iter()
-                    .map(|replica| replica[idx][k].sojourn)
-                    .collect();
-                column.sort_unstable_by(f64::total_cmp);
-                sj_column.sort_unstable_by(f64::total_cmp);
-                let rank = ((q * column.len() as f64).ceil() as usize)
-                    .saturating_sub(1)
-                    .min(column.len().saturating_sub(1));
-                value_rows[k] = column[rank];
-                sojourn_rows[k] = sj_column[rank];
-            }
-            quantiles.push(QuantileSeries {
-                q,
-                values: value_rows,
-            });
-            sojourn_quantiles.push(QuantileSeries {
-                q,
-                values: sojourn_rows,
-            });
-        }
-        // Confidence intervals: closed forms over the sums already
-        // reduced above, so they cost O(instants) arithmetic and never
-        // revisit a replica.
-        let level = config.confidence;
-        // The declared kind decides both the construction and, where a
-        // campaign observed no dispersion at all, the size of the
-        // departure it failed to observe: a 0/1 indicator keeps its
-        // sojourn inside `[0, t]`, a free-valued one does not.
-        let binary = is_declared_binary(model, indicator);
-        let ci = if binary {
-            ConfidenceInterval::on_proportion(level, config.nb_runs, &mean)
-        } else {
-            ConfidenceInterval::on_mean(level, config.nb_runs, &mean, &std, Departure::attribute())
-        };
-        let sojourn_departure = if binary {
-            Departure::sojourn(&config.samples)
-        } else {
-            Departure::integral(&config.samples)
-        };
-        let sojourn_ci = ConfidenceInterval::on_mean(
-            level,
-            config.nb_runs,
-            &sojourn_mean,
-            &sojourn_std,
-            sojourn_departure,
-        );
-        let nb_occurrences_ci = ConfidenceInterval::on_mean(
-            level,
-            config.nb_runs,
-            &nb_occurrences_mean,
-            &nb_occurrences_std,
-            Departure::count(),
-        );
-        let reached_ci = ConfidenceInterval::on_proportion(level, config.nb_runs, &reached_mean);
-        let zero_departures_ci = ConfidenceInterval::on_mean(
-            level,
-            config.nb_runs,
-            &zero_departures_mean,
-            &zero_departures_std,
-            Departure::count(),
-        );
-        let nonzero_reached_ci =
-            ConfidenceInterval::on_proportion(level, config.nb_runs, &nonzero_reached_mean);
-        indicators.push(IndicatorEstimate {
-            name: indicator.name.clone(),
-            instants: config.samples.clone(),
-            mean,
-            std,
-            ci,
-            sojourn_mean,
-            sojourn_std,
-            sojourn_ci,
-            nb_occurrences_mean,
-            nb_occurrences_std,
-            nb_occurrences_ci,
-            reached_mean,
-            reached_std,
-            reached_ci,
-            extremes,
-            sojourn_extremes,
-            nb_occurrences_extremes,
-            reached_extremes,
-            zero_departures_mean,
-            zero_departures_std,
-            zero_departures_ci,
-            zero_departures_extremes,
-            nonzero_reached_mean,
-            nonzero_reached_std,
-            nonzero_reached_ci,
-            nonzero_reached_extremes,
-            quantiles,
-            sojourn_quantiles,
-        });
+        self.folded += 1;
     }
 
-    McEstimates {
-        indicators,
-        nb_runs: config.nb_runs,
-        seed: config.seed,
-        confidence: config.confidence,
-        engine_version: env!("CARGO_PKG_VERSION").to_owned(),
-        fmu_units,
-        serial_fallback_unit,
+    /// The estimates of the folded campaign.
+    fn finish(
+        self,
+        model: &CompiledModel,
+        config: &McConfig,
+        fmu_units: Vec<FmuProvenance>,
+        serial_fallback_unit: Option<String>,
+    ) -> McEstimates {
+        debug_assert_eq!(self.folded, config.nb_runs, "every replica is folded once");
+        let n_instants = config.samples.len();
+        let n = config.nb_runs as f64;
+
+        let mut indicators = Vec::with_capacity(model.indicators.len());
+        for (indicator, fold) in model.indicators.iter().zip(self.folds) {
+            let IndicatorFold {
+                sums,
+                extremes,
+                sojourn_extremes,
+                nb_occurrences_extremes,
+                reached_extremes,
+                zero_departures_extremes,
+                nonzero_reached_extremes,
+                mut value_columns,
+                mut sojourn_columns,
+            } = fold;
+            let mut mean = vec![0.0; n_instants];
+            let mut std = vec![0.0; n_instants];
+            let mut sojourn_mean = vec![0.0; n_instants];
+            let mut sojourn_std = vec![0.0; n_instants];
+            let mut nb_occurrences_mean = vec![0.0; n_instants];
+            let mut nb_occurrences_std = vec![0.0; n_instants];
+            let mut reached_mean = vec![0.0; n_instants];
+            let mut reached_std = vec![0.0; n_instants];
+            let mut zero_departures_mean = vec![0.0; n_instants];
+            let mut zero_departures_std = vec![0.0; n_instants];
+            let mut nonzero_reached_mean = vec![0.0; n_instants];
+            let mut nonzero_reached_std = vec![0.0; n_instants];
+            for (k, s) in sums.iter().enumerate() {
+                mean[k] = s.sum / n;
+                sojourn_mean[k] = s.sj_sum / n;
+                nb_occurrences_mean[k] = s.oc_sum / n;
+                reached_mean[k] = s.reached_sum / n;
+                zero_departures_mean[k] = s.zd_sum / n;
+                nonzero_reached_mean[k] = s.nonzero_sum / n;
+                if config.nb_runs > 1 {
+                    std[k] = ((s.sum_sq - n * mean[k] * mean[k]) / (n - 1.0))
+                        .max(0.0)
+                        .sqrt();
+                    sojourn_std[k] = ((s.sj_sum_sq - n * sojourn_mean[k] * sojourn_mean[k])
+                        / (n - 1.0))
+                        .max(0.0)
+                        .sqrt();
+                    nb_occurrences_std[k] = ((s.oc_sum_sq
+                        - n * nb_occurrences_mean[k] * nb_occurrences_mean[k])
+                        / (n - 1.0))
+                        .max(0.0)
+                        .sqrt();
+                    reached_std[k] = ((s.reached_sum - n * reached_mean[k] * reached_mean[k])
+                        / (n - 1.0))
+                        .max(0.0)
+                        .sqrt();
+                    zero_departures_std[k] = ((s.zd_sum_sq
+                        - n * zero_departures_mean[k] * zero_departures_mean[k])
+                        / (n - 1.0))
+                        .max(0.0)
+                        .sqrt();
+                    nonzero_reached_std[k] = ((s.nonzero_sum
+                        - n * nonzero_reached_mean[k] * nonzero_reached_mean[k])
+                        / (n - 1.0))
+                        .max(0.0)
+                        .sqrt();
+                }
+            }
+            // Nearest-rank quantiles (deterministic: total_cmp sort over the
+            // replica-ordered column).
+            let mut quantiles = Vec::new();
+            let mut sojourn_quantiles = Vec::new();
+            for column in value_columns.iter_mut().chain(sojourn_columns.iter_mut()) {
+                column.sort_unstable_by(f64::total_cmp);
+            }
+            for &q in &config.quantiles {
+                let mut value_rows = vec![0.0; n_instants];
+                let mut sojourn_rows = vec![0.0; n_instants];
+                for k in 0..n_instants {
+                    let column = &value_columns[k];
+                    let sj_column = &sojourn_columns[k];
+                    let rank = ((q * column.len() as f64).ceil() as usize)
+                        .saturating_sub(1)
+                        .min(column.len().saturating_sub(1));
+                    value_rows[k] = column[rank];
+                    sojourn_rows[k] = sj_column[rank];
+                }
+                quantiles.push(QuantileSeries {
+                    q,
+                    values: value_rows,
+                });
+                sojourn_quantiles.push(QuantileSeries {
+                    q,
+                    values: sojourn_rows,
+                });
+            }
+            // Confidence intervals: closed forms over the sums already
+            // reduced above, so they cost O(instants) arithmetic and never
+            // revisit a replica.
+            let level = config.confidence;
+            // The declared kind decides both the construction and, where a
+            // campaign observed no dispersion at all, the size of the
+            // departure it failed to observe: a 0/1 indicator keeps its
+            // sojourn inside `[0, t]`, a free-valued one does not.
+            let binary = is_declared_binary(model, indicator);
+            let ci = if binary {
+                ConfidenceInterval::on_proportion(level, config.nb_runs, &mean)
+            } else {
+                ConfidenceInterval::on_mean(
+                    level,
+                    config.nb_runs,
+                    &mean,
+                    &std,
+                    Departure::attribute(),
+                )
+            };
+            let sojourn_departure = if binary {
+                Departure::sojourn(&config.samples)
+            } else {
+                Departure::integral(&config.samples)
+            };
+            let sojourn_ci = ConfidenceInterval::on_mean(
+                level,
+                config.nb_runs,
+                &sojourn_mean,
+                &sojourn_std,
+                sojourn_departure,
+            );
+            let nb_occurrences_ci = ConfidenceInterval::on_mean(
+                level,
+                config.nb_runs,
+                &nb_occurrences_mean,
+                &nb_occurrences_std,
+                Departure::count(),
+            );
+            let reached_ci =
+                ConfidenceInterval::on_proportion(level, config.nb_runs, &reached_mean);
+            let zero_departures_ci = ConfidenceInterval::on_mean(
+                level,
+                config.nb_runs,
+                &zero_departures_mean,
+                &zero_departures_std,
+                Departure::count(),
+            );
+            let nonzero_reached_ci =
+                ConfidenceInterval::on_proportion(level, config.nb_runs, &nonzero_reached_mean);
+            indicators.push(IndicatorEstimate {
+                name: indicator.name.clone(),
+                instants: config.samples.clone(),
+                mean,
+                std,
+                ci,
+                sojourn_mean,
+                sojourn_std,
+                sojourn_ci,
+                nb_occurrences_mean,
+                nb_occurrences_std,
+                nb_occurrences_ci,
+                reached_mean,
+                reached_std,
+                reached_ci,
+                extremes,
+                sojourn_extremes,
+                nb_occurrences_extremes,
+                reached_extremes,
+                zero_departures_mean,
+                zero_departures_std,
+                zero_departures_ci,
+                zero_departures_extremes,
+                nonzero_reached_mean,
+                nonzero_reached_std,
+                nonzero_reached_ci,
+                nonzero_reached_extremes,
+                quantiles,
+                sojourn_quantiles,
+            });
+        }
+
+        McEstimates {
+            indicators,
+            nb_runs: config.nb_runs,
+            seed: config.seed,
+            confidence: config.confidence,
+            engine_version: env!("CARGO_PKG_VERSION").to_owned(),
+            fmu_units,
+            serial_fallback_unit,
+        }
     }
 }
 

@@ -27,10 +27,18 @@ they are summed in do not depend on it.
   [Reproducibility](reproducibility.md)).
 - Replica *r* draws from RNG substream *r*, so replicas never share
   random numbers regardless of scheduling.
-- The per-replica results are collected and **reduced serially, in
-  replica-index order**. Floating-point addition is not associative, so
-  this ordered reduction is what makes the estimate **byte-identical**
-  for any thread count: not merely statistically equal.
+- The per-replica results are **reduced serially, in replica-index
+  order**. Floating-point addition is not associative, so this ordered
+  reduction is what makes the estimate **byte-identical** for any thread
+  count: not merely statistically equal.
+- The replicas run in **chunks** of 65 536, each folded into the
+  running sums as soon as it completes, in replica order. A campaign
+  therefore holds one chunk of samples at a time, and its memory does not
+  grow with the number of replicas: 10^8 replicas cost what 10^5 do.
+  Quantiles are the exception: a nearest-rank quantile needs the whole
+  column, so asking for one keeps one value per replica, indicator and
+  instant. A probability of reaching a target is a count, and
+  `quantify(..., method="monte_carlo")` keeps only the count.
 
 ```python
 import pyraichu

@@ -26,7 +26,7 @@ import translate
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("variant")
-    parser.add_argument("--seeds", type=int, default=6)
+    parser.add_argument("--seeds", type=int, default=100)
     args = parser.parse_args()
 
     common.load(args.variant)  # regenerates the model when it is missing
