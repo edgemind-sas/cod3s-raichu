@@ -40,7 +40,8 @@ REFERENCES = {
     ],
 }
 METHODS = (
-    ("monte_carlo", "Monte-Carlo"),
+    ("monte_carlo", "Monte-Carlo, 2e7"),
+    ("monte_carlo_5e8", "Monte-Carlo, 5e8"),
     ("cross_entropy", "cross-entropy"),
     ("splitting", "splitting"),
 )

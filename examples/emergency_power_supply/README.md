@@ -39,15 +39,17 @@ python run_static_tree.py
 python run_monte_carlo.py eps_benchmark 20000000
 python run_monte_carlo.py eps_benchmark_battery_1h 20000000
 python run_monte_carlo.py eps_benchmark_fast_line_repair 20000000
+python run_monte_carlo.py eps_benchmark_fast_line_repair 500000000 --tag 5e8   # 1 h 40 min
 python run_rare_event.py eps_benchmark cross_entropy
 python run_rare_event.py eps_benchmark splitting
 python run_rare_event.py eps_benchmark_fast_line_repair cross_entropy
 python run_rare_event.py eps_benchmark_fast_line_repair splitting
+python run_splitting_seeds.py eps_benchmark --seeds 100
+python run_splitting_seeds.py eps_benchmark_fast_line_repair --seeds 100
 ```
 
-Each Monte-Carlo campaign draws 2 x 10^7 histories, the budget of the YAMS
-run it is compared with, and holds about 170 bytes per history in memory
-until the end (the replicas are reduced in replica order, so that the
-result does not depend on the thread count): allow 4 GB. The seeds are
-fixed (2017 by default), so a rerun reproduces the results, except for the
-wall-clock times.
+The main Monte-Carlo campaigns draw 2 x 10^7 histories, the budget of the
+YAMS run they are compared with. From RAICHU 0.79 a campaign's memory does
+not depend on its number of histories (under 100 MB here, 5 x 10^8 included).
+The seeds are fixed (2017 by default), so a rerun reproduces the results,
+except for the wall-clock times.

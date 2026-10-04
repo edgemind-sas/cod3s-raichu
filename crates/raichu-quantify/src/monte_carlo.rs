@@ -2,8 +2,8 @@
 
 use raichu_core::{CompiledModel, FlowConfig, SolverParams};
 use raichu_montecarlo::{
-    run_to_targets, run_to_targets_with_fmu, wilson_bounds, IntervalMethod, McConfig,
-    TargetCampaign,
+    count_to_targets, count_to_targets_with_fmu, wilson_bounds, IntervalMethod, McConfig,
+    TargetCounts,
 };
 use std::path::Path;
 
@@ -40,7 +40,7 @@ impl MonteCarloSettings {
         require_parallel: bool,
     ) -> Result<Answer, QuantifyError> {
         self.check_nb_runs()?;
-        let campaign = run_to_targets_with_fmu(
+        let campaign = count_to_targets_with_fmu(
             model,
             &self.to_engine(study),
             base_dir,
@@ -60,7 +60,7 @@ impl MonteCarloSettings {
         Ok(())
     }
 
-    fn answer_from_campaign(&self, campaign: TargetCampaign, study: &Study) -> Answer {
+    fn answer_from_campaign(&self, campaign: TargetCounts, study: &Study) -> Answer {
         let reached = campaign.count_reached(&study.target);
         let replicas = self.nb_runs;
         let estimate = reached as f64 / replicas as f64;
@@ -99,7 +99,7 @@ impl QuantificationEngine for MonteCarloSettings {
     fn answer(&self, model: &CompiledModel, study: &Study) -> Result<Answer, QuantifyError> {
         self.check_nb_runs()?;
         let config = self.to_engine(study);
-        let campaign = run_to_targets(model, &config)?;
+        let campaign = count_to_targets(model, &config)?;
         Ok(self.answer_from_campaign(campaign, study))
     }
 }
