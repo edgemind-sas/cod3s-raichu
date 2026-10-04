@@ -1,0 +1,8 @@
+{
+  "wall_clock_s": 6.7,
+  "logical_cpus": 24,
+  "machine": "x86_64",
+  "pyraichu": "0.77.2",
+  "particles": 1000,
+  "batches": 100
+}

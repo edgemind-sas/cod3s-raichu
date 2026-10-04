@@ -1,0 +1,29 @@
+{
+  "format": "eps_example.static_tree",
+  "top": "LHA_and_LHB_lost",
+  "gates": 49,
+  "basic_events": 61,
+  "rows": [
+    {
+      "mission_time": 100.0,
+      "top_probability": 2.812089063832291e-05,
+      "exact": true,
+      "method": "bdd",
+      "minimal_cut_sets": 53137
+    },
+    {
+      "mission_time": 1000.0,
+      "top_probability": 0.02736032924703134,
+      "exact": true,
+      "method": "bdd",
+      "minimal_cut_sets": 53137
+    },
+    {
+      "mission_time": 10000.0,
+      "top_probability": 0.40711246671573076,
+      "exact": true,
+      "method": "bdd",
+      "minimal_cut_sets": 53137
+    }
+  ]
+}

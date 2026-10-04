@@ -1,0 +1,10 @@
+{
+  "wall_clock_s": 0.5,
+  "logical_cpus": 24,
+  "machine": "x86_64",
+  "pyraichu": "0.77.2",
+  "min_probability": 1e-07,
+  "retained_sequences": 12903,
+  "sequences_with_battery": 185,
+  "probability_with_battery": 0.0001365561473772459
+}
