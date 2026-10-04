@@ -33,3 +33,7 @@ CLAUDE.md
 
 # Internal IP-hygiene note: never published
 PyCATSHOO-SIMILARITY-ANALYSIS.md
+
+# Translated benchmark models: adaptations of third-party files, regenerated
+# by each reader with examples/*/translate.py, never versioned
+examples/emergency_power_supply/model/

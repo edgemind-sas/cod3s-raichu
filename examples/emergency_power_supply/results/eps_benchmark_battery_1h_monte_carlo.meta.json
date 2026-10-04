@@ -1,0 +1,7 @@
+{
+  "wall_clock_s": 381.3,
+  "logical_cpus": 24,
+  "machine": "x86_64",
+  "pyraichu": "0.77.2",
+  "nb_runs": 20000000
+}

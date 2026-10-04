@@ -1,0 +1,9 @@
+{
+  "wall_clock_s": 1.2,
+  "logical_cpus": 24,
+  "machine": "x86_64",
+  "pyraichu": "0.77.2",
+  "top": "LHA_and_LHB_lost",
+  "gates": 49,
+  "basic_events": 61
+}
