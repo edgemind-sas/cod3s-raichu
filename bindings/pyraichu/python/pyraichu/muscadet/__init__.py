@@ -5855,7 +5855,9 @@ class ObjFlow:
 
     def _build_failure_modes(self, automata: list[dict]) -> None:
         """The ok/nok automaton of each declared failure mode, its two
-        transitions carrying the delay or the rate the law asks for.
+        transitions carrying the delay or the rate the law asks for (one
+        only for an exponential mode whose repair rate is zero, which is
+        non-repairable).
 
         The deratings a mode declares are not written here: they are read
         off this automaton's **location** by the outputs they bear on,
@@ -5871,21 +5873,28 @@ class ObjFlow:
             }
             if mode.failure_cond is not None:
                 failure_transition["guard"] = _var(me, mode.failure_cond)
+            transitions = [failure_transition]
+            # An exponential repair at rate zero never fires: the mode is
+            # non-repairable, and `nok` is absorbing. muscadet builds that
+            # edge with its zero rate (the reference engine never draws it);
+            # the engine here refuses a zero rate, so the edge is left out,
+            # which is the same trajectory.
+            if not (mode.law == "exp" and float(mode.repair_param) == 0.0):
+                transitions.append(
+                    {
+                        "name": "repair",
+                        "source": "nok",
+                        "targets": ["ok"],
+                        "distrib": mode.law,
+                        ("time" if mode.law == "delay" else "rate"): mode.repair_param,
+                    }
+                )
             automata.append(
                 {
                     "name": mode.name,
                     "states": ["ok", "nok"],
                     "init": "ok",
-                    "transitions": [
-                        failure_transition,
-                        {
-                            "name": "repair",
-                            "source": "nok",
-                            "targets": ["ok"],
-                            "distrib": mode.law,
-                            ("time" if mode.law == "delay" else "rate"): mode.repair_param,
-                        },
-                    ],
+                    "transitions": transitions,
                 }
             )
 

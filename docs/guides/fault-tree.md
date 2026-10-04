@@ -1,9 +1,10 @@
 # Fault trees
 
 `pyraichu.fault_tree` generates the fault tree explaining why a **top
-expression** over the model's states can become true, and hands it back as a
-tree, as its minimal cut sets, and as an OpenPSA model-exchange document a
-static tool reads. `pyraichu.quantify` then computes the tree's exact
+expression** over the model, or one of the model's declared **targets** (the
+feared events of a study, see [Trees from targets](#trees-from-targets)), can
+become true, and hands it back as a tree, as its minimal cut sets, and as an
+OpenPSA model-exchange document a static tool reads. `pyraichu.quantify` then computes the tree's exact
 top-event probability, the importance of each basic event and its minimal cut
 sets, for a generated tree or for any OpenPSA document (see
 [Quantification](#quantification)).
@@ -38,17 +39,29 @@ xml = tree.open_psa        # the OpenPSA document a static tool reads
 ## The method, and its hypothesis
 
 The tree is built by **backward chaining**, the method of the reference
-engine's own generator, under the same hypothesis, which is the whole content
-of the feature:
+engine's own generator, under one hypothesis, which is the whole content of the
+feature:
 
-- every **attribute keeps its initial value**, or the value a `profile` gives
-  it by qualified name (`profile={"B.x": 10.0}`). A guard reading only
-  attributes is therefore a constant: the transition is always possible, or
-  never;
 - only **states move**. A state is explained as being the initial one, OR as
   entered by one of the transitions into it; a transition is explained as its
   **basic event** (the draw of its law) AND its source state being reached AND
-  its guard holding.
+  its guard holding;
+- an attribute a **sensitive function** or an **explicit equation** computes
+  is **unrolled**: replaced by the expression that computes it, recursively,
+  down to the states and to the attributes nothing writes. A flow variable of
+  a model built through the muscadet layer is such an attribute, so a
+  condition on the flows is explained by the failures that cut them;
+- an attribute **nothing writes keeps its initial value**, or the value a
+  `profile` gives it by qualified name (`profile={"B.x": 10.0}`); a profiled
+  attribute is a constant, whatever computes it. A guard reading only such
+  constants is therefore a constant: the transition is always possible, or
+  never;
+- negations are pushed down to the states: "not in `ok`" is "in one of the
+  automaton's other states", which is how the loss of a flow becomes the
+  failure states that cause it;
+- a transition **no draw governs** (a delay of zero: an observer's, an
+  instantaneous reconfiguration) fires as soon as its source and its guard
+  hold, so it is **crossed** as those two and contributes no basic event.
 
 One step of the chaining, applied recursively from the top expression down:
 
@@ -88,14 +101,15 @@ in the OpenPSA file).
 
 ## The result
 
-`fault_tree` returns a `FaultTree` with four fields:
+`fault_tree` returns a `FaultTree` with five fields:
 
 | field | content |
 |---|---|
-| `top` | the top gate, nested: `{"node": "gate", "gate": …, "k": …, "children": […]}` with `"gate"` one of `"and"`, `"or"`, `"at_least"`; `{"node": "basic", "event": index}`; or `{"node": "constant", "value": bool}` |
+| `top` | the top gate, nested: `{"node": "gate", "gate": …, "k": …, "children": […]}` with `"gate"` one of `"and"`, `"or"`, `"at_least"`, or `{"node": "basic", "event": index}`; never a constant, a degenerate tree being refused (see [What is refused](#what-is-refused)) |
 | `basic_events` | one entry per transition draw: `name`, `component`, `automaton`, `transition`, `target` and its `law` with the law's parameters; `event` in `top` indexes this list |
 | `minimal_cut_sets` | each a sorted list of basic-event names, ordered by size then name |
 | `open_psa` | the OpenPSA document (see [The file](#the-file)) |
+| `warnings` | why the tree's probability may exceed the model's own, one sentence per transition concerned; empty when the tree is exact (see [What the number means](#what-the-number-means)) |
 
 ```python
 assert tree.top["gate"] == "or"
@@ -114,22 +128,155 @@ Three keywords bound the work and name the output:
 Either limit being reached raises `SimulationError` naming it: raise it, or
 explain a narrower top expression.
 
-## What it is not
+## Trees from targets
 
-A tree is not the minimal sequences of a simulation (sequence analysis), which
-let attributes move and order the events. The two answer different questions.
-On a model built through the muscadet layer, a guard reads flow variables that
-functions compute from states; frozen, those variables are constants, exactly
-as on the reference engine, whose knowledge bases state a separate textual
-condition for fault-tree generation for this reason. Write the top expression
-over the states you want explained.
+A study does not write a top expression: it declares **targets**, the feared
+events whose occurrence ends a trajectory (the model's `targets` section, see
+the model schema). `targets=[...]` explains them: the top is the disjunction of
+the targets' states, and each is explained through the transition that enters
+it. A feared event is an **observer** in the muscadet layer (a transition of
+kind `observation`, a delay of zero, guarded by the event's condition on the
+flows): it is crossed as its condition, unrolled down to the failures.
+
+```python
+import math
+
+def block(name, rate):
+    """A block whose `up` a function computes from its failure state."""
+    return {"name": name,
+            "attributes": [{"name": "up", "kind": "bool",
+                            "init": {"kind": "bool", "value": False}}],
+            "ports": [{"name": "out", "dir": "out", "attr": "up"}],
+            "automata": [{"name": "health", "states": ["ok", "nok"], "init": "ok",
+                          "transitions": [{"name": "fail", "source": "ok", "targets": ["nok"],
+                                           "distrib": "exp", "rate": rate}]}],
+            "sensitive_functions": [{"name": "update_up", "effects": [
+                {"target": {"component": name, "attribute": "up"},
+                 "value": {"op": "state_active",
+                           "state": {"component": name, "automaton": "health", "state": "ok"}}}]}]}
+
+fed = {"op": "attr", "attr": {"component": "T", "attribute": "fed"}}
+lost = {"op": "cmp", "cmp": "eq", "lhs": fed,
+        "rhs": {"op": "const", "value": {"kind": "bool", "value": False}}}
+parallel = pyraichu.load_model({
+    "name": "parallel",
+    "components": [
+        block("B1", 1e-3), block("B2", 2e-3),
+        {"name": "T",          # fed while any block is up
+         "attributes": [{"name": "fed", "kind": "bool",
+                         "init": {"kind": "bool", "value": False}}],
+         "ports": [{"name": "in", "dir": "in"}],
+         "sensitive_functions": [{"name": "update_fed", "effects": [
+             {"target": {"component": "T", "attribute": "fed"},
+              "value": {"op": "port_agg", "port": {"component": "T", "port": "in"},
+                        "agg": "any"}}]}]},
+        {"name": "T_lost",     # the feared event, observing the target
+         "automata": [{"name": "ev", "states": ["not_occ", "occ"], "init": "not_occ",
+                       "transitions": [{"name": "occ", "source": "not_occ",
+                                        "targets": ["occ"], "guard": lost,
+                                        "kind": "observation",
+                                        "distrib": "delay", "time": 0.0}]}]}],
+    "connections": [{"from": {"component": b, "port": "out"},
+                     "to": {"component": "T", "port": "in"}} for b in ("B1", "B2")],
+    "targets": [{"name": "T_lost", "component": "T_lost",
+                 "automaton": "ev", "state": "occ"}],
+})
+
+lost_tree = pyraichu.fault_tree(parallel, targets=["T_lost"])
+assert lost_tree.minimal_cut_sets == [["B1.health.fail", "B2.health.fail"]]
+assert lost_tree.warnings == []    # the exact structure: see below
+lost = lost_tree.quantify(mission_time=1000.0)
+assert abs(lost.probability - (1 - math.exp(-1)) * (1 - math.exp(-2))) < 1e-12
+```
+
+`T.fed` starts `false`, before the first fixpoint: frozen at that value, the
+condition `not fed` would be the constant `true` and the tree would read one.
+Unrolled, it is `not (B1 ok or B2 ok)`, that is `B1 nok and B2 nok`.
+
+### What the number means
+
+A basic event's probability is its law's distribution at the mission time,
+with no repair: the tree gives the **probability without repair** that the
+top holds at that time. That number is the model's own probability, the one
+its simulation draws, exactly when every basic event is drawn from the start
+of the mission independently of the others: a transition out of an initial
+state, guarded by nothing that reads a state, competing with no other
+transition, never undone by a repair. On such a model (a series, a parallel or
+a voting structure of non-repairable components), RAICHU's Monte-Carlo of the
+same model, each trajectory stopped at the target, lands on the tree's
+probability within its confidence interval; the test suite checks it on each
+of the three.
+
+Where one of these does not hold, the tree **over-estimates**, and says where:
+`warnings` holds one sentence per transition concerned.
+
+| Warning | Why the tree is above the model |
+|---|---|
+| a repair the tree ignores | a repaired component is up again, the tree keeps it down: the tree is an upper bound of the first-occurrence probability with repairs |
+| a failure guarded by a condition on states (a block that fails only while fed) | the tree times the draw from the start of the mission, the model from when the condition holds |
+| a draw from a state entered during the mission (a degraded mode failing further) | same: the second draw starts later in the model |
+| a transition competing with another from the same state | the tree lets each fire as if the other could not first |
+
+On a coherent top, each of these can only add failures, so the tree remains an
+upper bound. The empty list is the statement that the tree is exact.
+
+### Forms of a muscadet model
+
+What the generation does with each shape a muscadet study takes, measured on
+systems muscadet 5.11.0 itself built:
+
+| Shape | Class |
+|---|---|
+| boolean flows in series, in parallel, or into a `logic=k` vote; exponential or delay failure modes without repair | exact |
+| the same with repairs; failure modes guarded by a flow (`failure_cond="is_ok_fed_out"`); a common-cause mode (`ObjFMExp` over several targets) with repairs | upper bound, with warnings |
+| a feared event that waits before occurring (`tempo_occ > 0`) | refused: its state lags its condition |
+| a standby on a trigger (`add_flow_out_on_trigger`) | refused: the loss needs the trigger to stay down, an order of events a static tree cannot carry |
+| a feared event no failure can cause | refused: degenerate |
+
+The sequences of a simulation (sequence analysis) are the tool for the
+dynamic shapes. A tree is not those sequences, which order the events: the two
+answer different questions.
+
+### The envelope
+
+`lost_tree.envelope(mission_times)` quantifies the tree at each of 1 to 20 strictly
+increasing mission times and returns the `raichu.fault_tree` envelope, a
+versioned document RAICHU produces: the probability at every instant, and at
+the last one (the horizon) the minimal cut sets with their probabilities and
+the importance of each basic event, beside the generation warnings and the
+settings applied. Its schema is the
+[fault-tree envelope format](../reference/fault-tree-format.md);
+`pyraichu.read_fault_tree` checks a document's format and version before
+reading it.
+
+```python
+envelope = lost_tree.envelope([100.0, 500.0, 1000.0])
+assert envelope["format"] == "raichu.fault_tree" and envelope["version"] == 1
+assert [i["mission_time"] for i in envelope["instants"]] == [100.0, 500.0, 1000.0]
+assert envelope["horizon"]["minimal_cut_sets"][0]["order"] == 2
+assert envelope["generation"]["exact"]
+```
 
 ## What is refused
 
-The method explains a value becoming **true** through states being entered,
-so every expression it crosses has to be monotone in the states. A state read
-under a negation, or inside arithmetic that is not a vote, is refused with the
-expression named, and so is a transition whose rate reads a state.
+Every refusal raises `SimulationError` naming its cause, rather than handing
+out a number that looks right:
+
+- a **degenerate** tree: a top that reduces to a constant once unrolled, true
+  from the initial state (no failure needed) or false (no failure can cause
+  it, for instance a condition on attributes nothing computes from a state).
+  Quantified, it would read one or zero; the message names the condition that
+  came out constant;
+- a top, or a feared event's condition, that needs a state the model can leave
+  to **persist** (an initial state read positively once the negations are
+  pushed down): a static tree explains states being entered, not kept;
+- a state read inside arithmetic that is not a vote, and a transition whose
+  rate reads a state;
+- an attribute that **cannot be unrolled**: computed by an ODE, a transition's
+  effect, a distribution operator, a linear block or a program, or written in
+  two places, and a ring of attributes computing each other. Frozen, it would
+  turn the conditions reading it into constants;
+- an observer that waits before it fires.
 
 ## Quantification
 

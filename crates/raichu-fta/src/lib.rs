@@ -23,6 +23,11 @@
 //! guaranteed upper bound, the variable order the diagrams were built in,
 //! and warnings when a cutoff bit.
 //!
+//! A tree generated from a model is quantified at up to
+//! [`MAX_MISSION_TIMES`] mission times into a versioned result,
+//! [`fault_tree_envelope`] (`raichu.fault_tree`), which a reader checks
+//! with [`read_fault_tree_envelope`].
+//!
 //! The minimal cut sets of a non-coherent tree (one whose top is not
 //! monotone in its events) are not computed, although its probability and
 //! importance measures are, exactly; the cut-set engine refuses it.
@@ -53,12 +58,19 @@
 
 mod approx;
 mod dd;
+mod envelope;
 mod from_core;
 mod law;
 mod open_psa;
 mod quantify;
 mod tree;
 
+pub use envelope::{
+    fault_tree_envelope, read_fault_tree_envelope, EnvelopeCutSet, EnvelopeEvent,
+    EnvelopeGeneration, EnvelopeImportance, EnvelopeProvenance, EnvelopeSettings, EnvelopeTop,
+    FaultTreeEnvelope, HorizonResult, InstantResult, ReadFaultTreeError, FAULT_TREE_FORMAT,
+    FAULT_TREE_VERSION, MAX_MISSION_TIMES, MEASURE_WITHOUT_REPAIR,
+};
 pub use law::Law;
 pub use open_psa::{read_open_psa, write_open_psa};
 pub use quantify::{

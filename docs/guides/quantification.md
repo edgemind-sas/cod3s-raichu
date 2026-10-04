@@ -350,8 +350,10 @@ with the largest share of one cut set's basic events currently realised,
 a heuristic inspired by the minimal-cut-set committor approximations of
 Chennetier et al. (2024), rather than their exact formula or an optimal
 committor. It refuses, quoting the reason, when fault-tree generation
-refuses the model (a state read under a negation, a guard it cannot
-explain): declare an attribute then. `max_cut_sets` (default 1000) caps
+refuses the model (a state the target needs to persist, a guard it
+cannot explain): declare an attribute then. A target the tree finds
+reached from the start is certain, and one no failure can reach is
+refused by name. `max_cut_sets` (default 1000) caps
 how many cut sets are kept, since every completed instant scores them
 all; the cap applies to the final minimal family after absorption, and a
 target with more is refused naming the cap.

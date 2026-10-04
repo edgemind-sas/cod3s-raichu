@@ -1,8 +1,8 @@
 """Fault-tree generation by backward chaining (``pyraichu.fault_tree``).
 
-The explanation of a top expression over states: every attribute frozen at
-its initial value (or a profile's), only states moving, a state entered by a
-transition whose draw is a basic event. Checked against block diagrams whose
+The explanation of a top expression over states: an attribute nothing
+computes keeps its initial value (or a profile's), only states move, a state
+is entered by a transition whose draw is a basic event. Checked against block diagrams whose
 minimal cut sets are known by construction.
 """
 
@@ -89,17 +89,31 @@ def test_a_profile_holds_an_attribute_at_another_value():
         "rhs": {"op": "const", "value": {"kind": "float", "value": 5.0}},
     }
     m = model(unit("B", guard=guard))
-    assert pyraichu.fault_tree(m, nok("B")).minimal_cut_sets == []
+    # Nothing writes `x`: the failure can never fire, and a tree that is the
+    # constant false is refused rather than returned empty.
+    with pytest.raises(pyraichu.SimulationError, match="degenerate"):
+        pyraichu.fault_tree(m, nok("B"))
     held = pyraichu.fault_tree(m, nok("B"), profile={"B.x": 10.0})
     assert held.minimal_cut_sets == [["B.health.fail"]]
 
 
-def test_a_negated_state_is_refused_by_name():
-    ok = {
+def ok(name):
+    return {
         "op": "state_active",
-        "state": {"component": "A", "automaton": "health", "state": "ok"},
+        "state": {"component": name, "automaton": "health", "state": "ok"},
     }
-    with pytest.raises(pyraichu.SimulationError, match="negation"):
+
+
+def test_a_negated_state_is_one_of_the_other_states():
+    tree = pyraichu.fault_tree(
+        model(unit("A")), {"op": "bool", "bool_op": "not", "args": [ok("A")]}
+    )
+    assert tree.minimal_cut_sets == [["A.health.fail"]]
+
+
+def test_a_state_required_to_persist_is_refused_by_name():
+    with pytest.raises(pyraichu.SimulationError, match="A.health.ok"):
         pyraichu.fault_tree(
-            model(unit("A")), {"op": "bool", "bool_op": "not", "args": [ok]}
+            model(unit("A"), unit("B")),
+            {"op": "bool", "bool_op": "and", "args": [ok("A"), nok("B")]},
         )

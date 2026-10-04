@@ -10,8 +10,8 @@
 
 use crate::confidence::{batch_interval, is_valid_level, BatchInterval, DEFAULT_CONFIDENCE};
 use raichu_core::{
-    CompiledModel, Engine, EngineConfig, EngineError, FaultTreeError, FaultTreeSettings,
-    FlowConfig, Snapshot, SolverParams,
+    CompiledModel, Engine, EngineConfig, EngineError, Explanation, FaultTree, FaultTreeError,
+    FaultTreeSettings, FlowConfig, FtNode, Snapshot, SolverParams,
 };
 use raichu_expr::{Expr, StateRef, Value};
 use rand::Rng;
@@ -403,7 +403,17 @@ fn compile_cut_sets(
             ),
         )
     };
-    let tree = raichu_core::fault_tree(m, &top, &FaultTreeSettings::default()).map_err(refused)?;
+    // A constant is an answer here, not a refusal: a target reached from
+    // the start is certain, one no failure reaches is refused below.
+    let tree =
+        match raichu_core::explain(m, &top, &FaultTreeSettings::default()).map_err(refused)? {
+            Explanation::Tree(tree) => tree,
+            Explanation::Constant { value, .. } => FaultTree {
+                top: FtNode::Constant { value },
+                basic_events: Vec::new(),
+                warnings: Vec::new(),
+            },
+        };
     // Reuse exact BDD extraction: the core expansion cap bounds intermediate
     // products, whereas this setting bounds the final minimal family. In
     // particular, A OR (A AND B) must fit a cap of one after absorption.
@@ -450,8 +460,9 @@ fn compile_cut_sets(
             "importance",
             format!(
                 "fault-tree generation explains no way for the target `{}` \
-                 to become true (a guard reading only attributes is held at \
-                 its initial value); declare an attribute importance instead",
+                 to become true (a guard reading only attributes nothing \
+                 computes from a state is a constant); declare an attribute \
+                 importance instead",
                 s.target
             ),
         ));
