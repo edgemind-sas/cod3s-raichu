@@ -579,9 +579,14 @@ pub struct Transition {
     /// else writes, a variable that memorises (a latched detection, an
     /// alarm). An interrupted transition writes nothing.
     ///
+    /// On the target of an ODE equation, an edge effect is a **reset
+    /// map**, the jump of a piecewise-deterministic Markov process: the
+    /// continuous state takes the written value at the firing instant and
+    /// the integration restarts from it (the value must be a finite float).
+    ///
     /// Non-baseline construct: a document carrying it must declare
-    /// [`Feature::TransitionEffects`]. An effect on an attribute an equation
-    /// or a sensitive function writes is refused
+    /// [`Feature::TransitionEffects`]. An effect on an attribute an explicit
+    /// equation or a sensitive function writes is refused
     /// ([`ModelError::TransitionEffectOverwritten`]): the next evaluation
     /// would erase it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1875,13 +1880,15 @@ pub enum ModelError {
         /// The declared value.
         value: f64,
     },
-    /// A transition's edge effect writes an attribute that an equation or
-    /// a sensitive function also writes: the next evaluation would erase
-    /// the one-shot write.
+    /// A transition's edge effect writes an attribute that an explicit
+    /// equation or a sensitive function also writes: the next evaluation
+    /// would erase the one-shot write. (On an ODE target an edge effect is
+    /// a reset map, and accepted.)
     #[error(
         "transition `{transition}` writes `{attribute}` on its firing edge, \
          and {writer} writes it too: the next evaluation would erase the \
-         one-shot write. An edge effect needs an attribute nothing else writes"
+         one-shot write. An edge effect needs an attribute nothing else \
+         writes, or the target of an ODE equation, which it resets"
     )]
     TransitionEffectOverwritten {
         /// `component.automaton.transition`.
@@ -2678,11 +2685,14 @@ impl Model {
         Ok(())
     }
 
-    /// An edge effect's target must have no other writer: the equation or
-    /// sensitive function that also writes it would erase the one-shot
-    /// write at the next evaluation.
+    /// An edge effect's target must have no other writer that would erase
+    /// the one-shot write at the next evaluation: an explicit equation or a
+    /// sensitive function. The target of an ODE equation is not such a
+    /// writer: integration starts from the attribute's current value, so an
+    /// edge effect on it is a reset map, the jump of a piecewise-
+    /// deterministic Markov process.
     fn check_transition_effects(&self) -> Result<(), ModelError> {
-        let writers = self.attribute_writers();
+        let writers = self.level_writers();
         for component in &self.components {
             for automaton in &component.automata {
                 for transition in &automaton.transitions {
@@ -2706,6 +2716,43 @@ impl Model {
             }
         }
         Ok(())
+    }
+
+    /// The writers that set an attribute as a *level*, re-evaluated
+    /// whenever what they read changes: explicit equations and sensitive
+    /// functions, first writer in declaration order. ODE equations are left
+    /// out: they move their target from its current value instead of
+    /// recomputing it.
+    fn level_writers(&self) -> HashMap<(&str, &str), String> {
+        let mut writers: HashMap<(&str, &str), String> = HashMap::new();
+        for component in &self.components {
+            for equation in &component.equations {
+                if matches!(equation.kind, EquationKind::Ode) {
+                    continue;
+                }
+                writers
+                    .entry((component.name.as_str(), equation.target.as_str()))
+                    .or_insert_with(|| {
+                        format!(
+                            "the explicit equation on `{}.{}`",
+                            component.name, equation.target
+                        )
+                    });
+            }
+            for function in &component.sensitive_functions {
+                for assignment in &function.effects {
+                    writers
+                        .entry((
+                            assignment.target.component.as_str(),
+                            assignment.target.attribute.as_str(),
+                        ))
+                        .or_insert_with(|| {
+                            format!("sensitive function `{}.{}`", component.name, function.name)
+                        });
+                }
+            }
+        }
+        writers
     }
 
     /// Validate the discrete-only, affine and single-writer contract of all
