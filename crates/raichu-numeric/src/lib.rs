@@ -19,7 +19,8 @@
 //! - **Missed-crossing safety net**: every accepted step is scanned at
 //!   `sub_samples` interior points of the dense interpolant in
 //!   addition to its endpoint, then the earliest sign change is
-//!   bracketed and bisected down to `tol_event`. `max_step` caps the
+//!   bracketed and bisected down to `tol_event`, or to the gap between
+//!   two adjacent doubles when that gap is the wider. `max_step` caps the
 //!   step so a boundary feature narrower than the scan spacing cannot
 //!   hide inside one step (stress-tested).
 //!
@@ -320,6 +321,18 @@ fn first_satisfied(margins: &[f64]) -> Option<usize> {
     margins.iter().position(|margin| *margin >= 0.0)
 }
 
+/// Whether a bisection bracket `[lo, hi]` can still shrink: its computed
+/// midpoint lies strictly inside it.
+///
+/// Far from the origin the gap between two adjacent doubles exceeds
+/// `tol_event` (about 1.2e-10 at t = 5e5, for the default 1e-10): `lo` and
+/// `hi` are then neighbours, the midpoint rounds onto one of them, and a
+/// loop on `hi - lo > tol_event` alone would never end. The crossing is
+/// then located to the resolution of the time axis itself.
+fn has_room(lo: f64, mid: f64, hi: f64) -> bool {
+    lo < mid && mid < hi
+}
+
 /// Shared event-scan machinery: locate the earliest negative→non-negative
 /// transition inside `[t_lo, t_hi]` given a dense evaluator.
 ///
@@ -356,6 +369,9 @@ fn locate_event(
             let (mut lo, mut hi) = (prev_t, t);
             while hi - lo > tol_event {
                 let mid = 0.5 * (lo + hi);
+                if !has_room(lo, mid, hi) {
+                    break;
+                }
                 dense(mid, y_scratch);
                 system.events(mid, y_scratch, g_scratch);
                 if g_scratch[index] >= 0.0 {
@@ -416,6 +432,9 @@ fn observe_interval(
             let (mut lo, mut hi) = (prev_t, t);
             while hi - lo > tol_event {
                 let mid = 0.5 * (lo + hi);
+                if !has_room(lo, mid, hi) {
+                    break;
+                }
                 dense(mid, y_scratch);
                 system.observations(mid, y_scratch, &mut probe);
                 if probe[index] == before {
@@ -913,6 +932,94 @@ mod tests {
         fn events(&mut self, _t: f64, y: &[f64], out: &mut [f64]) {
             out[0] = y[0] - self.threshold;
         }
+    }
+
+    /// dy/dt = -1 from `y0` at `t0`: an event when y reaches 0, an
+    /// observation flipping when y falls under `y0 / 2`.
+    struct FarRamp {
+        y0: f64,
+    }
+    impl OdeSystem for FarRamp {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn rhs(&mut self, _t: f64, _y: &[f64], dydt: &mut [f64]) {
+            dydt[0] = -1.0;
+        }
+        fn n_events(&self) -> usize {
+            1
+        }
+        fn events(&mut self, _t: f64, y: &[f64], out: &mut [f64]) {
+            out[0] = -y[0];
+        }
+        fn n_observations(&self) -> usize {
+            1
+        }
+        fn observations(&mut self, _t: f64, y: &[f64], out: &mut [bool]) {
+            out[0] = y[0] < self.y0 / 2.0;
+        }
+    }
+
+    /// Far from the origin adjacent doubles are further apart than the
+    /// default `tol_event`: the bisections must stop at the resolution of
+    /// the time axis instead of looping. A run of half a million hours
+    /// reached it on the gas production example.
+    #[test]
+    fn a_crossing_far_from_the_origin_is_located_to_the_float_resolution() {
+        let t0 = 6.0e5;
+        let y0 = 50.3;
+        let ulp = t0 * f64::EPSILON;
+        assert!(ulp > SolverParams::default().tol_event);
+        let mut flips = Vec::new();
+        struct Watch<'a> {
+            ramp: FarRamp,
+            flips: &'a mut Vec<f64>,
+        }
+        impl OdeSystem for Watch<'_> {
+            fn dim(&self) -> usize {
+                1
+            }
+            fn rhs(&mut self, t: f64, y: &[f64], dydt: &mut [f64]) {
+                self.ramp.rhs(t, y, dydt);
+            }
+            fn n_events(&self) -> usize {
+                1
+            }
+            fn events(&mut self, t: f64, y: &[f64], out: &mut [f64]) {
+                self.ramp.events(t, y, out);
+            }
+            fn n_observations(&self) -> usize {
+                1
+            }
+            fn observations(&mut self, t: f64, y: &[f64], out: &mut [bool]) {
+                self.ramp.observations(t, y, out);
+            }
+            fn observed(&mut self, _index: usize, t: f64, _now: bool) {
+                self.flips.push(t);
+            }
+        }
+        let mut system = Watch {
+            ramp: FarRamp { y0 },
+            flips: &mut flips,
+        };
+        let mut solver = DormandPrince45::new(SolverParams::default());
+        let mut y = vec![y0];
+        let outcome = solver
+            .integrate(&mut system, t0, &mut y, t0 + 100.0, &[], &mut |_, _| {})
+            .unwrap();
+        let Outcome::Event { index: 0, t } = outcome else {
+            panic!("expected an event, got {outcome:?}");
+        };
+        // The steps of `max_step` accumulate rounding on the time axis
+        // itself (hundreds of additions near 6e5), so the crossing is right
+        // to a few 1e-8 h: what this test pins is that the bisection ends.
+        assert!((t - (t0 + y0)).abs() <= 1e-6, "event at {t}");
+        assert_eq!(flips.len(), 1, "{flips:?}");
+        assert!(
+            (flips[0] - (t0 + y0 / 2.0)).abs() <= 1e-6,
+            "flip at {}",
+            flips[0]
+        );
     }
 
     #[test]
