@@ -62,6 +62,29 @@ def main() -> None:
         values = campaign(variant)
         row = " | ".join(f"{100 * values[k][0]:.1f} %" for k in ORDER)
         print(f"| {LABELS[variant]} | {row} |")
+    hypotheses_table()
+
+
+def hypotheses_table() -> None:
+    """The hypotheses on the TPA share (`hypotheses.py`), as a table."""
+    path = RESULTS / "hypotheses.json"
+    if not path.exists():
+        return
+    rows = json.loads(path.read_text())["hypotheses"]
+    print()
+    print("| Hypothesis on the TPA | Trip in 18 months | TPA |")
+    print("|---|---|---|")
+    p, se = published()["tpa"]
+    total, se_total = published()["total"]
+    print(
+        f"| published Monte-Carlo | {100 * total:.1f} % ± {196 * se_total:.1f} "
+        f"| {100 * p:.1f} % ± {196 * se:.1f} |"
+    )
+    for row in rows:
+        print(
+            f"| {row['description']} | {100 * row['total']:.1f} % "
+            f"| {100 * row['by_cause']['tpa']:.2f} % |"
+        )
 
 
 if __name__ == "__main__":

@@ -11,7 +11,8 @@ published Monte-Carlo.
 | `model.py` | builds the RAICHU model of each variant (ARE trip rule, common-cause failures, the perfect-TPA diagnostic) from the report's data |
 | `model/<variant>.json` | the model documents `model.py` writes |
 | `run_campaign.py` | one Monte-Carlo campaign: probability of a trip within the 18-month cycle and its cause, with the cumulative curve |
-| `compare.py` | the published result, and the table comparing it with the campaigns |
+| `hypotheses.py` | the readings of the TPA data tried against the published TPA share, alone and combined |
+| `compare.py` | the published result, and the tables comparing it with the campaigns and the hypotheses |
 | `results/` | the campaigns the documentation page quotes |
 
 The model is ours, written from the report's description. The report's
@@ -28,5 +29,6 @@ python model.py
 for v in approdyn_pdmp approdyn_pdmp_noccf approdyn_tables approdyn_pdmp_perfect_tpa; do
     python run_campaign.py $v                           # about 1 s each on 24 threads
 done
+python hypotheses.py                                    # about 20 s
 python compare.py
 ```

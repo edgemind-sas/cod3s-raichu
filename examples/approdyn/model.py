@@ -57,6 +57,7 @@ Usage: python model.py  (writes model/<variant>.json, see VARIANTS)
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -109,6 +110,26 @@ RAMP_DOWN = 24.0
 HORIZON = PLATEAU_END + RAMP_DOWN
 
 CAUSES = ("vvp", "cex", "tpa", "are")
+
+
+@dataclass(frozen=True)
+class TpaData:
+    """The TPA parameters; the report's values by default (Tables 4.4, 4.8,
+    4.10, p. 49-50). Every field is a lever of the hypotheses tested on the
+    published TPA share (`hypotheses.py`)."""
+
+    #: Running failure rates per hour, turbine part and out-of-turbine part.
+    turbine_rate: float = TPA_T_RATE
+    out_of_turbine_rate: float = TPA_HT_RATE
+    #: Failure probabilities on demand (a start refused).
+    turbine_pfd: float = TPA_T_PFD
+    out_of_turbine_pfd: float = TPA_HT_PFD
+    #: Failure of the forcing back to 60 % power, per demand.
+    forcing_pfd: float = FORCING_PFD
+    #: Factor on every TPA repair time.
+    repair_factor: float = 1.0
+    #: Common-cause failures of the TPA; `None` follows the model's `ccf`.
+    ccf: bool | None = None
 
 
 # ---- expression helpers -----------------------------------------------------
@@ -256,7 +277,7 @@ def tpa_required() -> dict:
     }
 
 
-def power() -> dict:
+def power(data: TpaData) -> dict:
     calendar_done = at("calendar", "plateau", "over")
     lost_one = cmp("eq", tpa_running(), num(1))
     transitions = [
@@ -281,14 +302,14 @@ def power() -> dict:
             "force_60pc_full",
             "full",
             ["forcing_failed", "forced60"],
-            [FORCING_PFD],
+            [data.forcing_pfd],
             lost_one,
         ),
         inst(
             "force_60pc_ramp",
             "up3",
             ["forcing_failed", "forced60"],
-            [FORCING_PFD],
+            [data.forcing_pfd],
             lost_one,
         ),
         inst(
@@ -392,7 +413,7 @@ def cex_pump(name: str, running: bool, index: int, ccf: bool) -> dict:
     }
 
 
-def tpa(name: str, other: str, ccf: bool, perfect: bool = False) -> dict:
+def tpa(name: str, other: str, data: TpaData, perfect: bool = False) -> dict:
     """A TPA turbo-pump: the series of its turbine part (T) and its
     out-of-turbine part (HT), each with its failure modes and repair times
     (Tables 4.8 and 4.10)."""
@@ -401,8 +422,8 @@ def tpa(name: str, other: str, ccf: bool, perfect: bool = False) -> dict:
         # TPA1 is started first; TPA2 when TPA1 is not in standby.
         demanded = all_of(demanded, negate(at("TPA1", "state", "standby")))
     # Start: HT refuses (repair 28 h), else T refuses (2 h for 99 %, 24 h).
-    p_ht = TPA_HT_PFD
-    p_t = (1 - TPA_HT_PFD) * TPA_T_PFD
+    p_ht = data.out_of_turbine_pfd
+    p_t = (1 - data.out_of_turbine_pfd) * data.turbine_pfd
     # A refusal while forced at 60 % trips the plant (p. 50). The effect is
     # evaluated after the draw, on every outcome: only a refusal (the pump
     # not running) raises the flag.
@@ -420,6 +441,8 @@ def tpa(name: str, other: str, ccf: bool, perfect: bool = False) -> dict:
         demanded,
         effects=refused_at_60,
     )
+    ccf = bool(data.ccf)
+    lam_ht, lam_t = data.out_of_turbine_rate, data.turbine_rate
     ind = 1 - (CCF_SHARE if ccf else 0.0)
     transitions = [
         start,
@@ -429,13 +452,11 @@ def tpa(name: str, other: str, ccf: bool, perfect: bool = False) -> dict:
             "fail_long",
             "running",
             "rep24",
-            ind * (TPA_HT_RATE * 0.999 + TPA_T_RATE * 0.75),
+            ind * (lam_ht * 0.999 + lam_t * 0.75),
             kind="failure",
         ),
-        exp_t("fail_short", "running", "rep2", ind * TPA_T_RATE * 0.25, kind="failure"),
-        exp_t(
-            "rupture", "running", "rep144", ind * TPA_HT_RATE * 0.001, kind="failure"
-        ),
+        exp_t("fail_short", "running", "rep2", ind * lam_t * 0.25, kind="failure"),
+        exp_t("rupture", "running", "rep144", ind * lam_ht * 0.001, kind="failure"),
     ]
     if ccf:
         # 5 % of the running failures (modes I and II of the out-of-turbine
@@ -445,13 +466,13 @@ def tpa(name: str, other: str, ccf: bool, perfect: bool = False) -> dict:
                 "common_cause",
                 "running",
                 "rep24",
-                CCF_SHARE * (TPA_HT_RATE + TPA_T_RATE),
+                CCF_SHARE * (lam_ht + lam_t),
                 kind="failure",
                 effects=[flag_effect("tpa_ccf", true())],
             )
         )
     transitions += [
-        exp_t(f"repair_{s}", s, "standby", 1 / t, kind="repair")
+        exp_t(f"repair_{s}", s, "standby", 1 / (t * data.repair_factor), kind="repair")
         for s, t in TPA_REPAIR.items()
     ]
     if perfect:
@@ -566,22 +587,26 @@ def build(
     ccf: bool = True,
     name: str | None = None,
     perfect_tpa: bool = False,
+    tpa_data: TpaData | None = None,
 ) -> dict:
     """The model document for the ARE trip rule `rule`, with or without the
     common-cause failures."""
     if rule not in ARE_TRIP:
         raise ValueError(f"rule must be one of {RULES}, not {rule!r}")
+    data = tpa_data or TpaData()
+    if data.ccf is None:
+        data = TpaData(**{**data.__dict__, "ccf": ccf})
     body = {
         "name": name or f"approdyn_{rule}" + ("" if ccf else "_noccf"),
         "components": [
-            power(),
+            power(data),
             calendar(),
             vvp(),
             cex_pump("CEX1", True, 0, ccf),
             cex_pump("CEX2", True, 1, ccf),
             cex_pump("CEX3", False, 2, ccf),
-            tpa("TPA1", "TPA2", ccf, perfect_tpa),
-            tpa("TPA2", "TPA1", ccf, perfect_tpa),
+            tpa("TPA1", "TPA2", data, perfect_tpa),
+            tpa("TPA2", "TPA1", data, perfect_tpa),
             are_valve("PD", rule),
             are_valve("GD", rule),
             plant(),
