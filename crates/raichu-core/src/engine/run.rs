@@ -613,6 +613,20 @@ impl<'m> Engine<'m> {
         let transition = &self.model.transitions[trans_idx];
         for (target, value_expr) in &transition.effects {
             let new = eval_expr(self.model, &self.vars, &self.states, self.time, value_expr)?;
+            // On an ODE target the effect is a reset map: integration
+            // restarts from the written value, which must be a finite float.
+            if self.model.ode.iter().any(|(var, _)| var == target)
+                && !matches!(new, Value::Float(x) if x.is_finite())
+            {
+                return Err(EngineError::TypeError {
+                    time: self.time,
+                    detail: format!(
+                        "transition `{}` resets the ODE target `{}` to {new:?}: a reset \
+                         needs a finite float",
+                        transition.name, self.model.var_names[*target]
+                    ),
+                });
+            }
             let old = self.vars[*target];
             if old != new {
                 self.vars[*target] = new;

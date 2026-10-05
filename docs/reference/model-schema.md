@@ -312,9 +312,22 @@ effect, and on an attribute nothing else writes, a variable that
 memorises: a detection latched by a failure and cleared by its repair.
 An interrupted transition writes nothing.
 
-An edge effect on an attribute an equation or a sensitive function also
-writes is refused: the next evaluation would erase it. A document
-carrying the field declares the `transition_effects` feature.
+An edge effect on an attribute an explicit equation or a sensitive
+function also writes is refused: the next evaluation would erase it.
+
+On the target of an **ODE** equation, an edge effect is a **reset map**,
+the jump of a piecewise-deterministic Markov process (Davis): the
+continuous state takes the written value at the firing instant and the
+integration of the next segment starts from it. Watched guards and
+state-dependent hazards that read the variable see the new value from
+that instant. A tank refilled at once when a pump is repaired, a counter
+of accumulated wear reset by a maintenance, a bouncing ball whose
+velocity flips at the floor: each is one transition writing its ODE
+target. The written value must be a finite float; any other value stops
+the run with an error naming the transition. A value sampled at the very
+instant of the jump reads the state before it.
+
+A document carrying the field declares the `transition_effects` feature.
 
 #### Declared kind
 
