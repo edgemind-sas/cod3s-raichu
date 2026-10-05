@@ -117,30 +117,83 @@ the published run:
 ![Probability of a trip within the cycle, by cause, for the published Monte-Carlo and each RAICHU variant](../assets/figures/example-approdyn-trips-light.svg#only-light){ .figure }
 ![Probability of a trip within the cycle, by cause, for the published Monte-Carlo and each RAICHU variant](../assets/figures/example-approdyn-trips-dark.svg#only-dark){ .figure }
 
-**The turbo-pumps make the difference.** With the reconfiguration logic
-as the report prints it, the TPA trip the plant in 22 % of the cycles
-even without common causes, and in 54 % with them. A hand count gives the
-same order: about 19 TPA failures per cycle with both running, each
-followed by a repair of about 20 h during which the other TPA can fail
-(about 1.4 %), plus the forcing failure and the restart refusal, about
-2 % per failure. The report's own closed-form reasoning on the TPA
-trajectories reaches 17 % (chapter 5). The published Markov-process run
-attributes 1.2 % to them.
+**The turbo-pumps make the difference.** At full power both TPA run.
+When one fails, the report brings the power back to 60 %, where one TPA
+is enough, repairs the failed one and restarts it. Three things can go
+wrong on the way, and each trips the plant: the power reduction fails
+(1 in 1000), the remaining TPA fails during the repair, or the repaired
+one refuses to restart. The turbine part fails at 5.9e-4 per hour, so
+with two TPA running a cycle sees **about 19 TPA failures**, each
+followed by a repair of about 20 h. The other TPA fails during that
+repair about 1.4 % of the time, the restart is refused about 0.4 % of
+the time and the reduction fails 0.1 % of the time: **about 2 % per
+failure, about 30 % per cycle**, and 22 % once the other causes have
+ended part of the cycles first. The report's common causes (5 % of the
+running failures lose both TPA at once, nearly one per cycle) raise it
+to 54 %. The report's own closed-form reasoning on the TPA trajectories
+reaches 17 % (chapter 5). The published Markov-process run attributes
+1.2 % to them.
 
 **Without TPA trips, the published run is reproduced.** The diagnostic
 variant keeps everything else and makes the TPA perfect: it gives 55.5 %,
 of which 19.3 % by the VVP and 31.7 % by the ARE, against 54.8 %, 19.8 %
 and 32.5 % published, each within the published sample's uncertainty. The
 published causes are those of a model whose turbo-pumps hardly ever trip
-the plant. Whether the published run left out the TPA common causes and
-most of the forcing logic, or modelled it otherwise, cannot be told from
-the report. The published CEX share, 1.2 %, lies between the values
-found here without common causes (0.6 %) and with them (4.6 %).
+the plant. Whether the published run modelled the TPA otherwise is the
+question of the next section. The published CEX share, 1.2 %, lies
+between the values found here without common causes (0.6 %) and with
+them (4.6 %).
 
 **The ARE counting rule matters as much.** Counting only the ARE failures
 that the report's detection rates would reveal (8 % of them) turns the ARE
 from the first cause into a minor one (1.8 %). The published run counts
 them all.
+
+## Hypotheses on the published TPA share
+
+`hypotheses.py` tries the readings that could bring the TPA share down to
+the published 1.2 %, one lever at a time and then combined, everything
+else as printed (ARE counted as in the published run, CEX common causes
+kept):
+
+- the TPA common causes left out;
+- the turbine failure rate ten times lower, as for a misplaced decimal;
+- the turbine refusal on demand at 3.9e-5, the value of Ionescu's 2016
+  thesis on the same TPA (the report also prints 3.9e-3 and 3.9e-2);
+- the power reduction and the restarts never failing;
+- the repair times doubled, as the report's three implementations used
+  them, or instantaneous, as for a model that ignores the exposure during
+  a repair.
+
+| Hypothesis on the TPA | Trip in 18 months | TPA |
+|---|---|---|
+| published Monte-Carlo | 54.8 % ± 1.5 | 1.2 % ± 0.3 |
+| report as printed, with TPA common causes | 87.5 % | 53.66 % |
+| no TPA common cause | 68.9 % | 21.35 % |
+| no common cause; turbine failure rate / 10 | 57.6 % | 3.56 % |
+| no common cause; turbine refusal 3.9e-5 (thesis) | 66.6 % | 17.61 % |
+| no common cause; forcing and restarts never fail | 65.5 % | 16.11 % |
+| no common cause; repair times doubled | 75.5 % | 32.12 % |
+| no common cause; repairs instantaneous | 59.8 % | 6.86 % |
+| no common cause; turbine rate / 10 and refusal 3.9e-5 | 56.7 % | 2.19 % |
+| no common cause; turbine rate / 10, forcing and restarts never fail | 56.2 % | 1.65 % |
+| no common cause; repairs instantaneous and refusal 3.9e-5 | 56.7 % | 2.06 % |
+| no common cause; turbine rate / 10 and repairs instantaneous | 56.6 % | 2.00 % |
+| no common cause; turbine rate / 10, repairs instantaneous, refusal 3.9e-5 | 55.7 % | 0.60 % |
+
+**No single reading explains the published share.** Leaving out the
+common causes still leaves 21 %; the strongest single lever after it, a
+turbine failure rate ten times lower, still leaves 3.6 %. The published
+1.2 % is reached only by stacking **three departures** from the printed
+data at once: no common cause, a turbine failing ten times less often,
+and either no failure on demand (1.65 %) or instantaneous repairs with
+the thesis refusal (0.60 %). These combinations bring the total to
+55.7-56.2 %, 1.2 to 1.8 published standard errors above 54.8 %; the rest
+of the gap is about the CEX share, whose common causes these runs keep
+(2.8 % against 1.2 % published). The
+published run is therefore consistent with a TPA model much more lenient
+than the printed one on several counts, and with no single typo; which
+departures it actually made is not documented in the report.
 
 ## Reading the results
 
@@ -149,9 +202,10 @@ them all.
   competing causes is plain data, and an 18-month campaign of 200 000
   histories runs in a second.
 - **What this example validates.** The model reproduces the published
-  total and the VVP and ARE shares once the TPA are neutralised; it does
+  total and the VVP and ARE shares once the TPA are neutralised. It does
   not reproduce the published TPA share, and shows that the report's
-  printed logic cannot produce it.
+  printed TPA data and logic cannot produce it: only several departures
+  from them at once can.
 - **What it does not.** The steam-generator level and its control are not
   modelled; the data choices above are ours; the reference itself rests on
   undocumented modelling decisions. Treat the case as a test of modelling
@@ -166,7 +220,8 @@ python run_campaign.py approdyn_pdmp                  # about 1 s each
 python run_campaign.py approdyn_pdmp_noccf
 python run_campaign.py approdyn_tables
 python run_campaign.py approdyn_pdmp_perfect_tpa
-python compare.py                                     # the table above
+python hypotheses.py                                  # the TPA hypotheses, about 20 s
+python compare.py                                     # the tables above
 ```
 
 Every RAICHU number on this page is read from the files under
