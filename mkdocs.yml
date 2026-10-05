@@ -73,6 +73,7 @@ nav:
       - Two-out-of-three pumps: examples/two-out-of-three.md
       - Hydrogen installation: examples/h2-installation.md
       - Emergency power supply: examples/emergency-power-supply.md
+      - Gas production: examples/gas-production.md
   - Model schema reference: reference/model-schema.md
   - Raw sequence corpus format: reference/sequence-format.md
   - Quantification envelope format: reference/quantification-format.md

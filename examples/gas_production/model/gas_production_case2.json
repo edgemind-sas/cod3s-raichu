@@ -1,0 +1,1039 @@
+{
+ "raichu_model": {
+  "format": 1,
+  "requires": [
+   "transition_effects"
+  ]
+ },
+ "model": {
+  "name": "gas_production_case2",
+  "components": [
+   {
+    "name": "U1",
+    "automata": [
+     {
+      "name": "health",
+      "states": [
+       "up",
+       "down"
+      ],
+      "init": "up",
+      "transitions": [
+       {
+        "name": "fail",
+        "source": "up",
+        "targets": [
+         "down"
+        ],
+        "distrib": "exp",
+        "rate_expr": {
+         "op": "if",
+         "cond": {
+          "op": "bool",
+          "bool_op": "not",
+          "args": [
+           {
+            "op": "state_active",
+            "state": {
+             "component": "U2",
+             "automaton": "health",
+             "state": "up"
+            }
+           }
+          ]
+         },
+         "then": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 0.0005
+          }
+         },
+         "otherwise": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 0.0005
+          }
+         }
+        },
+        "kind": "failure",
+        "monitored": true
+       },
+       {
+        "name": "repair",
+        "source": "down",
+        "targets": [
+         "up"
+        ],
+        "distrib": "lognormal",
+        "mu": 0.23,
+        "sigma": 2.25,
+        "kind": "repair",
+        "monitored": true,
+        "effects": [
+         {
+          "target": {
+           "component": "reservoir",
+           "attribute": "level"
+          },
+          "value": {
+           "op": "if",
+           "cond": {
+            "op": "state_active",
+            "state": {
+             "component": "U2",
+             "automaton": "health",
+             "state": "up"
+            }
+           },
+           "then": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 220000.0
+            }
+           },
+           "otherwise": {
+            "op": "attr",
+            "attr": {
+             "component": "reservoir",
+             "attribute": "level"
+            }
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "U2",
+    "automata": [
+     {
+      "name": "health",
+      "states": [
+       "up",
+       "down"
+      ],
+      "init": "up",
+      "transitions": [
+       {
+        "name": "fail",
+        "source": "up",
+        "targets": [
+         "down"
+        ],
+        "distrib": "exp",
+        "rate_expr": {
+         "op": "if",
+         "cond": {
+          "op": "bool",
+          "bool_op": "not",
+          "args": [
+           {
+            "op": "state_active",
+            "state": {
+             "component": "U1",
+             "automaton": "health",
+             "state": "up"
+            }
+           }
+          ]
+         },
+         "then": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 0.0025
+          }
+         },
+         "otherwise": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 0.0025
+          }
+         }
+        },
+        "kind": "failure",
+        "monitored": true
+       },
+       {
+        "name": "repair",
+        "source": "down",
+        "targets": [
+         "up"
+        ],
+        "distrib": "lognormal",
+        "mu": 0.5,
+        "sigma": 1.83,
+        "kind": "repair",
+        "monitored": true,
+        "effects": [
+         {
+          "target": {
+           "component": "reservoir",
+           "attribute": "level"
+          },
+          "value": {
+           "op": "if",
+           "cond": {
+            "op": "state_active",
+            "state": {
+             "component": "U1",
+             "automaton": "health",
+             "state": "up"
+            }
+           },
+           "then": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 220000.0
+            }
+           },
+           "otherwise": {
+            "op": "attr",
+            "attr": {
+             "component": "reservoir",
+             "attribute": "level"
+            }
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "reservoir",
+    "attributes": [
+     {
+      "name": "level",
+      "kind": "float",
+      "init": {
+       "kind": "float",
+       "value": 220000.0
+      }
+     },
+     {
+      "name": "delivered",
+      "kind": "float",
+      "init": {
+       "kind": "float",
+       "value": 1.0
+      }
+     },
+     {
+      "name": "total_loss",
+      "kind": "bool",
+      "init": {
+       "kind": "bool",
+       "value": false
+      }
+     }
+    ],
+    "automata": [
+     {
+      "name": "store",
+      "states": [
+       "full",
+       "partial",
+       "empty"
+      ],
+      "init": "full",
+      "transitions": [
+       {
+        "name": "start_draining",
+        "source": "full",
+        "targets": [
+         "partial"
+        ],
+        "guard": {
+         "op": "cmp",
+         "cmp": "lt",
+         "lhs": {
+          "op": "if",
+          "cond": {
+           "op": "state_active",
+           "state": {
+            "component": "U1",
+            "automaton": "health",
+            "state": "up"
+           }
+          },
+          "then": {
+           "op": "if",
+           "cond": {
+            "op": "state_active",
+            "state": {
+             "component": "U2",
+             "automaton": "health",
+             "state": "up"
+            }
+           },
+           "then": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           },
+           "otherwise": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": -4300.0
+            }
+           }
+          },
+          "otherwise": {
+           "op": "if",
+           "cond": {
+            "op": "state_active",
+            "state": {
+             "component": "U2",
+             "automaton": "health",
+             "state": "up"
+            }
+           },
+           "then": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": -2000.0
+            }
+           },
+           "otherwise": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": -7500.0
+            }
+           }
+          }
+         },
+         "rhs": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 0.0
+          }
+         }
+        },
+        "distrib": "inst",
+        "probs": []
+       },
+       {
+        "name": "run_dry",
+        "source": "partial",
+        "targets": [
+         "empty"
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "le",
+           "lhs": {
+            "op": "attr",
+            "attr": {
+             "component": "reservoir",
+             "attribute": "level"
+            }
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           }
+          },
+          {
+           "op": "cmp",
+           "cmp": "lt",
+           "lhs": {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "U1",
+              "automaton": "health",
+              "state": "up"
+             }
+            },
+            "then": {
+             "op": "if",
+             "cond": {
+              "op": "state_active",
+              "state": {
+               "component": "U2",
+               "automaton": "health",
+               "state": "up"
+              }
+             },
+             "then": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": 0.0
+              }
+             },
+             "otherwise": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -4300.0
+              }
+             }
+            },
+            "otherwise": {
+             "op": "if",
+             "cond": {
+              "op": "state_active",
+              "state": {
+               "component": "U2",
+               "automaton": "health",
+               "state": "up"
+              }
+             },
+             "then": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -2000.0
+              }
+             },
+             "otherwise": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -7500.0
+              }
+             }
+            }
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           }
+          }
+         ]
+        },
+        "distrib": "watched"
+       },
+       {
+        "name": "fill_up",
+        "source": "partial",
+        "targets": [
+         "full"
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "ge",
+           "lhs": {
+            "op": "attr",
+            "attr": {
+             "component": "reservoir",
+             "attribute": "level"
+            }
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 220000.0
+            }
+           }
+          },
+          {
+           "op": "cmp",
+           "cmp": "gt",
+           "lhs": {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "U1",
+              "automaton": "health",
+              "state": "up"
+             }
+            },
+            "then": {
+             "op": "if",
+             "cond": {
+              "op": "state_active",
+              "state": {
+               "component": "U2",
+               "automaton": "health",
+               "state": "up"
+              }
+             },
+             "then": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": 0.0
+              }
+             },
+             "otherwise": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -4300.0
+              }
+             }
+            },
+            "otherwise": {
+             "op": "if",
+             "cond": {
+              "op": "state_active",
+              "state": {
+               "component": "U2",
+               "automaton": "health",
+               "state": "up"
+              }
+             },
+             "then": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -2000.0
+              }
+             },
+             "otherwise": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -7500.0
+              }
+             }
+            }
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           }
+          }
+         ]
+        },
+        "distrib": "watched"
+       },
+       {
+        "name": "restart",
+        "source": "empty",
+        "targets": [
+         "partial"
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "or",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "gt",
+           "lhs": {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "U1",
+              "automaton": "health",
+              "state": "up"
+             }
+            },
+            "then": {
+             "op": "if",
+             "cond": {
+              "op": "state_active",
+              "state": {
+               "component": "U2",
+               "automaton": "health",
+               "state": "up"
+              }
+             },
+             "then": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": 0.0
+              }
+             },
+             "otherwise": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -4300.0
+              }
+             }
+            },
+            "otherwise": {
+             "op": "if",
+             "cond": {
+              "op": "state_active",
+              "state": {
+               "component": "U2",
+               "automaton": "health",
+               "state": "up"
+              }
+             },
+             "then": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -2000.0
+              }
+             },
+             "otherwise": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": -7500.0
+              }
+             }
+            }
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           }
+          },
+          {
+           "op": "cmp",
+           "cmp": "gt",
+           "lhs": {
+            "op": "attr",
+            "attr": {
+             "component": "reservoir",
+             "attribute": "level"
+            }
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           }
+          }
+         ]
+        },
+        "distrib": "inst",
+        "probs": []
+       }
+      ]
+     }
+    ],
+    "equations": [
+     {
+      "target": "level",
+      "kind": "ode",
+      "expr": {
+       "op": "if",
+       "cond": {
+        "op": "state_active",
+        "state": {
+         "component": "reservoir",
+         "automaton": "store",
+         "state": "empty"
+        }
+       },
+       "then": {
+        "op": "max",
+        "args": [
+         {
+          "op": "if",
+          "cond": {
+           "op": "state_active",
+           "state": {
+            "component": "U1",
+            "automaton": "health",
+            "state": "up"
+           }
+          },
+          "then": {
+           "op": "if",
+           "cond": {
+            "op": "state_active",
+            "state": {
+             "component": "U2",
+             "automaton": "health",
+             "state": "up"
+            }
+           },
+           "then": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           },
+           "otherwise": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": -4300.0
+            }
+           }
+          },
+          "otherwise": {
+           "op": "if",
+           "cond": {
+            "op": "state_active",
+            "state": {
+             "component": "U2",
+             "automaton": "health",
+             "state": "up"
+            }
+           },
+           "then": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": -2000.0
+            }
+           },
+           "otherwise": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": -7500.0
+            }
+           }
+          }
+         },
+         {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 0.0
+          }
+         }
+        ]
+       },
+       "otherwise": {
+        "op": "if",
+        "cond": {
+         "op": "state_active",
+         "state": {
+          "component": "reservoir",
+          "automaton": "store",
+          "state": "full"
+         }
+        },
+        "then": {
+         "op": "min",
+         "args": [
+          {
+           "op": "if",
+           "cond": {
+            "op": "state_active",
+            "state": {
+             "component": "U1",
+             "automaton": "health",
+             "state": "up"
+            }
+           },
+           "then": {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "U2",
+              "automaton": "health",
+              "state": "up"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": -4300.0
+             }
+            }
+           },
+           "otherwise": {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "U2",
+              "automaton": "health",
+              "state": "up"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": -2000.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": -7500.0
+             }
+            }
+           }
+          },
+          {
+           "op": "const",
+           "value": {
+            "kind": "float",
+            "value": 0.0
+           }
+          }
+         ]
+        },
+        "otherwise": {
+         "op": "if",
+         "cond": {
+          "op": "state_active",
+          "state": {
+           "component": "U1",
+           "automaton": "health",
+           "state": "up"
+          }
+         },
+         "then": {
+          "op": "if",
+          "cond": {
+           "op": "state_active",
+           "state": {
+            "component": "U2",
+            "automaton": "health",
+            "state": "up"
+           }
+          },
+          "then": {
+           "op": "const",
+           "value": {
+            "kind": "float",
+            "value": 0.0
+           }
+          },
+          "otherwise": {
+           "op": "const",
+           "value": {
+            "kind": "float",
+            "value": -4300.0
+           }
+          }
+         },
+         "otherwise": {
+          "op": "if",
+          "cond": {
+           "op": "state_active",
+           "state": {
+            "component": "U2",
+            "automaton": "health",
+            "state": "up"
+           }
+          },
+          "then": {
+           "op": "const",
+           "value": {
+            "kind": "float",
+            "value": -2000.0
+           }
+          },
+          "otherwise": {
+           "op": "const",
+           "value": {
+            "kind": "float",
+            "value": -7500.0
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    ],
+    "sensitive_functions": [
+     {
+      "name": "production",
+      "effects": [
+       {
+        "target": {
+         "component": "reservoir",
+         "attribute": "delivered"
+        },
+        "value": {
+         "op": "if",
+         "cond": {
+          "op": "bool",
+          "bool_op": "not",
+          "args": [
+           {
+            "op": "state_active",
+            "state": {
+             "component": "reservoir",
+             "automaton": "store",
+             "state": "empty"
+            }
+           }
+          ]
+         },
+         "then": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 1.0
+          }
+         },
+         "otherwise": {
+          "op": "if",
+          "cond": {
+           "op": "state_active",
+           "state": {
+            "component": "U1",
+            "automaton": "health",
+            "state": "up"
+           }
+          },
+          "then": {
+           "op": "const",
+           "value": {
+            "kind": "float",
+            "value": 0.4266666666666667
+           }
+          },
+          "otherwise": {
+           "op": "if",
+           "cond": {
+            "op": "state_active",
+            "state": {
+             "component": "U2",
+             "automaton": "health",
+             "state": "up"
+            }
+           },
+           "then": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.7333333333333333
+            }
+           },
+           "otherwise": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           }
+          }
+         }
+        }
+       },
+       {
+        "target": {
+         "component": "reservoir",
+         "attribute": "total_loss"
+        },
+        "value": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "state_active",
+           "state": {
+            "component": "reservoir",
+            "automaton": "store",
+            "state": "empty"
+           }
+          },
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "U1",
+              "automaton": "health",
+              "state": "up"
+             }
+            }
+           ]
+          },
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "U2",
+              "automaton": "health",
+              "state": "up"
+             }
+            }
+           ]
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "indicators": [
+   {
+    "name": "empty",
+    "target": "state",
+    "component": "reservoir",
+    "automaton": "store",
+    "state": "empty"
+   },
+   {
+    "name": "delivered",
+    "target": "attribute",
+    "attr": {
+     "component": "reservoir",
+     "attribute": "delivered"
+    }
+   },
+   {
+    "name": "total_loss",
+    "target": "attribute",
+    "attr": {
+     "component": "reservoir",
+     "attribute": "total_loss"
+    }
+   }
+  ]
+ }
+}

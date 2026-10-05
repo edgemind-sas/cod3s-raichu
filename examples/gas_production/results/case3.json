@@ -1,0 +1,35 @@
+{
+  "format": "gas_example.campaign",
+  "case": 3,
+  "quantities": {
+    "A": {
+      "estimate": 0.9884870558590008,
+      "standard_error": 2.3524592717909242e-05
+    },
+    "PA": {
+      "estimate": 0.9940512968631632,
+      "standard_error": 1.0500373468409323e-05
+    },
+    "f_LNP": {
+      "estimate": 0.8292353296499999,
+      "standard_error": 0.0004226907792141003
+    },
+    "f_TLP": {
+      "estimate": 1.20845424285,
+      "standard_error": 0.003871698456341682
+    }
+  },
+  "settings": {
+    "runs": 40000,
+    "horizon_h": 1000000.0,
+    "seed": 2008,
+    "max_step_h": 100.0,
+    "year_h": 8766.0
+  },
+  "run": {
+    "pyraichu": "0.80.0",
+    "wall_clock_s": 112.9,
+    "logical_cpus": 24,
+    "machine": "x86_64"
+  }
+}
