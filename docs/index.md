@@ -147,7 +147,9 @@ print("unavailability:", round(failed.mean[-1], 3),
 - **[Examples](examples/index.md)**: worked studies with schematics,
   hypotheses and results on charts: the heated tank benchmark, a heated
   room over a winter, a two-out-of-three system solved three ways, a solar
-  hydrogen installation.
+  hydrogen installation, and two published benchmarks compared with their
+  reference values: EDF's emergency power supply of a nuclear plant and a
+  gas production system with a buffer reservoir.
 - **[Model schema reference](reference/model-schema.md)**: every field,
   distribution and expression operator.
 - **[Advanced guides](guides/reproducibility.md)**: reproducibility,
