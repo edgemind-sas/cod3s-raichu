@@ -14,7 +14,7 @@ tolerances are part of the [provenance](reproducibility.md)).
 | `rtol` | relative step-error tolerance | `1e-9` |
 | `atol` | absolute step-error tolerance | `1e-12` |
 | `max_step` | hard cap on the step size (missed-crossing safety net) | `0.1` |
-| `tol_event` | time tolerance of the boundary-crossing bisection | `1e-10` |
+| `tol_event` | time tolerance of the boundary-crossing bisection, floored by the float resolution of the time axis | `1e-10` |
 | `sub_samples` | dense interior points scanned per step for guard crossings | `16` |
 | `event_resolution` | widest spacing accepted between two scan points: a floor on resolution | none (the engine's own, `step / sub_samples`) |
 
@@ -22,6 +22,12 @@ The defaults are **deliberately conservative**: they locate events to
 `1e-10` and scan 16 interior points per step, buying far more accuracy
 than most studies need. Relaxing them can speed a hybrid Monte-Carlo run
 by an order of magnitude at an accuracy that is still excellent.
+
+Far from the origin, `1e-10` is finer than the time axis itself: beyond
+about `t = 5e5` two adjacent doubles are further apart than that. The
+bisection then stops at the float resolution of the time axis, the best
+any location can do there (before 0.79.1 it never stopped, and a long
+history hung).
 
 `event_resolution` answers a different question: how short an episode can
 be and still be seen. The scan finds a crossing only when a scan point
@@ -327,6 +333,13 @@ it has no run-time counterpart to fall back on: see
 - **Relax `rtol`/`tol_event` and raise `max_step`** for large hybrid
   Monte-Carlo campaigns where the ODE is smooth and a `1e-5`-level
   accuracy is ample.
+- **Raise `max_step` on piecewise-linear dynamics over long horizons.**
+  Between two events a level filled or drained at constant rates is
+  integrated exactly whatever the step, and watched crossings are still
+  located by root finding; only the default cap of `0.1` multiplies the
+  steps (a million for a history of `1e5` hours). On the
+  [gas production example](../examples/gas-production.md), `max_step=100`
+  gave the same results 274 times faster.
 - Always record the setting: it rides in the run's provenance, so a
   result is never ambiguous about how it was computed.
 
