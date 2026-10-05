@@ -1,0 +1,2906 @@
+{
+ "raichu_model": {
+  "format": 1,
+  "requires": [
+   "transition_effects"
+  ]
+ },
+ "model": {
+  "name": "approdyn_tables",
+  "components": [
+   {
+    "name": "power",
+    "automata": [
+     {
+      "name": "profile",
+      "states": [
+       "up0",
+       "start2",
+       "up1",
+       "switch15",
+       "up2",
+       "at60",
+       "up3",
+       "full",
+       "forced60",
+       "forcing_failed",
+       "down",
+       "end"
+      ],
+      "init": "up0",
+      "transitions": [
+       {
+        "name": "reach_2pc",
+        "source": "up0",
+        "targets": [
+         "start2"
+        ],
+        "distrib": "delay",
+        "time": 10.0
+       },
+       {
+        "name": "take_over_2pc",
+        "source": "start2",
+        "targets": [
+         "up1"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "ge",
+           "lhs": {
+            "op": "add",
+            "args": [
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "TPA1",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "TPA2",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             }
+            ]
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 1.0
+            }
+           }
+          },
+          {
+           "op": "state_active",
+           "state": {
+            "component": "PD",
+            "automaton": "valve",
+            "state": "open"
+           }
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "reach_15pc",
+        "source": "up1",
+        "targets": [
+         "switch15"
+        ],
+        "distrib": "delay",
+        "time": 10.222222222222221
+       },
+       {
+        "name": "take_over_15pc",
+        "source": "switch15",
+        "targets": [
+         "up2"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "state_active",
+         "state": {
+          "component": "GD",
+          "automaton": "valve",
+          "state": "open"
+         }
+        },
+        "monitored": true
+       },
+       {
+        "name": "reach_60pc",
+        "source": "up2",
+        "targets": [
+         "at60"
+        ],
+        "distrib": "delay",
+        "time": 2.0
+       },
+       {
+        "name": "second_tpa_running",
+        "source": "at60",
+        "targets": [
+         "up3"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "cmp",
+         "cmp": "eq",
+         "lhs": {
+          "op": "add",
+          "args": [
+           {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "TPA1",
+              "automaton": "state",
+              "state": "running"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 1.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            }
+           },
+           {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "TPA2",
+              "automaton": "state",
+              "state": "running"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 1.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            }
+           }
+          ]
+         },
+         "rhs": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 2.0
+          }
+         }
+        },
+        "monitored": true
+       },
+       {
+        "name": "reach_100pc",
+        "source": "up3",
+        "targets": [
+         "full"
+        ],
+        "distrib": "delay",
+        "time": 1.7777777777777777
+       },
+       {
+        "name": "force_60pc_full",
+        "source": "full",
+        "targets": [
+         "forcing_failed",
+         "forced60"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.001
+        ],
+        "guard": {
+         "op": "cmp",
+         "cmp": "eq",
+         "lhs": {
+          "op": "add",
+          "args": [
+           {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "TPA1",
+              "automaton": "state",
+              "state": "running"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 1.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            }
+           },
+           {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "TPA2",
+              "automaton": "state",
+              "state": "running"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 1.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            }
+           }
+          ]
+         },
+         "rhs": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 1.0
+          }
+         }
+        },
+        "monitored": true
+       },
+       {
+        "name": "force_60pc_ramp",
+        "source": "up3",
+        "targets": [
+         "forcing_failed",
+         "forced60"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.001
+        ],
+        "guard": {
+         "op": "cmp",
+         "cmp": "eq",
+         "lhs": {
+          "op": "add",
+          "args": [
+           {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "TPA1",
+              "automaton": "state",
+              "state": "running"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 1.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            }
+           },
+           {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "TPA2",
+              "automaton": "state",
+              "state": "running"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 1.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            }
+           }
+          ]
+         },
+         "rhs": {
+          "op": "const",
+          "value": {
+           "kind": "float",
+           "value": 1.0
+          }
+         }
+        },
+        "monitored": true
+       },
+       {
+        "name": "back_to_full",
+        "source": "forced60",
+        "targets": [
+         "full"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "eq",
+           "lhs": {
+            "op": "add",
+            "args": [
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "TPA1",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "TPA2",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             }
+            ]
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 2.0
+            }
+           }
+          },
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "calendar",
+              "automaton": "plateau",
+              "state": "over"
+             }
+            }
+           ]
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "end_of_plateau",
+        "source": "full",
+        "targets": [
+         "down"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "state_active",
+         "state": {
+          "component": "calendar",
+          "automaton": "plateau",
+          "state": "over"
+         }
+        },
+        "monitored": true
+       },
+       {
+        "name": "end_of_plateau_forced",
+        "source": "forced60",
+        "targets": [
+         "down"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "state_active",
+         "state": {
+          "component": "calendar",
+          "automaton": "plateau",
+          "state": "over"
+         }
+        },
+        "monitored": true
+       },
+       {
+        "name": "shut_down",
+        "source": "down",
+        "targets": [
+         "end"
+        ],
+        "distrib": "delay",
+        "time": 24.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "calendar",
+    "automata": [
+     {
+      "name": "plateau",
+      "states": [
+       "open",
+       "over"
+      ],
+      "init": "open",
+      "transitions": [
+       {
+        "name": "plateau_ends",
+        "source": "open",
+        "targets": [
+         "over"
+        ],
+        "distrib": "delay",
+        "time": 12984.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "VVP",
+    "automata": [
+     {
+      "name": "state",
+      "states": [
+       "ok",
+       "failed"
+      ],
+      "init": "ok",
+      "transitions": [
+       {
+        "name": "fail",
+        "source": "ok",
+        "targets": [
+         "failed"
+        ],
+        "distrib": "exp",
+        "rate": 2.17e-05,
+        "monitored": true,
+        "kind": "failure"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "CEX1",
+    "automata": [
+     {
+      "name": "state",
+      "states": [
+       "running",
+       "standby",
+       "rep72",
+       "rep168"
+      ],
+      "init": "running",
+      "transitions": [
+       {
+        "name": "fail",
+        "source": "running",
+        "targets": [
+         "rep72"
+        ],
+        "distrib": "exp",
+        "rate": 4.1283675000000004e-05,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "rupture",
+        "source": "running",
+        "targets": [
+         "rep168"
+        ],
+        "distrib": "exp",
+        "rate": 4.1325e-08,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "start",
+        "source": "standby",
+        "targets": [
+         "rep72",
+         "running"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.00195
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "lt",
+           "lhs": {
+            "op": "add",
+            "args": [
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX1",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX2",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX3",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             }
+            ]
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 2.0
+            }
+           }
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "common_cause",
+        "source": "running",
+        "targets": [
+         "rep168"
+        ],
+        "distrib": "exp",
+        "rate": 2.175e-06,
+        "monitored": true,
+        "kind": "failure",
+        "effects": [
+         {
+          "target": {
+           "component": "plant",
+           "attribute": "cex_ccf"
+          },
+          "value": {
+           "op": "const",
+           "value": {
+            "kind": "bool",
+            "value": true
+           }
+          }
+         }
+        ]
+       },
+       {
+        "name": "repair_rep72",
+        "source": "rep72",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.013888888888888888,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep168",
+        "source": "rep168",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.005952380952380952,
+        "monitored": true,
+        "kind": "repair"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "CEX2",
+    "automata": [
+     {
+      "name": "state",
+      "states": [
+       "running",
+       "standby",
+       "rep72",
+       "rep168"
+      ],
+      "init": "running",
+      "transitions": [
+       {
+        "name": "fail",
+        "source": "running",
+        "targets": [
+         "rep72"
+        ],
+        "distrib": "exp",
+        "rate": 4.1283675000000004e-05,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "rupture",
+        "source": "running",
+        "targets": [
+         "rep168"
+        ],
+        "distrib": "exp",
+        "rate": 4.1325e-08,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "start",
+        "source": "standby",
+        "targets": [
+         "rep72",
+         "running"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.00195
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "lt",
+           "lhs": {
+            "op": "add",
+            "args": [
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX1",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX2",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX3",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             }
+            ]
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 2.0
+            }
+           }
+          },
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "CEX1",
+              "automaton": "state",
+              "state": "standby"
+             }
+            }
+           ]
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "common_cause",
+        "source": "running",
+        "targets": [
+         "rep168"
+        ],
+        "distrib": "exp",
+        "rate": 2.175e-06,
+        "monitored": true,
+        "kind": "failure",
+        "effects": [
+         {
+          "target": {
+           "component": "plant",
+           "attribute": "cex_ccf"
+          },
+          "value": {
+           "op": "const",
+           "value": {
+            "kind": "bool",
+            "value": true
+           }
+          }
+         }
+        ]
+       },
+       {
+        "name": "repair_rep72",
+        "source": "rep72",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.013888888888888888,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep168",
+        "source": "rep168",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.005952380952380952,
+        "monitored": true,
+        "kind": "repair"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "CEX3",
+    "automata": [
+     {
+      "name": "state",
+      "states": [
+       "running",
+       "standby",
+       "rep72",
+       "rep168"
+      ],
+      "init": "standby",
+      "transitions": [
+       {
+        "name": "fail",
+        "source": "running",
+        "targets": [
+         "rep72"
+        ],
+        "distrib": "exp",
+        "rate": 4.1283675000000004e-05,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "rupture",
+        "source": "running",
+        "targets": [
+         "rep168"
+        ],
+        "distrib": "exp",
+        "rate": 4.1325e-08,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "start",
+        "source": "standby",
+        "targets": [
+         "rep72",
+         "running"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.00195
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "lt",
+           "lhs": {
+            "op": "add",
+            "args": [
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX1",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX2",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "CEX3",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             }
+            ]
+           },
+           "rhs": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 2.0
+            }
+           }
+          },
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "CEX1",
+              "automaton": "state",
+              "state": "standby"
+             }
+            }
+           ]
+          },
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "CEX2",
+              "automaton": "state",
+              "state": "standby"
+             }
+            }
+           ]
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "common_cause",
+        "source": "running",
+        "targets": [
+         "rep168"
+        ],
+        "distrib": "exp",
+        "rate": 2.175e-06,
+        "monitored": true,
+        "kind": "failure",
+        "effects": [
+         {
+          "target": {
+           "component": "plant",
+           "attribute": "cex_ccf"
+          },
+          "value": {
+           "op": "const",
+           "value": {
+            "kind": "bool",
+            "value": true
+           }
+          }
+         }
+        ]
+       },
+       {
+        "name": "repair_rep72",
+        "source": "rep72",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.013888888888888888,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep168",
+        "source": "rep168",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.005952380952380952,
+        "monitored": true,
+        "kind": "repair"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "TPA1",
+    "automata": [
+     {
+      "name": "state",
+      "states": [
+       "standby",
+       "running",
+       "rep2",
+       "rep24",
+       "rep28",
+       "rep144"
+      ],
+      "init": "standby",
+      "transitions": [
+       {
+        "name": "start",
+        "source": "standby",
+        "targets": [
+         "rep28",
+         "rep2",
+         "rep24",
+         "running"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.000545,
+         0.003858895755,
+         3.8978744999999996e-05
+        ],
+        "guard": {
+         "op": "cmp",
+         "cmp": "lt",
+         "lhs": {
+          "op": "add",
+          "args": [
+           {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "TPA1",
+              "automaton": "state",
+              "state": "running"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 1.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            }
+           },
+           {
+            "op": "if",
+            "cond": {
+             "op": "state_active",
+             "state": {
+              "component": "TPA2",
+              "automaton": "state",
+              "state": "running"
+             }
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 1.0
+             }
+            },
+            "otherwise": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 0.0
+             }
+            }
+           }
+          ]
+         },
+         "rhs": {
+          "op": "if",
+          "cond": {
+           "op": "bool",
+           "bool_op": "or",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "power",
+              "automaton": "profile",
+              "state": "at60"
+             }
+            },
+            {
+             "op": "state_active",
+             "state": {
+              "component": "power",
+              "automaton": "profile",
+              "state": "up3"
+             }
+            },
+            {
+             "op": "state_active",
+             "state": {
+              "component": "power",
+              "automaton": "profile",
+              "state": "full"
+             }
+            },
+            {
+             "op": "state_active",
+             "state": {
+              "component": "power",
+              "automaton": "profile",
+              "state": "forced60"
+             }
+            }
+           ]
+          },
+          "then": {
+           "op": "const",
+           "value": {
+            "kind": "float",
+            "value": 2.0
+           }
+          },
+          "otherwise": {
+           "op": "if",
+           "cond": {
+            "op": "bool",
+            "bool_op": "or",
+            "args": [
+             {
+              "op": "state_active",
+              "state": {
+               "component": "power",
+               "automaton": "profile",
+               "state": "start2"
+              }
+             },
+             {
+              "op": "state_active",
+              "state": {
+               "component": "power",
+               "automaton": "profile",
+               "state": "up1"
+              }
+             },
+             {
+              "op": "state_active",
+              "state": {
+               "component": "power",
+               "automaton": "profile",
+               "state": "switch15"
+              }
+             },
+             {
+              "op": "state_active",
+              "state": {
+               "component": "power",
+               "automaton": "profile",
+               "state": "up2"
+              }
+             },
+             {
+              "op": "state_active",
+              "state": {
+               "component": "power",
+               "automaton": "profile",
+               "state": "down"
+              }
+             }
+            ]
+           },
+           "then": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 1.0
+            }
+           },
+           "otherwise": {
+            "op": "const",
+            "value": {
+             "kind": "float",
+             "value": 0.0
+            }
+           }
+          }
+         }
+        },
+        "monitored": true,
+        "effects": [
+         {
+          "target": {
+           "component": "plant",
+           "attribute": "tpa_refused_at_60"
+          },
+          "value": {
+           "op": "bool",
+           "bool_op": "and",
+           "args": [
+            {
+             "op": "bool",
+             "bool_op": "or",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "forced60"
+               }
+              }
+             ]
+            },
+            {
+             "op": "bool",
+             "bool_op": "not",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "TPA1",
+                "automaton": "state",
+                "state": "running"
+               }
+              }
+             ]
+            }
+           ]
+          }
+         }
+        ]
+       },
+       {
+        "name": "fail_long",
+        "source": "running",
+        "targets": [
+         "rep24"
+        ],
+        "distrib": "exp",
+        "rate": 0.0005589363,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "fail_short",
+        "source": "running",
+        "targets": [
+         "rep2"
+        ],
+        "distrib": "exp",
+        "rate": 0.000140125,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "rupture",
+        "source": "running",
+        "targets": [
+         "rep144"
+        ],
+        "distrib": "exp",
+        "rate": 1.387e-07,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "common_cause",
+        "source": "running",
+        "targets": [
+         "rep24"
+        ],
+        "distrib": "exp",
+        "rate": 3.68e-05,
+        "monitored": true,
+        "kind": "failure",
+        "effects": [
+         {
+          "target": {
+           "component": "plant",
+           "attribute": "tpa_ccf"
+          },
+          "value": {
+           "op": "const",
+           "value": {
+            "kind": "bool",
+            "value": true
+           }
+          }
+         }
+        ]
+       },
+       {
+        "name": "repair_rep2",
+        "source": "rep2",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.5,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep24",
+        "source": "rep24",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.041666666666666664,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep28",
+        "source": "rep28",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.03571428571428571,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep144",
+        "source": "rep144",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.006944444444444444,
+        "monitored": true,
+        "kind": "repair"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "TPA2",
+    "automata": [
+     {
+      "name": "state",
+      "states": [
+       "standby",
+       "running",
+       "rep2",
+       "rep24",
+       "rep28",
+       "rep144"
+      ],
+      "init": "standby",
+      "transitions": [
+       {
+        "name": "start",
+        "source": "standby",
+        "targets": [
+         "rep28",
+         "rep2",
+         "rep24",
+         "running"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.000545,
+         0.003858895755,
+         3.8978744999999996e-05
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "cmp",
+           "cmp": "lt",
+           "lhs": {
+            "op": "add",
+            "args": [
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "TPA1",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             },
+             {
+              "op": "if",
+              "cond": {
+               "op": "state_active",
+               "state": {
+                "component": "TPA2",
+                "automaton": "state",
+                "state": "running"
+               }
+              },
+              "then": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 1.0
+               }
+              },
+              "otherwise": {
+               "op": "const",
+               "value": {
+                "kind": "float",
+                "value": 0.0
+               }
+              }
+             }
+            ]
+           },
+           "rhs": {
+            "op": "if",
+            "cond": {
+             "op": "bool",
+             "bool_op": "or",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "at60"
+               }
+              },
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "up3"
+               }
+              },
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "full"
+               }
+              },
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "forced60"
+               }
+              }
+             ]
+            },
+            "then": {
+             "op": "const",
+             "value": {
+              "kind": "float",
+              "value": 2.0
+             }
+            },
+            "otherwise": {
+             "op": "if",
+             "cond": {
+              "op": "bool",
+              "bool_op": "or",
+              "args": [
+               {
+                "op": "state_active",
+                "state": {
+                 "component": "power",
+                 "automaton": "profile",
+                 "state": "start2"
+                }
+               },
+               {
+                "op": "state_active",
+                "state": {
+                 "component": "power",
+                 "automaton": "profile",
+                 "state": "up1"
+                }
+               },
+               {
+                "op": "state_active",
+                "state": {
+                 "component": "power",
+                 "automaton": "profile",
+                 "state": "switch15"
+                }
+               },
+               {
+                "op": "state_active",
+                "state": {
+                 "component": "power",
+                 "automaton": "profile",
+                 "state": "up2"
+                }
+               },
+               {
+                "op": "state_active",
+                "state": {
+                 "component": "power",
+                 "automaton": "profile",
+                 "state": "down"
+                }
+               }
+              ]
+             },
+             "then": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": 1.0
+              }
+             },
+             "otherwise": {
+              "op": "const",
+              "value": {
+               "kind": "float",
+               "value": 0.0
+              }
+             }
+            }
+           }
+          },
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "TPA1",
+              "automaton": "state",
+              "state": "standby"
+             }
+            }
+           ]
+          }
+         ]
+        },
+        "monitored": true,
+        "effects": [
+         {
+          "target": {
+           "component": "plant",
+           "attribute": "tpa_refused_at_60"
+          },
+          "value": {
+           "op": "bool",
+           "bool_op": "and",
+           "args": [
+            {
+             "op": "bool",
+             "bool_op": "or",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "forced60"
+               }
+              }
+             ]
+            },
+            {
+             "op": "bool",
+             "bool_op": "not",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "TPA2",
+                "automaton": "state",
+                "state": "running"
+               }
+              }
+             ]
+            }
+           ]
+          }
+         }
+        ]
+       },
+       {
+        "name": "fail_long",
+        "source": "running",
+        "targets": [
+         "rep24"
+        ],
+        "distrib": "exp",
+        "rate": 0.0005589363,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "fail_short",
+        "source": "running",
+        "targets": [
+         "rep2"
+        ],
+        "distrib": "exp",
+        "rate": 0.000140125,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "rupture",
+        "source": "running",
+        "targets": [
+         "rep144"
+        ],
+        "distrib": "exp",
+        "rate": 1.387e-07,
+        "monitored": true,
+        "kind": "failure"
+       },
+       {
+        "name": "common_cause",
+        "source": "running",
+        "targets": [
+         "rep24"
+        ],
+        "distrib": "exp",
+        "rate": 3.68e-05,
+        "monitored": true,
+        "kind": "failure",
+        "effects": [
+         {
+          "target": {
+           "component": "plant",
+           "attribute": "tpa_ccf"
+          },
+          "value": {
+           "op": "const",
+           "value": {
+            "kind": "bool",
+            "value": true
+           }
+          }
+         }
+        ]
+       },
+       {
+        "name": "repair_rep2",
+        "source": "rep2",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.5,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep24",
+        "source": "rep24",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.041666666666666664,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep28",
+        "source": "rep28",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.03571428571428571,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "repair_rep144",
+        "source": "rep144",
+        "targets": [
+         "standby"
+        ],
+        "distrib": "exp",
+        "rate": 0.006944444444444444,
+        "monitored": true,
+        "kind": "repair"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "PD",
+    "automata": [
+     {
+      "name": "valve",
+      "states": [
+       "closed",
+       "open",
+       "refused",
+       "tripped"
+      ],
+      "init": "closed",
+      "transitions": [
+       {
+        "name": "open",
+        "source": "closed",
+        "targets": [
+         "refused",
+         "open"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.004212
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "or",
+         "args": [
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "start2"
+           }
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "repair",
+        "source": "refused",
+        "targets": [
+         "closed"
+        ],
+        "distrib": "exp",
+        "rate": 0.08333333333333333,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "fail_in_service",
+        "source": "open",
+        "targets": [
+         "tripped"
+        ],
+        "distrib": "exp",
+        "rate": 2.824e-06,
+        "monitored": true,
+        "kind": "failure",
+        "guard": {
+         "op": "bool",
+         "bool_op": "or",
+         "args": [
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "up1"
+           }
+          },
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "switch15"
+           }
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "GD",
+    "automata": [
+     {
+      "name": "valve",
+      "states": [
+       "closed",
+       "open",
+       "refused",
+       "tripped"
+      ],
+      "init": "closed",
+      "transitions": [
+       {
+        "name": "open",
+        "source": "closed",
+        "targets": [
+         "refused",
+         "open"
+        ],
+        "distrib": "inst",
+        "probs": [
+         0.004212
+        ],
+        "guard": {
+         "op": "bool",
+         "bool_op": "or",
+         "args": [
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "switch15"
+           }
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "repair",
+        "source": "refused",
+        "targets": [
+         "closed"
+        ],
+        "distrib": "exp",
+        "rate": 0.08333333333333333,
+        "monitored": true,
+        "kind": "repair"
+       },
+       {
+        "name": "fail_in_service",
+        "source": "open",
+        "targets": [
+         "tripped"
+        ],
+        "distrib": "exp",
+        "rate": 2.824e-06,
+        "monitored": true,
+        "kind": "failure",
+        "guard": {
+         "op": "bool",
+         "bool_op": "or",
+         "args": [
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "up2"
+           }
+          },
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "at60"
+           }
+          },
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "up3"
+           }
+          },
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "full"
+           }
+          },
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "forced60"
+           }
+          },
+          {
+           "op": "state_active",
+           "state": {
+            "component": "power",
+            "automaton": "profile",
+            "state": "down"
+           }
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "plant",
+    "attributes": [
+     {
+      "name": "cex_ccf",
+      "kind": "bool",
+      "init": {
+       "kind": "bool",
+       "value": false
+      }
+     },
+     {
+      "name": "tpa_ccf",
+      "kind": "bool",
+      "init": {
+       "kind": "bool",
+       "value": false
+      }
+     },
+     {
+      "name": "tpa_refused_at_60",
+      "kind": "bool",
+      "init": {
+       "kind": "bool",
+       "value": false
+      }
+     }
+    ]
+   },
+   {
+    "name": "trip",
+    "automata": [
+     {
+      "name": "cause",
+      "states": [
+       "none",
+       "vvp",
+       "cex",
+       "tpa",
+       "are"
+      ],
+      "init": "none",
+      "transitions": [
+       {
+        "name": "trip_vvp",
+        "source": "none",
+        "targets": [
+         "vvp"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "bool",
+             "bool_op": "or",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "end"
+               }
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "state_active",
+           "state": {
+            "component": "VVP",
+            "automaton": "state",
+            "state": "failed"
+           }
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "trip_cex",
+        "source": "none",
+        "targets": [
+         "cex"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "bool",
+             "bool_op": "or",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "end"
+               }
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "bool",
+           "bool_op": "or",
+           "args": [
+            {
+             "op": "attr",
+             "attr": {
+              "component": "plant",
+              "attribute": "cex_ccf"
+             }
+            },
+            {
+             "op": "bool",
+             "bool_op": "and",
+             "args": [
+              {
+               "op": "cmp",
+               "cmp": "lt",
+               "lhs": {
+                "op": "add",
+                "args": [
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "CEX1",
+                    "automaton": "state",
+                    "state": "running"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 },
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "CEX2",
+                    "automaton": "state",
+                    "state": "running"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 },
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "CEX3",
+                    "automaton": "state",
+                    "state": "running"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 }
+                ]
+               },
+               "rhs": {
+                "op": "const",
+                "value": {
+                 "kind": "float",
+                 "value": 2.0
+                }
+               }
+              },
+              {
+               "op": "cmp",
+               "cmp": "eq",
+               "lhs": {
+                "op": "add",
+                "args": [
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "CEX1",
+                    "automaton": "state",
+                    "state": "standby"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 },
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "CEX2",
+                    "automaton": "state",
+                    "state": "standby"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 },
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "CEX3",
+                    "automaton": "state",
+                    "state": "standby"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 }
+                ]
+               },
+               "rhs": {
+                "op": "const",
+                "value": {
+                 "kind": "float",
+                 "value": 0.0
+                }
+               }
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "trip_tpa",
+        "source": "none",
+        "targets": [
+         "tpa"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "bool",
+             "bool_op": "or",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "end"
+               }
+              },
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "up0"
+               }
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "bool",
+           "bool_op": "or",
+           "args": [
+            {
+             "op": "attr",
+             "attr": {
+              "component": "plant",
+              "attribute": "tpa_ccf"
+             }
+            },
+            {
+             "op": "attr",
+             "attr": {
+              "component": "plant",
+              "attribute": "tpa_refused_at_60"
+             }
+            },
+            {
+             "op": "bool",
+             "bool_op": "or",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "forcing_failed"
+               }
+              }
+             ]
+            },
+            {
+             "op": "bool",
+             "bool_op": "and",
+             "args": [
+              {
+               "op": "bool",
+               "bool_op": "or",
+               "args": [
+                {
+                 "op": "state_active",
+                 "state": {
+                  "component": "power",
+                  "automaton": "profile",
+                  "state": "up1"
+                 }
+                },
+                {
+                 "op": "state_active",
+                 "state": {
+                  "component": "power",
+                  "automaton": "profile",
+                  "state": "switch15"
+                 }
+                },
+                {
+                 "op": "state_active",
+                 "state": {
+                  "component": "power",
+                  "automaton": "profile",
+                  "state": "up2"
+                 }
+                },
+                {
+                 "op": "state_active",
+                 "state": {
+                  "component": "power",
+                  "automaton": "profile",
+                  "state": "at60"
+                 }
+                },
+                {
+                 "op": "state_active",
+                 "state": {
+                  "component": "power",
+                  "automaton": "profile",
+                  "state": "up3"
+                 }
+                },
+                {
+                 "op": "state_active",
+                 "state": {
+                  "component": "power",
+                  "automaton": "profile",
+                  "state": "full"
+                 }
+                },
+                {
+                 "op": "state_active",
+                 "state": {
+                  "component": "power",
+                  "automaton": "profile",
+                  "state": "forced60"
+                 }
+                },
+                {
+                 "op": "state_active",
+                 "state": {
+                  "component": "power",
+                  "automaton": "profile",
+                  "state": "down"
+                 }
+                }
+               ]
+              },
+              {
+               "op": "cmp",
+               "cmp": "eq",
+               "lhs": {
+                "op": "add",
+                "args": [
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "TPA1",
+                    "automaton": "state",
+                    "state": "running"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 },
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "TPA2",
+                    "automaton": "state",
+                    "state": "running"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 }
+                ]
+               },
+               "rhs": {
+                "op": "const",
+                "value": {
+                 "kind": "float",
+                 "value": 0.0
+                }
+               }
+              },
+              {
+               "op": "cmp",
+               "cmp": "eq",
+               "lhs": {
+                "op": "add",
+                "args": [
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "TPA1",
+                    "automaton": "state",
+                    "state": "standby"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 },
+                 {
+                  "op": "if",
+                  "cond": {
+                   "op": "state_active",
+                   "state": {
+                    "component": "TPA2",
+                    "automaton": "state",
+                    "state": "standby"
+                   }
+                  },
+                  "then": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 1.0
+                   }
+                  },
+                  "otherwise": {
+                   "op": "const",
+                   "value": {
+                    "kind": "float",
+                    "value": 0.0
+                   }
+                  }
+                 }
+                ]
+               },
+               "rhs": {
+                "op": "const",
+                "value": {
+                 "kind": "float",
+                 "value": 0.0
+                }
+               }
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        "monitored": true
+       },
+       {
+        "name": "trip_are",
+        "source": "none",
+        "targets": [
+         "are"
+        ],
+        "distrib": "inst",
+        "probs": [],
+        "guard": {
+         "op": "bool",
+         "bool_op": "and",
+         "args": [
+          {
+           "op": "bool",
+           "bool_op": "not",
+           "args": [
+            {
+             "op": "bool",
+             "bool_op": "or",
+             "args": [
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "end"
+               }
+              },
+              {
+               "op": "state_active",
+               "state": {
+                "component": "power",
+                "automaton": "profile",
+                "state": "up0"
+               }
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "bool",
+           "bool_op": "or",
+           "args": [
+            {
+             "op": "state_active",
+             "state": {
+              "component": "PD",
+              "automaton": "valve",
+              "state": "tripped"
+             }
+            },
+            {
+             "op": "state_active",
+             "state": {
+              "component": "GD",
+              "automaton": "valve",
+              "state": "tripped"
+             }
+            }
+           ]
+          }
+         ]
+        },
+        "monitored": true
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "targets": [
+   {
+    "name": "trip_vvp",
+    "component": "trip",
+    "automaton": "cause",
+    "state": "vvp"
+   },
+   {
+    "name": "trip_cex",
+    "component": "trip",
+    "automaton": "cause",
+    "state": "cex"
+   },
+   {
+    "name": "trip_tpa",
+    "component": "trip",
+    "automaton": "cause",
+    "state": "tpa"
+   },
+   {
+    "name": "trip_are",
+    "component": "trip",
+    "automaton": "cause",
+    "state": "are"
+   }
+  ],
+  "indicators": [
+   {
+    "name": "trip_vvp",
+    "target": "state",
+    "component": "trip",
+    "automaton": "cause",
+    "state": "vvp"
+   },
+   {
+    "name": "trip_cex",
+    "target": "state",
+    "component": "trip",
+    "automaton": "cause",
+    "state": "cex"
+   },
+   {
+    "name": "trip_tpa",
+    "target": "state",
+    "component": "trip",
+    "automaton": "cause",
+    "state": "tpa"
+   },
+   {
+    "name": "trip_are",
+    "target": "state",
+    "component": "trip",
+    "automaton": "cause",
+    "state": "are"
+   }
+  ]
+ }
+}

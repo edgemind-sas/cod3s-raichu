@@ -149,7 +149,9 @@ print("unavailability:", round(failed.mean[-1], 3),
   room over a winter, a two-out-of-three system solved three ways, a solar
   hydrogen installation, and two published benchmarks compared with their
   reference values: EDF's emergency power supply of a nuclear plant and a
-  gas production system with a buffer reservoir.
+  gas production system with a buffer reservoir; and the APPRODYN
+  feedwater case, whose published result it reproduces once the
+  turbo-pumps are set aside.
 - **[Model schema reference](reference/model-schema.md)**: every field,
   distribution and expression operator.
 - **[Advanced guides](guides/reproducibility.md)**: reproducibility,
