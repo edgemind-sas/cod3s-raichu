@@ -74,6 +74,7 @@ nav:
       - Hydrogen installation: examples/h2-installation.md
       - Emergency power supply: examples/emergency-power-supply.md
       - Gas production: examples/gas-production.md
+      - Feedwater supply (APPRODYN): examples/approdyn-feedwater.md
   - Model schema reference: reference/model-schema.md
   - Raw sequence corpus format: reference/sequence-format.md
   - Quantification envelope format: reference/quantification-format.md
