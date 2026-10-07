@@ -107,13 +107,32 @@ in the OpenPSA file).
 |---|---|
 | `top` | the top gate, nested: `{"node": "gate", "gate": …, "k": …, "children": […]}` with `"gate"` one of `"and"`, `"or"`, `"at_least"`, or `{"node": "basic", "event": index}`; never a constant, a degenerate tree being refused (see [What is refused](#what-is-refused)) |
 | `basic_events` | one entry per transition draw: `name`, `component`, `automaton`, `transition`, `target` and its `law` with the law's parameters; `event` in `top` indexes this list |
-| `minimal_cut_sets` | each a sorted list of basic-event names, ordered by size then name |
+| `minimal_cut_sets` | each a sorted list of basic-event names, ordered by size then name; `None` when `cut_sets=False` |
 | `open_psa` | the OpenPSA document (see [The file](#the-file)) |
 | `warnings` | why the tree's probability may exceed the model's own, one sentence per transition concerned; empty when the tree is exact (see [What the number means](#what-the-number-means)) |
 
 ```python
 assert tree.top["gate"] == "or"
 assert [e["name"] for e in tree.basic_events] == ["A.health.fail", "B.health.fail", "C.health.fail"]
+```
+
+Set `cut_sets=False` to skip structural cut-set extraction. The default
+remains `True`. A skipped collection is `None`, never an empty list; the
+extraction budget cannot block generation when extraction is skipped.
+`tree.structure()` returns the producer-owned `raichu.fault_tree.structure`
+v1 document, containing the gates, basic events, generation warnings and
+requested structural cuts without quantifying any probability. Read it with
+`pyraichu.read_fault_tree_structure`.
+
+```python
+structure_only = pyraichu.fault_tree(model, top, cut_sets=False, cut_set_limit=0)
+assert structure_only.minimal_cut_sets is None
+document = structure_only.structure()
+assert document["cut_sets_omitted"] == "not requested"
+assert pyraichu.read_fault_tree_structure(document) == document
+# Probability-only analysis also skips the quantifier's cut extraction.
+probabilities = structure_only.envelope([1000.0], cut_sets=False)
+assert probabilities["horizon"]["minimal_cut_sets"] is None
 ```
 
 Three keywords bound the work and name the output:

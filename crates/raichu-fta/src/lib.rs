@@ -63,6 +63,7 @@ mod from_core;
 mod law;
 mod open_psa;
 mod quantify;
+mod structure;
 mod tree;
 
 pub use envelope::{
@@ -148,3 +149,9 @@ pub enum FtaError {
     #[error("fault tree: {0}")]
     Resource(String),
 }
+
+pub use structure::{
+    fault_tree_structure, read_fault_tree_structure, FaultTreeStructure,
+    ReadFaultTreeStructureError, StructureGeneration, StructureProvenance, StructureSettings,
+    StructureSource, FAULT_TREE_STRUCTURE_FORMAT, FAULT_TREE_STRUCTURE_VERSION,
+};

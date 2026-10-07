@@ -40,6 +40,7 @@ from ._pyraichu import (
     unfed_triggers_json,
     validate_exploration,
     validate_fault_tree_envelope,
+    validate_fault_tree_structure,
     validate_model,
 )
 from ._pyraichu import (
@@ -55,6 +56,8 @@ from .journal import AttributeChange, Cascade, JournalQuery, TransitionHistory
 __all__ = [
     "DEFAULT_CONFIDENCE",
     "FAULT_TREE_FORMAT",
+    "FAULT_TREE_STRUCTURE_FORMAT",
+    "FAULT_TREE_STRUCTURE_VERSION",
     "FAULT_TREE_VERSION",
     "MAX_MISSION_TIMES",
     "MODEL_ENVELOPE_KEY",
@@ -113,6 +116,7 @@ __all__ = [
     "quantify",
     "read_exploration",
     "read_fault_tree",
+    "read_fault_tree_structure",
     "read_quantification",
     "required_features",
     "run_sequences",
@@ -1070,6 +1074,9 @@ def exploration_domain(model: Model) -> list[dict[str, Any]]:
 FAULT_TREE_FORMAT = "raichu.fault_tree"
 #: The envelope version this engine writes, and the highest it reads.
 FAULT_TREE_VERSION = 1
+#: The independent structural output format and version.
+FAULT_TREE_STRUCTURE_FORMAT = "raichu.fault_tree.structure"
+FAULT_TREE_STRUCTURE_VERSION = 1
 #: The most mission times one envelope quantifies.
 MAX_MISSION_TIMES = 20
 
@@ -1087,8 +1094,8 @@ class FaultTree:
     #: law's parameters.
     basic_events: list[dict[str, Any]]
     #: The minimal cut sets, each a sorted list of basic-event names, by
-    #: size then name.
-    minimal_cut_sets: list[list[str]]
+    #: size then name; None when extraction was not requested.
+    minimal_cut_sets: list[list[str]] | None
     #: The tree in the OpenPSA model-exchange format.
     open_psa: str
     #: Why the tree's probability may exceed the model's own probability
@@ -1099,6 +1106,19 @@ class FaultTree:
     warnings: list[str] = field(default_factory=list)
     #: What the tree was generated from, for :meth:`envelope`.
     _source: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+
+    _structure: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+
+    def structure(self) -> dict[str, Any]:
+        """Return the versioned structural output without quantification.
+
+        Omitted cuts are ``None``, distinct from an empty collection.
+        """
+        if self._structure is None:
+            raise SimulationError(
+                "fault tree: no producer structural result for this tree"
+            )
+        return json.loads(json.dumps(self._structure))
 
     def quantify(
         self,
@@ -1173,6 +1193,14 @@ class FaultTree:
         return json.loads(text)
 
 
+def _fault_tree_document_text(document: str | Path | dict[str, Any]) -> str:
+    if isinstance(document, dict):
+        return json.dumps(document)
+    if isinstance(document, Path) or not str(document).lstrip().startswith("{"):
+        return Path(document).read_text(encoding="utf-8")
+    return document
+
+
 def read_fault_tree(document: str | Path | dict[str, Any]) -> dict[str, Any]:
     """Read a ``raichu.fault_tree`` envelope: a JSON text, the path of a
     file holding one, or an already parsed dictionary.
@@ -1182,13 +1210,19 @@ def read_fault_tree(document: str | Path | dict[str, Any]) -> dict[str, Any]:
     :class:`SimulationError`, so a document this engine does not know is
     refused rather than read with empty fields.
     """
-    if isinstance(document, dict):
-        text = json.dumps(document)
-    elif isinstance(document, Path) or not str(document).lstrip().startswith("{"):
-        text = Path(document).read_text(encoding="utf-8")
-    else:
-        text = document
+    text = _fault_tree_document_text(document)
     validate_fault_tree_envelope(text)
+    return json.loads(text)
+
+
+def read_fault_tree_structure(document: str | Path | dict[str, Any]) -> dict[str, Any]:
+    """Read a structural result, checking its producer format and version.
+
+    Accept a JSON text, file path or dictionary. Numerical envelope v1
+    remains available through :func:`read_fault_tree`.
+    """
+    text = _fault_tree_document_text(document)
+    validate_fault_tree_structure(text)
     return json.loads(text)
 
 
@@ -1208,10 +1242,15 @@ def fault_tree(
     profile: dict[str, Any] | None = None,
     max_nodes: int | None = None,
     cut_set_limit: int = 100_000,
+    cut_sets: bool = True,
     name: str = "fault_tree",
 ) -> FaultTree:
     """Generate the fault tree explaining why ``top``, or one of
     ``targets``, can become true.
+
+    ``cut_sets=False`` skips structural extraction and returns
+    ``minimal_cut_sets=None``. Its budget is unused in that case.
+    :meth:`FaultTree.structure` publishes the versioned structural result.
 
     Give exactly one of the two. ``top`` is an expression over the model's
     states and attributes, in the model's own expression vocabulary
@@ -1264,18 +1303,22 @@ def fault_tree(
             cut_set_limit,
             name,
             source["targets_json"],
+            cut_sets,
         )
     )
     events = raw["tree"]["basic_events"]
     return FaultTree(
         top=raw["tree"]["top"],
         basic_events=events,
-        minimal_cut_sets=[
+        minimal_cut_sets=None
+        if raw["minimal_cut_sets"] is None
+        else [
             sorted(events[i]["name"] for i in cut) for cut in raw["minimal_cut_sets"]
         ],
         open_psa=raw["open_psa"],
         warnings=raw["tree"]["warnings"],
         _source=source,
+        _structure=raw["structure"],
     )
 
 
