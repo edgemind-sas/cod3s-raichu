@@ -137,7 +137,7 @@ pub enum FaultTreeError {
 }
 
 /// How a basic event occurs: the law of the transition it stands for.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "law", rename_all = "snake_case")]
 pub enum BasicLaw {
     /// Exponential time to occurrence, rate λ.
@@ -192,7 +192,7 @@ pub enum BasicLaw {
 
 /// One basic event: a transition's draw (into one target, for a branching
 /// transition).
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TreeEvent {
     /// A name OpenPSA accepts, unique in the tree:
     /// `{component}.{automaton}.{transition}`, plus `.{target}` on a
@@ -212,7 +212,7 @@ pub struct TreeEvent {
 }
 
 /// The connective of a gate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "gate", rename_all = "snake_case")]
 pub enum GateOp {
     /// Every child holds.
@@ -227,7 +227,7 @@ pub enum GateOp {
 }
 
 /// A node of the tree.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "node", rename_all = "snake_case")]
 pub enum FtNode {
     /// A constant (only as the whole tree, once simplified).
@@ -251,7 +251,7 @@ pub enum FtNode {
 }
 
 /// A generated tree.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FaultTree {
     /// The top gate, simplified: constant gates propagated, single-child
     /// gates collapsed, nested gates of one connective merged. Never a
@@ -280,7 +280,8 @@ pub struct FaultTreeSettings {
     pub max_nodes: Option<usize>,
 }
 
-const DEFAULT_MAX_NODES: usize = 1_000_000;
+/// Default node budget for generation and unrolling.
+pub const DEFAULT_MAX_NODES: usize = 1_000_000;
 
 /// Generate the fault tree explaining `top`, an expression over the
 /// model's states and attributes, on `model`.

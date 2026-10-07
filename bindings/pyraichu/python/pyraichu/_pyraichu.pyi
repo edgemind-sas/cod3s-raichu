@@ -119,6 +119,7 @@ def fault_tree_json(
     cut_set_limit: int = 100_000,
     name: str = "fault_tree",
     targets_json: str | None = None,
+    cut_sets: bool = True,
 ) -> str: ...
 def fault_tree_envelope_json(
     model_json: str,
@@ -137,6 +138,7 @@ def fault_tree_envelope_json(
     max_cut_sets: int = 1_000_000,
     max_expansions: int = 100_000_000,
 ) -> str: ...
+def validate_fault_tree_structure(structure_json: str) -> None: ...
 def validate_fault_tree_envelope(envelope_json: str) -> None: ...
 def fault_tree_quantify_json(
     open_psa: str,

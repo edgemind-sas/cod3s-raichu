@@ -33,8 +33,9 @@ use raichu::raichu_explore::{
 };
 use raichu::raichu_expr::{AttrRef, CmpOp};
 use raichu::raichu_fta::{
-    fault_tree_envelope, quantify as quantify_tree, read_fault_tree_envelope, read_open_psa,
-    Engine as FtaEngine, EnvelopeTop, QuantifySettings,
+    fault_tree_envelope, fault_tree_structure, quantify as quantify_tree, read_fault_tree_envelope,
+    read_fault_tree_structure, read_open_psa, Engine as FtaEngine, EnvelopeTop, QuantifySettings,
+    StructureGeneration, StructureSettings, StructureSource,
 };
 use raichu::raichu_model::Model;
 use raichu::raichu_model::{Indicator, IndicatorTarget};
@@ -917,7 +918,7 @@ fn generate_tree(
     targets_json: Option<&str>,
     profile_json: Option<&str>,
     max_nodes: Option<usize>,
-) -> PyResult<(FaultTree, EnvelopeTop)> {
+) -> PyResult<(FaultTree, EnvelopeTop, FaultTreeSettings)> {
     let compiled = parse_and_compile(model_json)?;
     let profile = match profile_json {
         None => Vec::new(),
@@ -953,7 +954,7 @@ fn generate_tree(
         }
     };
     let tree = tree.map_err(|e| SimulationError::new_err(e.to_string()))?;
-    Ok((tree, top))
+    Ok((tree, top, settings))
 }
 
 /// Generate the fault tree explaining `top_json`, or the targets named by
@@ -961,7 +962,8 @@ fn generate_tree(
 /// basic_events, warnings}, "minimal_cut_sets": [[event index, ...]],
 /// "open_psa": "<document>"}`.
 #[pyfunction]
-#[pyo3(signature = (model_json, top_json = None, profile_json = None, max_nodes = None, cut_set_limit = 100_000, name = "fault_tree", targets_json = None))]
+#[pyo3(signature = (model_json, top_json = None, profile_json = None, max_nodes = None, cut_set_limit = 100_000, name = "fault_tree", targets_json = None, cut_sets = true))]
+#[allow(clippy::too_many_arguments)]
 fn fault_tree_json(
     model_json: &str,
     top_json: Option<&str>,
@@ -970,17 +972,77 @@ fn fault_tree_json(
     cut_set_limit: usize,
     name: &str,
     targets_json: Option<&str>,
+    cut_sets: bool,
 ) -> PyResult<String> {
-    let (tree, _) = generate_tree(model_json, top_json, targets_json, profile_json, max_nodes)?;
-    let cuts = tree
-        .minimal_cut_sets(cut_set_limit)
+    let (tree, top, generation) =
+        generate_tree(model_json, top_json, targets_json, profile_json, max_nodes)?;
+    let source_model =
+        Model::from_json(model_json).map_err(|e| SimulationError::new_err(e.to_string()))?;
+    let model_hash = raichu::raichu_quantify::model_content_hash(&source_model)
         .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    let profile = generation
+        .profile
+        .iter()
+        .map(|(name, value)| serde_json::to_value(value).map(|value| (name.clone(), value)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    let structure = fault_tree_structure(
+        &tree,
+        name,
+        top,
+        &StructureSettings {
+            cut_sets,
+            cut_set_limit,
+        },
+        StructureSource::Model {
+            model_hash,
+            generation: StructureGeneration {
+                max_nodes: generation
+                    .max_nodes
+                    .unwrap_or(raichu::raichu_core::DEFAULT_MAX_NODES),
+                profile,
+            },
+        },
+    )
+    .map_err(|e| SimulationError::new_err(e.to_string()))?;
+    let cuts = structure.minimal_cut_sets.as_ref().map(|sets| {
+        // Keep the existing index-based binding representation without a
+        // repeated scan of the event table for every cut member.
+        let indices: std::collections::HashMap<&str, usize> = tree
+            .basic_events
+            .iter()
+            .enumerate()
+            .map(|(i, event)| (event.name.as_str(), i))
+            .collect();
+        let mut indexed: Vec<Vec<usize>> = sets
+            .iter()
+            .map(|cut| {
+                let mut members: Vec<usize> = cut
+                    .iter()
+                    .filter_map(|name| indices.get(name.as_str()).copied())
+                    .collect();
+                members.sort();
+                members
+            })
+            .collect();
+        indexed.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        indexed
+    });
     let answer = serde_json::json!({
         "tree": tree,
         "minimal_cut_sets": cuts,
         "open_psa": tree.to_open_psa(name),
+        "structure": structure,
     });
     serde_json::to_string(&answer).map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
+/// Validate the versioned structural result without numerical quantification.
+#[pyfunction]
+fn validate_fault_tree_structure(structure_json: &str) -> PyResult<()> {
+    read_fault_tree_structure(structure_json)
+        .map(|_| ())
+        .map_err(|e| SimulationError::new_err(e.to_string()))
 }
 
 fn fta_engine(engine: &str) -> PyResult<FtaEngine> {
@@ -1027,7 +1089,8 @@ fn fault_tree_envelope_json(
             "fault tree: min_cut_probability {min_cut_probability} is outside [0, 1]"
         )));
     }
-    let (tree, top) = generate_tree(model_json, top_json, targets_json, profile_json, max_nodes)?;
+    let (tree, top, _) =
+        generate_tree(model_json, top_json, targets_json, profile_json, max_nodes)?;
     let settings = QuantifySettings {
         mission_time: None,
         max_bdd_nodes,
@@ -1518,6 +1581,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(explore_json, module)?)?;
     module.add_function(wrap_pyfunction!(exploration_domain_json, module)?)?;
     module.add_function(wrap_pyfunction!(fault_tree_json, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_fault_tree_structure, module)?)?;
     module.add_function(wrap_pyfunction!(fault_tree_quantify_json, module)?)?;
     module.add_function(wrap_pyfunction!(fault_tree_envelope_json, module)?)?;
     module.add_function(wrap_pyfunction!(validate_fault_tree_envelope, module)?)?;

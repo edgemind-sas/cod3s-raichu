@@ -44,7 +44,7 @@ pub use engine::{
 };
 pub use fault_tree::{
     explain, fault_tree, fault_tree_for_targets, BasicLaw, Explanation, FaultTree, FaultTreeError,
-    FaultTreeSettings, FtNode, GateOp, TreeEvent,
+    FaultTreeSettings, FtNode, GateOp, TreeEvent, DEFAULT_MAX_NODES,
 };
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
 pub use loops::{switching_loops, SwitchingLoop};
