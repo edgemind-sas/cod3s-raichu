@@ -10,6 +10,8 @@ pin the Python surface; the Rust suite pins the format itself.
 
 import json
 
+import pytest
+
 import pyraichu
 
 #: The redundant pair of the sequence-analysis guide: one common-cause mode
@@ -95,3 +97,15 @@ def test_no_path_no_file(tmp_path):
     campaign = pyraichu.run_sequences(pyraichu.load_model(MODEL), 50, T_MAX, seed=1)
     assert campaign.raw_path is None
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_failed_campaign_leaves_the_previous_corpus_untouched(tmp_path):
+    raw_path = tmp_path / "raw.jsonl"
+    raw_path.write_text("the previous corpus\n")
+    refused = pyraichu.Observation("A_late", "A", "flow", -1.0)
+    with pytest.raises(pyraichu.SimulationError):
+        pyraichu.run_sequences(
+            pyraichu.load_model(MODEL), 50, T_MAX, seed=1, raw_path=raw_path, observations=[refused]
+        )
+    assert raw_path.read_text() == "the previous corpus\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["raw.jsonl"]
