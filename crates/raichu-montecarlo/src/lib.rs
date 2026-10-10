@@ -644,10 +644,10 @@ fn prepare_campaign(
 
 /// Run `compute` on the default rayon pool, or on a pool of `threads`
 /// workers when one is asked for.
-fn in_pool<T: Send>(
+fn in_pool<T: Send, E: Send + From<EngineError>>(
     threads: Option<usize>,
-    compute: impl FnOnce() -> Result<T, EngineError> + Send,
-) -> Result<T, EngineError> {
+    compute: impl FnOnce() -> Result<T, E> + Send,
+) -> Result<T, E> {
     match threads {
         None => compute(),
         Some(threads) => rayon::ThreadPoolBuilder::new()
@@ -1199,50 +1199,151 @@ impl Reducer {
     }
 }
 
-/// Run `nb_runs` **sequence-recording** replicas and collect their raw
-/// per-trajectory sequences, in replica order (deterministic).
+/// Replicas of a sequence campaign simulated together before they are
+/// handed on, in replica order. Smaller than [`CHUNK`] because a recorded
+/// trajectory weighs kilobytes on a repairable system where a sample row
+/// weighs bytes: 4 096 of them stay in the tens of megabytes, and still
+/// give every thread of a large machine a hundred replicas per chunk.
+const SEQUENCE_CHUNK: u64 = 1 << 12;
+
+/// The observations of a sequence campaign, resolved against the model;
+/// the default plan observes nothing.
+#[derive(Default)]
+struct ObservationPlan {
+    /// The indicator each observation reads.
+    columns: Vec<usize>,
+    /// The instant each observation is read at, in the order asked.
+    times: Vec<f64>,
+    /// The distinct instants the engine samples, sorted.
+    samples: Vec<f64>,
+}
+
+impl ObservationPlan {
+    fn new(
+        model: &CompiledModel,
+        config: &McConfig,
+        observations: &[SequenceObservation],
+    ) -> Result<Self, EngineError> {
+        let mut columns = Vec::with_capacity(observations.len());
+        let mut times = Vec::with_capacity(observations.len());
+        for observation in observations {
+            let column = model
+                .indicators
+                .iter()
+                .position(|indicator| indicator.name == observation.indicator)
+                .ok_or_else(|| EngineError::TypeError {
+                    time: 0.0,
+                    detail: format!(
+                        "the observation reads `{}`, which is no indicator of the model",
+                        observation.indicator
+                    ),
+                })?;
+            if !observation.time.is_finite() || observation.time < 0.0 {
+                return Err(EngineError::TypeError {
+                    time: 0.0,
+                    detail: format!(
+                        "the observation of `{}` is read at {}, which is not an instant of a \
+                         trajectory",
+                        observation.indicator, observation.time
+                    ),
+                });
+            }
+            columns.push(column);
+            times.push(observation.read_at(config.t_max));
+        }
+        let mut samples = times.clone();
+        samples.sort_by(f64::total_cmp);
+        samples.dedup();
+        Ok(ObservationPlan {
+            columns,
+            times,
+            samples,
+        })
+    }
+
+    /// Simulate one replica: its sequence and its observed values.
+    fn replica(
+        &self,
+        model: &CompiledModel,
+        config: &McConfig,
+        stop_at_targets: bool,
+        replica: u64,
+    ) -> Result<(Sequence, Vec<f64>), EngineError> {
+        let engine_config = EngineConfig {
+            t_max: config.t_max,
+            sequences: true,
+            stop_at_targets,
+            seed: config.seed,
+            rng_stream: replica,
+            ode: config.ode.clone(),
+            flow: config.flow.clone(),
+            samples: self.samples.clone(),
+            ..EngineConfig::default()
+        };
+        let result = Engine::new(model, engine_config)?.run()?;
+        let row = self
+            .columns
+            .iter()
+            .zip(&self.times)
+            .map(|(&column, &time)| {
+                result.samples[column]
+                    .points
+                    .iter()
+                    .find(|(at, _)| *at == time)
+                    .map(|(_, value)| observed_number(*value))
+                    .ok_or_else(|| EngineError::TypeError {
+                        time,
+                        detail: format!(
+                            "replica {replica} recorded no value of `{}` at {time}",
+                            model.indicators[column].name
+                        ),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let sequence = result.sequence.ok_or_else(|| EngineError::TypeError {
+            time: 0.0,
+            detail: format!("replica {replica} recorded no sequence"),
+        })?;
+        Ok((sequence, row))
+    }
+}
+
+/// Simulate every replica of a sequence campaign and hand each one to
+/// `sink`, in replica order, in parallel chunks of [`SEQUENCE_CHUNK`]:
+/// only one chunk of trajectories is alive at a time.
 ///
 /// `stop_at_targets` decides the regime: on, each trajectory ends at the
 /// first feared event, which is the corpus minimal-sequence analysis is
 /// defined on; off, it keeps evolving to the horizon, which is what a
 /// measure read at an instant *beyond* the feared event needs.
-fn collect_sequences(
+fn stream_sequences<E, F>(
     model: &CompiledModel,
     config: &McConfig,
     stop_at_targets: bool,
-) -> Result<Vec<Sequence>, EngineError> {
+    plan: &ObservationPlan,
+    mut sink: F,
+) -> Result<(), E>
+where
+    E: Send + From<EngineError>,
+    F: FnMut(u64, Sequence, Vec<f64>) -> Result<(), E> + Send,
+{
     use rayon::prelude::*;
 
-    let compute = || -> Result<Vec<Option<Sequence>>, EngineError> {
-        (0..config.nb_runs)
-            .into_par_iter()
-            .map(|replica| {
-                let engine_config = EngineConfig {
-                    t_max: config.t_max,
-                    sequences: true,
-                    stop_at_targets,
-                    seed: config.seed,
-                    rng_stream: replica,
-                    ode: config.ode.clone(),
-                    flow: config.flow.clone(),
-                    ..EngineConfig::default()
-                };
-                Ok(Engine::new(model, engine_config)?.run()?.sequence)
-            })
-            .collect()
-    };
-    let per = match config.threads {
-        None => compute()?,
-        Some(threads) => rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .map_err(|e| EngineError::TypeError {
-                time: 0.0,
-                detail: format!("thread-pool construction failed: {e}"),
-            })?
-            .install(compute)?,
-    };
-    Ok(per.into_iter().flatten().collect())
+    in_pool(config.threads, || {
+        let mut first = 0;
+        while first < config.nb_runs {
+            let last = (first + SEQUENCE_CHUNK).min(config.nb_runs);
+            let chunk = (first..last)
+                .into_par_iter()
+                .map(|replica| plan.replica(model, config, stop_at_targets, replica))
+                .collect::<Result<Vec<_>, EngineError>>()?;
+            for (replica, (sequence, row)) in (first..last).zip(chunk) {
+                sink(replica, sequence, row)?;
+            }
+            first = last;
+        }
+        Ok(())
+    })
 }
 
 /// Run `nb_runs` **sequence-recording** replicas and collect their raw
@@ -1251,6 +1352,9 @@ fn collect_sequences(
 /// reaches no target still contributes its (target-less) sequence. Feed the
 /// result to [`raichu_analysis::analyse`] for the minimal-sequence corpus.
 ///
+/// Every trajectory is held until the campaign ends, so memory grows with
+/// `nb_runs`: a large campaign goes through [`run_sequences_streamed`].
+///
 /// Reports sequences rather than estimators, so it produces no interval
 /// and ignores [`McConfig::confidence`].
 pub fn run_sequences(
@@ -1258,6 +1362,26 @@ pub fn run_sequences(
     config: &McConfig,
 ) -> Result<Vec<Sequence>, EngineError> {
     collect_sequences(model, config, true)
+}
+
+/// Every trajectory of a campaign without observations, in replica order.
+fn collect_sequences(
+    model: &CompiledModel,
+    config: &McConfig,
+    stop_at_targets: bool,
+) -> Result<Vec<Sequence>, EngineError> {
+    let mut sequences = Vec::new();
+    stream_sequences(
+        model,
+        config,
+        stop_at_targets,
+        &ObservationPlan::default(),
+        |_, sequence, _| {
+            sequences.push(sequence);
+            Ok::<_, EngineError>(())
+        },
+    )?;
+    Ok(sequences)
 }
 
 /// One quantity a sequence campaign reads on every trajectory: the value of
@@ -1269,6 +1393,15 @@ pub struct SequenceObservation {
     /// The instant it is read at. An instant past the horizon reads the
     /// value at the horizon, which is the trajectory's last state.
     pub time: f64,
+}
+
+impl SequenceObservation {
+    /// The instant it is actually read at on a campaign of horizon
+    /// `t_max`: its own, brought back to the horizon when it lies beyond.
+    #[must_use]
+    pub fn read_at(&self, t_max: f64) -> f64 {
+        self.time.min(t_max)
+    }
 }
 
 /// A sequence campaign's trajectories with the values observed on each.
@@ -1292,6 +1425,9 @@ pub struct ObservedSequences {
 /// after the event, so the value is the state the trajectory was in at
 /// that instant, or ended in.
 ///
+/// Every trajectory is held until the campaign ends; a large campaign goes
+/// through [`run_sequences_streamed`].
+///
 /// # Errors
 /// [`EngineError::TypeError`] for an observation naming no model
 /// indicator or read at an instant that is negative or not finite; any
@@ -1301,98 +1437,49 @@ pub fn run_sequences_observed(
     config: &McConfig,
     observations: &[SequenceObservation],
 ) -> Result<ObservedSequences, EngineError> {
-    use rayon::prelude::*;
-
-    let mut columns = Vec::with_capacity(observations.len());
-    let mut times = Vec::with_capacity(observations.len());
-    for observation in observations {
-        let column = model
-            .indicators
-            .iter()
-            .position(|indicator| indicator.name == observation.indicator)
-            .ok_or_else(|| EngineError::TypeError {
-                time: 0.0,
-                detail: format!(
-                    "the observation reads `{}`, which is no indicator of the model",
-                    observation.indicator
-                ),
-            })?;
-        if !observation.time.is_finite() || observation.time < 0.0 {
-            return Err(EngineError::TypeError {
-                time: 0.0,
-                detail: format!(
-                    "the observation of `{}` is read at {}, which is not an instant of a \
-                     trajectory",
-                    observation.indicator, observation.time
-                ),
-            });
-        }
-        columns.push(column);
-        times.push(observation.time.min(config.t_max));
-    }
-    let mut samples = times.clone();
-    samples.sort_by(f64::total_cmp);
-    samples.dedup();
-
-    let compute = || -> Result<Vec<(Sequence, Vec<f64>)>, EngineError> {
-        (0..config.nb_runs)
-            .into_par_iter()
-            .map(|replica| {
-                let engine_config = EngineConfig {
-                    t_max: config.t_max,
-                    sequences: true,
-                    stop_at_targets: true,
-                    seed: config.seed,
-                    rng_stream: replica,
-                    ode: config.ode.clone(),
-                    flow: config.flow.clone(),
-                    samples: samples.clone(),
-                    ..EngineConfig::default()
-                };
-                let result = Engine::new(model, engine_config)?.run()?;
-                let row = columns
-                    .iter()
-                    .zip(&times)
-                    .map(|(&column, &time)| {
-                        result.samples[column]
-                            .points
-                            .iter()
-                            .find(|(at, _)| *at == time)
-                            .map(|(_, value)| observed_number(*value))
-                            .ok_or_else(|| EngineError::TypeError {
-                                time,
-                                detail: format!(
-                                    "replica {replica} recorded no value of `{}` at {time}",
-                                    model.indicators[column].name
-                                ),
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let sequence = result.sequence.ok_or_else(|| EngineError::TypeError {
-                    time: 0.0,
-                    detail: format!("replica {replica} recorded no sequence"),
-                })?;
-                Ok((sequence, row))
-            })
-            .collect()
-    };
-    let per = match config.threads {
-        None => compute()?,
-        Some(threads) => rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .map_err(|e| EngineError::TypeError {
-                time: 0.0,
-                detail: format!("thread-pool construction failed: {e}"),
-            })?
-            .install(compute)?,
-    };
-    let (sequences, observed) = per.into_iter().unzip();
+    let plan = ObservationPlan::new(model, config, observations)?;
+    let mut sequences = Vec::new();
+    let mut observed = Vec::new();
+    stream_sequences(model, config, true, &plan, |_, sequence, row| {
+        sequences.push(sequence);
+        observed.push(row);
+        Ok::<_, EngineError>(())
+    })?;
     Ok(ObservedSequences {
         sequences,
         observed,
-        times,
+        times: plan.times,
     })
+}
+
+/// [`run_sequences_observed`] without holding the campaign: each
+/// trajectory is handed to `sink` as `(replica, sequence, observed)`, in
+/// replica order, and dropped once `sink` returns. The replicas run in
+/// parallel chunks, so memory is bounded by one chunk of trajectories
+/// whatever `nb_runs` is; what `sink` keeps is its own affair (a
+/// [`raichu_analysis::SequenceReducer`] keeps the distinct cleaned paths,
+/// a [`raichu_analysis::RawCorpusWriter`] keeps nothing).
+///
+/// The same seed gives the same trajectories in the same order as
+/// [`run_sequences_observed`], whatever the thread count. Each observation
+/// is read at [`SequenceObservation::read_at`].
+///
+/// # Errors
+/// What [`run_sequences_observed`] raises, before any replica for an
+/// observation it refuses; the first error `sink` returns, which stops the
+/// campaign.
+pub fn run_sequences_streamed<E, F>(
+    model: &CompiledModel,
+    config: &McConfig,
+    observations: &[SequenceObservation],
+    sink: F,
+) -> Result<(), E>
+where
+    E: Send + From<EngineError>,
+    F: FnMut(u64, Sequence, Vec<f64>) -> Result<(), E> + Send,
+{
+    let plan = ObservationPlan::new(model, config, observations)?;
+    stream_sequences(model, config, true, &plan, sink)
 }
 
 /// An indicator value as the number a raw corpus records.

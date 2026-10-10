@@ -100,23 +100,41 @@ The pipeline behind the call:
 
 ```mermaid
 flowchart LR
-    R["1. record"] --> G["2. group"]
-    G --> C["3. cancel repairs"]
-    C --> M["4. absorb"]
+    R["1. record"] --> C["2. cancel repairs"]
+    C --> G["3. group"]
+    G --> M["4. absorb"]
     M --> O(["minimal cut<br/>sequences"])
 ```
 
 1. **Record**: each trajectory logs its *monitored* transitions (the
    plugin marks failure/repair and event transitions automatically) and
    stops at the first target.
-2. **Group**: trajectories with the same ordered event signature merge;
-   weights add up.
-3. **Cancel transient cycles**: a failure that was repaired *before*
+2. **Cancel transient cycles**: a failure that was repaired *before*
    the feared event did not cause it: paired failure/repair events of
    the same mode are removed (per component, so distinct modes never
    cancel each other).
+3. **Group**: trajectories left with the same ordered event signature
+   merge; weights add up and dates are averaged.
 4. **Minimal absorption**: a sequence that contains a shorter reaching
    sequence is absorbed into it; only irreducible cuts remain.
+
+Steps 2 and 3 run on each trajectory as the campaign produces it, and the
+trajectory is then dropped: a campaign holds one chunk of trajectories in
+flight plus one entry per distinct cleaned path, so its memory does not grow
+with `nb_runs`. Cancelling before grouping is what makes that hold on a
+repairable system, where nearly every raw trajectory is distinct (its
+transient cycles differ) while the paths left once they are cancelled are
+few. Up to 0.81.0 every trajectory was held until the end of the campaign,
+which ran out of memory at 1e7 trajectories on a 39-component repairable
+model.
+
+Two results can differ from 0.81.0, which also grouped once before
+cancelling. Averaged dates may differ in their last bits. And when a longer
+sequence contains two minimal ones of the same length and weight, 0.81.0
+absorbed it into whichever its grouping order put first; it now goes to the
+one with the smaller event signature, so the minimal level depends only on
+the cleaned paths and their weights, never on the order they were reduced
+in.
 
 ## Keeping the raw corpus
 
@@ -138,7 +156,11 @@ assert again.minimal == campaign.minimal
 ```
 
 The raw corpus holds one line per trajectory, dates included, so it is the
-level to audit a campaign on, to filter, or to hand to another tool.
+level to audit a campaign on, to filter, or to hand to another tool. It is
+written line by line as the campaign runs, and `analyse_raw_sequences` reads
+it line by line: neither holds the trajectories, so the file is the only
+thing that grows with `nb_runs` (about 1.6 kB per trajectory on a two-component
+repairable model over 200 time units).
 
 ### Observing a value, and reducing under a condition
 

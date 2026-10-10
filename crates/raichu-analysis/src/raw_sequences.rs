@@ -133,6 +133,31 @@ impl RawHeader {
         self.observations = observations;
         self
     }
+
+    /// The position of the observation named `name` in a trajectory's
+    /// `observed` array.
+    ///
+    /// # Errors
+    /// [`RawSequencesError::Format`] when the corpus observed nothing by
+    /// that name: a condition on a quantity the campaign did not record
+    /// cannot be decided, and keeping every trajectory would read as a
+    /// filter that passed them all.
+    pub fn observation_index(&self, name: &str) -> Result<usize, RawSequencesError> {
+        self.observations
+            .iter()
+            .position(|o| o.name == name)
+            .ok_or_else(|| {
+                let known: Vec<&str> = self.observations.iter().map(|o| o.name.as_str()).collect();
+                RawSequencesError::Format(format!(
+                    "the corpus observed no `{name}`; it observed {}",
+                    if known.is_empty() {
+                        "nothing".to_owned()
+                    } else {
+                        format!("{known:?}")
+                    }
+                ))
+            })
+    }
 }
 
 /// A raw corpus read back whole: its header, its trajectories in replica
@@ -192,28 +217,7 @@ impl RawCorpus {
         &self,
         condition: &ObservedCondition,
     ) -> Result<Vec<Sequence>, RawSequencesError> {
-        let position = self
-            .header
-            .observations
-            .iter()
-            .position(|o| o.name == condition.observation)
-            .ok_or_else(|| {
-                let known: Vec<&str> = self
-                    .header
-                    .observations
-                    .iter()
-                    .map(|o| o.name.as_str())
-                    .collect();
-                RawSequencesError::Format(format!(
-                    "the corpus observed no `{}`; it observed {}",
-                    condition.observation,
-                    if known.is_empty() {
-                        "nothing".to_owned()
-                    } else {
-                        format!("{known:?}")
-                    }
-                ))
-            })?;
+        let position = self.header.observation_index(&condition.observation)?;
         Ok(self
             .sequences
             .iter()
@@ -307,13 +311,15 @@ pub fn write_raw_sequences<W: Write>(
 ///
 /// `observed` holds one row per trajectory, each with one value per
 /// observation the header declares, in that order; it is empty when the
-/// header declares none.
+/// header declares none. Every count is checked before anything is
+/// written; a campaign too large to hold writes through a
+/// [`RawCorpusWriter`] instead.
 ///
 /// # Errors
 /// [`RawSequencesError::Format`] when a count differs from what the header
 /// states; [`RawSequencesError::Io`] when the writer fails.
 pub fn write_raw_corpus<W: Write>(
-    mut writer: W,
+    writer: W,
     header: &RawHeader,
     sequences: &[Sequence],
     observed: &[Vec<f64>],
@@ -350,10 +356,67 @@ pub fn write_raw_corpus<W: Write>(
             )));
         }
     }
-    writer.write_all(json_line(header)?.as_bytes())?;
+    let mut corpus = RawCorpusWriter::new(writer, header)?;
     for (run, sequence) in sequences.iter().enumerate() {
+        corpus.push(sequence, observed.get(run).map_or(&[], Vec::as_slice))?;
+    }
+    corpus.finish()?;
+    Ok(())
+}
+
+/// A raw corpus written one trajectory at a time, as a campaign produces
+/// them: the header goes out on creation, each [`push`](Self::push) writes
+/// one line, and [`finish`](Self::finish) checks that the header's count
+/// was met. Nothing but the current line is held, so a campaign of any
+/// size writes in bounded memory.
+#[derive(Debug)]
+pub struct RawCorpusWriter<W: Write> {
+    writer: W,
+    nb_runs: u64,
+    width: usize,
+    written: u64,
+}
+
+impl<W: Write> RawCorpusWriter<W> {
+    /// Write `header` and get ready for its trajectories.
+    ///
+    /// # Errors
+    /// [`RawSequencesError::Io`] when the writer fails.
+    pub fn new(mut writer: W, header: &RawHeader) -> Result<Self, RawSequencesError> {
+        writer.write_all(json_line(header)?.as_bytes())?;
+        Ok(RawCorpusWriter {
+            writer,
+            nb_runs: header.nb_runs,
+            width: header.observations.len(),
+            written: 0,
+        })
+    }
+
+    /// Write the next trajectory, in replica order, with its observed
+    /// values (one per observation the header declares; none when it
+    /// declares none).
+    ///
+    /// # Errors
+    /// [`RawSequencesError::Format`] when the header's count is already
+    /// written or `observed` does not hold one value per declared
+    /// observation; [`RawSequencesError::Io`] when the writer fails.
+    pub fn push(&mut self, sequence: &Sequence, observed: &[f64]) -> Result<(), RawSequencesError> {
+        if self.written == self.nb_runs {
+            return Err(RawSequencesError::Format(format!(
+                "the header states {} trajectories and one more is written",
+                self.nb_runs
+            )));
+        }
+        if observed.len() != self.width {
+            return Err(RawSequencesError::Format(format!(
+                "run {} has {} observed values where the header declares {}",
+                self.written,
+                observed.len(),
+                self.width
+            )));
+        }
         let record = RawRecord {
-            run: run as u64,
+            run: self.written,
             end_cause: &sequence.end_cause,
             end_time: sequence.end_time,
             events: sequence
@@ -361,12 +424,29 @@ pub fn write_raw_corpus<W: Write>(
                 .iter()
                 .map(|e| (e.time, e.obj.as_str(), e.attr.as_str(), &e.cycle_group))
                 .collect(),
-            observed: observed.get(run).map_or(&[], Vec::as_slice),
+            observed,
         };
-        writer.write_all(json_line(&record)?.as_bytes())?;
+        self.writer.write_all(json_line(&record)?.as_bytes())?;
+        self.written += 1;
+        Ok(())
     }
-    writer.flush()?;
-    Ok(())
+
+    /// Flush the corpus and hand the writer back.
+    ///
+    /// # Errors
+    /// [`RawSequencesError::Format`] when fewer trajectories than the
+    /// header states were written; [`RawSequencesError::Io`] when the
+    /// flush fails.
+    pub fn finish(mut self) -> Result<W, RawSequencesError> {
+        if self.written != self.nb_runs {
+            return Err(RawSequencesError::Format(format!(
+                "the header states {} trajectories and {} are written",
+                self.nb_runs, self.written
+            )));
+        }
+        self.writer.flush()?;
+        Ok(self.writer)
+    }
 }
 
 /// Read a raw corpus back: its header and its trajectories, in replica
@@ -383,6 +463,39 @@ pub fn read_raw_sequences<R: BufRead>(
 }
 
 /// Read a raw corpus back whole: header, trajectories and observed values.
+/// A corpus too large to hold reads through a [`RawCorpusReader`] instead.
+///
+/// # Errors
+/// As [`RawCorpusReader`].
+pub fn read_raw_corpus<R: BufRead>(reader: R) -> Result<RawCorpus, RawSequencesError> {
+    let corpus = RawCorpusReader::new(reader)?;
+    let header = corpus.header().clone();
+    let width = header.observations.len();
+    let mut sequences = Vec::new();
+    let mut observed = Vec::new();
+    for trajectory in corpus {
+        let (sequence, row) = trajectory?;
+        sequences.push(sequence);
+        if width > 0 {
+            observed.push(row);
+        }
+    }
+    Ok(RawCorpus {
+        header,
+        sequences,
+        observed,
+    })
+}
+
+/// A raw corpus read one trajectory at a time: the header is read and
+/// checked on creation, then each item is the next trajectory, in replica
+/// order, with its observed values (empty when the corpus observed
+/// nothing). Only the current line is held, so a corpus of any size reads
+/// in bounded memory.
+///
+/// Every check [`read_raw_corpus`] makes is made as the lines go by; a
+/// trajectory count that falls short of the header's is reported as the
+/// last item.
 ///
 /// # Errors
 /// [`RawSequencesError::Line`] on a line that is not the expected JSON;
@@ -390,46 +503,73 @@ pub fn read_raw_sequences<R: BufRead>(
 /// [`RAW_SEQUENCES_VERSION`], runs out of order, a trajectory count that
 /// is not the header's, or a trajectory whose observed values are not one
 /// per declared observation.
-pub fn read_raw_corpus<R: BufRead>(reader: R) -> Result<RawCorpus, RawSequencesError> {
-    let mut lines = reader.lines().enumerate();
-    let header: RawHeader = match lines.next() {
-        None => return Err(RawSequencesError::Format("the corpus is empty".to_owned())),
-        Some((_, line)) => serde_json::from_str(&line?).map_err(|e| RawSequencesError::Line {
-            line: 1,
-            detail: e.to_string(),
-        })?,
-    };
-    if header.format != RAW_SEQUENCES_FORMAT {
-        return Err(RawSequencesError::Format(format!(
-            "the format is `{}`, not `{RAW_SEQUENCES_FORMAT}`",
-            header.format
-        )));
-    }
-    if header.version > RAW_SEQUENCES_VERSION {
-        return Err(RawSequencesError::Format(format!(
-            "version {} is newer than the {RAW_SEQUENCES_VERSION} this reader knows",
-            header.version
-        )));
-    }
-    let width = header.observations.len();
-    let mut sequences = Vec::new();
-    let mut observed = Vec::new();
-    for (index, line) in lines {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+#[derive(Debug)]
+pub struct RawCorpusReader<R: BufRead> {
+    lines: std::iter::Enumerate<std::io::Lines<R>>,
+    header: RawHeader,
+    read: u64,
+    done: bool,
+}
+
+impl<R: BufRead> RawCorpusReader<R> {
+    /// Read and check the header.
+    ///
+    /// # Errors
+    /// As the type says, for the header line.
+    pub fn new(reader: R) -> Result<Self, RawSequencesError> {
+        let mut lines = reader.lines().enumerate();
+        let header: RawHeader = match lines.next() {
+            None => return Err(RawSequencesError::Format("the corpus is empty".to_owned())),
+            Some((_, line)) => {
+                serde_json::from_str(&line?).map_err(|e| RawSequencesError::Line {
+                    line: 1,
+                    detail: e.to_string(),
+                })?
+            }
+        };
+        if header.format != RAW_SEQUENCES_FORMAT {
+            return Err(RawSequencesError::Format(format!(
+                "the format is `{}`, not `{RAW_SEQUENCES_FORMAT}`",
+                header.format
+            )));
         }
+        if header.version > RAW_SEQUENCES_VERSION {
+            return Err(RawSequencesError::Format(format!(
+                "version {} is newer than the {RAW_SEQUENCES_VERSION} this reader knows",
+                header.version
+            )));
+        }
+        Ok(RawCorpusReader {
+            lines,
+            header,
+            read: 0,
+            done: false,
+        })
+    }
+
+    /// The corpus header.
+    #[must_use]
+    pub fn header(&self) -> &RawHeader {
+        &self.header
+    }
+
+    /// One trajectory line.
+    fn trajectory(
+        &self,
+        index: usize,
+        line: &str,
+    ) -> Result<(Sequence, Vec<f64>), RawSequencesError> {
         let record: ReadRecord =
-            serde_json::from_str(&line).map_err(|e| RawSequencesError::Line {
+            serde_json::from_str(line).map_err(|e| RawSequencesError::Line {
                 line: index + 1,
                 detail: e.to_string(),
             })?;
-        if record.run != sequences.len() as u64 {
+        if record.run != self.read {
             return Err(RawSequencesError::Format(format!(
                 "line {} holds run {} where run {} was expected",
                 index + 1,
                 record.run,
-                sequences.len()
+                self.read
             )));
         }
         let events = record
@@ -444,6 +584,7 @@ pub fn read_raw_corpus<R: BufRead>(reader: R) -> Result<RawCorpus, RawSequencesE
                 })
             })
             .collect::<Result<Vec<_>, RawSequencesError>>()?;
+        let width = self.header.observations.len();
         if record.observed.len() != width {
             return Err(RawSequencesError::Format(format!(
                 "line {} holds {} observed values where the header declares {width}",
@@ -451,34 +592,57 @@ pub fn read_raw_corpus<R: BufRead>(reader: R) -> Result<RawCorpus, RawSequencesE
                 record.observed.len()
             )));
         }
-        if width > 0 {
-            observed.push(
-                record
-                    .observed
-                    .iter()
-                    .map(|value| number(value, index + 1))
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
-        }
-        sequences.push(Sequence {
+        let observed = record
+            .observed
+            .iter()
+            .map(|value| number(value, index + 1))
+            .collect::<Result<Vec<_>, _>>()?;
+        let sequence = Sequence {
             events,
             end_cause: record.end_cause,
             end_time: number(&record.end_time, index + 1)?,
             weight: 1.0,
-        });
+        };
+        Ok((sequence, observed))
     }
-    if sequences.len() as u64 != header.nb_runs {
-        return Err(RawSequencesError::Format(format!(
-            "the header states {} trajectories and the corpus holds {}",
-            header.nb_runs,
-            sequences.len()
-        )));
+}
+
+impl<R: BufRead> Iterator for RawCorpusReader<R> {
+    type Item = Result<(Sequence, Vec<f64>), RawSequencesError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        loop {
+            let Some((index, line)) = self.lines.next() else {
+                self.done = true;
+                if self.read != self.header.nb_runs {
+                    return Some(Err(RawSequencesError::Format(format!(
+                        "the header states {} trajectories and the corpus holds {}",
+                        self.header.nb_runs, self.read
+                    ))));
+                }
+                return None;
+            };
+            let line = match line {
+                Ok(line) => line,
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(e.into()));
+                }
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let item = self.trajectory(index, &line);
+            match item {
+                Ok(_) => self.read += 1,
+                Err(_) => self.done = true,
+            }
+            return Some(item);
+        }
     }
-    Ok(RawCorpus {
-        header,
-        sequences,
-        observed,
-    })
 }
 
 /// One JSON document on one line.

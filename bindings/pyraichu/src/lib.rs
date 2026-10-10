@@ -16,15 +16,16 @@ use pyo3::import_exception;
 use pyo3::prelude::*;
 use raichu::raichu_analysis::analyse as analyse_sequences;
 use raichu::raichu_analysis::{
-    clean as clean_sequences, minimal_sequences, read_raw_corpus, write_raw_corpus,
-    ObservedCondition, RawCorpus, RawHeader, RawObservation,
+    minimal_sequences, ObservedCondition, RawCorpusReader, RawCorpusWriter, RawHeader,
+    RawObservation, RawSequencesError, SequenceReducer,
 };
 use raichu::raichu_core::{
     fault_tree as generate_fault_tree, fault_tree_for_targets, FaultTree, FaultTreeSettings,
 };
 use raichu::raichu_core::{
     CoSimulationHost, CompiledModel, Engine, EngineConfig, EngineError,
-    FlowConfig as CoreFlowConfig, Snapshot as CoreSnapshot, SolverParams, StochasticDates,
+    FlowConfig as CoreFlowConfig, Sequence, Snapshot as CoreSnapshot, SolverParams,
+    StochasticDates,
 };
 use raichu::raichu_explore::{
     exact_domain_report, explore_discretised, explore_discretised_with_fmu, explore_exact,
@@ -40,8 +41,8 @@ use raichu::raichu_fta::{
 use raichu::raichu_model::Model;
 use raichu::raichu_model::{Indicator, IndicatorTarget};
 use raichu::raichu_montecarlo::{
-    run as mc_run, run_importance as mc_run_importance, run_sequences as mc_run_sequences,
-    run_sequences_observed as mc_run_sequences_observed, run_with_fmu as mc_run_with_fmu, McConfig,
+    run as mc_run, run_importance as mc_run_importance,
+    run_sequences_streamed as mc_run_sequences_streamed, run_with_fmu as mc_run_with_fmu, McConfig,
     SequenceObservation, DEFAULT_CONFIDENCE,
 };
 use raichu::raichu_quantify::{
@@ -485,21 +486,15 @@ fn analyse_sequences_json(
             stop_at_targets: false,
             flow,
         };
-        let raw = mc_run_sequences(&compiled, &config).map_err(engine_error)?;
-        let minimal = analyse_sequences(raw);
+        let mut reducer = SequenceReducer::new();
+        mc_run_sequences_streamed(&compiled, &config, &[], |_, sequence, _| {
+            reducer.push(sequence);
+            Ok::<_, EngineError>(())
+        })
+        .map_err(engine_error)?;
+        let minimal = minimal_sequences(reducer.cleaned());
         serde_json::to_string(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))
     })
-}
-
-/// The two reduced levels of a raw corpus, as the JSON object
-/// `{"cleaned": [...], "minimal": [...]}`.
-fn reduced_levels(raw: Vec<raichu::raichu_core::engine::Sequence>) -> PyResult<serde_json::Value> {
-    let cleaned = clean_sequences(raw);
-    let minimal = minimal_sequences(cleaned.clone());
-    Ok(serde_json::json!({
-        "cleaned": serde_json::to_value(&cleaned).map_err(|e| SimulationError::new_err(e.to_string()))?,
-        "minimal": serde_json::to_value(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))?,
-    }))
 }
 
 /// A condition as the binding receives it: `(observation, op, value)`, with
@@ -528,30 +523,122 @@ fn observed_condition(condition: ConditionArg) -> PyResult<ObservedCondition> {
     })
 }
 
-/// Reduce a corpus to its two levels, first keeping only the trajectories
-/// `condition` holds on when one is given, and report what it kept.
-fn reduce_corpus(
-    corpus: &RawCorpus,
-    condition: Option<ConditionArg>,
-) -> PyResult<serde_json::Value> {
-    let Some(condition) = condition else {
-        return reduced_levels(corpus.sequences.clone());
-    };
-    let symbol = condition.1.clone();
-    let condition = observed_condition(condition)?;
-    let kept = corpus
-        .filtered(&condition)
-        .map_err(|e| SimulationError::new_err(e.to_string()))?;
-    let kept_count = kept.len();
-    let mut levels = reduced_levels(kept)?;
-    levels["condition"] = serde_json::json!({
-        "observation": condition.observation,
-        "op": symbol,
-        "value": condition.value,
-        "total_trajectories": corpus.sequences.len(),
-        "kept_trajectories": kept_count,
-    });
-    Ok(levels)
+/// What a sequence campaign or a corpus read can fail with, while the
+/// trajectories go by.
+enum CorpusError {
+    Engine(EngineError),
+    Raw(RawSequencesError),
+}
+
+impl From<EngineError> for CorpusError {
+    fn from(error: EngineError) -> Self {
+        CorpusError::Engine(error)
+    }
+}
+
+impl From<RawSequencesError> for CorpusError {
+    fn from(error: RawSequencesError) -> Self {
+        CorpusError::Raw(error)
+    }
+}
+
+fn corpus_error(error: CorpusError) -> PyErr {
+    match error {
+        CorpusError::Engine(error) => engine_error(error),
+        CorpusError::Raw(error) => SimulationError::new_err(error.to_string()),
+    }
+}
+
+/// A condition resolved against a corpus header.
+struct ResolvedCondition {
+    condition: ObservedCondition,
+    /// The position of the observation it reads in a trajectory's
+    /// observed values.
+    column: usize,
+    /// The comparison as it was spelled, for the report.
+    op_symbol: String,
+}
+
+/// The reduction of a corpus to its two levels, fed one trajectory at a
+/// time, keeping only the trajectories a condition holds on when one is
+/// given. Holds the distinct cleaned paths and two counts, never the
+/// trajectories.
+struct ConditionalReduction {
+    reducer: SequenceReducer,
+    condition: Option<ResolvedCondition>,
+    total: u64,
+    kept: u64,
+}
+
+impl ConditionalReduction {
+    /// A reduction of the corpus `header` describes; refuses a condition
+    /// on an observation it does not carry, before any trajectory.
+    fn new(header: &RawHeader, condition: Option<ConditionArg>) -> PyResult<Self> {
+        let condition = match condition {
+            None => None,
+            Some(condition) => {
+                let symbol = condition.1.clone();
+                let condition = observed_condition(condition)?;
+                let position = header
+                    .observation_index(&condition.observation)
+                    .map_err(|e| SimulationError::new_err(e.to_string()))?;
+                Some(ResolvedCondition {
+                    condition,
+                    column: position,
+                    op_symbol: symbol,
+                })
+            }
+        };
+        Ok(ConditionalReduction {
+            reducer: SequenceReducer::new(),
+            condition,
+            total: 0,
+            kept: 0,
+        })
+    }
+
+    fn push(&mut self, sequence: Sequence, observed: &[f64]) {
+        self.total += 1;
+        let holds = self
+            .condition
+            .as_ref()
+            .is_none_or(|resolved| resolved.condition.holds(observed[resolved.column]));
+        if holds {
+            self.kept += 1;
+            self.reducer.push(sequence);
+        }
+    }
+
+    /// The two levels as `{"cleaned": [...], "minimal": [...]}`, plus a
+    /// `condition` report when one was given.
+    fn finish(self) -> PyResult<serde_json::Value> {
+        let to_value = |v: &[Sequence]| {
+            serde_json::to_value(v).map_err(|e| SimulationError::new_err(e.to_string()))
+        };
+        let cleaned = self.reducer.cleaned();
+        // Serialised before the minimal level consumes it: no copy is made.
+        let cleaned_value = to_value(&cleaned)?;
+        let minimal = minimal_sequences(cleaned);
+        let mut levels = serde_json::json!({
+            "cleaned": cleaned_value,
+            "minimal": to_value(&minimal)?,
+        });
+        if let Some(ResolvedCondition {
+            condition,
+            op_symbol: symbol,
+            ..
+        }) = self.condition
+        {
+            levels["condition"] = serde_json::json!({
+                "observation": condition.observation,
+                "op": symbol,
+                "value": condition.value,
+                "total_trajectories": self.total,
+                "kept_trajectories": self.kept,
+            });
+        }
+        Ok(levels)
+    }
 }
 
 /// A sequence campaign kept whole: run `nb_runs` sequence-recording replicas
@@ -566,8 +653,10 @@ fn reduce_corpus(
 /// the returned JSON then holds a `condition` report. The raw corpus always
 /// holds every trajectory.
 ///
-/// The raw corpus is written from Rust and never materialised as Python
-/// objects: a large campaign holds one line per replica.
+/// Each trajectory is written and reduced as the campaign produces it, and
+/// dropped: memory holds one chunk of trajectories and the distinct
+/// cleaned paths, whatever `nb_runs` is, and the raw corpus never becomes
+/// Python objects.
 #[pyfunction]
 #[pyo3(signature = (model_json, nb_runs, t_max, seed = 0, threads = None, flow = None, raw_path = None, observations = None, condition = None))]
 #[allow(clippy::too_many_arguments)]
@@ -632,8 +721,6 @@ fn run_sequences_json(
                 time: *time,
             })
             .collect();
-        let campaign =
-            mc_run_sequences_observed(&compiled, &config, &asked).map_err(engine_error)?;
         let header = RawHeader::new(
             raichu::VERSION,
             &model.name,
@@ -643,45 +730,82 @@ fn run_sequences_json(
             compiled.targets.iter().map(|t| t.name.clone()).collect(),
         )
         .with_observations(
-            observations
+            asked
                 .iter()
-                .zip(&campaign.times)
-                .map(|((name, _, _, _), time)| RawObservation {
-                    name: name.clone(),
-                    time: *time,
+                .map(|observation| RawObservation {
+                    name: observation.indicator.clone(),
+                    time: observation.read_at(t_max),
                 })
                 .collect(),
         );
-        let observed = if observations.is_empty() {
-            Vec::new()
+        let mut reduction = ConditionalReduction::new(&header, condition)?;
+        // The corpus is written beside `raw_path` and moved onto it once the
+        // campaign succeeded: a campaign that fails leaves whatever
+        // `raw_path` held untouched, and no partial corpus behind.
+        let mut writer = match &raw_path {
+            None => None,
+            Some(path) => {
+                let partial = partial_path(path);
+                let file = std::fs::File::create(&partial).map_err(|e| {
+                    SimulationError::new_err(format!("cannot create {}: {e}", partial.display()))
+                })?;
+                let writer = RawCorpusWriter::new(std::io::BufWriter::new(file), &header)
+                    .map_err(|e| SimulationError::new_err(e.to_string()));
+                match writer {
+                    Ok(writer) => Some((writer, partial)),
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&partial);
+                        return Err(e);
+                    }
+                }
+            }
+        };
+        let campaign =
+            mc_run_sequences_streamed(&compiled, &config, &asked, |_, sequence, observed| {
+                if let Some((writer, _)) = writer.as_mut() {
+                    writer.push(&sequence, &observed)?;
+                }
+                reduction.push(sequence, &observed);
+                Ok::<_, CorpusError>(())
+            })
+            .map_err(corpus_error);
+        if let (Some((writer, partial)), Some(path)) = (writer, &raw_path) {
+            let written = campaign.and_then(|()| {
+                writer
+                    .finish()
+                    .map_err(|e| SimulationError::new_err(e.to_string()))?;
+                std::fs::rename(&partial, path).map_err(|e| {
+                    SimulationError::new_err(format!(
+                        "cannot move the corpus to {}: {e}",
+                        path.display()
+                    ))
+                })
+            });
+            if written.is_err() {
+                let _ = std::fs::remove_file(&partial);
+            }
+            written?;
         } else {
-            campaign.observed
-        };
-        if let Some(path) = raw_path {
-            let file = std::fs::File::create(&path).map_err(|e| {
-                SimulationError::new_err(format!("cannot create {}: {e}", path.display()))
-            })?;
-            write_raw_corpus(
-                std::io::BufWriter::new(file),
-                &header,
-                &campaign.sequences,
-                &observed,
-            )
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+            campaign?;
         }
-        let corpus = RawCorpus {
-            header,
-            sequences: campaign.sequences,
-            observed,
-        };
-        Ok(reduce_corpus(&corpus, condition)?.to_string())
+        Ok(reduction.finish()?.to_string())
     })
+}
+
+/// The file a raw corpus is written to before it is moved onto `path`: the
+/// same name with `.partial` appended, in the same directory, so the move
+/// is a rename within one file system.
+fn partial_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".partial");
+    std::path::PathBuf::from(name)
 }
 
 /// Read a raw corpus written by [`run_sequences_json`] and reduce it again:
 /// the JSON `{"header": {...}, "cleaned": [...], "minimal": [...]}`, reduced
 /// from the trajectories `condition` holds on when one is given (plus a
-/// `condition` report).
+/// `condition` report). The corpus is read one line at a time, so a corpus
+/// of any size reduces in the memory of its distinct cleaned paths.
 #[pyfunction]
 #[pyo3(signature = (raw_path, condition = None))]
 fn analyse_raw_sequences_json(
@@ -693,11 +817,18 @@ fn analyse_raw_sequences_json(
         let file = std::fs::File::open(&raw_path).map_err(|e| {
             SimulationError::new_err(format!("cannot open {}: {e}", raw_path.display()))
         })?;
-        let corpus = read_raw_corpus(std::io::BufReader::new(file))
+        let corpus = RawCorpusReader::new(std::io::BufReader::new(file))
             .map_err(|e| SimulationError::new_err(e.to_string()))?;
-        let mut levels = reduce_corpus(&corpus, condition)?;
-        levels["header"] = serde_json::to_value(&corpus.header)
-            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        let header = corpus.header().clone();
+        let mut reduction = ConditionalReduction::new(&header, condition)?;
+        for trajectory in corpus {
+            let (sequence, observed) =
+                trajectory.map_err(|e| SimulationError::new_err(e.to_string()))?;
+            reduction.push(sequence, &observed);
+        }
+        let mut levels = reduction.finish()?;
+        levels["header"] =
+            serde_json::to_value(&header).map_err(|e| SimulationError::new_err(e.to_string()))?;
         Ok(levels.to_string())
     })
 }

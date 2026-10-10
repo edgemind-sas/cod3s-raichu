@@ -32,7 +32,9 @@ pub use importance::{
 };
 pub use raw_sequences::{
     read_raw_corpus, read_raw_sequences, write_raw_corpus, write_raw_sequences, ObservedCondition,
-    RawCorpus, RawHeader, RawObservation, RawSequencesError, RAW_SEQUENCES_FORMAT,
-    RAW_SEQUENCES_VERSION,
+    RawCorpus, RawCorpusReader, RawCorpusWriter, RawHeader, RawObservation, RawSequencesError,
+    RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
 };
-pub use sequence::{analyse, clean, filter_cycles, group_sequences, minimal_sequences};
+pub use sequence::{
+    analyse, clean, filter_cycles, group_sequences, minimal_sequences, SequenceReducer,
+};
