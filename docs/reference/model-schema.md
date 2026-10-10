@@ -295,6 +295,7 @@ automaton**. `init` must be one of `states`.
 | `on_interruption` | `"reset"` \| `"resume"` \| `"continue"` | optional (default `reset`); see [below](#interruption-policy) |
 | `monitored` | bool | optional (default `false`); firing is recorded in the trajectory's [sequence](../guides/sequence-analysis.md) |
 | `cycle_group` | string | optional; failure/repair partners share it so transient cycles cancel in the sequence pipeline (paired per component) |
+| `monitored_states` | array of string | optional (default: every target); the targets whose entry a `monitored` transition records, a non-empty subset of `targets`. A draw `rep → [occ, not_occ]` records `["occ"]`: a lost draw only parks the automaton and is not an event. Requires the feature `monitored_states` |
 | `kind` | `"failure"` \| `"repair"` | optional (default absent); the declared reliability role, see [Declared kind](#declared-kind) |
 | `effects` | array of Assignment | optional; written ONCE when the transition fires, see [Edge effects](#edge-effects) |
 | `distrib` + params | - | the occurrence distribution, flattened onto the transition (see [Distributions](#distributions)) |
@@ -889,6 +890,7 @@ The Python helpers, all in `pyraichu`:
 | `mixed_integer_program` | model-level [programs](#program) |
 | `observer_priority` | transition-level [declared kind](#declared-kind) `observation` |
 | `interface_connections` | model-level [interface connections](#interface-connection) |
+| `monitored_states` | transition-level [recorded targets](#transition) |
 
 The transition-level [declared kind](#declared-kind) `failure` or
 `repair` is a **baseline** construct and has no feature name (the kind
@@ -1055,7 +1057,7 @@ guide:
 | `interactive` | a trajectory stepped by hand | [Interactive simulation](../guides/interactive-simulation.md) |
 | `run_sequences` / `analyse_sequences` | the sequences leading to a feared event | [Sequence analysis](../guides/sequence-analysis.md) |
 | `explore` | the exact sequence tree, with probability bounds | [Sequence-tree exploration](../guides/sequence-tree-exploration.md) |
-| `importance` | component importance measures | [Importance measures](../guides/importance-measures.md) |
+| `importance` | importance measures per failure mode, component and group | [Importance measures](../guides/importance-measures.md) |
 | `fault_tree` | the fault tree and its minimal cut sets | [Fault trees](../guides/fault-tree.md) |
 
 The two run entry points take:

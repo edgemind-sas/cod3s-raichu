@@ -455,9 +455,18 @@ impl<'m> Engine<'m> {
         self.events.push(event.clone());
         self.note_firing(trans_idx)?;
         // Sequence analysis: record the entry into a monitored state.
-        if self.config.sequences && transition.monitored {
+        // A transition restricted to some of its targets records only the
+        // branches that are events of the mission (the won draw, never the
+        // park of a lost one).
+        if self.config.sequences && transition.records(target) {
+            let automaton = &self.model.automata[owner].name;
             self.seq_events.push(SeqEvent {
                 obj: transition.component.clone(),
+                automaton: automaton
+                    .strip_prefix(transition.component.as_str())
+                    .and_then(|rest| rest.strip_prefix('.'))
+                    .unwrap_or(automaton)
+                    .to_owned(),
                 attr: event.to.clone(),
                 time: self.time,
                 cycle_group: transition.cycle_group.clone(),

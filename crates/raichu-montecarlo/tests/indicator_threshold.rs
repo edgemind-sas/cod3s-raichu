@@ -68,6 +68,7 @@ fn tank(indicators: Vec<Indicator>) -> Model {
                     targets: vec!["gone".into()],
                     on_interruption: Default::default(),
                     monitored: false,
+                    monitored_states: None,
                     cycle_group: None,
                     kind: None,
                     effects: vec![],

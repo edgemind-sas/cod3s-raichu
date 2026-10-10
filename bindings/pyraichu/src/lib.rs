@@ -16,8 +16,9 @@ use pyo3::import_exception;
 use pyo3::prelude::*;
 use raichu::raichu_analysis::analyse as analyse_sequences;
 use raichu::raichu_analysis::{
-    minimal_sequences, ObservedCondition, RawCorpusReader, RawCorpusWriter, RawHeader,
-    RawObservation, RawSequencesError, SequenceReducer,
+    minimal_sequences, BasicEvent, BasicEventSelection, ImportanceGroup, ObservedCondition,
+    RawCorpusReader, RawCorpusWriter, RawHeader, RawObservation, RawSequencesError,
+    SequenceReducer,
 };
 use raichu::raichu_core::{
     fault_tree as generate_fault_tree, fault_tree_for_targets, FaultTree, FaultTreeSettings,
@@ -846,8 +847,13 @@ fn analyse_raw_sequences_json(
 ///
 /// `flow` is an optional [`FlowConfig`] overriding the convergence
 /// policy of the continuous flow resolution, applied to every replica.
+///
+/// `options_json` carries the basic-event selection and the groups:
+/// `{"basic_events": "failures" | "monitored" | [{obj, automaton, attr}],
+/// "groups": [{name, events: [{obj, automaton, attr}]}]}`, both optional
+/// (the declared failure states, no group).
 #[pyfunction]
-#[pyo3(signature = (model_json, nb_runs, t_max, instants, target = None, seed = 0, threads = None, flow = None))]
+#[pyo3(signature = (model_json, nb_runs, t_max, instants, target = None, seed = 0, threads = None, flow = None, options_json = None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn importance_json(
     py: Python<'_>,
@@ -859,7 +865,9 @@ fn importance_json(
     seed: u64,
     threads: Option<usize>,
     flow: Option<FlowConfig>,
+    options_json: Option<&str>,
 ) -> PyResult<String> {
+    let (selection, groups) = importance_options(options_json)?;
     let compiled = parse_and_compile(model_json)?;
     let flow = flow_policy(flow);
     py.detach(|| {
@@ -876,10 +884,51 @@ fn importance_json(
             stop_at_targets: false,
             flow,
         };
-        let analysis =
-            mc_run_importance(&compiled, &config, target.as_deref()).map_err(engine_error)?;
+        let analysis = mc_run_importance(&compiled, &config, target.as_deref(), &selection, groups)
+            .map_err(engine_error)?;
         serde_json::to_string(&analysis).map_err(|e| SimulationError::new_err(e.to_string()))
     })
+}
+
+/// The basic-event selection and the groups of an importance analysis,
+/// from the options document [`importance_json`] documents.
+fn importance_options(
+    options_json: Option<&str>,
+) -> PyResult<(BasicEventSelection, Vec<ImportanceGroup>)> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Selection {
+        Named(String),
+        Listed(Vec<BasicEvent>),
+    }
+    #[derive(serde::Deserialize, Default)]
+    #[serde(deny_unknown_fields)]
+    struct Options {
+        #[serde(default)]
+        basic_events: Option<Selection>,
+        #[serde(default)]
+        groups: Vec<ImportanceGroup>,
+    }
+    let refused =
+        |detail: String| SimulationError::new_err(format!("importance options: {detail}"));
+    let options: Options = match options_json {
+        Some(json) => serde_json::from_str(json).map_err(|e| refused(e.to_string()))?,
+        None => Options::default(),
+    };
+    let selection = match options.basic_events {
+        None => BasicEventSelection::Failures,
+        Some(Selection::Named(name)) => match name.as_str() {
+            "failures" => BasicEventSelection::Failures,
+            "monitored" => BasicEventSelection::Monitored,
+            other => {
+                return Err(refused(format!(
+                    "`basic_events` is `{other}`: expected `failures`, `monitored` or a list"
+                )))
+            }
+        },
+        Some(Selection::Listed(events)) => BasicEventSelection::Listed(events),
+    };
+    Ok((selection, options.groups))
 }
 
 /// Explore the sequence tree of a model to the target `target` and return

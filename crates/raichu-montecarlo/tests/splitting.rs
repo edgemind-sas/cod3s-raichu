@@ -291,6 +291,7 @@ fn completed_instants_hide_transient_score_peaks() {
             guard: None,
             on_interruption: Default::default(),
             monitored: false,
+            monitored_states: None,
             cycle_group: None,
             kind: None,
             effects: vec![],

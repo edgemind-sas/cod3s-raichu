@@ -49,7 +49,10 @@ pub use cross_entropy::{
     DEFAULT_CE_PILOT_RUNS, DEFAULT_CE_SMOOTHING, DEFAULT_CE_TOLERANCE,
 };
 
-use raichu_analysis::{importance, target_events, ImportanceAnalysis};
+use raichu_analysis::{
+    basic_events, target_events, BasicEventSelection, ImportanceAnalysis, ImportanceError,
+    ImportanceGroup, ImportanceReducer,
+};
 use raichu_core::{
     CIndicator, CIndicatorTarget, CoSimulationHost, CompiledModel, Engine, EngineConfig,
     EngineError, FlowConfig, FmuProvenance, IndicatorSeries, PreparedCoSimulation, Sequence,
@@ -1553,12 +1556,15 @@ fn observed_number(value: Value) -> f64 {
 }
 
 /// Native **importance measures** of one feared event: run a
-/// sequence-recording campaign and reduce it to the per-component
-/// Birnbaum, Fussell-Vesely and criticality series over
-/// [`McConfig::samples`].
+/// sequence-recording campaign and reduce it to the Birnbaum,
+/// Fussell-Vesely and criticality series of every failure mode, every
+/// component and every declared group over [`McConfig::samples`].
 ///
 /// `target` names the feared event among the model's declared targets; a
-/// model with exactly one may leave it out. The campaign runs
+/// model with exactly one may leave it out. `selection` says which
+/// recorded states are basic events (the declared failure states by
+/// default), and `groups` the units measured beyond the modes and the
+/// components. The campaign runs
 /// **free-running** (no target early-stop), because a measure read at an
 /// instant is a statement about the state of the system at that instant,
 /// and a trajectory frozen at its first feared event stops producing one.
@@ -1567,12 +1573,24 @@ fn observed_number(value: Value) -> f64 {
 /// same thing the early stop would have recorded: one campaign, both
 /// halves of the answer.
 ///
+/// The trajectories are reduced as they are produced
+/// ([`raichu_analysis::ImportanceReducer`]): what the campaign holds is a
+/// compact record of the state changes the measures read, never the
+/// trajectories.
+///
 /// See [`mod@raichu_analysis::importance`] for what the measures mean and what
 /// they assume.
+///
+/// # Errors
+/// [`EngineError::TypeError`] for an unknown or ambiguous feared event, one
+/// never recorded, a selection that finds no basic event, or a group the
+/// analysis refuses; any error a replica raises.
 pub fn run_importance(
     model: &CompiledModel,
     config: &McConfig,
     target: Option<&str>,
+    selection: &BasicEventSelection,
+    groups: Vec<ImportanceGroup>,
 ) -> Result<ImportanceAnalysis, EngineError> {
     // `target_events` keeps the declaration order, so the position of the
     // chosen event is also the index of its `CTarget`.
@@ -1622,8 +1640,24 @@ pub fn run_importance(
             ),
         });
     }
-    let raw = collect_sequences(model, config, false)?;
-    Ok(importance(&raw, event, &config.samples))
+    let refused = |error: ImportanceError| EngineError::TypeError {
+        time: 0.0,
+        detail: error.to_string(),
+    };
+    let events = basic_events(model, selection, event).map_err(refused)?;
+    let mut reducer =
+        ImportanceReducer::new(event.clone(), events, groups, &config.samples).map_err(refused)?;
+    stream_sequences(
+        model,
+        config,
+        false,
+        &ObservationPlan::default(),
+        |_, sequence, _| {
+            reducer.push(&sequence);
+            Ok::<_, EngineError>(())
+        },
+    )?;
+    Ok(reducer.finish())
 }
 
 /// The declared feared events, for an error message that names the

@@ -31,6 +31,7 @@ fn transition(name: &str, source: &str, target: &str, rate: f64) -> Transition {
         targets: vec![target.into()],
         on_interruption: Default::default(),
         monitored: false,
+        monitored_states: None,
         cycle_group: None,
         kind: None,
         effects: vec![],

@@ -1019,6 +1019,16 @@ pub struct Event {
 pub struct SeqEvent {
     /// Owning component (cod3s `elt.parent().name()`).
     pub obj: String,
+    /// The automaton of `obj` whose state was entered, by its name inside
+    /// the component. Two automata of one component can share state names
+    /// (two failure modes grafted on one pump both reach `occ`), and this
+    /// is what tells their events apart. Empty when the source names no
+    /// automaton (an exploration result, a raw corpus written before the
+    /// name was recorded). Not part of the serialized sequence: the
+    /// `(obj, attr)` identity of the published sequence levels is kept,
+    /// and the raw corpus carries it in a field of its own.
+    #[serde(skip)]
+    pub automaton: String,
     /// The monitored state entered (cod3s `elt.basename()`, e.g. `occ__cc_12`).
     pub attr: String,
     /// Firing date.

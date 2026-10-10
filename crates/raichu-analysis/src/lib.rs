@@ -10,8 +10,9 @@
 //! - [`raw_sequences`]: the raw corpus format (`raichu.sequences`), read
 //!   and written line by line, so a campaign too large for memory can be
 //!   reduced later;
-//! - [`importance`](mod@importance): the importance measures of each component with
-//!   respect to a feared event, computed from one campaign.
+//! - [`importance`](mod@importance): the importance measures of each failure
+//!   mode, component and declared group with respect to a feared event,
+//!   computed from one campaign.
 //!
 //! The records themselves ([`Sequence`](raichu_core::Sequence),
 //! [`SeqEvent`](raichu_core::SeqEvent), [`Provenance`](raichu_core::Provenance))
@@ -28,7 +29,9 @@ pub mod raw_sequences;
 pub mod sequence;
 
 pub use importance::{
-    importance, target_events, BasicEvent, ComponentImportance, Cut, ImportanceAnalysis,
+    basic_events, importance, target_events, BasicEvent, BasicEventSelection, ComponentImportance,
+    Cut, EventImportance, GroupImportance, ImportanceAnalysis, ImportanceError, ImportanceGroup,
+    ImportanceReducer, Measures,
 };
 pub use raw_sequences::{
     read_raw_corpus, read_raw_sequences, write_raw_corpus, write_raw_sequences, ObservedCondition,

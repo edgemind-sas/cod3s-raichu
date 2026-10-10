@@ -353,6 +353,9 @@ impl ExploredEvent {
     pub fn to_seq_event(&self) -> SeqEvent {
         SeqEvent {
             obj: self.obj.clone(),
+            // The exploration format names no automaton (see
+            // `SeqEvent::automaton`: empty when the source does not say).
+            automaton: String::new(),
             attr: self.attr.clone(),
             time: 0.0,
             cycle_group: self.cycle_group.clone(),

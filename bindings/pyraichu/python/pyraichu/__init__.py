@@ -71,6 +71,7 @@ __all__ = [
     "ConfidenceInterval",
     "CrossEntropyResult",
     "Cut",
+    "EventImportance",
     "Event",
     "Exploration",
     "ExploredSequence",
@@ -79,6 +80,7 @@ __all__ = [
     "FaultTreeQuantification",
     "Fireable",
     "FlowConfig",
+    "GroupImportance",
     "ImportanceAnalysis",
     "IndicatorEstimate",
     "Interactive",
@@ -1516,35 +1518,18 @@ from ._quantification import (
 class Cut:
     """One minimal cut set of the feared event."""
 
-    #: The basic events, as ``component.state`` qualified names.
+    #: The basic events, as ``component.automaton.state`` qualified names.
     events: list[str]
-    #: How many trajectories reached the feared event through this cut.
+    #: How many trajectories reached the feared event with this cut
+    #: realized.
     weight: float
 
 
-@dataclass(frozen=True)
-class ComponentImportance:
-    """The importance measures of one component over the schedule.
+class _PivotalWorths:
+    """The two worths every importance unit derives from its pivotal
+    levels: shared by the mode, component and group levels."""
 
-    Every list is indexed like :attr:`ImportanceAnalysis.instants`.
-    """
-
-    component: str
-    #: The monitored failure states the cut structure attributes to it.
-    events: list[str]
-    #: ``q_i(t)``: probability that at least one of those states is active.
-    unavailability: list[float]
-    #: Probability that the system is *critical* for this component: it
-    #: fails if the component fails and holds if the component holds.
-    birnbaum: list[float]
-    #: The share of the feared-event probability that passes through a cut
-    #: containing this component.
-    fussell_vesely: list[float]
-    #: ``birnbaum · unavailability / q_cuts``.
-    criticality: list[float]
-    #: The feared-event probability with this component certainly failed.
     q_system_failed: list[float]
-    #: The feared-event probability with this component made perfect.
     q_system_intact: list[float]
 
     def risk_achievement(self, analysis: ImportanceAnalysis) -> list[float]:
@@ -1569,10 +1554,98 @@ class ComponentImportance:
 
 
 @dataclass(frozen=True)
+class EventImportance(_PivotalWorths):
+    """The importance measures of one basic event, one failure mode.
+
+    Every list is indexed like :attr:`ImportanceAnalysis.instants`.
+    """
+
+    #: The ``component.automaton.state`` qualified name.
+    event: str
+    #: The component whose automaton carries it.
+    component: str
+    #: The automaton, by its name inside the component.
+    automaton: str
+    #: The failure state.
+    state: str
+    #: ``q_i(t)``: probability that the state is active.
+    unavailability: list[float]
+    #: Probability that the system is *critical* for this mode: it fails
+    #: if the mode occurs and holds if it does not.
+    birnbaum: list[float]
+    #: The share of the feared-event probability that passes through a cut
+    #: containing this mode.
+    fussell_vesely: list[float]
+    #: ``birnbaum · unavailability / q_cuts``.
+    criticality: list[float]
+    #: The feared-event probability with this mode certainly occurred.
+    q_system_failed: list[float]
+    #: The feared-event probability with this mode made impossible.
+    q_system_intact: list[float]
+
+
+@dataclass(frozen=True)
+class ComponentImportance(_PivotalWorths):
+    """The importance measures of one component, every failure mode its
+    automata carry taken as one unit.
+
+    Every list is indexed like :attr:`ImportanceAnalysis.instants`.
+    """
+
+    component: str
+    #: The failure states the cut structure attributes to it, as
+    #: ``automaton.state`` names.
+    events: list[str]
+    #: ``q_i(t)``: probability that at least one of those states is active.
+    unavailability: list[float]
+    #: Probability that the system is *critical* for this component: it
+    #: fails if the component fails and holds if the component holds.
+    #: Computed for the component, not summed over its modes, which it is
+    #: not.
+    birnbaum: list[float]
+    #: The share of the feared-event probability that passes through a cut
+    #: containing this component.
+    fussell_vesely: list[float]
+    #: ``birnbaum · unavailability / q_cuts``.
+    criticality: list[float]
+    #: The feared-event probability with this component certainly failed.
+    q_system_failed: list[float]
+    #: The feared-event probability with this component made perfect.
+    q_system_intact: list[float]
+
+
+@dataclass(frozen=True)
+class GroupImportance(_PivotalWorths):
+    """The importance measures of one declared group of basic events, as
+    one unit (see the ``groups`` argument of :func:`importance`).
+
+    Every list is indexed like :attr:`ImportanceAnalysis.instants`.
+    """
+
+    group: str
+    #: Its basic events, as ``component.automaton.state`` names.
+    events: list[str]
+    #: ``q_g(t)``: probability that at least one of them is active.
+    unavailability: list[float]
+    #: Probability that the system is critical for the group:
+    #: ``P(Φ(D ∪ E_g)) − P(Φ(D \ E_g))``.
+    birnbaum: list[float]
+    #: The share of the feared-event probability that passes through a cut
+    #: meeting the group.
+    fussell_vesely: list[float]
+    #: ``birnbaum · unavailability / q_cuts``.
+    criticality: list[float]
+    #: The feared-event probability with the whole group failed.
+    q_system_failed: list[float]
+    #: The feared-event probability with the whole group made perfect.
+    q_system_intact: list[float]
+
+
+@dataclass(frozen=True)
 class ImportanceAnalysis:
     """Native importance measures of one feared event."""
 
-    #: The feared event, as a ``component.state`` qualified name.
+    #: The feared event, as a ``component.automaton.state`` qualified name.
     target: str
     #: The instants every series is sampled at, ascending.
     instants: list[float]
@@ -1593,12 +1666,44 @@ class ImportanceAnalysis:
     nb_runs: float
     #: Engine version that produced it.
     engine_version: str
+    #: Per-failure-mode measures, keyed by ``component.automaton.state``,
+    #: for the basic events of the cuts, ranked like :attr:`components`.
+    basic_events: dict[str, EventImportance] = field(default_factory=dict)
+    #: Per-group measures, keyed by group name, one per declared group,
+    #: ranked like :attr:`components`.
+    groups: dict[str, GroupImportance] = field(default_factory=dict)
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
             f"ImportanceAnalysis(target={self.target!r}, "
-            f"{len(self.cuts)} cuts, {len(self.components)} components)"
+            f"{len(self.cuts)} cuts, {len(self.basic_events)} basic events, "
+            f"{len(self.components)} components, {len(self.groups)} groups)"
         )
+
+
+def _basic_event_name(event: dict) -> str:
+    """The ``component.automaton.state`` name of a wire basic event."""
+    return f"{event['obj']}.{event['automaton']}.{event['attr']}"
+
+
+def _basic_event_wire(name: str, where: str) -> dict:
+    """The wire form of a ``component.automaton.state`` name."""
+    parts = name.rsplit(".", 2)
+    if len(parts) != 3 or not all(parts):
+        raise ValueError(
+            f"{where}: `{name}` is not a `component.automaton.state` basic event"
+        )
+    return {"obj": parts[0], "automaton": parts[1], "attr": parts[2]}
+
+
+_MEASURES = (
+    "unavailability",
+    "birnbaum",
+    "fussell_vesely",
+    "criticality",
+    "q_system_failed",
+    "q_system_intact",
+)
 
 
 def importance(
@@ -1610,23 +1715,44 @@ def importance(
     seed: int = 0,
     threads: int | None = None,
     flow: FlowConfig | None = None,
+    basic_events: str | list[str] = "failures",
+    groups: dict[str, list[str]] | None = None,
 ) -> ImportanceAnalysis:
-    """Native importance measures: which component carries the risk.
+    """Native importance measures: which failure mode, which component
+    and which group carries the risk.
 
     Runs one sequence-recording Monte-Carlo campaign and reduces it to the
-    per-component **Birnbaum**, **Fussell-Vesely** and **criticality**
-    series at ``instants``, together with the minimal cut sets they were
-    computed on.
+    **Birnbaum**, **Fussell-Vesely** and **criticality** series at
+    ``instants`` of every failure mode, every component and every declared
+    group, together with the minimal cut sets they were computed on.
 
-    The support is RAICHU's native minimal sequences. Truncated at the
-    first feared event they are the minimal cut sets, hence the structure
-    function; left to run to the horizon the same trajectories replay the
-    state of every failure mode at any instant. Both measures then follow
-    from their definitions, with no independence assumed between
-    components and no rare-event approximation: Birnbaum is the pivotal
-    difference ``P(Φ(D ∪ E_i)) − P(Φ(D \\ E_i))``, Fussell-Vesely the
-    share of system failures whose realized cut passes through the
-    component.
+    The support is RAICHU's native sequence recording. Replayed up to the
+    first feared event, each trajectory gives the failures active when it
+    occurred, a cut; merged and reduced, the cuts are the minimal cut
+    sets, hence the structure function. Left to run to the horizon, the
+    same trajectories replay the state of every failure mode at any
+    instant. The measures then follow from their definitions, with no
+    independence assumed and no rare-event approximation: Birnbaum is the
+    pivotal difference ``P(Φ(D ∪ E_i)) − P(Φ(D \\ E_i))``,
+    Fussell-Vesely the share of system failures whose realized cut meets
+    the unit.
+
+    A **basic event** is one failure state of one automaton, named
+    ``component.automaton.state``: two modes of one pump are two automata
+    of the pump, hence two basic events, and the pump itself is the unit
+    that gathers them. ``basic_events`` says which recorded states count:
+
+    - ``"failures"`` (default): the states the model's failure transitions
+      enter (``kind: "failure"``), so an observer, an intermediate feared
+      event or the park of a lost draw is never a failure;
+    - ``"monitored"``: every recorded state other than its automaton's
+      initial one, for a model that declares no failure role;
+    - a list of ``component.automaton.state`` names.
+
+    ``groups`` maps a group name to its basic events, each group being
+    measured as one unit (a physical component whose modes live on other
+    objects, a subsystem). An event may sit in several groups, which is
+    how a common cause is attributed to each of its targets.
 
     ``target`` names the feared event among the model's declared targets;
     a model with exactly one may leave it out. ``flow`` is a
@@ -1636,38 +1762,77 @@ def importance(
     A campaign in which the feared event never occurred returns an empty
     analysis with ``q_target`` and ``q_cuts`` at zero, saying why.
     """
+    if isinstance(basic_events, str):
+        selection: str | list[dict] = basic_events
+    else:
+        selection = [_basic_event_wire(name, "basic_events") for name in basic_events]
+    options = {
+        "basic_events": selection,
+        "groups": [
+            {
+                "name": name,
+                "events": [
+                    _basic_event_wire(event, f"group `{name}`") for event in events
+                ],
+            }
+            for name, events in (groups or {}).items()
+        ],
+    }
     raw = json.loads(
         importance_json(
-            model.json, nb_runs, t_max, instants, target, seed, threads, flow
+            model.json,
+            nb_runs,
+            t_max,
+            instants,
+            target,
+            seed,
+            threads,
+            flow,
+            json.dumps(options),
         )
     )
+
+    def measures(entry: dict) -> dict:
+        return {name: entry[name] for name in _MEASURES}
+
     analysis = ImportanceAnalysis(
-        target=f"{raw['target']['obj']}.{raw['target']['attr']}",
+        target=_basic_event_name(raw["target"]),
         instants=raw["instants"],
         q_target=raw["q_target"],
         q_cuts=raw["q_cuts"],
         cuts=[
             Cut(
-                events=[f"{e['obj']}.{e['attr']}" for e in cut["events"]],
+                events=[_basic_event_name(e) for e in cut["events"]],
                 weight=cut["weight"],
             )
             for cut in raw["cuts"]
         ],
         components={
             c["component"]: ComponentImportance(
-                component=c["component"],
-                events=c["events"],
-                unavailability=c["unavailability"],
-                birnbaum=c["birnbaum"],
-                fussell_vesely=c["fussell_vesely"],
-                criticality=c["criticality"],
-                q_system_failed=c["q_system_failed"],
-                q_system_intact=c["q_system_intact"],
+                component=c["component"], events=c["events"], **measures(c)
             )
             for c in raw["components"]
         },
         nb_runs=raw["nb_runs"],
         engine_version=raw["engine_version"],
+        basic_events={
+            _basic_event_name(e["event"]): EventImportance(
+                event=_basic_event_name(e["event"]),
+                component=e["event"]["obj"],
+                automaton=e["event"]["automaton"],
+                state=e["event"]["attr"],
+                **measures(e),
+            )
+            for e in raw["basic_events"]
+        },
+        groups={
+            g["group"]: GroupImportance(
+                group=g["group"],
+                events=[_basic_event_name(e) for e in g["events"]],
+                **measures(g),
+            )
+            for g in raw["groups"]
+        },
     )
     return analysis
 
