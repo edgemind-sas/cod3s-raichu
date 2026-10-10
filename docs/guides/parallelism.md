@@ -31,10 +31,14 @@ they are summed in do not depend on it.
   order**. Floating-point addition is not associative, so this ordered
   reduction is what makes the estimate **byte-identical** for any thread
   count: not merely statistically equal.
-- The replicas run in **chunks** of 65 536, each folded into the
-  running sums as soon as it completes, in replica order. A campaign
-  therefore holds one chunk of samples at a time, and its memory does not
-  grow with the number of replicas: 10^8 replicas cost what 10^5 do.
+- The replicas run in **chunks**, each folded into the running sums as
+  soon as it completes, in replica order. A chunk holds at most 64 MiB of
+  samples: 65 536 replicas for a model with a few indicators, fewer for one
+  that samples hundreds (about 10 000 for 165 indicators at one instant),
+  and never fewer than 1 024. A campaign therefore holds one chunk of
+  samples at a time, and its memory grows neither with the number of
+  replicas nor, beyond that bound, with the number of indicators. The
+  chunking never changes a result.
   Quantiles are the exception: a nearest-rank quantile needs the whole
   column, so asking for one keeps one value per replica, indicator and
   instant. A probability of reaching a target is a count, and
