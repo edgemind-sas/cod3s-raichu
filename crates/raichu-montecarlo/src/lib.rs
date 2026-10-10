@@ -406,8 +406,16 @@ struct Sample {
     nonzero_reached: f64,
 }
 
-/// One replica's samples: `[indicator][instant] → Sample`.
-type ReplicaSamples = Vec<Vec<Sample>>;
+/// One replica's samples, flat: indicator `i` at instant `k` is
+/// `samples[i * per_indicator + k]`. One allocation per replica rather
+/// than one per indicator: a chunk holds thousands of replicas, and a model
+/// can declare hundreds of indicators.
+struct ReplicaSamples {
+    samples: Vec<Sample>,
+    /// The instants recorded per indicator; the engine records every
+    /// indicator at every instant it reaches, so they all share it.
+    per_indicator: usize,
+}
 
 /// Whether the sampled value of this indicator is a `{0, 1}` draw **by
 /// declaration**, which makes its mean a probability and its interval a
@@ -473,28 +481,52 @@ fn replica_samples(
     let end = result
         .sequence
         .map(|sequence| replica_end(Some(sequence), config.t_max));
-    let per_indicator = result
+    let recorded = |sampled: &IndicatorSeries| sampled.points.len().min(config.samples.len());
+    let per_indicator = result.samples.first().map_or(0, recorded);
+    // The flat layout needs every indicator to carry as many samples as the
+    // first: the engine records them all at each instant it reaches, and a
+    // series that did not would be folded into its neighbour's sums.
+    if let Some(i) = result
         .samples
         .iter()
-        .zip(&result.indicators)
-        .map(
-            |(sampled, change_points): (&IndicatorSeries, &IndicatorSeries)| {
-                config
-                    .samples
-                    .iter()
-                    .zip(&sampled.points)
-                    .map(|(instant, (_, value))| Sample {
-                        value: value_as_f64(*value),
-                        sojourn: sojourn_at(&change_points.points, *instant),
-                        nb_occurrences: nb_occurrences_at(&change_points.points, *instant),
-                        zero_departures: zero_departures_at(&change_points.points, *instant),
-                        nonzero_reached: nonzero_reached_at(&change_points.points, *instant),
-                    })
-                    .collect()
-            },
-        )
-        .collect();
-    Ok((per_indicator, end))
+        .position(|sampled| recorded(sampled) != per_indicator)
+    {
+        return Err(EngineError::TypeError {
+            time: config.t_max,
+            detail: format!(
+                "replica {replica} recorded {} samples of `{}` where the first indicator has \
+                 {per_indicator}",
+                recorded(&result.samples[i]),
+                model
+                    .indicators
+                    .get(i)
+                    .map_or("an unnamed indicator", |indicator| indicator.name.as_str())
+            ),
+        });
+    }
+    let mut samples = Vec::with_capacity(result.samples.len() * per_indicator);
+    for (sampled, change_points) in result.samples.iter().zip(&result.indicators) {
+        samples.extend(
+            config
+                .samples
+                .iter()
+                .zip(&sampled.points)
+                .map(|(instant, (_, value))| Sample {
+                    value: value_as_f64(*value),
+                    sojourn: sojourn_at(&change_points.points, *instant),
+                    nb_occurrences: nb_occurrences_at(&change_points.points, *instant),
+                    zero_departures: zero_departures_at(&change_points.points, *instant),
+                    nonzero_reached: nonzero_reached_at(&change_points.points, *instant),
+                }),
+        );
+    }
+    Ok((
+        ReplicaSamples {
+            samples,
+            per_indicator,
+        },
+        end,
+    ))
 }
 
 /// Run the Monte-Carlo estimation.
@@ -553,7 +585,7 @@ fn run_internal(
 }
 
 /// Simulate every replica of a campaign and hand each one to `sink`, in
-/// replica order: in parallel chunks of [`CHUNK`] replicas, or one at a
+/// replica order: in parallel chunks of [`chunk_len`] replicas, or one at a
 /// time when an FMU that allows a single instance makes the campaign
 /// serial. Only one chunk of samples is alive at a time.
 fn stream_replicas<F>(
@@ -578,10 +610,11 @@ where
         }
         return Ok(());
     }
+    let chunk = chunk_len(model.indicators.len() * config.samples.len());
     in_pool(config.threads, || {
         let mut first = 0;
         while first < config.nb_runs {
-            let last = (first + CHUNK).min(config.nb_runs);
+            let last = (first + chunk).min(config.nb_runs);
             let chunk = (first..last)
                 .into_par_iter()
                 .map(|replica| replica_samples(model, config, replica, record_end, prepared, None))
@@ -880,11 +913,30 @@ where
     Ok(reducer.finish(model, &config, fmu_units, serial_fallback_unit))
 }
 
-/// Replicas simulated together before their samples are folded into the
-/// estimates. A campaign holds at most one chunk of replica samples at a
-/// time, so its memory does not grow with `nb_runs`; only the quantile
-/// columns, when quantiles are asked, keep one value per replica.
-const CHUNK: u64 = 1 << 16;
+/// The bytes of samples one chunk of replicas may hold before it is folded
+/// into the estimates. A campaign holds at most one chunk at a time, so its
+/// memory does not grow with `nb_runs`; only the quantile columns, when
+/// quantiles are asked, keep one value per replica.
+const CHUNK_BYTES: usize = 64 << 20;
+
+/// The most replicas in one chunk, reached by models with few indicators.
+const MAX_CHUNK: u64 = 1 << 16;
+
+/// The fewest replicas in one chunk, whatever a replica weighs: enough to
+/// keep every thread of a large machine busy between two folds.
+const MIN_CHUNK: u64 = 1 << 10;
+
+/// The replicas of one chunk, for replicas recording `samples_per_replica`
+/// samples each: as many as [`CHUNK_BYTES`] holds, between [`MIN_CHUNK`]
+/// and [`MAX_CHUNK`]. The chunking never changes a result, since the fold
+/// takes the replicas in replica order whatever their grouping.
+fn chunk_len(samples_per_replica: usize) -> u64 {
+    let replica_bytes = samples_per_replica
+        .saturating_mul(size_of::<Sample>())
+        .max(1);
+    let fits = u64::try_from(CHUNK_BYTES / replica_bytes).unwrap_or(MAX_CHUNK);
+    fits.clamp(MIN_CHUNK, MAX_CHUNK)
+}
 
 /// Running sums of one indicator at one instant, folded in replica order.
 #[derive(Clone, Copy, Default)]
@@ -962,7 +1014,16 @@ impl Reducer {
 
     /// Fold the next replica, in replica order.
     fn push(&mut self, replica: &ReplicaSamples) {
-        for (fold, samples) in self.folds.iter_mut().zip(replica) {
+        let per_indicator = replica.per_indicator;
+        if per_indicator == 0 {
+            self.folded += 1;
+            return;
+        }
+        for (fold, samples) in self
+            .folds
+            .iter_mut()
+            .zip(replica.samples.chunks_exact(per_indicator))
+        {
             for (k, sample) in samples.iter().enumerate() {
                 let Sample {
                     value,
@@ -1200,7 +1261,7 @@ impl Reducer {
 }
 
 /// Replicas of a sequence campaign simulated together before they are
-/// handed on, in replica order. Smaller than [`CHUNK`] because a recorded
+/// handed on, in replica order. Smaller than [`MAX_CHUNK`] because a recorded
 /// trajectory weighs kilobytes on a repairable system where a sample row
 /// weighs bytes: 4 096 of them stay in the tens of megabytes, and still
 /// give every thread of a large machine a hundred replicas per chunk.
@@ -1624,5 +1685,24 @@ mod departure_tests {
         assert_eq!(zero_departures_at(&points, 2.0), 1.0);
         assert_eq!(nb_occurrences_at(&points, 2.0), 2.0);
         assert_eq!(nonzero_reached_at(&points, 0.0), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::*;
+
+    #[test]
+    fn a_chunk_holds_a_bounded_number_of_bytes_of_samples() {
+        let bytes =
+            |n_samples: usize| chunk_len(n_samples) as usize * n_samples * size_of::<Sample>();
+        // The 165 indicators of the EPS showcase, sampled once: a chunk of
+        // 65 536 replicas held about 1 GB of samples.
+        assert!(bytes(165) <= CHUNK_BYTES, "{} bytes", bytes(165));
+        // A small model keeps the largest chunk.
+        assert_eq!(chunk_len(3), MAX_CHUNK);
+        // A huge one keeps enough replicas per chunk to feed every thread.
+        assert_eq!(chunk_len(10_000_000), MIN_CHUNK);
+        assert_eq!(chunk_len(0), MAX_CHUNK);
     }
 }
