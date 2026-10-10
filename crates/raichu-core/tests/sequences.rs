@@ -16,6 +16,7 @@ fn mon(name: &str, source: &str, target: &str, time: f64, group: Option<&str>) -
         targets: vec![target.into()],
         on_interruption: Default::default(),
         monitored: true,
+        monitored_states: None,
         cycle_group: group.map(Into::into),
         kind: None,
         effects: vec![],
@@ -296,4 +297,111 @@ fn reset_clears_the_recorded_trace_and_end_cause() {
     assert_eq!(seq.end_cause.as_deref(), Some("feared"));
     assert_eq!(seq.end_time, 10.0);
     assert_eq!(result.final_time, 10.0);
+}
+
+#[test]
+fn a_recorded_event_names_its_automaton() {
+    let m = compiled();
+    let config = EngineConfig {
+        t_max: 100.0,
+        sequences: true,
+        stop_at_targets: true,
+        ..EngineConfig::default()
+    };
+    let seq = Engine::new(&m, config)
+        .unwrap()
+        .run()
+        .unwrap()
+        .sequence
+        .unwrap();
+    let automata: Vec<_> = seq.events.iter().map(|e| e.automaton.as_str()).collect();
+    assert_eq!(automata, vec!["life", "life", "ev"]);
+}
+
+/// A component `D` whose automaton `fm` draws once, at t = 0, between
+/// `occ` (probability `p`) and the park `not_occ`, recording
+/// `monitored_states` of the draw.
+fn draw_model(p: f64, monitored_states: Option<Vec<String>>) -> Model {
+    let draw = Transition {
+        name: "occ".into(),
+        source: "rep".into(),
+        guard: None,
+        targets: vec!["occ".into(), "not_occ".into()],
+        on_interruption: Default::default(),
+        monitored: true,
+        monitored_states,
+        cycle_group: Some("fm".into()),
+        kind: None,
+        effects: vec![],
+        distrib: Distrib::Inst { probs: vec![p] },
+    };
+    let mut model = model();
+    model.name = "draw".into();
+    model.targets.clear();
+    model.components = vec![comp(
+        "D",
+        "fm",
+        "rep",
+        &["rep", "occ", "not_occ"],
+        vec![draw],
+    )];
+    model
+}
+
+fn recorded(model: &Model) -> Vec<(String, String)> {
+    let m = CompiledModel::compile(model).unwrap();
+    let config = EngineConfig {
+        t_max: 1.0,
+        sequences: true,
+        ..EngineConfig::default()
+    };
+    let seq = Engine::new(&m, config)
+        .unwrap()
+        .run()
+        .unwrap()
+        .sequence
+        .unwrap();
+    seq.events
+        .iter()
+        .map(|e| (e.automaton.clone(), e.attr.clone()))
+        .collect()
+}
+
+#[test]
+fn a_draw_records_only_the_branches_it_monitors() {
+    let won = || Some(vec!["occ".to_owned()]);
+    // The won branch is the event of the mission, and is recorded.
+    assert_eq!(
+        recorded(&draw_model(1.0, won())),
+        vec![("fm".to_owned(), "occ".to_owned())]
+    );
+    // The lost branch only parks the automaton, and records nothing.
+    assert!(recorded(&draw_model(0.0, won())).is_empty());
+    // Without the restriction, every branch is recorded, the park too.
+    assert_eq!(
+        recorded(&draw_model(0.0, None)),
+        vec![("fm".to_owned(), "not_occ".to_owned())]
+    );
+}
+
+#[test]
+fn monitored_states_must_be_targets_of_a_monitored_transition() {
+    let refused = |model: Model| model.validate().unwrap_err().to_string();
+    assert!(refused(draw_model(0.5, Some(vec!["rep".into()])))
+        .contains("`rep` is not a target of the transition"));
+    assert!(refused(draw_model(0.5, Some(vec![]))).contains("the list is empty"));
+    let mut silent = draw_model(0.5, Some(vec!["occ".into()]));
+    silent.components[0].automata[0].transitions[0].monitored = false;
+    assert!(refused(silent).contains("not `monitored`"));
+}
+
+#[test]
+fn monitored_states_is_a_declared_feature() {
+    use raichu_model::Feature;
+    assert!(draw_model(0.5, Some(vec!["occ".into()]))
+        .required_features()
+        .contains(&Feature::MonitoredStates));
+    assert!(!draw_model(0.5, None)
+        .required_features()
+        .contains(&Feature::MonitoredStates));
 }

@@ -39,6 +39,7 @@ fn transition(name: &str, source: &str, targets: &[&str], distrib: Distrib) -> T
         targets: targets.iter().map(|t| (*t).into()).collect(),
         on_interruption: Default::default(),
         monitored: false,
+        monitored_states: None,
         cycle_group: None,
         kind: None,
         effects: vec![],

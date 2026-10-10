@@ -316,6 +316,7 @@ mod tests {
                 .iter()
                 .map(|(o, a, g)| SeqEvent {
                     obj: (*o).into(),
+                    automaton: String::new(),
                     attr: (*a).into(),
                     time: 0.0,
                     cycle_group: g.map(Into::into),
@@ -469,6 +470,7 @@ mod tests {
             for attr in ["occ", "rep"] {
                 events.push(SeqEvent {
                     obj: fm.into(),
+                    automaton: String::new(),
                     attr: attr.into(),
                     time: date,
                     cycle_group: Some("life".into()),
@@ -478,6 +480,7 @@ mod tests {
         for p in persistent {
             events.push(SeqEvent {
                 obj: (*p).into(),
+                automaton: String::new(),
                 attr: "occ".into(),
                 time: date + 1.0,
                 cycle_group: Some("life".into()),
@@ -485,6 +488,7 @@ mod tests {
         }
         events.push(SeqEvent {
             obj: "ER".into(),
+            automaton: String::new(),
             attr: "occ".into(),
             time: date + 2.0,
             cycle_group: None,

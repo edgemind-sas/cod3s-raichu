@@ -295,3 +295,28 @@ crate, which re-exports it as `raichu::raichu_analysis`).
 `raichu_analysis::ImportanceAnalysis`: the same type under its new path.
 The formats are unchanged: a `raichu.sequences` corpus written by an
 earlier release reads back identically, and every result is bit-identical.
+
+### 0.83.0: importance measures per mode, per component and per group
+
+A basic event is now named by its automaton too, because two failure
+modes of one component reach states of the same name. The signatures
+change accordingly.
+
+| Before 0.83.0 | From 0.83.0 |
+|---|---|
+| `BasicEvent::new(obj, attr)` | `BasicEvent::new(obj, automaton, attr)` |
+| `BasicEvent::name()`, `obj.attr` | `BasicEvent::name()`, `obj.automaton.attr` |
+| `importance(raw, target, instants)` | `importance(raw, target, events, groups, instants)`, fallible, or `ImportanceReducer` fed one trajectory at a time |
+| `run_importance(model, config, target)` | `run_importance(model, config, target, selection, groups)` |
+| `ComponentImportance::{unavailability, birnbaum, ...}` | `ComponentImportance::measures.{unavailability, birnbaum, ...}` (the JSON is unchanged) |
+| `ComponentImportance::events`, `attr` names | `ComponentImportance::events`, `automaton.attr` names |
+| *(none)* | `ImportanceAnalysis::{basic_events, groups}` |
+| *(none)* | `SeqEvent::automaton`, `Transition::monitored_states` |
+
+On the Python side, `pyraichu.importance` keeps its arguments and gains
+`basic_events` and `groups`; the qualified names in `Cut.events` and
+`ImportanceAnalysis.target` gain the automaton. The basic events default
+to the declared failure states, so a hand-written model that declares no
+`kind: "failure"` now passes `basic_events="monitored"` to keep the
+previous reading.
+

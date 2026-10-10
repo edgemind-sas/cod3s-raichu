@@ -147,8 +147,8 @@ def test_the_minimal_cuts_are_the_diagram_cuts(analysis):
     redundant pair are one cut set, not two."""
     found = {frozenset(cut.events) for cut in analysis.cuts}
     assert found == {
-        frozenset({"fm_A.occ"}),
-        frozenset({"fm_B.occ", "fm_C.occ"}),
+        frozenset({"fm_A.fm.occ"}),
+        frozenset({"fm_B.fm.occ", "fm_C.fm.occ"}),
     }
 
 
@@ -372,4 +372,4 @@ def test_a_model_with_two_feared_events_asks_which_one():
     picked = pyraichu.importance(
         two, nb_runs=2000, t_max=40.0, instants=[40.0], target="b_alone", seed=1
     )
-    assert picked.target == "fm_B.occ"
+    assert picked.target == "fm_B.fm.occ"

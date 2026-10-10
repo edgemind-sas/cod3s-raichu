@@ -93,6 +93,7 @@ def importance_json(
     seed: int = 0,
     threads: int | None = None,
     flow: FlowConfig | None = None,
+    options_json: str | None = None,
 ) -> str: ...
 def explore_json(
     model_json: str,

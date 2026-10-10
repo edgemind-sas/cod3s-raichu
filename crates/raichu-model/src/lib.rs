@@ -557,6 +557,24 @@ pub struct Transition {
     /// muscadet plugin sets it on ObjFM occ/rep and ObjEvent occ transitions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub monitored: bool,
+    /// **Sequence analysis**: the targets whose entry a `monitored`
+    /// transition records, when not all of them. `None` (the default)
+    /// records every target; a list records the entry into those targets
+    /// only, and a firing that realises another branch records nothing.
+    ///
+    /// This is how a Bernoulli draw is monitored: its winning branch is
+    /// the event of the mission, while its losing branch only parks the
+    /// automaton until the solicitation falls, and recording that park
+    /// would break the strict failure/repair alternation the cycle filter
+    /// relies on. Each entry must name a target of the transition, the
+    /// list must not be empty, and the transition must be `monitored`.
+    ///
+    /// Non-baseline construct: a document carrying it must declare
+    /// [`Feature::MonitoredStates`]. An engine that ignored the field
+    /// would record every branch, and the sequence and importance analyses
+    /// would read a lost draw as an event without a word.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitored_states: Option<Vec<String>>,
     /// **Sequence analysis**: cycle-pair group id: occ/rep (occ/not_occ)
     /// partner transitions of one failure mode share it, so the
     /// cycle-filtering step can drop transient failure→repair pairs that net
@@ -793,6 +811,12 @@ pub enum Feature {
     /// run a model whose components never hear from each other without
     /// a word.
     InterfaceConnections,
+    /// Transition-level [`Transition::monitored_states`]: a monitored
+    /// transition records the entry into some of its targets only. An
+    /// engine that ignored the field would record a lost Bernoulli draw as
+    /// an event of the mission, and the sequence and importance analyses
+    /// would cancel or invent failures without a word.
+    MonitoredStates,
 }
 
 impl Feature {
@@ -806,6 +830,7 @@ impl Feature {
         Feature::MixedIntegerProgram,
         Feature::ObserverPriority,
         Feature::InterfaceConnections,
+        Feature::MonitoredStates,
     ];
 
     /// Serialized name of the feature.
@@ -820,6 +845,7 @@ impl Feature {
             Feature::MixedIntegerProgram => "mixed_integer_program",
             Feature::ObserverPriority => "observer_priority",
             Feature::InterfaceConnections => "interface_connections",
+            Feature::MonitoredStates => "monitored_states",
         }
     }
 
@@ -1898,6 +1924,15 @@ pub enum ModelError {
         /// The other writer.
         writer: String,
     },
+    /// A transition's [`Transition::monitored_states`] is not a non-empty
+    /// subset of its targets on a monitored transition.
+    #[error("transition `{transition}` declares `monitored_states`, but {reason}")]
+    MonitoredStatesInvalid {
+        /// `component.automaton.transition`.
+        transition: String,
+        /// What is wrong with the declaration.
+        reason: String,
+    },
     /// A distribution operator does not sit on an out port of its
     /// component.
     #[error(
@@ -2431,6 +2466,16 @@ impl Model {
             })
         }) {
             features.insert(Feature::ObserverPriority);
+        }
+        if self.components.iter().any(|component| {
+            component.automata.iter().any(|automaton| {
+                automaton
+                    .transitions
+                    .iter()
+                    .any(|t| t.monitored_states.is_some())
+            })
+        }) {
+            features.insert(Feature::MonitoredStates);
         }
         if self
             .components
@@ -3715,6 +3760,30 @@ impl Model {
                         automaton: automaton.name.clone(),
                         transition: transition.name.clone(),
                         state: state.clone(),
+                    });
+                }
+            }
+            if let Some(recorded) = &transition.monitored_states {
+                let reason = if !transition.monitored {
+                    Some("the transition is not `monitored`, so nothing is recorded".to_owned())
+                } else if recorded.is_empty() {
+                    Some(
+                        "the list is empty: a transition that records no target is                          declared `\"monitored\": false`"
+                            .to_owned(),
+                    )
+                } else {
+                    recorded
+                        .iter()
+                        .find(|state| !transition.targets.contains(state))
+                        .map(|state| format!("`{state}` is not a target of the transition"))
+                };
+                if let Some(reason) = reason {
+                    return Err(ModelError::MonitoredStatesInvalid {
+                        transition: format!(
+                            "{}.{}.{}",
+                            component.name, automaton.name, transition.name
+                        ),
+                        reason,
                     });
                 }
             }

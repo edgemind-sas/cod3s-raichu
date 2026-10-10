@@ -322,7 +322,12 @@ def _inst_edge(
       restores the mode once the condition falls.
 
     The re-arm is never monitored: it is structure, not an event of the
-    mission (cod3s masks it with a never-matching mask).
+    mission (cod3s masks it with a never-matching mask). A monitored draw
+    records its winning branch only (``monitored_states``, the
+    out-state mask cod3s sets to the draw's own name): a lost draw parks
+    and re-arms without an event, so the failure/repair alternation the
+    cycle filter reads stays strict, and a lost draw followed by a won one
+    still reads as a failure.
 
     ``kind`` (``"failure"`` / ``"repair"``) is the declared reliability
     role of the draw. It applies to the draw's FIRST target only, which is
@@ -341,6 +346,7 @@ def _inst_edge(
         draw["kind"] = kind
     if monitored:
         draw["monitored"] = True
+        draw["monitored_states"] = [dest]
         if cycle_group is not None:
             draw["cycle_group"] = cycle_group
     return [
@@ -2007,6 +2013,12 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                 outer,
                 where=f"ObjFMInst `{name}`: `repair_cond`",
             )
+            # Sequence monitoring: the won draw and the repair are the
+            # events of the mode, paired by the automaton's cycle group, as
+            # an internal ObjFM's are (cod3s monitors the draw under an
+            # out-state mask on its own name). Left unmonitored, an
+            # on-demand failure never reaches a sequence nor a cut.
+            aut_name = f"fm{suffix}"
             transitions = [
                 *_inst_edge(  # the draw + its anti-Zeno parking
                     rep,
@@ -2014,7 +2026,8 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                     absorb,
                     demand,
                     gamma,
-                    monitored=False,
+                    monitored=True,
+                    cycle_group=aut_name,
                     kind="failure",
                 ),
             ]
@@ -2025,6 +2038,8 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                         "source": occ,
                         "targets": [rep],
                         "guard": repair_guard,
+                        "monitored": True,
+                        "cycle_group": aut_name,
                         "kind": "repair",
                         **repair_law,
                     }
@@ -2043,12 +2058,13 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                     parked,
                     repair_guard,
                     _inst_prob(repair_law, what=f"ObjFMInst `{name}`"),
-                    monitored=False,
+                    monitored=True,
+                    cycle_group=aut_name,
                     kind="repair",
                 )
             automata.append(
                 {
-                    "name": f"fm{suffix}",
+                    "name": aut_name,
                     "states": states,
                     "init": rep,
                     "transitions": transitions,

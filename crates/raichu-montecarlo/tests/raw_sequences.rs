@@ -188,3 +188,39 @@ fn writing_refuses_a_count_the_header_does_not_state() {
         Err(RawSequencesError::Format(_))
     ));
 }
+
+/// A corpus line from before the `automata` field: it reads, every event
+/// naming no automaton. A line whose `automata` does not match its events
+/// is refused.
+#[test]
+fn the_automata_field_is_optional_and_checked() {
+    let header = r#"{"format":"raichu.sequences","version":1,"engine_version":"0.82.1","model":"m","seed":1,"nb_runs":1,"t_max":1.0,"targets":[],"event_fields":["time","obj","attr","cycle_group"]}"#;
+    let old = format!(
+        "{header}\n{}\n",
+        r#"{"run":0,"end_cause":null,"end_time":1.0,"events":[[0.5,"A","ko","life"]]}"#
+    );
+    let (_, sequences) = read_raw_sequences(old.as_bytes()).unwrap();
+    assert_eq!(sequences[0].events[0].automaton, "");
+
+    let named = format!(
+        "{header}\n{}\n",
+        r#"{"run":0,"end_cause":null,"end_time":1.0,"events":[[0.5,"A","ko","life"]],"automata":["life"]}"#
+    );
+    let (_, sequences) = read_raw_sequences(named.as_bytes()).unwrap();
+    assert_eq!(sequences[0].events[0].automaton, "life");
+
+    let short = format!(
+        "{header}\n{}\n",
+        r#"{"run":0,"end_cause":null,"end_time":1.0,"events":[[0.5,"A","ko","life"]],"automata":[]}"#
+    );
+    assert!(read_raw_sequences(short.as_bytes()).is_ok());
+    let wrong = format!(
+        "{header}\n{}\n",
+        r#"{"run":0,"end_cause":null,"end_time":1.0,"events":[[0.5,"A","ko","life"]],"automata":["a","b"]}"#
+    );
+    let error = read_raw_sequences(wrong.as_bytes()).unwrap_err();
+    assert!(
+        matches!(error, RawSequencesError::Format(ref m) if m.contains("names 2 automata for 1 events")),
+        "{error}"
+    );
+}

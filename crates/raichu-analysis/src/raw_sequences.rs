@@ -20,7 +20,9 @@
 //!   trajectory ran to the horizon), `end_time`, and `events`, each an array
 //!   ordered as `event_fields` says: the firing date, the component, the
 //!   monitored state entered, and the transition's cycle group (`null` when
-//!   it has none).
+//!   it has none). An optional `automata` array, parallel to `events`, names
+//!   the automaton of each event inside its component; it is absent when
+//!   the source named none, and a reader that predates it ignores it.
 //!
 //! Every trajectory weighs one; the file has exactly `nb_runs` trajectory
 //! lines. The cycle group is carried because it is what the cycle filter of
@@ -235,6 +237,8 @@ struct RawRecord<'a> {
     end_cause: &'a Option<String>,
     end_time: f64,
     events: Vec<(f64, &'a str, &'a str, &'a Option<String>)>,
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    automata: Vec<&'a str>,
     #[serde(skip_serializing_if = "<[f64]>::is_empty")]
     observed: &'a [f64],
 }
@@ -254,6 +258,8 @@ struct ReadRecord {
         String,
         Option<String>,
     )>,
+    #[serde(default)]
+    automata: Vec<String>,
     #[serde(default)]
     observed: Vec<Box<serde_json::value::RawValue>>,
 }
@@ -424,6 +430,18 @@ impl<W: Write> RawCorpusWriter<W> {
                 .iter()
                 .map(|e| (e.time, e.obj.as_str(), e.attr.as_str(), &e.cycle_group))
                 .collect(),
+            // Written only when some event names its automaton, so a
+            // corpus from a source that names none stays byte for byte
+            // what earlier engines wrote.
+            automata: if sequence.events.iter().any(|e| !e.automaton.is_empty()) {
+                sequence
+                    .events
+                    .iter()
+                    .map(|e| e.automaton.as_str())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             observed,
         };
         self.writer.write_all(json_line(&record)?.as_bytes())?;
@@ -572,12 +590,24 @@ impl<R: BufRead> RawCorpusReader<R> {
                 self.read
             )));
         }
+        if !record.automata.is_empty() && record.automata.len() != record.events.len() {
+            return Err(RawSequencesError::Format(format!(
+                "line {} names {} automata for {} events",
+                index + 1,
+                record.automata.len(),
+                record.events.len()
+            )));
+        }
+        let mut automata = record.automata.into_iter();
         let events = record
             .events
             .into_iter()
             .map(|(time, obj, attr, cycle_group)| {
                 Ok(SeqEvent {
                     obj,
+                    // Absent from a corpus whose source named no automaton
+                    // (see `SeqEvent::automaton`: empty when it does not say).
+                    automaton: automata.next().unwrap_or_default(),
                     attr,
                     time: number(&time, index + 1)?,
                     cycle_group,

@@ -184,8 +184,15 @@ def test_importance_costs_a_fraction_of_a_hybrid_campaign():
         )
     )
     measured = _fastest(
+        # A native model that declares no failure role: every recorded
+        # state counts.
         lambda: pyraichu.importance(
-            model, nb_runs=500, t_max=1000.0, instants=instants, seed=1
+            model,
+            nb_runs=500,
+            t_max=1000.0,
+            instants=instants,
+            seed=1,
+            basic_events="monitored",
         )
     )
     assert measured < 2.0 * plain, (

@@ -37,6 +37,7 @@ with the engine's own pipeline.
 | `end_cause` | string or `null` | the feared event reached, or `null` when the trajectory ran to the horizon |
 | `end_time` | number | when it stopped |
 | `events` | array of event arrays | the monitored events, in firing order |
+| `automata` | array of strings, optional | the automaton of each event inside its component, parallel to `events`; absent when the source names none |
 | `observed` | array of numbers, optional | one value per header observation, in that order; absent when nothing is observed |
 
 An **event array** is `[time, obj, attr, cycle_group]`: the firing date, the
@@ -53,6 +54,14 @@ The first two lines of the redundant pair of the
 (857 kB in all): replica 0 saw `A` fail at 8.76 and be repaired at 11.70, a
 cycle the reduction removes, then fail again at 14.93 and `B` fail at 14.94,
 which reached the feared event.
+
+The `automata` array tells apart two automata of one component that reach
+states of the same name (two failure modes grafted on one pump both reach
+`occ`): the reduction keys on `(obj, attr)` and does not read it, while the
+[importance measures](../guides/importance-measures.md) name a basic event
+`component.automaton.state`. It is a field added to version 1 under the
+format's extension rule: a reader that predates it reads the corpus as
+before.
 
 Every trajectory weighs one, and the file holds exactly `nb_runs` trajectory
 lines. The **cycle group** is what the reduction's cycle filter reads (a

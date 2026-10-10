@@ -213,6 +213,10 @@ pub struct CTransition {
     pub on_interruption: InterruptionPolicy,
     /// Firing this transition records a `SeqEvent` (sequence analysis).
     pub monitored: bool,
+    /// The targets whose entry is recorded, when not all of them
+    /// ([`raichu_model::Transition::monitored_states`]); `None` records
+    /// every target of a monitored transition.
+    pub monitored_states: Option<Vec<StateIdx>>,
     /// Cycle-pair group id (occ/rep partners share it; sequence analysis).
     pub cycle_group: Option<String>,
     /// Declared reliability role, if any
@@ -224,6 +228,21 @@ pub struct CTransition {
     pub effects: Vec<(VarIdx, CExpr)>,
     /// Occurrence distribution.
     pub distrib: CLaw,
+}
+
+impl CTransition {
+    /// Whether firing this transition into `target` records a sequence
+    /// event: it is monitored, and `target` is one of the states it
+    /// records ([`CTransition::monitored_states`], every target when
+    /// absent).
+    #[must_use]
+    pub fn records(&self, target: StateIdx) -> bool {
+        self.monitored
+            && self
+                .monitored_states
+                .as_ref()
+                .is_none_or(|states| states.contains(&target))
+    }
 }
 
 /// A compiled sequence-analysis target (feared event).
@@ -1648,6 +1667,20 @@ impl CompiledModel {
                                 .map(|(_, s)| s)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
+                    let monitored_states = transition
+                        .monitored_states
+                        .as_ref()
+                        .map(|recorded| {
+                            recorded
+                                .iter()
+                                .map(|t| {
+                                    resolver
+                                        .state(&component.name, &automaton.name, t)
+                                        .map(|(_, s)| s)
+                                })
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .transpose()?;
                     let guard = transition
                         .guard
                         .as_ref()
@@ -1725,6 +1758,7 @@ impl CompiledModel {
                         targets,
                         on_interruption: transition.on_interruption,
                         monitored: transition.monitored,
+                        monitored_states,
                         cycle_group: transition.cycle_group.clone(),
                         kind: transition.kind,
                         effects,
