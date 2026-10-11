@@ -47,7 +47,7 @@ impl MonteCarloSettings {
             true,
             require_parallel,
         )?;
-        Ok(self.answer_from_campaign(campaign, study))
+        self.answer_from_campaign(campaign, study)
     }
 
     fn check_nb_runs(&self) -> Result<(), QuantifyError> {
@@ -60,12 +60,19 @@ impl MonteCarloSettings {
         Ok(())
     }
 
-    fn answer_from_campaign(&self, campaign: TargetCounts, study: &Study) -> Answer {
+    /// The answer of a finished campaign, refused when one of its
+    /// estimates is not finite: the envelope would not read back.
+    fn answer_from_campaign(
+        &self,
+        campaign: TargetCounts,
+        study: &Study,
+    ) -> Result<Answer, QuantifyError> {
+        campaign.estimates.check_finite()?;
         let reached = campaign.count_reached(&study.target);
         let replicas = self.nb_runs;
         let estimate = reached as f64 / replicas as f64;
         let (low, high) = wilson_bounds(estimate, replicas, self.confidence);
-        Answer {
+        Ok(Answer {
             probability: TargetProbability::ConfidenceInterval {
                 estimate,
                 reached,
@@ -76,7 +83,7 @@ impl MonteCarloSettings {
                 high,
             },
             detail: Detail::MonteCarlo(Box::new(campaign.estimates)),
-        }
+        })
     }
 }
 
@@ -100,6 +107,6 @@ impl QuantificationEngine for MonteCarloSettings {
         self.check_nb_runs()?;
         let config = self.to_engine(study);
         let campaign = count_to_targets(model, &config)?;
-        Ok(self.answer_from_campaign(campaign, study))
+        self.answer_from_campaign(campaign, study)
     }
 }

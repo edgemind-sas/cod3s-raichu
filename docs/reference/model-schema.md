@@ -1075,6 +1075,13 @@ tol_event=None, sub_samples=None, stop_at_targets=False, flow=None,
 event_resolution=None)`: parallel replicas; returns per-indicator
 estimates. Replica *r* uses RNG substream *r*; the reduction is
 index-ordered, so results are byte-identical for any `threads`.
+Every estimate is a finite number: an indicator that took no finite
+value on some replica (`0 / 0`, `1 / 0`) makes the run raise
+`SimulationError`, naming the indicator, the measure and the first
+instant, because JSON has no spelling for a NaN or an infinity. The
+inputs that would do the same are refused before any replica runs:
+`nb_runs` of 0, a `samples` instant that is negative or not finite, and
+a `quantiles` order outside `[0, 1]`.
 `confidence` is the level of every interval
 ([Confidence intervals](../guides/confidence-intervals.md)); the `rtol` /
 `atol` / `max_step` / `tol_event` / `sub_samples` / `event_resolution`

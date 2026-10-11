@@ -288,6 +288,166 @@ pub struct McEstimates {
     pub serial_fallback_unit: Option<String>,
 }
 
+/// A Monte-Carlo estimate that is not a finite number: a NaN or an
+/// infinity, which a replica produced when the indicator it reads took no
+/// finite value (`0 / 0`, `1 / 0`).
+///
+/// JSON has no spelling for such a number, and `serde_json` writes it as
+/// `null`, which no reader of a result document accepts back. A document
+/// that cannot be read back is never written: the writers refuse with
+/// this error instead (see [`McEstimates::check_finite`]).
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error(
+    "indicator `{indicator}`: its `{measure}` at t = {instant} is {value}, not a finite \
+     number, so the Monte-Carlo result cannot be written (the model gave this indicator \
+     no finite value on at least one replica)"
+)]
+pub struct NonFiniteEstimate {
+    /// The indicator.
+    pub indicator: String,
+    /// The measure, named by its member in the result document (`mean`,
+    /// `ci.low`, `extremes.max`, `quantiles[q=0.5]`, ...).
+    pub measure: String,
+    /// The schedule instant.
+    pub instant: f64,
+    /// The value found there.
+    pub value: f64,
+}
+
+impl McEstimates {
+    /// Check that every estimate is a finite number, as a result document
+    /// requires.
+    ///
+    /// The measures are visited in their document order, then the
+    /// instants in schedule order. The first non-finite value is the one
+    /// reported.
+    ///
+    /// # Errors
+    /// [`NonFiniteEstimate`] for the first value that is not finite.
+    pub fn check_finite(&self) -> Result<(), NonFiniteEstimate> {
+        self.indicators
+            .iter()
+            .try_for_each(IndicatorEstimate::check_finite)
+    }
+}
+
+impl IndicatorEstimate {
+    fn check_finite(&self) -> Result<(), NonFiniteEstimate> {
+        // Exhaustive on purpose: a measure added to the struct does not
+        // compile until it is checked here.
+        let IndicatorEstimate {
+            name,
+            instants,
+            mean,
+            std,
+            ci,
+            sojourn_mean,
+            sojourn_std,
+            sojourn_ci,
+            nb_occurrences_mean,
+            nb_occurrences_std,
+            nb_occurrences_ci,
+            reached_mean,
+            reached_std,
+            reached_ci,
+            extremes,
+            sojourn_extremes,
+            nb_occurrences_extremes,
+            reached_extremes,
+            zero_departures_mean,
+            zero_departures_std,
+            zero_departures_ci,
+            zero_departures_extremes,
+            nonzero_reached_mean,
+            nonzero_reached_std,
+            nonzero_reached_ci,
+            nonzero_reached_extremes,
+            quantiles,
+            sojourn_quantiles,
+        } = self;
+        let refused = |measure: String, k: usize, value: f64| NonFiniteEstimate {
+            indicator: name.clone(),
+            measure,
+            instant: instants.get(k).copied().unwrap_or(f64::NAN),
+            value,
+        };
+        let first_non_finite = |values: &[f64]| {
+            values
+                .iter()
+                .copied()
+                .enumerate()
+                .find(|(_, v)| !v.is_finite())
+        };
+        // In document order.
+        let fixed: [(&str, &[f64]); 36] = [
+            ("mean", mean),
+            ("std", std),
+            ("ci.low", &ci.low),
+            ("ci.high", &ci.high),
+            ("sojourn_mean", sojourn_mean),
+            ("sojourn_std", sojourn_std),
+            ("sojourn_ci.low", &sojourn_ci.low),
+            ("sojourn_ci.high", &sojourn_ci.high),
+            ("nb_occurrences_mean", nb_occurrences_mean),
+            ("nb_occurrences_std", nb_occurrences_std),
+            ("nb_occurrences_ci.low", &nb_occurrences_ci.low),
+            ("nb_occurrences_ci.high", &nb_occurrences_ci.high),
+            ("reached_mean", reached_mean),
+            ("reached_std", reached_std),
+            ("reached_ci.low", &reached_ci.low),
+            ("reached_ci.high", &reached_ci.high),
+            ("extremes.min", &extremes.min),
+            ("extremes.max", &extremes.max),
+            ("sojourn_extremes.min", &sojourn_extremes.min),
+            ("sojourn_extremes.max", &sojourn_extremes.max),
+            ("nb_occurrences_extremes.min", &nb_occurrences_extremes.min),
+            ("nb_occurrences_extremes.max", &nb_occurrences_extremes.max),
+            ("reached_extremes.min", &reached_extremes.min),
+            ("reached_extremes.max", &reached_extremes.max),
+            ("zero_departures_mean", zero_departures_mean),
+            ("zero_departures_std", zero_departures_std),
+            ("zero_departures_ci.low", &zero_departures_ci.low),
+            ("zero_departures_ci.high", &zero_departures_ci.high),
+            (
+                "zero_departures_extremes.min",
+                &zero_departures_extremes.min,
+            ),
+            (
+                "zero_departures_extremes.max",
+                &zero_departures_extremes.max,
+            ),
+            ("nonzero_reached_mean", nonzero_reached_mean),
+            ("nonzero_reached_std", nonzero_reached_std),
+            ("nonzero_reached_ci.low", &nonzero_reached_ci.low),
+            ("nonzero_reached_ci.high", &nonzero_reached_ci.high),
+            (
+                "nonzero_reached_extremes.min",
+                &nonzero_reached_extremes.min,
+            ),
+            (
+                "nonzero_reached_extremes.max",
+                &nonzero_reached_extremes.max,
+            ),
+        ];
+        for (measure, values) in fixed {
+            if let Some((k, value)) = first_non_finite(values) {
+                return Err(refused(measure.to_owned(), k, value));
+            }
+        }
+        for (family, series) in [
+            ("quantiles", quantiles),
+            ("sojourn_quantiles", sojourn_quantiles),
+        ] {
+            for QuantileSeries { q, values } in series {
+                if let Some((k, value)) = first_non_finite(values) {
+                    return Err(refused(format!("{family}[q={q}]"), k, value));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 fn value_as_f64(value: Value) -> f64 {
     match value {
         Value::Bool(b) => f64::from(u8::from(b)),
@@ -567,7 +727,7 @@ fn run_internal(
     base_dir: Option<&Path>,
     require_parallel: bool,
 ) -> Result<McEstimates, EngineError> {
-    check_level(config)?;
+    check_config(config)?;
 
     let PreparedCampaign {
         serial_fallback_unit,
@@ -697,19 +857,51 @@ fn in_pool<T: Send, E: Send + From<EngineError>>(
     }
 }
 
-/// Refuse a confidence level that cannot produce an interval, before the
-/// replicas: it must not cost a campaign first.
-fn check_level(config: &McConfig) -> Result<(), EngineError> {
-    if is_valid_level(config.confidence) {
-        return Ok(());
+/// Refuse a campaign input that cannot produce a result document, before
+/// the replicas: it must not cost a campaign first. A confidence level
+/// outside `(0, 1)` has no interval; no replica, a sample instant that is
+/// negative or not finite, and a quantile order outside `[0, 1]` would
+/// each write a non-finite number that [`McEstimates::check_finite`]
+/// would then blame on the model.
+fn check_config(config: &McConfig) -> Result<(), EngineError> {
+    let refuse = |parameter: &str, detail: String| {
+        Err(EngineError::InvalidStudyParameter {
+            parameter: parameter.to_owned(),
+            detail,
+        })
+    };
+    if !is_valid_level(config.confidence) {
+        return refuse(
+            "confidence",
+            format!(
+                "a confidence level is a probability strictly inside (0, 1), got {}",
+                config.confidence
+            ),
+        );
     }
-    Err(EngineError::InvalidStudyParameter {
-        parameter: "confidence".to_owned(),
-        detail: format!(
-            "a confidence level is a probability strictly inside (0, 1), got {}",
-            config.confidence
-        ),
-    })
+    if config.nb_runs == 0 {
+        return refuse(
+            "nb_runs",
+            "a campaign runs at least 1 replica, got 0".to_owned(),
+        );
+    }
+    if let Some(t) = config
+        .samples
+        .iter()
+        .find(|t| !(t.is_finite() && **t >= 0.0))
+    {
+        return refuse(
+            "samples",
+            format!("a sample instant is a finite time not before 0, got {t}"),
+        );
+    }
+    if let Some(q) = config.quantiles.iter().find(|q| !(0.0..=1.0).contains(*q)) {
+        return refuse(
+            "quantiles",
+            format!("a quantile order lies in [0, 1], got {q}"),
+        );
+    }
+    Ok(())
 }
 
 /// How one replica ended: the first declared target it reached, or none.
@@ -894,7 +1086,7 @@ where
         stop_at_targets: true,
         ..config.clone()
     };
-    check_level(&config)?;
+    check_config(&config)?;
     let PreparedCampaign {
         serial_fallback_unit,
         fmu_units,

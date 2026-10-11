@@ -789,6 +789,63 @@ fn a_negative_instant_and_a_non_finite_horizon_are_refused() {
     }
 }
 
+/// The parallel pair, with A's failure setting `A.ratio` to
+/// `numerator / 0` and an indicator `A_ratio` reading it: a model that
+/// produces no number on every replica where A fails.
+fn pair_with_a_ratio(numerator: f64) -> Model {
+    use raichu_expr::{Assignment, Expr};
+    let ratio = AttrRef {
+        component: "A".into(),
+        attribute: "ratio".into(),
+    };
+    let mut model = parallel_pair(A, B);
+    let a = &mut model.components[0];
+    a.attributes.push(Attribute {
+        name: "ratio".into(),
+        kind: AttrKind::Float,
+        init: Value::Float(0.0),
+    });
+    a.automata[0].transitions[0].effects.push(Assignment {
+        target: ratio.clone(),
+        value: Expr::Div {
+            lhs: Box::new(Expr::Const {
+                value: Value::Float(numerator),
+            }),
+            rhs: Box::new(Expr::Const {
+                value: Value::Float(0.0),
+            }),
+        },
+    });
+    model.indicators.push(Indicator {
+        name: "A_ratio".into(),
+        target: IndicatorTarget::Attribute { attr: ratio },
+    });
+    model
+}
+
+#[test]
+fn a_non_finite_estimate_is_refused_rather_than_written_unreadable() {
+    for numerator in [0.0, 1.0, -1.0] {
+        let model = pair_with_a_ratio(numerator);
+        match quantify(&model, &study("both_down"), &monte_carlo(200, 0.95)).unwrap_err() {
+            QuantifyError::NonFiniteEstimate(e) => {
+                assert_eq!(e.indicator, "A_ratio", "{numerator}/0");
+                assert_eq!(e.measure, "mean", "{numerator}/0");
+                assert_eq!(e.instant, 1.0, "{numerator}/0");
+                assert_eq!(
+                    e.value.to_bits(),
+                    (numerator / 0.0_f64).to_bits(),
+                    "{numerator}/0"
+                );
+                let message = e.to_string();
+                assert!(message.contains("`A_ratio`"), "{message}");
+                assert!(message.contains("t = 1"), "{message}");
+            }
+            other => panic!("expected NonFiniteEstimate for {numerator}/0, got {other:?}"),
+        }
+    }
+}
+
 // ---- the cross-entropy method ------------------------------------------------
 
 fn cross_entropy(nb_runs: u64) -> Method {

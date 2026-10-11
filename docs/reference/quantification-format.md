@@ -251,7 +251,9 @@ An object with a single key naming the engine kind:
 - `{"monte_carlo": {...}}`: the Monte-Carlo estimates of the
   stop-at-targets campaign, identical to a direct Monte-Carlo run with the
   stop at targets on and the same seed, replicas, level, quantiles, horizon
-  and instants;
+  and instants. Every estimate there is finite: a campaign with a NaN or
+  an infinite estimate is refused by name (indicator, measure, instant)
+  instead of quantified, since JSON cannot carry the value;
 - `{"exploration": {...}}`: the exploration result, a `raichu.exploration`
   document (version 1 for an exact exploration, 2 for a discretised one;
   see the [sequence-tree exploration guide](../guides/sequence-tree-exploration.md));
