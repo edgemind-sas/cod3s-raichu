@@ -14,7 +14,6 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::import_exception;
 use pyo3::prelude::*;
-use raichu::raichu_analysis::analyse as analyse_sequences;
 use raichu::raichu_analysis::{
     minimal_sequences, BasicEvent, BasicEventSelection, ImportanceGroup, ObservedCondition,
     RawCorpusReader, RawCorpusWriter, RawHeader, RawObservation, RawSequencesError,
@@ -465,8 +464,14 @@ fn monte_carlo_json(
 ///
 /// `flow` is an optional [`FlowConfig`] overriding the convergence
 /// policy of the continuous flow resolution, applied to every replica.
+///
+/// With `report`, the JSON is `{"minimal": [...], "reduction": {...}}`
+/// instead, the reduction report saying which trajectories kept their
+/// cycles because cancelling them would leave a feared event without a
+/// cause.
 #[pyfunction]
-#[pyo3(signature = (model_json, nb_runs, t_max, seed = 0, threads = None, flow = None))]
+#[pyo3(signature = (model_json, nb_runs, t_max, seed = 0, threads = None, flow = None, report = false))]
+#[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn analyse_sequences_json(
     py: Python<'_>,
     model_json: &str,
@@ -475,6 +480,7 @@ fn analyse_sequences_json(
     seed: u64,
     threads: Option<usize>,
     flow: Option<FlowConfig>,
+    report: bool,
 ) -> PyResult<String> {
     let compiled = parse_and_compile(model_json)?;
     let flow = flow_policy(flow);
@@ -493,14 +499,30 @@ fn analyse_sequences_json(
             flow,
         };
         let mut reducer = SequenceReducer::new();
-        mc_run_sequences_streamed(&compiled, &config, &[], |_, sequence, _| {
-            reducer.push(sequence);
+        mc_run_sequences_streamed(&compiled, &config, &[], |replica, sequence, _| {
+            reducer.push_indexed(replica, sequence);
             Ok::<_, EngineError>(())
         })
         .map_err(engine_error)?;
-        let minimal = minimal_sequences(reducer.cleaned());
-        serde_json::to_string(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))
+        let reduction = report
+            .then(|| serde_json::to_value(reducer.report()))
+            .transpose()
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
+        minimal_json(&minimal_sequences(reducer.cleaned()), reduction)
     })
+}
+
+/// Minimal sequences as JSON: the bare array, or, given a reduction report,
+/// the envelope `{"minimal": [...], "reduction": {...}}`.
+fn minimal_json(minimal: &[Sequence], reduction: Option<serde_json::Value>) -> PyResult<String> {
+    let json = match reduction {
+        Some(reduction) => serde_json::to_string(&serde_json::json!({
+            "minimal": minimal,
+            "reduction": reduction,
+        })),
+        None => serde_json::to_string(minimal),
+    };
+    json.map_err(|e| SimulationError::new_err(e.to_string()))
 }
 
 /// A condition as the binding receives it: `(observation, op, value)`, with
@@ -604,6 +626,9 @@ impl ConditionalReduction {
     }
 
     fn push(&mut self, sequence: Sequence, observed: &[f64]) {
+        // Trajectories arrive in replica order, so the count so far is the
+        // replica index, which the reduction report names.
+        let replica = self.total;
         self.total += 1;
         let holds = self
             .condition
@@ -611,16 +636,18 @@ impl ConditionalReduction {
             .is_none_or(|resolved| resolved.condition.holds(observed[resolved.column]));
         if holds {
             self.kept += 1;
-            self.reducer.push(sequence);
+            self.reducer.push_indexed(replica, sequence);
         }
     }
 
-    /// The two levels as `{"cleaned": [...], "minimal": [...]}`, plus a
-    /// `condition` report when one was given.
+    /// The two levels as `{"cleaned": [...], "minimal": [...]}`, the
+    /// `reduction` report, plus a `condition` report when one was given.
     fn finish(self) -> PyResult<serde_json::Value> {
         let to_value = |v: &[Sequence]| {
             serde_json::to_value(v).map_err(|e| SimulationError::new_err(e.to_string()))
         };
+        let reduction = serde_json::to_value(self.reducer.report())
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
         let cleaned = self.reducer.cleaned();
         // Serialised before the minimal level consumes it: no copy is made.
         let cleaned_value = to_value(&cleaned)?;
@@ -628,6 +655,7 @@ impl ConditionalReduction {
         let mut levels = serde_json::json!({
             "cleaned": cleaned_value,
             "minimal": to_value(&minimal)?,
+            "reduction": reduction,
         });
         if let Some(ResolvedCondition {
             condition,
@@ -1395,11 +1423,28 @@ fn validate_exploration(result_json: &str) -> PyResult<()> {
 /// collapse into one minimal sequence add up, and the total weight is the
 /// result's lower bound. Dates are 0, since the exact driver never moves
 /// the clock.
+///
+/// With `report`, the JSON is `{"minimal": [...], "reduction": {...}}`:
+/// the reduction report names the retained sequences whose cycles were
+/// kept by their index, and adds `contradicted_share`, their probability
+/// mass as a share of the lower bound.
 #[pyfunction]
-fn exploration_minimal_sequences_json(result_json: &str) -> PyResult<String> {
+#[pyo3(signature = (result_json, report = false))]
+fn exploration_minimal_sequences_json(result_json: &str, report: bool) -> PyResult<String> {
     let result = parse_exploration(result_json)?;
-    let minimal = analyse_sequences(result.to_sequences());
-    serde_json::to_string(&minimal).map_err(|e| SimulationError::new_err(e.to_string()))
+    let (minimal, reduction) = result.minimal_sequences();
+    if !report {
+        return minimal_json(&minimal, None);
+    }
+    let share = if result.lower > 0.0 {
+        reduction.contradicted_weight / result.lower
+    } else {
+        0.0
+    };
+    let mut reduction =
+        serde_json::to_value(&reduction).map_err(|e| SimulationError::new_err(e.to_string()))?;
+    reduction["contradicted_share"] = serde_json::json!(share);
+    minimal_json(&minimal, Some(reduction))
 }
 
 /// Quantify one study with one method and return the

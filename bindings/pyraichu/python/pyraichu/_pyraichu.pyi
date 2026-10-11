@@ -69,6 +69,7 @@ def analyse_sequences_json(
     seed: int = 0,
     threads: int | None = None,
     flow: FlowConfig | None = None,
+    report: bool = False,
 ) -> str: ...
 def run_sequences_json(
     model_json: str,
@@ -162,7 +163,7 @@ def quantify_json(
     settings_json: str | None = None,
 ) -> str: ...
 def validate_quantification(envelope_json: str) -> None: ...
-def exploration_minimal_sequences_json(result_json: str) -> str: ...
+def exploration_minimal_sequences_json(result_json: str, report: bool = False) -> str: ...
 
 class Snapshot:
     """Opaque interactive-session checkpoint (see ``Interactive``)."""

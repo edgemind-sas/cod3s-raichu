@@ -470,6 +470,7 @@ impl<'m> Engine<'m> {
                 attr: event.to.clone(),
                 time: self.time,
                 cycle_group: transition.cycle_group.clone(),
+                kind: transition.kind_on_entry(target),
             });
         }
 

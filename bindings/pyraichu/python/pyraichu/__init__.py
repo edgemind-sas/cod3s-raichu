@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +64,7 @@ __all__ = [
     "MODEL_ENVELOPE_KEY",
     "MODEL_FORMAT_REVISION",
     "QUANTIFICATION_METHODS",
+    "ReductionWarning",
     "AttributeChange",
     "BasicEventImportance",
     "BiasFamily",
@@ -605,6 +607,38 @@ def monte_carlo(
     return _mc_estimates(raw)
 
 
+class ReductionWarning(UserWarning):
+    """The minimal-sequence reduction had to depart from its hypothesis.
+
+    Cancelling a failure that was repaired before the feared event assumes
+    the repaired component no longer contributes. Some trajectories proved
+    otherwise: cancelling their cycles would leave the feared event with no
+    recorded cause, so they were reduced with their cycles kept. Either a
+    repaired failure had a lasting effect (a storage that drained during the
+    outage, for example), or the feared event has a cause that no monitored
+    transition records.
+    The result stays correct; the warning says that the model holds such an
+    effect. :func:`run_sequences` and :meth:`Exploration.minimal_sequences_with_report`
+    return the full report.
+    """
+
+
+def _warn_reduction(reduction: dict[str, Any], full_report: str) -> None:
+    """Emit a :class:`ReductionWarning` when the reduction refused a cancellation;
+    ``full_report`` names where the caller finds the whole report."""
+    count = reduction["contradicted"]
+    if count:
+        warnings.warn(
+            f"{count} trajectories (weight {reduction['contradicted_weight']:g}) reached a feared "
+            "event that cancelling their repaired failures would leave without a cause; they were "
+            "reduced with their failure/repair cycles kept. Either a repaired failure has a lasting "
+            "effect in this model, or the feared event has a cause that no monitored transition "
+            f"records: {full_report} returns the full reduction report.",
+            ReductionWarning,
+            stacklevel=3,
+        )
+
+
 def analyse_sequences(
     model: Model,
     nb_runs: int,
@@ -626,10 +660,13 @@ def analyse_sequences(
     ``flow`` is a :class:`FlowConfig` overriding the convergence policy
     of the continuous flow resolution for every replica (engine defaults
     when omitted).
+
+    A trajectory that cancelling its repaired failures would leave without a
+    cause keeps its cycles, and a :class:`ReductionWarning` says how many did.
     """
-    return json.loads(
-        analyse_sequences_json(model.json, nb_runs, t_max, seed, threads, flow)
-    )
+    result = json.loads(analyse_sequences_json(model.json, nb_runs, t_max, seed, threads, flow, True))
+    _warn_reduction(result["reduction"], "run_sequences")
+    return result["minimal"]
 
 
 @dataclass(frozen=True)
@@ -693,6 +730,12 @@ class SequenceCampaign:
     reduced under, ``{observation, op, value, total_trajectories,
     kept_trajectories}``, or is ``None`` when every trajectory was reduced.
     The raw corpus always holds every trajectory.
+
+    ``reduction`` reports what the reduction did beyond its two steps:
+    ``contradicted`` trajectories reached a feared event that cancelling
+    their repaired failures would leave without a cause, so they kept their
+    cycles; ``contradicted_weight`` is their total weight and
+    ``contradicted_indices`` the replica indices of the first hundred.
     """
 
     cleaned: list[dict[str, Any]]
@@ -700,6 +743,7 @@ class SequenceCampaign:
     raw_path: Path | None = None
     header: dict[str, Any] | None = None
     condition: dict[str, Any] | None = None
+    reduction: dict[str, Any] | None = None
 
 
 def run_sequences(
@@ -747,6 +791,7 @@ def run_sequences(
         minimal=levels["minimal"],
         raw_path=path,
         condition=levels.get("condition"),
+        reduction=levels["reduction"],
     )
 
 
@@ -767,6 +812,7 @@ def analyse_raw_sequences(raw_path: str | Path, condition: SequenceCondition | N
         raw_path=path,
         header=levels["header"],
         condition=levels.get("condition"),
+        reduction=levels["reduction"],
     )
 
 
@@ -964,8 +1010,27 @@ class Exploration:
         are 0: the exact driver never moves the clock, and a discretised
         sequence merges cells fired at different instants, which is also
         why an exploration is not an input to date-based post-processing.
+
+        A retained sequence that cancelling its repaired failures would leave
+        without a cause keeps its cycles, and a :class:`ReductionWarning` says
+        how many did; :meth:`minimal_sequences_with_report` returns the report.
         """
-        return json.loads(exploration_minimal_sequences_json(self.to_json()))
+        minimal, reduction = self.minimal_sequences_with_report()
+        _warn_reduction(reduction, "Exploration.minimal_sequences_with_report")
+        return minimal
+
+    def minimal_sequences_with_report(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """:meth:`minimal_sequences`, and the reduction report.
+
+        The report is ``{contradicted, contradicted_weight,
+        contradicted_indices, contradicted_share}``: the retained sequences
+        whose cycles were kept because cancelling them would leave the
+        feared event without a cause, their probability mass, the indices
+        of the first hundred in :attr:`sequences`, and that mass as a share
+        of ``lower``. No warning is emitted.
+        """
+        result = json.loads(exploration_minimal_sequences_json(self.to_json(), True))
+        return result["minimal"], result["reduction"]
 
 
 def explore(

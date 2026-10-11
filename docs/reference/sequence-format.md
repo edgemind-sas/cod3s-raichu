@@ -38,6 +38,7 @@ with the engine's own pipeline.
 | `end_time` | number | when it stopped |
 | `events` | array of event arrays | the monitored events, in firing order |
 | `automata` | array of strings, optional | the automaton of each event inside its component, parallel to `events`; absent when the source names none |
+| `kinds` | array of strings or `null`, optional | the declared role of each event (`"failure"`, `"repair"`, `"observation"`, or `null`), parallel to `events`; absent when no event declares one |
 | `observed` | array of numbers, optional | one value per header observation, in that order; absent when nothing is observed |
 
 An **event array** is `[time, obj, attr, cycle_group]`: the firing date, the
@@ -62,6 +63,14 @@ states of the same name (two failure modes grafted on one pump both reach
 `component.automaton.state`. It is a field added to version 1 under the
 format's extension rule: a reader that predates it reads the corpus as
 before.
+
+The `kinds` array gives the reliability role the model declares for the
+transition of each event, and only for an entry into that transition's first
+declared target, the one the declaration speaks for: `"failure"`, `"repair"`,
+`"observation"`, or `null` when it declares none. The reduction's safety net
+reads it (see [The three levels](#the-three-levels)). It was added to version
+1 in 0.85.0 under the same extension rule: a reader that predates it reduces
+without the safety net, as engines before 0.85.0 did.
 
 Every trajectory weighs one, and the file holds exactly `nb_runs` trajectory
 lines. The **cycle group** is what the reduction's cycle filter reads (a
@@ -128,3 +137,21 @@ fields it does not know.
 The weights of the cleaned level sum to `nb_runs`; the reduction from the raw
 corpus to the minimal level is the stated identity
 `analyse(raw) = minimal(clean(raw))`.
+
+One trajectory keeps its cycles in the cleaned level: one that reached a
+feared event, yet that cancellation would leave with no cause, either nothing
+at all or only repairs and observations while a declared failure was
+cancelled. A feared event cannot happen without a cause, so such a trajectory
+proves that one of its repaired failures had a lasting effect; cancelled, it
+would also absorb every other sequence of its feared event. The campaign
+result reports these trajectories under `reduction`:
+
+| Field | Meaning |
+|---|---|
+| `contradicted` | how many trajectories kept their cycles for that reason |
+| `contradicted_weight` | their total weight (a trajectory count here) |
+| `contradicted_indices` | the replica indices of the first hundred, in replica order |
+
+Re-reducing a corpus gives the same report. A corpus written before 0.85.0
+carries no `kinds`, so only the first case is recognised on it: a
+trajectory left with nothing at all.

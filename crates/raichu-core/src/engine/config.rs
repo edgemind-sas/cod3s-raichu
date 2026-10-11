@@ -1037,6 +1037,15 @@ pub struct SeqEvent {
     /// cycle-filtering step; not part of the compared/serialized sequence).
     #[serde(skip)]
     pub cycle_group: Option<String>,
+    /// Declared reliability role of this entry: the firing transition's
+    /// [`raichu_model::TransitionKind`] when it entered its first declared
+    /// target (the only entry the declaration speaks for), `None` when it
+    /// entered another branch or declares no kind. The reduction reads it
+    /// to tell a failure from an observation; it is not part of the
+    /// serialized sequence, and the raw corpus carries it in a field of
+    /// its own.
+    #[serde(skip)]
+    pub kind: Option<raichu_model::TransitionKind>,
 }
 
 /// One trajectory's recorded sequence: the ordered monitored-transition

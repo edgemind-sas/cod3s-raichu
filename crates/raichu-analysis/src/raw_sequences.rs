@@ -22,7 +22,12 @@
 //!   monitored state entered, and the transition's cycle group (`null` when
 //!   it has none). An optional `automata` array, parallel to `events`, names
 //!   the automaton of each event inside its component; it is absent when
-//!   the source named none, and a reader that predates it ignores it.
+//!   the source named none, and a reader that predates it ignores it. An
+//!   optional `kinds` array, parallel to `events` too, gives the declared
+//!   reliability role of each entry (`"failure"`, `"repair"`,
+//!   `"observation"`, or `null`), which the reduction's safety net reads;
+//!   it is absent when no event declares one, and a reader that predates
+//!   it reduces without the net, as earlier engines did.
 //!
 //! Every trajectory weighs one; the file has exactly `nb_runs` trajectory
 //! lines. The cycle group is carried because it is what the cycle filter of
@@ -52,6 +57,7 @@ use raichu_expr::CmpOp;
 use serde::{Deserialize, Serialize};
 
 use raichu_core::{SeqEvent, Sequence};
+use raichu_model::TransitionKind;
 
 /// The `format` of a raw sequence corpus.
 pub const RAW_SEQUENCES_FORMAT: &str = "raichu.sequences";
@@ -239,6 +245,8 @@ struct RawRecord<'a> {
     events: Vec<(f64, &'a str, &'a str, &'a Option<String>)>,
     #[serde(skip_serializing_if = "<[&str]>::is_empty")]
     automata: Vec<&'a str>,
+    #[serde(skip_serializing_if = "<[Option<TransitionKind>]>::is_empty")]
+    kinds: Vec<Option<TransitionKind>>,
     #[serde(skip_serializing_if = "<[f64]>::is_empty")]
     observed: &'a [f64],
 }
@@ -260,6 +268,8 @@ struct ReadRecord {
     )>,
     #[serde(default)]
     automata: Vec<String>,
+    #[serde(default)]
+    kinds: Vec<Option<TransitionKind>>,
     #[serde(default)]
     observed: Vec<Box<serde_json::value::RawValue>>,
 }
@@ -442,6 +452,12 @@ impl<W: Write> RawCorpusWriter<W> {
             } else {
                 Vec::new()
             },
+            // Likewise written only when some event declares a kind.
+            kinds: if sequence.events.iter().any(|e| e.kind.is_some()) {
+                sequence.events.iter().map(|e| e.kind).collect()
+            } else {
+                Vec::new()
+            },
             observed,
         };
         self.writer.write_all(json_line(&record)?.as_bytes())?;
@@ -598,7 +614,16 @@ impl<R: BufRead> RawCorpusReader<R> {
                 record.events.len()
             )));
         }
+        if !record.kinds.is_empty() && record.kinds.len() != record.events.len() {
+            return Err(RawSequencesError::Format(format!(
+                "line {} gives {} kinds for {} events",
+                index + 1,
+                record.kinds.len(),
+                record.events.len()
+            )));
+        }
         let mut automata = record.automata.into_iter();
+        let mut kinds = record.kinds.into_iter();
         let events = record
             .events
             .into_iter()
@@ -611,6 +636,8 @@ impl<R: BufRead> RawCorpusReader<R> {
                     attr,
                     time: number(&time, index + 1)?,
                     cycle_group,
+                    // Absent from a corpus whose events declare no kind.
+                    kind: kinds.next().flatten(),
                 })
             })
             .collect::<Result<Vec<_>, RawSequencesError>>()?;

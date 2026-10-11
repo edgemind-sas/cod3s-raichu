@@ -94,8 +94,9 @@ def test_a_condition_on_what_was_not_observed_is_refused(tmp_path):
 
 
 def test_a_corpus_without_observations_carries_none(tmp_path):
-    text = _campaign(tmp_path, observations=()).raw_path.read_text()
-    assert "observ" not in text
+    lines = [json.loads(line) for line in _campaign(tmp_path, observations=()).raw_path.read_text().splitlines()]
+    assert "observations" not in lines[0]
+    assert all("observed" not in line for line in lines[1:])
 
 
 def test_what_cannot_be_observed_is_refused(tmp_path):

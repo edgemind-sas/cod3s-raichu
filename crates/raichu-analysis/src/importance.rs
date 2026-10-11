@@ -1041,6 +1041,7 @@ mod tests {
                     attr: (*attr).into(),
                     time: *time,
                     cycle_group: Some((*automaton).into()),
+                    kind: None,
                 })
                 .collect(),
             end_cause: None,

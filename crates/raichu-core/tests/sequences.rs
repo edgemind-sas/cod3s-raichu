@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use raichu_core::{CompiledModel, Engine, EngineConfig};
-use raichu_model::{Automaton, Component, Distrib, Model, Target, Transition};
+use raichu_model::{Automaton, Component, Distrib, Model, Target, Transition, TransitionKind};
 
 fn mon(name: &str, source: &str, target: &str, time: f64, group: Option<&str>) -> Transition {
     Transition {
@@ -382,6 +382,42 @@ fn a_draw_records_only_the_branches_it_monitors() {
         recorded(&draw_model(0.0, None)),
         vec![("fm".to_owned(), "not_occ".to_owned())]
     );
+}
+
+/// The declared kind of each recorded entry of `model`.
+fn recorded_kinds(model: &Model) -> Vec<Option<TransitionKind>> {
+    let m = CompiledModel::compile(model).unwrap();
+    let config = EngineConfig {
+        t_max: 1.0,
+        sequences: true,
+        ..EngineConfig::default()
+    };
+    let seq = Engine::new(&m, config)
+        .unwrap()
+        .run()
+        .unwrap()
+        .sequence
+        .unwrap();
+    seq.events.iter().map(|e| e.kind).collect()
+}
+
+#[test]
+fn a_recorded_entry_carries_the_declared_kind_of_its_first_target_only() {
+    let failing = |p: f64| {
+        let mut model = draw_model(p, None);
+        model.components[0].automata[0].transitions[0].kind = Some(TransitionKind::Failure);
+        model
+    };
+    // Into the first declared target, the entry is the declared failure.
+    assert_eq!(
+        recorded_kinds(&failing(1.0)),
+        vec![Some(TransitionKind::Failure)]
+    );
+    // Into the other branch it is no failure: the declaration speaks for
+    // the first target only.
+    assert_eq!(recorded_kinds(&failing(0.0)), vec![None]);
+    // A transition that declares no kind records none.
+    assert_eq!(recorded_kinds(&draw_model(1.0, None)), vec![None]);
 }
 
 #[test]

@@ -534,6 +534,15 @@ is a **probability** here, not a replica count: the retained sequences
 are disjoint, so the probabilities that collapse into one minimal
 sequence add up, and the weights total `result.lower`.
 
+A retained sequence that cancelling its repaired failures would leave
+without a cause keeps its cycles, as in
+[sequence analysis](sequence-analysis.md#from-trajectories-to-minimal-cut-sequences),
+and `minimal_sequences()` then emits a `pyraichu.ReductionWarning`.
+`result.minimal_sequences_with_report()` returns the minimal sequences with
+the report: how many retained sequences kept their cycles, their indices in
+`result.sequences`, their probability mass, and that mass as a share of
+`result.lower`.
+
 An exploration result is **not** a valid input to any post-processing
 that replays dated trajectories (reading the state of the model at
 chosen instants, for example). The exact exploration chooses the order
