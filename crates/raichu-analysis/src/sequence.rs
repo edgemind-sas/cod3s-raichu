@@ -7,6 +7,9 @@
 //!   before the feared event (a failure mode's monitored occ/rep events
 //!   strictly alternate, so an even per-group count cancels entirely and an
 //!   odd one leaves only the last, persistent failure);
+//!   a trajectory that cancellation would leave without a cause is kept
+//!   whole and reported ([`ReductionReport`]): the feared event cannot
+//!   happen without one, so the hypothesis failed for it;
 //! - **group** buckets by end cause (target) and merges sequences with an
 //!   identical ordered `(obj, attr)` signature, summing weights;
 //! - **minimal** greedily keeps the shortest sequences and absorbs every
@@ -25,6 +28,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use raichu_core::{SeqEvent, Sequence};
+use raichu_model::TransitionKind;
+use serde::Serialize;
 
 /// Ordered `(obj, attr)` signature of a sequence: the identity used for
 /// grouping and subsequence inclusion (times and cycle groups excluded).
@@ -130,7 +135,10 @@ impl Grouping {
 /// pushed trajectory has its transient cycles filtered, then merges with
 /// the distinct paths already held. What it holds grows with the number of
 /// distinct cleaned paths, not with the number of trajectories pushed, so
-/// a campaign of any size reduces in bounded memory.
+/// a campaign of any size reduces in bounded memory, with one exception: a
+/// contradicted trajectory (see [`ReductionReport`]) is held with its
+/// cycles, so on a model where many trajectories are contradicted with
+/// different cycle histories, memory grows with those histories.
 ///
 /// Pushing the trajectories of a corpus in replica order and taking
 /// [`SequenceReducer::cleaned`] is [`clean`]; the result is deterministic
@@ -138,6 +146,47 @@ impl Grouping {
 #[derive(Debug, Default)]
 pub struct SequenceReducer {
     grouping: Grouping,
+    report: ReductionReport,
+    pushed: u64,
+}
+
+/// How many contradicted trajectories a [`ReductionReport`] identifies by
+/// index. The count and weight stay exact past it; the list stops growing,
+/// so the report holds bounded memory on a campaign of any size.
+pub const CONTRADICTED_INDICES_CAP: usize = 100;
+
+/// What the reduction did beyond its two steps, for the analyst to audit.
+///
+/// A **contradicted** trajectory reached a feared event, yet cancelling its
+/// failure/repair cycles would leave it without a recorded cause: nothing
+/// at all, or only repairs and observations while a declared failure was
+/// cancelled. An event cannot happen without a cause, so such a trajectory
+/// has one the cancellation would hide: either a repaired failure kept an
+/// effect (the hypothesis that a repaired failure no longer contributes
+/// failed, typically because a continuous state integrated its effect), or
+/// the feared event has a cause that no monitored transition records. It
+/// is reduced with no cycle cancelled.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ReductionReport {
+    /// Number of contradicted trajectories.
+    pub contradicted: u64,
+    /// Their total weight: a trajectory count for a Monte-Carlo campaign,
+    /// a probability mass for a sequence-tree exploration.
+    pub contradicted_weight: f64,
+    /// The first [`CONTRADICTED_INDICES_CAP`] of them, in push order: the
+    /// replica index for a campaign or a raw corpus, the sequence index for
+    /// an exploration.
+    pub contradicted_indices: Vec<u64>,
+}
+
+impl ReductionReport {
+    fn contradicted(&mut self, index: u64, weight: f64) {
+        self.contradicted += 1;
+        self.contradicted_weight += weight;
+        if self.contradicted_indices.len() < CONTRADICTED_INDICES_CAP {
+            self.contradicted_indices.push(index);
+        }
+    }
 }
 
 impl SequenceReducer {
@@ -147,9 +196,31 @@ impl SequenceReducer {
         Self::default()
     }
 
-    /// Add one trajectory.
+    /// Add one trajectory, identified in the report by its push order
+    /// (0-based): the replica index when every replica is pushed in order.
     pub fn push(&mut self, sequence: Sequence) {
-        self.grouping.merge(filter_sequence_cycles(sequence));
+        self.push_indexed(self.pushed, sequence);
+    }
+
+    /// Add one trajectory, identified in the report by `index`: for a
+    /// reduction that skips some replicas (a condition on observations),
+    /// the replica index the push order would not give. One reducer is fed
+    /// through [`SequenceReducer::push`] or through this, not both: the
+    /// push count would not match the indices given here.
+    pub fn push_indexed(&mut self, index: u64, sequence: Sequence) {
+        self.pushed += 1;
+        let weight = sequence.weight;
+        let (sequence, contradicted) = cancel_cycles(sequence);
+        if contradicted {
+            self.report.contradicted(index, weight);
+        }
+        self.grouping.merge(sequence);
+    }
+
+    /// What the reduction did so far beyond its two steps.
+    #[must_use]
+    pub fn report(&self) -> &ReductionReport {
+        &self.report
     }
 
     /// The number of distinct cleaned paths held so far.
@@ -177,13 +248,33 @@ impl SequenceReducer {
 /// failure, so an even per-group count nets out entirely (repaired before
 /// the feared event) and an odd one leaves only the last, persistent
 /// failure. Events with no cycle group are always kept, order preserved.
+///
+/// A trajectory the cancellation would leave without a cause is kept
+/// whole (see [`ReductionReport`]); [`SequenceReducer`] counts them.
 #[must_use]
 pub fn filter_cycles(sequences: Vec<Sequence>) -> Vec<Sequence> {
-    sequences.into_iter().map(filter_sequence_cycles).collect()
+    sequences
+        .into_iter()
+        .map(|sequence| cancel_cycles(sequence).0)
+        .collect()
 }
 
-/// [`filter_cycles`] on one sequence.
-fn filter_sequence_cycles(mut seq: Sequence) -> Sequence {
+/// Whether an event left after cancellation may be a cause: a declared
+/// failure, or an event that declares no kind and so cannot be ruled out.
+fn may_cause(event: &SeqEvent) -> bool {
+    !matches!(
+        event.kind,
+        Some(TransitionKind::Repair | TransitionKind::Observation)
+    )
+}
+
+/// [`filter_cycles`] on one sequence, and whether the cancellation was
+/// refused because it contradicts the feared event: the trajectory reached
+/// a target, cancellation removed something, and what it would leave is
+/// empty or holds no possible cause while a declared failure was removed.
+/// The test runs on the kept set before anything is drained, so a refused
+/// cancellation costs no copy.
+fn cancel_cycles(mut seq: Sequence) -> (Sequence, bool) {
     // For each (component, group) pair, the index of its last event (kept
     // iff the pair has an odd count); every other grouped event is
     // dropped. The component is part of the key so two DIFFERENT failure
@@ -197,20 +288,41 @@ fn filter_sequence_cycles(mut seq: Sequence) -> Sequence {
             entry.1 = i;
         }
     }
-    let keep_idx: std::collections::HashSet<usize> = last
-        .values()
-        .filter(|(count, _)| count % 2 == 1)
-        .map(|(_, idx)| *idx)
-        .collect();
-    let kept: Vec<SeqEvent> = seq
+    // Whether each event survives, decided once: the scan below and the
+    // drain both read it.
+    let mut survives: Vec<bool> = seq
         .events
-        .drain(..)
-        .enumerate()
-        .filter(|(i, ev)| ev.cycle_group.is_none() || keep_idx.contains(i))
-        .map(|(_, ev)| ev)
+        .iter()
+        .map(|ev| ev.cycle_group.is_none())
         .collect();
-    seq.events = kept;
-    seq
+    for (count, idx) in last.values() {
+        if count % 2 == 1 {
+            survives[*idx] = true;
+        }
+    }
+    if survives.iter().all(|&s| s) {
+        // Nothing cancelled: nothing to test, nothing to rebuild.
+        return (seq, false);
+    }
+    if seq.end_cause.is_some() {
+        let mut removed_failure = false;
+        let mut left_any = false;
+        let mut left_cause = false;
+        for (ev, &s) in seq.events.iter().zip(&survives) {
+            if s {
+                left_any = true;
+                left_cause |= may_cause(ev);
+            } else {
+                removed_failure |= ev.kind == Some(TransitionKind::Failure);
+            }
+        }
+        if !left_any || (removed_failure && !left_cause) {
+            return (seq, true);
+        }
+    }
+    let mut flags = survives.into_iter();
+    seq.events.retain(|_| flags.next().unwrap_or(true));
+    (seq, false)
 }
 
 /// `short` is an ordered (non-contiguous) subsequence of `long`.
@@ -308,6 +420,7 @@ pub fn analyse(raw: Vec<Sequence>) -> Vec<Sequence> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use raichu_model::TransitionKind;
 
     /// Build a sequence: `events` are `(obj, attr, group)`, all at time 0.
     fn seq(cause: &str, weight: f64, events: &[(&str, &str, Option<&str>)]) -> Sequence {
@@ -320,6 +433,7 @@ mod tests {
                     attr: (*a).into(),
                     time: 0.0,
                     cycle_group: g.map(Into::into),
+                    kind: None,
                 })
                 .collect(),
             end_cause: Some(cause.into()),
@@ -456,6 +570,138 @@ mod tests {
         assert_eq!(minimal[0].weight, 2.0);
     }
 
+    /// Build a sequence with declared kinds: `events` are `(obj, attr,
+    /// group, kind)`, at increasing dates.
+    fn kseq(
+        cause: Option<&str>,
+        events: &[(&str, &str, Option<&str>, Option<TransitionKind>)],
+    ) -> Sequence {
+        Sequence {
+            events: events
+                .iter()
+                .enumerate()
+                .map(|(i, (o, a, g, k))| SeqEvent {
+                    obj: (*o).into(),
+                    automaton: String::new(),
+                    attr: (*a).into(),
+                    time: i as f64,
+                    cycle_group: g.map(Into::into),
+                    kind: *k,
+                })
+                .collect(),
+            end_cause: cause.map(Into::into),
+            end_time: events.len() as f64,
+            weight: 1.0,
+        }
+    }
+
+    const F: Option<TransitionKind> = Some(TransitionKind::Failure);
+    const R: Option<TransitionKind> = Some(TransitionKind::Repair);
+    const O: Option<TransitionKind> = Some(TransitionKind::Observation);
+
+    /// The muscadet shape: every failure repaired, the feared event's own
+    /// observation surviving the filter as the only event left.
+    fn repaired_then_observed() -> Sequence {
+        kseq(
+            Some("F"),
+            &[
+                ("fm1", "occ", Some("fm1"), F),
+                ("fm1", "rep", Some("fm1"), R),
+                ("ER", "occ", Some("ER"), O),
+            ],
+        )
+    }
+
+    fn reduce(raw: Vec<Sequence>) -> (Vec<Sequence>, ReductionReport) {
+        let mut reducer = SequenceReducer::new();
+        for sequence in raw {
+            reducer.push(sequence);
+        }
+        let report = reducer.report().clone();
+        (minimal_sequences(reducer.cleaned()), report)
+    }
+
+    #[test]
+    fn a_trajectory_left_with_only_observations_keeps_its_failures() {
+        // Cancelled, the first trajectory would be [ER.occ], included in
+        // every other sequence: it would absorb the persistent one and say
+        // that no failure is needed.
+        let persistent = kseq(
+            Some("F"),
+            &[("fm1", "occ", Some("fm1"), F), ("ER", "occ", Some("ER"), O)],
+        );
+        let (minimal, report) = reduce(vec![repaired_then_observed(), persistent]);
+        assert_eq!(report.contradicted, 1);
+        assert_eq!(report.contradicted_weight, 1.0);
+        assert_eq!(report.contradicted_indices, vec![0]);
+        // Kept whole, the contradicted trajectory contains [fm1.occ,
+        // ER.occ] and is absorbed into it: no cause-free minimal sequence.
+        assert_eq!(minimal.len(), 1);
+        assert_eq!(
+            sig_of(&minimal[0]),
+            vec![("fm1".into(), "occ".into()), ("ER".into(), "occ".into())]
+        );
+        assert_eq!(minimal[0].weight, 2.0);
+    }
+
+    #[test]
+    fn a_trajectory_emptied_by_cancellation_is_contradicted_even_without_kinds() {
+        let emptied = kseq(
+            Some("F"),
+            &[("A", "occ", Some("A"), None), ("A", "rep", Some("A"), None)],
+        );
+        let (minimal, report) = reduce(vec![emptied]);
+        assert_eq!(report.contradicted, 1);
+        assert_eq!(minimal[0].events.len(), 2);
+    }
+
+    #[test]
+    fn an_undeclared_event_left_over_counts_as_a_possible_cause() {
+        let undeclared = kseq(
+            Some("F"),
+            &[
+                ("A", "occ", Some("A"), None),
+                ("A", "rep", Some("A"), None),
+                ("ER", "occ", None, None),
+            ],
+        );
+        let (minimal, report) = reduce(vec![undeclared]);
+        assert_eq!(report.contradicted, 0);
+        assert_eq!(sig_of(&minimal[0]), vec![("ER".into(), "occ".into())]);
+    }
+
+    #[test]
+    fn only_a_reaching_trajectory_whose_cancellation_removed_something_is_contradicted() {
+        let mut horizon = repaired_then_observed();
+        horizon.end_cause = None;
+        let nothing_recorded = kseq(Some("F"), &[]);
+        let one_failure_left = kseq(
+            Some("F"),
+            &[
+                ("fm1", "occ", Some("fm1"), F),
+                ("fm1", "rep", Some("fm1"), R),
+                ("fm2", "occ", Some("fm2"), F),
+                ("ER", "occ", Some("ER"), O),
+            ],
+        );
+        let (_, report) = reduce(vec![horizon, nothing_recorded, one_failure_left]);
+        assert_eq!(report, ReductionReport::default());
+    }
+
+    #[test]
+    fn the_report_lists_the_first_contradicted_indices_only() {
+        let mut reducer = SequenceReducer::new();
+        for _ in 0..150 {
+            reducer.push(kseq(Some("F"), &[("X", "occ", None, O)]));
+            reducer.push(repaired_then_observed());
+        }
+        let report = reducer.report();
+        assert_eq!(report.contradicted, 150);
+        assert_eq!(report.contradicted_weight, 150.0);
+        assert_eq!(report.contradicted_indices.len(), CONTRADICTED_INDICES_CAP);
+        assert_eq!(report.contradicted_indices[..3], [1, 3, 5]);
+    }
+
     /// The reduction up to 0.81.0: group, filter, group again.
     fn grouped_twice(raw: Vec<Sequence>) -> Vec<Sequence> {
         group_sequences(filter_cycles(group_sequences(raw)))
@@ -474,6 +720,7 @@ mod tests {
                     attr: attr.into(),
                     time: date,
                     cycle_group: Some("life".into()),
+                    kind: None,
                 });
             }
         }
@@ -484,6 +731,7 @@ mod tests {
                 attr: "occ".into(),
                 time: date + 1.0,
                 cycle_group: Some("life".into()),
+                kind: None,
             });
         }
         events.push(SeqEvent {
@@ -492,6 +740,7 @@ mod tests {
             attr: "occ".into(),
             time: date + 2.0,
             cycle_group: None,
+            kind: None,
         });
         Sequence {
             events,

@@ -329,11 +329,15 @@ trajectories that lose supply, every failure had been repaired by then:
 the PV inverter comes back at 15:30, the electrolyser runs until 17:55 on
 the afternoon sun with an empty battery, and the storage, down to 2.8 kg,
 runs dry at 23:50. Declared on the production chain, the hypothesis
-reduces those trajectories to an **empty** sequence, and an empty
-sequence that reaches the event is contained in every other one: all 421
-trajectories then collapse onto it, and the analysis answers that no
-failure is needed. The `cycle_group` is therefore a modelling statement,
-made per component.
+would reduce those trajectories to an **empty** sequence, which is
+contained in every other one and would absorb all 421. Since 0.85.0 the
+reduction refuses that cancellation, keeps those 6 trajectories whole and
+emits a `ReductionWarning`; up to 0.84.0 the analysis answered, silently,
+that no failure is needed. The safety net only catches a trajectory left
+with nothing: one whose repaired PV failure caused the loss while an
+unrelated compressor failure persisted would still be reduced to the
+compressor. The `cycle_group` therefore stays a modelling statement, made
+per component.
 
 ## Reading the results
 

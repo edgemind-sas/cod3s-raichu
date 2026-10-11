@@ -39,5 +39,6 @@ pub use raw_sequences::{
     RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
 };
 pub use sequence::{
-    analyse, clean, filter_cycles, group_sequences, minimal_sequences, SequenceReducer,
+    analyse, clean, filter_cycles, group_sequences, minimal_sequences, ReductionReport,
+    SequenceReducer, CONTRADICTED_INDICES_CAP,
 };

@@ -1207,3 +1207,43 @@ fn a_root_with_nothing_fireable_yields_an_empty_result() {
         assert_eq!(result.cutoff_tallies, Default::default());
     }
 }
+
+/// Each explored entry carries the declared kind of its transition, the
+/// open format keeps it, and a document written before it was recorded
+/// reads with every kind absent.
+#[test]
+fn explored_events_carry_their_declared_kind() {
+    let kinded = model(
+        "kinded_pair",
+        vec![
+            // Non-repairable: an exact exploration of a repairable model
+            // without a cut-off never ends.
+            unit("A", exp(0.1), None, true),
+            unit("B", exp(0.2), None, false),
+            watcher(all(vec![down("A"), down("B")])),
+        ],
+        vec![sys_down()],
+    );
+    let result = explore_exact(&compile(&kinded), &settings("sys_down", 5.0)).unwrap();
+    let kinds: Vec<_> = result
+        .steps
+        .iter()
+        .filter_map(|step| step.event.as_ref())
+        .map(|event| (event.obj.as_str(), event.attr.as_str(), event.kind))
+        .collect();
+    assert!(kinds.contains(&("A", "nok", Some(TransitionKind::Failure))));
+    assert!(kinds.contains(&("B", "nok", None)));
+
+    let json = serde_json::to_string(&result).unwrap();
+    assert_eq!(read_exploration(&json).unwrap().steps, result.steps);
+    // Without a kind the key is omitted, so such a document reads as one
+    // written before the field existed.
+    let stripped = json.replace(r#","kind":"failure""#, "");
+    assert_ne!(stripped, json);
+    assert!(read_exploration(&stripped)
+        .unwrap()
+        .steps
+        .iter()
+        .filter_map(|step| step.event.as_ref())
+        .all(|event| event.kind.is_none()));
+}

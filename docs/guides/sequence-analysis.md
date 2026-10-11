@@ -112,7 +112,8 @@ flowchart LR
 2. **Cancel transient cycles**: a failure that was repaired *before*
    the feared event did not cause it: paired failure/repair events of
    the same mode are removed (per component, so distinct modes never
-   cancel each other).
+   cancel each other). A trajectory this would leave without a cause
+   keeps its cycles (see below).
 3. **Group**: trajectories left with the same ordered event signature
    merge; weights add up and dates are averaged.
 4. **Minimal absorption**: a sequence that contains a shorter reaching
@@ -126,7 +127,9 @@ repairable system, where nearly every raw trajectory is distinct (its
 transient cycles differ) while the paths left once they are cancelled are
 few. Up to 0.81.0 every trajectory was held until the end of the campaign,
 which ran out of memory at 1e7 trajectories on a 39-component repairable
-model.
+model. A trajectory that keeps its cycles (see below) is held with them, so a
+campaign in which many trajectories keep their cycles, each with a different
+history, grows with those histories.
 
 Two results can differ from 0.81.0, which also grouped once before
 cancelling. Averaged dates may differ in their last bits. And when a longer
@@ -135,6 +138,31 @@ absorbed it into whichever its grouping order put first; it now goes to the
 one with the smaller event signature, so the minimal level depends only on
 the cleaned paths and their weights, never on the order they were reduced
 in.
+
+**When a repaired failure still counts.** Step 2 assumes that a repair
+undoes the failure's effect. A continuous state can keep it: a storage that
+drained while a producer was down stays low after the repair, and the
+feared event can come hours later with every failure repaired. Cancelled,
+such a trajectory would have no cause left: nothing at all, or only the
+feared event's own observation. Either sequence is contained in every other
+one, so step 4 would absorb the whole campaign into it, and the analysis
+would answer that no failure is needed.
+
+A feared event cannot happen without a cause, so the reduction refuses that
+cancellation: a trajectory that reached a feared event and that
+cancellation would leave empty, or with only repairs and observations while
+a declared failure was cancelled, keeps its cycles. The declared roles come
+from each transition's `kind` (the muscadet plugin declares them); an event
+whose transition declares none is counted as a possible cause.
+`analyse_sequences` emits a `pyraichu.ReductionWarning` when some trajectory
+kept its cycles, and `run_sequences` reports them in `campaign.reduction`:
+their number, their weight, and the replica indices of the first hundred.
+
+The net catches only the trajectories left with no cause at all. One whose
+cancellation removes the failure that caused the event but leaves an
+unrelated one still reads wrongly; declare `cycle_group` only on failures
+whose effect ends with the repair. Up to 0.84.0 the collapse happened
+silently.
 
 ## Keeping the raw corpus
 

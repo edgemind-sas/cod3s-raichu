@@ -243,6 +243,18 @@ impl CTransition {
                 .as_ref()
                 .is_none_or(|states| states.contains(&target))
     }
+
+    /// The declared kind of an entry into `target`: [`CTransition::kind`]
+    /// when `target` is the first declared target, which is the only entry
+    /// the declaration speaks for, `None` for any other branch.
+    #[must_use]
+    pub fn kind_on_entry(&self, target: StateIdx) -> Option<TransitionKind> {
+        if self.targets.first() == Some(&target) {
+            self.kind
+        } else {
+            None
+        }
+    }
 }
 
 /// A compiled sequence-analysis target (feared event).

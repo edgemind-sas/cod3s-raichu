@@ -109,3 +109,10 @@ def test_a_failed_campaign_leaves_the_previous_corpus_untouched(tmp_path):
         )
     assert raw_path.read_text() == "the previous corpus\n"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["raw.jsonl"]
+
+
+def test_the_muscadet_route_records_failures_repairs_and_observations(tmp_path):
+    campaign = _campaign(tmp_path)
+    lines = [json.loads(line) for line in campaign.raw_path.read_text().splitlines()[1:]]
+    kinds = {kind for line in lines for kind in line.get("kinds", [])}
+    assert {"failure", "repair", "observation"} <= kinds

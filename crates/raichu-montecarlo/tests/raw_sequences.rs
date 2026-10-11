@@ -9,7 +9,7 @@ use raichu_analysis::{
     RawSequencesError, RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
 };
 use raichu_core::{CompiledModel, SolverParams};
-use raichu_model::Model;
+use raichu_model::{Model, TransitionKind};
 use raichu_montecarlo::{run_sequences, McConfig, DEFAULT_CONFIDENCE};
 
 /// Two repairable components on exponential laws, their failure and repair
@@ -21,12 +21,12 @@ const PAIR: &str = r#"
   "components": [
     {"name": "A", "ports": [], "attributes": [], "automata": [{"name": "life", "states": ["ok", "ko"], "init": "ok",
       "transitions": [
-        {"name": "fail", "source": "ok", "targets": ["ko"], "distrib": "exp", "rate": 0.3, "monitored": true, "cycle_group": "life"},
-        {"name": "fix", "source": "ko", "targets": ["ok"], "distrib": "exp", "rate": 1.0, "monitored": true, "cycle_group": "life"}]}]},
+        {"name": "fail", "source": "ok", "targets": ["ko"], "distrib": "exp", "rate": 0.3, "monitored": true, "cycle_group": "life", "kind": "failure"},
+        {"name": "fix", "source": "ko", "targets": ["ok"], "distrib": "exp", "rate": 1.0, "monitored": true, "cycle_group": "life", "kind": "repair"}]}]},
     {"name": "B", "ports": [], "attributes": [], "automata": [{"name": "life", "states": ["ok", "ko"], "init": "ok",
       "transitions": [
-        {"name": "fail", "source": "ok", "targets": ["ko"], "distrib": "exp", "rate": 0.2, "monitored": true, "cycle_group": "life"},
-        {"name": "fix", "source": "ko", "targets": ["ok"], "distrib": "exp", "rate": 1.0, "monitored": true, "cycle_group": "life"}]}]},
+        {"name": "fail", "source": "ok", "targets": ["ko"], "distrib": "exp", "rate": 0.2, "monitored": true, "cycle_group": "life", "kind": "failure"},
+        {"name": "fix", "source": "ko", "targets": ["ok"], "distrib": "exp", "rate": 1.0, "monitored": true, "cycle_group": "life", "kind": "repair"}]}]},
     {"name": "ER", "ports": [], "attributes": [], "automata": [{"name": "ev", "states": ["not_occ", "occ"], "init": "not_occ",
       "transitions": [
         {"name": "occ", "source": "not_occ", "targets": ["occ"], "distrib": "delay", "time": 0.0, "monitored": true,
@@ -87,6 +87,13 @@ fn the_corpus_reads_back_exactly_what_the_campaign_recorded() {
         raw.iter()
             .any(|s| s.events.iter().any(|e| e.cycle_group.is_some())),
         "the corpus must carry cycle groups, or the round trip proves nothing about them"
+    );
+    assert!(
+        raw.iter().any(|s| s
+            .events
+            .iter()
+            .any(|e| e.kind == Some(TransitionKind::Repair))),
+        "the corpus must carry kinds, or the round trip proves nothing about them"
     );
 }
 
@@ -221,6 +228,37 @@ fn the_automata_field_is_optional_and_checked() {
     let error = read_raw_sequences(wrong.as_bytes()).unwrap_err();
     assert!(
         matches!(error, RawSequencesError::Format(ref m) if m.contains("names 2 automata for 1 events")),
+        "{error}"
+    );
+}
+
+/// A corpus line from before the `kinds` field reads with every kind
+/// absent; a line whose `kinds` does not match its events is refused.
+#[test]
+fn the_kinds_field_is_optional_and_checked() {
+    let header = r#"{"format":"raichu.sequences","version":1,"engine_version":"0.84.0","model":"m","seed":1,"nb_runs":1,"t_max":1.0,"targets":[],"event_fields":["time","obj","attr","cycle_group"]}"#;
+    let line = |extra: &str| {
+        format!(
+            "{header}\n{{\"run\":0,\"end_cause\":null,\"end_time\":1.0,\"events\":[[0.5,\"A\",\"ko\",\"life\"],[0.7,\"A\",\"ok\",\"life\"]]{extra}}}\n"
+        )
+    };
+    let (_, sequences) = read_raw_sequences(line("").as_bytes()).unwrap();
+    assert!(sequences[0].events.iter().all(|e| e.kind.is_none()));
+
+    let (_, sequences) =
+        read_raw_sequences(line(r#","kinds":["failure",null]"#).as_bytes()).unwrap();
+    assert_eq!(
+        sequences[0]
+            .events
+            .iter()
+            .map(|e| e.kind)
+            .collect::<Vec<_>>(),
+        vec![Some(TransitionKind::Failure), None]
+    );
+
+    let error = read_raw_sequences(line(r#","kinds":["failure"]"#).as_bytes()).unwrap_err();
+    assert!(
+        matches!(error, RawSequencesError::Format(ref m) if m.contains("gives 1 kinds for 2 events")),
         "{error}"
     );
 }

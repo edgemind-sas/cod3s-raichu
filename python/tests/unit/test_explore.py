@@ -212,7 +212,8 @@ def test_resolved_transitions_and_events_keep_their_shapes():
     sequence = result.sequences[0]
     assert all(set(t) == {"transition", "from", "to"} for t in sequence.transitions)
     assert sequence.events
-    assert all(set(e) == {"obj", "attr", "cycle_group"} for e in sequence.events)
+    # `kind` is present only when the transition declares one.
+    assert all(set(e) - {"kind"} == {"obj", "attr", "cycle_group"} for e in sequence.events)
     assert len(sequence.transitions) == len(sequence.steps)
     # Monitored steps only.
     monitored = [result.steps[i] for i in sequence.steps if result.steps[i]["event"]]

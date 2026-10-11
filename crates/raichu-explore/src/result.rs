@@ -36,7 +36,9 @@
 //! predates (a `discretised` result at version 1) is refused as
 //! inconsistent ([`ReadExplorationError::AlgorithmVersion`]).
 
+use raichu_analysis::{minimal_sequences, ReductionReport, SequenceReducer};
 use raichu_core::{SeqEvent, Sequence};
+use raichu_model::TransitionKind;
 use serde::{Deserialize, Serialize};
 
 /// The `format` of an exploration result.
@@ -343,6 +345,11 @@ pub struct ExploredEvent {
     /// Cycle-pair group of the firing transition, which the cycle filter
     /// of the reduction reads.
     pub cycle_group: Option<String>,
+    /// Declared reliability role of the entry (see [`SeqEvent::kind`]),
+    /// which the reduction's safety net reads. Absent from a document
+    /// written before it was recorded, and then omitted on writing too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<TransitionKind>,
 }
 
 impl ExploredEvent {
@@ -359,6 +366,7 @@ impl ExploredEvent {
             attr: self.attr.clone(),
             time: 0.0,
             cycle_group: self.cycle_group.clone(),
+            kind: self.kind,
         }
     }
 }
@@ -527,6 +535,23 @@ impl ExplorationResult {
                 weight: sequence.probability,
             })
             .collect()
+    }
+
+    /// The minimal sequences of this result through the engine's own
+    /// reduction (the one of [`raichu_analysis::sequence::analyse`], fed
+    /// through a [`SequenceReducer`] so that it reports), and what the
+    /// reduction did beyond its two steps: the sequences whose cycle
+    /// cancellation was refused are identified by their index in
+    /// [`ExplorationResult::sequences`], and their weight is a probability
+    /// mass, part of [`ExplorationResult::lower`].
+    #[must_use]
+    pub fn minimal_sequences(&self) -> (Vec<Sequence>, ReductionReport) {
+        let mut reducer = SequenceReducer::new();
+        for (index, sequence) in self.to_sequences().into_iter().enumerate() {
+            reducer.push_indexed(index as u64, sequence);
+        }
+        let report = reducer.report().clone();
+        (minimal_sequences(reducer.cleaned()), report)
     }
 
     /// The fired transitions of sequence `i`, in firing order, resolved

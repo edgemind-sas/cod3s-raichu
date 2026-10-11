@@ -852,6 +852,7 @@ fn resolve_step(model: &CompiledModel, idx: usize, branch: usize) -> ExploredSte
                 obj: transition.component.clone(),
                 attr: to.clone(),
                 cycle_group: transition.cycle_group.clone(),
+                kind: transition.kind_on_entry(transition.targets[branch]),
             }),
         to,
     }
