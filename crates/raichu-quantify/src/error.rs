@@ -71,6 +71,10 @@ pub enum QuantifyError {
     /// Splitting refused the campaign or reached a cap without an estimate.
     #[error(transparent)]
     Splitting(#[from] raichu_montecarlo::SplittingError),
+    /// A Monte-Carlo estimate is not a finite number: the envelope could
+    /// not be read back, so none is returned.
+    #[error(transparent)]
+    NonFiniteEstimate(#[from] raichu_montecarlo::NonFiniteEstimate),
     /// The model could not be serialized for its content hash.
     #[error("the model could not be serialized for its content hash: {0}")]
     ModelSerialization(String),

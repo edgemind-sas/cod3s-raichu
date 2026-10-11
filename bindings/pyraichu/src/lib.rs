@@ -448,6 +448,11 @@ fn monte_carlo_json(
             )
         }
         .map_err(engine_error)?;
+        // JSON has no spelling for a NaN or an infinity: refused here
+        // rather than written as a `null` no reader takes back.
+        estimates
+            .check_finite()
+            .map_err(|e| SimulationError::new_err(e.to_string()))?;
         serde_json::to_string(&estimates).map_err(|e| SimulationError::new_err(e.to_string()))
     })
 }
