@@ -251,24 +251,31 @@ pub enum ReadQuantificationError {
 /// # Errors
 /// [`ReadQuantificationError`].
 pub fn read_quantification(json: &str) -> Result<Quantification, ReadQuantificationError> {
-    let document = raichu_core::exact_json::parse(json)
+    #[derive(Deserialize)]
+    struct Head {
+        format: Option<serde_json::Value>,
+        version: Option<serde_json::Value>,
+    }
+    let head: Head = raichu_core::exact_json::from_str(json)
         .map_err(|e| ReadQuantificationError::Json(e.to_string()))?;
-    let format = document
-        .get("format")
+    let format = head
+        .format
+        .as_ref()
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
     if format.as_deref() != Some(QUANTIFICATION_FORMAT) {
         return Err(ReadQuantificationError::Format(format));
     }
-    let version = document
-        .get("version")
+    let version = head
+        .version
+        .as_ref()
         .and_then(serde_json::Value::as_u64)
         .and_then(|v| u32::try_from(v).ok());
     match version {
         Some(version) if (1..=QUANTIFICATION_VERSION).contains(&version) => {}
         other => return Err(ReadQuantificationError::Version(other)),
     }
-    let envelope: Quantification = serde_json::from_value(document)
+    let envelope: Quantification = raichu_core::exact_json::from_str(json)
         .map_err(|e| ReadQuantificationError::Json(e.to_string()))?;
     check_consistency(&envelope)?;
     if let Detail::Exploration(result) = &envelope.detail {

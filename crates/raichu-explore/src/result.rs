@@ -159,10 +159,8 @@ pub fn read_exploration(json: &str) -> Result<ExplorationResult, ReadExploration
         format: Option<String>,
         version: Option<u32>,
     }
-    let document = raichu_core::exact_json::parse(json)
+    let envelope: Envelope = raichu_core::exact_json::from_str(json)
         .map_err(|e| ReadExplorationError::Json(e.to_string()))?;
-    let envelope =
-        Envelope::deserialize(&document).map_err(|e| ReadExplorationError::Json(e.to_string()))?;
     if envelope.format.as_deref() != Some(EXPLORATION_FORMAT) {
         return Err(ReadExplorationError::Format(envelope.format));
     }
@@ -170,8 +168,8 @@ pub fn read_exploration(json: &str) -> Result<ExplorationResult, ReadExploration
         Some(version) if version <= EXPLORATION_VERSION => {}
         other => return Err(ReadExplorationError::Version(other)),
     }
-    let result: ExplorationResult =
-        serde_json::from_value(document).map_err(|e| ReadExplorationError::Json(e.to_string()))?;
+    let result: ExplorationResult = raichu_core::exact_json::from_str(json)
+        .map_err(|e| ReadExplorationError::Json(e.to_string()))?;
     let required = result.algorithm.format_version();
     if result.version < required {
         return Err(ReadExplorationError::AlgorithmVersion {
