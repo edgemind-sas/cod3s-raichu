@@ -431,11 +431,9 @@ pub enum ReadFaultTreeError {
 /// version are read first, so a document of another format is refused by
 /// name rather than by the first member it happens to lack.
 ///
-/// This is the shape check of the format. Its numbers go through
-/// `serde_json`'s default float parser, which may land one unit in the
-/// last place away from the written value; a reader that needs the bits
-/// (pyraichu's, for one) parses the text with a correctly rounding parser
-/// once this check has passed.
+/// Numbers are read correctly rounded ([`raichu_core::exact_json`]), so
+/// a written envelope reads back to the same bits, a cut-set count past
+/// `u64` included.
 ///
 /// # Errors
 /// [`ReadFaultTreeError`].
@@ -445,8 +443,8 @@ pub fn read_fault_tree_envelope(json: &str) -> Result<FaultTreeEnvelope, ReadFau
         format: Option<serde_json::Value>,
         version: Option<serde_json::Value>,
     }
-    let head: Head =
-        serde_json::from_str(json).map_err(|e| ReadFaultTreeError::Json(e.to_string()))?;
+    let head: Head = raichu_core::exact_json::from_str(json)
+        .map_err(|e| ReadFaultTreeError::Json(e.to_string()))?;
     let format = head
         .format
         .as_ref()
@@ -464,7 +462,5 @@ pub fn read_fault_tree_envelope(json: &str) -> Result<FaultTreeEnvelope, ReadFau
         Some(version) if (1..=FAULT_TREE_VERSION).contains(&version) => {}
         other => return Err(ReadFaultTreeError::Version(other)),
     }
-    // Parsed from the text, not from a `serde_json::Value`, which cannot
-    // hold a cut-set count past `u64`.
-    serde_json::from_str(json).map_err(|e| ReadFaultTreeError::Json(e.to_string()))
+    raichu_core::exact_json::from_str(json).map_err(|e| ReadFaultTreeError::Json(e.to_string()))
 }

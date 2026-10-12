@@ -98,19 +98,20 @@ fn the_envelope_reads_back_and_names_its_generation_warnings() {
     .expect("envelope");
     assert!(!envelope.generation.exact);
     assert_eq!(envelope.generation.warnings, vec![warning]);
+    let mut envelope = envelope;
+    // A value serde_json's default float parser reads one ulp off, and a
+    // cut-set count past `u64`.
+    envelope.horizon.probability = 0.248_720_059_264_354_14;
+    envelope.horizon.cut_set_count = Some(u128::from(u64::MAX) + 1);
     let text = envelope.to_json().expect("json");
     let read = read_fault_tree_envelope(&text).expect("read");
-    // Numbers are checked for shape here, not re-read to the bit (see
-    // `read_fault_tree_envelope`): everything else reads back unchanged.
-    assert_eq!(read.generation, envelope.generation);
-    assert_eq!(read.top, envelope.top);
-    assert_eq!(read.settings, envelope.settings);
-    assert_eq!(read.instants.len(), 1);
     assert_eq!(
-        read.horizon.minimal_cut_sets.as_ref().map(|c| c.len()),
-        Some(1)
+        read.horizon.probability.to_bits(),
+        envelope.horizon.probability.to_bits()
     );
-    assert!((read.horizon.probability - envelope.horizon.probability).abs() < 1e-15);
+    assert_eq!(read, envelope);
+    // Every other float too: equal bits write equal text.
+    assert_eq!(read.to_json().expect("json"), text);
 }
 
 #[test]
@@ -129,6 +130,15 @@ fn another_format_or_a_later_version_is_refused_first() {
     assert_eq!(
         read_fault_tree_envelope(&document.to_string()).unwrap_err(),
         ReadFaultTreeError::Version(Some(FAULT_TREE_VERSION + 1))
+    );
+    // A version past `u64` is refused by name too, not as malformed JSON.
+    let text = document.to_string().replace(
+        &format!("\"version\":{}", FAULT_TREE_VERSION + 1),
+        "\"version\":18446744073709551616",
+    );
+    assert_eq!(
+        read_fault_tree_envelope(&text).unwrap_err(),
+        ReadFaultTreeError::Version(None)
     );
     let error = read_fault_tree_envelope(r#"{"format": "raichu.quantification", "version": 1}"#)
         .unwrap_err();

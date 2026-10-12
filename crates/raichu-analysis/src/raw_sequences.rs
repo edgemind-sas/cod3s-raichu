@@ -589,7 +589,7 @@ impl<R: BufRead> RawCorpusReader<R> {
         let header: RawHeader = match lines.next() {
             None => return Err(RawSequencesError::Format("the corpus is empty".to_owned())),
             Some((_, line)) => {
-                serde_json::from_str(&line?).map_err(|e| RawSequencesError::Line {
+                raichu_core::exact_json::from_str(&line?).map_err(|e| RawSequencesError::Line {
                     line: 1,
                     detail: e.to_string(),
                 })?
