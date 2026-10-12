@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 56723a6987e711fc89e518c1d67aaae15b56f02a393d83fa9584bd46b1a9a87a # shrinks to spec = ModelSpec { units: [UnitSpec { failure: 0.05, repair: None }, UnitSpec { failure: 0.05, repair: Some(0.5) }], cut_sets: [[0]], horizon: 1.0, seed: 8677 }
+cc b3818a8f9996392e67ac7e4893bece97c4d9f476306f464d4a6b21ceac6759c6 # shrinks to spec = ModelSpec { units: [UnitSpec { failure: 0.05, repair: None }, UnitSpec { failure: 0.05, repair: None }], cut_sets: [[1]], horizon: 1.0, seed: 0 }
