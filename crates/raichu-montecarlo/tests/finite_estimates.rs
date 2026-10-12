@@ -88,7 +88,15 @@ fn the_first_non_finite_value_is_named_by_indicator_measure_and_instant() {
             ("x", "mean", 2.0),
             "{numerator}/0"
         );
-        assert_eq!(e.value.to_bits(), (numerator / 0.0_f64).to_bits());
+        // The sign bit of a NaN is unspecified: 0/0 folded at compile
+        // time and 0/0 computed at run time may differ, so a NaN is only
+        // checked as a NaN.
+        let expected = numerator / 0.0_f64;
+        if expected.is_nan() {
+            assert!(e.value.is_nan(), "{numerator}/0 gave {}", e.value);
+        } else {
+            assert_eq!(e.value, expected, "{numerator}/0");
+        }
     }
 }
 

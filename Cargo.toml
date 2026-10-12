@@ -74,3 +74,11 @@ missing_docs = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
+
+# Test profile for CI: the statistical coverage tests (adaptive splitting
+# over 100 seeds, `raichu-montecarlo/tests/splitting.rs`) run about ten
+# times slower unoptimised. Inheriting from `dev` keeps debug assertions
+# and overflow checks on, which `--release` would drop.
+[profile.ci]
+inherits = "dev"
+opt-level = 3
