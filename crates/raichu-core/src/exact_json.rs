@@ -11,9 +11,11 @@
 //! [`str::parse`], which is correctly rounded, so a written document reads
 //! back to the same bits, and nothing else in the workspace is touched.
 //!
-//! [`parse`] returns a [`serde_json::Value`]; [`from_str`] deserializes
-//! straight into a typed result, which also keeps integers past `u64`
-//! (a `Value` cannot hold them).
+//! [`from_str`] deserializes straight into a typed result and keeps
+//! integers past `u64`; every reader above goes through it, so they share
+//! one integer policy. [`parse`] returns a [`serde_json::Value`], which
+//! cannot hold an integer past `u64`: it serves code that needs the
+//! document itself (the canonical form a model hash is computed on).
 
 use serde::de::value::{MapAccessDeserializer, MapDeserializer, SeqDeserializer};
 use serde::de::{DeserializeOwned, IntoDeserializer, Visitor};
