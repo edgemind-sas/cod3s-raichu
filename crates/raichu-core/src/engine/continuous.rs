@@ -273,6 +273,13 @@ impl<'m> Engine<'m> {
         // Recorded from a copy of the attribute vector: nothing to
         // invalidate, so the pass compares and reports nothing.
         let mut sample_changed = ChangeLog::discarding(self.config.flow.tolerance);
+        // A sample of a torn sweep is settled exactly as the right-hand
+        // side is (`settle_explicit`): its single pass would read, at the
+        // tear, the attribute vector of the segment START, and report the
+        // algebraic flow quantities of a state the trajectory has left.
+        let (sample_budget, sample_tolerance) =
+            (self.config.flow.sweep_budget, self.config.flow.tolerance);
+        let mut sample_before: Vec<Value> = Vec::new();
         {
             let model = self.model;
             let base_vars = self.vars.clone();
@@ -287,7 +294,16 @@ impl<'m> Engine<'m> {
                     scratch: &mut sample_scratch,
                     changed: &mut sample_changed,
                 };
-                if let Err(error) = recompute_explicit(model, &mut vars, &states, t, &mut ctx) {
+                if let Err(error) = settle_explicit(
+                    model,
+                    &mut vars,
+                    &states,
+                    t,
+                    &mut ctx,
+                    sample_budget,
+                    sample_tolerance,
+                    &mut sample_before,
+                ) {
                     // Stashed, then re-raised below: the callback has no
                     // way to report it and this instant's values are not
                     // recordable.

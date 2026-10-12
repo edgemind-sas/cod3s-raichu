@@ -625,7 +625,7 @@ def test_the_key_governs_a_continuous_model_too():
     body = pyraichu.expand_model(plugin_document(ONE_DECLARED, generated=False))
 
     assert sorted(observed(body)) == [DECLARED]
-    # The rebuild did run: the netting and the sweep order are there, which
+    # The rebuild did run: the per-edge channels and the sweep order are there, which
     # is the material only the connection list can supply.
     assert body["evaluation_order"]
     tank = next(c for c in body["components"] if c["name"] == "TANK")

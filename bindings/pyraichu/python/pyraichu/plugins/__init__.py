@@ -28,7 +28,7 @@ of every plugin has been expanded, with the whole model and that
 plugin's own object list. It exists for what an object cannot decide
 alone: a per-object expansion runs before the objects after it, so it
 never sees the complete connection list, and a network property (the
-continuous flow network: per-edge equations, netting between consumers,
+continuous flow network: per-edge equations and channels,
 allocation operators, the sweep order) is not component-local. The hook
 may mutate `model` in place and returns model-level keys the same way
 ``expand_object`` does. It is **optional**: a plugin without one is
