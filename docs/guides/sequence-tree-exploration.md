@@ -572,6 +572,10 @@ again = pyraichu.read_exploration("exploration.json")
 assert again == result
 ```
 
+Numbers are read correctly rounded, in Python and in Rust
+(`raichu_explore::read_exploration`), so a document written by the
+engine reads back to the same bits.
+
 The top-level fields are `format`, `version`, `engine_version`, `model`,
 `algorithm`, `target`, `horizon`, `cutoffs`, `gap_tolerance`,
 `precision`, `steps`, `sequences`, `lower`, `upper`, `cutoff_tallies`,

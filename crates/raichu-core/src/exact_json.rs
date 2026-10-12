@@ -2,17 +2,36 @@
 //!
 //! `serde_json` parses a float to within one unit in the last place
 //! unless its `float_roundtrip` feature is on, and a feature is unified
-//! across everything built together: switching it on for this crate would
+//! across everything built together: switching it on for one crate would
 //! switch it on for every model document the engine reads, which may move
-//! a parsed parameter by one ulp and a result with it. The envelope
-//! reader parses through this module instead: numbers go through
-//! [`str::parse`], which is correctly rounded, so a written envelope reads
-//! back to the same bits, and nothing else in the workspace is touched.
+//! a parsed parameter by one ulp and a result with it. The readers of the
+//! engine's own result documents (`raichu.exploration`,
+//! `raichu.quantification`) parse through this module instead: numbers go
+//! through [`str::parse`], which is correctly rounded, so a written
+//! document reads back to the same bits, and nothing else in the
+//! workspace is touched.
 
 use serde_json::{Map, Number, Value};
 
-/// Parse `text` as one JSON value, numbers correctly rounded.
-pub(crate) fn parse(text: &str) -> Result<Value, String> {
+/// Why a document could not be parsed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message} at byte {offset}")]
+pub struct ParseError {
+    /// What is wrong.
+    pub message: String,
+    /// Byte offset in the text where it was found.
+    pub offset: usize,
+}
+
+/// Parse `text` as one JSON value, numbers correctly rounded. Accepts the
+/// documents `serde_json` accepts, except that a member name repeated in
+/// one object is refused (`serde_json` keeps the last one silently, which
+/// the typed readers built on this module would otherwise inherit), and
+/// nesting is capped at 256 levels.
+///
+/// # Errors
+/// [`ParseError`], naming what is wrong and where.
+pub fn parse(text: &str) -> Result<Value, ParseError> {
     let mut parser = Parser {
         bytes: text.as_bytes(),
         text,
@@ -36,8 +55,11 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
-    fn error(&self, what: &str) -> String {
-        format!("{what} at byte {}", self.at)
+    fn error(&self, what: &str) -> ParseError {
+        ParseError {
+            message: what.to_owned(),
+            offset: self.at,
+        }
     }
 
     fn skip_whitespace(&mut self) {
@@ -46,7 +68,7 @@ impl Parser<'_> {
         }
     }
 
-    fn expect(&mut self, literal: &str, value: Value) -> Result<Value, String> {
+    fn expect(&mut self, literal: &str, value: Value) -> Result<Value, ParseError> {
         if self.text[self.at..].starts_with(literal) {
             self.at += literal.len();
             Ok(value)
@@ -55,7 +77,7 @@ impl Parser<'_> {
         }
     }
 
-    fn value(&mut self, depth: usize) -> Result<Value, String> {
+    fn value(&mut self, depth: usize) -> Result<Value, ParseError> {
         if depth > MAX_DEPTH {
             return Err(self.error("nesting too deep"));
         }
@@ -73,7 +95,7 @@ impl Parser<'_> {
         }
     }
 
-    fn object(&mut self, depth: usize) -> Result<Value, String> {
+    fn object(&mut self, depth: usize) -> Result<Value, ParseError> {
         self.at += 1;
         let mut map = Map::new();
         self.skip_whitespace();
@@ -86,7 +108,14 @@ impl Parser<'_> {
             if self.bytes.get(self.at) != Some(&b'"') {
                 return Err(self.error("expected a member name"));
             }
+            let key_at = self.at;
             let key = self.string()?;
+            if map.contains_key(&key) {
+                return Err(ParseError {
+                    message: format!("duplicate member `{key}`"),
+                    offset: key_at,
+                });
+            }
             self.skip_whitespace();
             if self.bytes.get(self.at) != Some(&b':') {
                 return Err(self.error("expected `:`"));
@@ -106,7 +135,7 @@ impl Parser<'_> {
         }
     }
 
-    fn array(&mut self, depth: usize) -> Result<Value, String> {
+    fn array(&mut self, depth: usize) -> Result<Value, ParseError> {
         self.at += 1;
         let mut items = Vec::new();
         self.skip_whitespace();
@@ -130,7 +159,7 @@ impl Parser<'_> {
 
     /// A string token, unescaped by `serde_json` (strings carry no
     /// rounding question).
-    fn string(&mut self) -> Result<String, String> {
+    fn string(&mut self) -> Result<String, ParseError> {
         let start = self.at;
         self.at += 1;
         loop {
@@ -144,10 +173,13 @@ impl Parser<'_> {
                 None => return Err(self.error("unterminated string")),
             }
         }
-        serde_json::from_str(&self.text[start..self.at]).map_err(|e| e.to_string())
+        serde_json::from_str(&self.text[start..self.at]).map_err(|e| ParseError {
+            message: e.to_string(),
+            offset: start,
+        })
     }
 
-    fn number(&mut self) -> Result<Value, String> {
+    fn number(&mut self) -> Result<Value, ParseError> {
         let start = self.at;
         while let Some(b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') = self.bytes.get(self.at) {
             self.at += 1;
@@ -155,7 +187,11 @@ impl Parser<'_> {
         let token = &self.text[start..self.at];
         // Validate the token as JSON first (Rust's parsers also accept
         // `01`, `+1` or `1.`, which JSON does not).
-        serde_json::from_str::<Number>(token).map_err(|e| format!("{e} in number `{token}`"))?;
+        let invalid = |e: &dyn std::fmt::Display| ParseError {
+            message: format!("{e} in number `{token}`"),
+            offset: start,
+        };
+        serde_json::from_str::<Number>(token).map_err(|e| invalid(&e))?;
         let is_float = token.contains(['.', 'e', 'E']);
         if !is_float {
             if let Ok(n) = token.parse::<u64>() {
@@ -165,12 +201,11 @@ impl Parser<'_> {
                 return Ok(Value::Number(n.into()));
             }
         }
-        let x: f64 = token
-            .parse()
-            .map_err(|e| format!("{e} in number `{token}`"))?;
-        Number::from_f64(x)
-            .map(Value::Number)
-            .ok_or_else(|| format!("number `{token}` is not finite"))
+        let x: f64 = token.parse().map_err(|e| invalid(&e))?;
+        Number::from_f64(x).map(Value::Number).ok_or(ParseError {
+            message: format!("number `{token}` is not finite"),
+            offset: start,
+        })
     }
 }
 
@@ -183,7 +218,13 @@ mod tests {
     /// The case `serde_json` without `float_roundtrip` reads one ulp off.
     #[test]
     fn floats_read_back_to_the_bits_they_were_written_from() {
-        let x = 0.497_001_056_589_678_f64;
+        let x = 0.248_720_059_264_354_14_f64;
+        let lossy: f64 = serde_json::from_str(&serde_json::to_string(&x).unwrap()).unwrap();
+        assert_ne!(
+            lossy.to_bits(),
+            x.to_bits(),
+            "not a case serde_json misreads"
+        );
         let text = serde_json::to_string(&x).unwrap();
         let value = parse(&text).unwrap();
         assert_eq!(value.as_f64().unwrap().to_bits(), x.to_bits());
@@ -206,6 +247,7 @@ mod tests {
             "\"open",
             "+1",
             "{\"a\" 1}",
+            "{\"a\": 1, \"a\": 2}",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }

@@ -150,15 +150,19 @@ pub enum ReadExplorationError {
 /// declared version predates ([`Algorithm::format_version`]), and a
 /// sequence referring to a step outside the step table. The envelope
 /// is read first, so a document of another format is refused by name
-/// rather than by the first field it happens to lack.
+/// rather than by the first field it happens to lack. Numbers are read
+/// correctly rounded ([`raichu_core::exact_json`]), so a written result
+/// reads back to the same bits.
 pub fn read_exploration(json: &str) -> Result<ExplorationResult, ReadExplorationError> {
     #[derive(Deserialize)]
     struct Envelope {
         format: Option<String>,
         version: Option<u32>,
     }
-    let envelope: Envelope =
-        serde_json::from_str(json).map_err(|e| ReadExplorationError::Json(e.to_string()))?;
+    let document = raichu_core::exact_json::parse(json)
+        .map_err(|e| ReadExplorationError::Json(e.to_string()))?;
+    let envelope =
+        Envelope::deserialize(&document).map_err(|e| ReadExplorationError::Json(e.to_string()))?;
     if envelope.format.as_deref() != Some(EXPLORATION_FORMAT) {
         return Err(ReadExplorationError::Format(envelope.format));
     }
@@ -167,7 +171,7 @@ pub fn read_exploration(json: &str) -> Result<ExplorationResult, ReadExploration
         other => return Err(ReadExplorationError::Version(other)),
     }
     let result: ExplorationResult =
-        serde_json::from_str(json).map_err(|e| ReadExplorationError::Json(e.to_string()))?;
+        serde_json::from_value(document).map_err(|e| ReadExplorationError::Json(e.to_string()))?;
     let required = result.algorithm.format_version();
     if result.version < required {
         return Err(ReadExplorationError::AlgorithmVersion {

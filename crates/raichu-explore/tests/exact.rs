@@ -840,11 +840,14 @@ fn reducing_the_result_to_minimal_sequences_keeps_the_total_probability() {
 
 #[test]
 fn the_result_round_trips_through_its_open_format() {
-    let result = explore_exact(
+    let mut result = explore_exact(
         &compile(&parallel_pair(0.1, 0.2)),
         &settings("sys_down", 5.0),
     )
     .unwrap();
+    // A value serde_json's default float parser reads one ulp off (the
+    // explorer's own bound on this model).
+    result.sequences[0].probability = 0.248_720_059_264_354_14;
     let json = serde_json::to_string(&result).unwrap();
     assert!(json.contains("\"format\":\"raichu.exploration\""));
     // The compact form: a step table, and sequences of indices into it.
@@ -854,9 +857,37 @@ fn the_result_round_trips_through_its_open_format() {
     assert_eq!(back.sequences.len(), result.sequences.len());
     for (x, y) in back.sequences.iter().zip(&result.sequences) {
         assert_eq!(x.steps, y.steps);
-        // serde_json's default float parser is correct to the last ulp or
-        // so, not bit-exact.
-        assert!(((x.probability - y.probability) / y.probability).abs() <= 1e-15);
+        assert_eq!(x.probability.to_bits(), y.probability.to_bits());
+        assert_eq!(x.error_bound.to_bits(), y.error_bound.to_bits());
+    }
+    // Every other float too: floats are written in their shortest
+    // round-trip form, so equal bits write equal text.
+    assert_eq!(serde_json::to_string(&back).unwrap(), json);
+}
+
+#[test]
+fn a_malformed_document_is_refused_as_json() {
+    let result = explore_exact(
+        &compile(&parallel_pair(0.1, 0.2)),
+        &settings("sys_down", 5.0),
+    )
+    .unwrap();
+    let json = serde_json::to_string(&result).unwrap();
+    let body = json.strip_suffix('}').unwrap();
+    for broken in [
+        json[..json.len() / 2].to_owned(),
+        format!("{json} 1"),
+        json.replace("\"horizon\":5.0", "\"horizon\":05.0"),
+        // A repeated member: the last one must not silently win.
+        format!("{body},\"lower\":0.5}}"),
+    ] {
+        assert!(
+            matches!(
+                read_exploration(&broken),
+                Err(ReadExplorationError::Json(_))
+            ),
+            "{broken}"
+        );
     }
 }
 

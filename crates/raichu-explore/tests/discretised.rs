@@ -731,18 +731,25 @@ fn the_result_round_trips_through_its_open_format() {
         &settings("sys_down", 3.0, 4),
     )
     .unwrap();
-    let back = read_exploration(&serde_json::to_string(&result).unwrap()).unwrap();
+    let json = serde_json::to_string(&result).unwrap();
+    let back = read_exploration(&json).unwrap();
     assert_eq!(back.algorithm, Algorithm::Discretised);
     assert_eq!(back.steps, result.steps);
-    let (d, e) = (back.discretisation.unwrap(), result.discretisation.unwrap());
+    let (d, e) = (
+        back.discretisation.as_ref().unwrap(),
+        result.discretisation.as_ref().unwrap(),
+    );
     assert_eq!(d.level, e.level);
-    let (r, s) = (d.refinement.unwrap(), e.refinement.unwrap());
+    let (r, s) = (
+        d.refinement.as_ref().unwrap(),
+        e.refinement.as_ref().unwrap(),
+    );
     assert_eq!(r.base_level, s.base_level);
     assert_eq!(r.truncation_dominated, s.truncation_dominated);
-    // serde_json's default float parser is correct to the last ulp or so,
-    // not bit-exact.
-    assert!(((r.error_estimate - s.error_estimate) / s.error_estimate).abs() <= 1e-15);
-    assert!(((back.lower - result.lower) / result.lower).abs() <= 1e-15);
+    assert_eq!(r.error_estimate.to_bits(), s.error_estimate.to_bits());
+    assert_eq!(back.lower.to_bits(), result.lower.to_bits());
+    // Every other float too: equal bits write equal text.
+    assert_eq!(serde_json::to_string(&back).unwrap(), json);
 }
 
 #[test]
