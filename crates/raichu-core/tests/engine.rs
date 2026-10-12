@@ -236,6 +236,49 @@ fn replay_is_byte_identical() {
     assert_eq!(a, b);
 }
 
+/// `evolA` numbering: every write of the fixpoint carries the index of
+/// the worklist pop that made it, counted from 1 and restarted at every
+/// fixpoint (the initial one at t = 0 included).
+#[test]
+fn journal_numbers_the_fixpoint_iterations() {
+    let result = run(&delay_model(), 16.0, true);
+    let numbered = |at: f64| -> Vec<(String, usize)> {
+        result
+            .journal
+            .iter()
+            .filter_map(|r| match r {
+                JournalRecord::FunctionTriggered {
+                    time,
+                    function,
+                    iteration,
+                } if *time == at => Some((format!("fn:{function}"), *iteration)),
+                JournalRecord::AttributeChanged {
+                    time,
+                    attribute,
+                    iteration,
+                    ..
+                } if *time == at => Some((format!("attr:{attribute}"), *iteration)),
+                _ => None,
+            })
+            .collect()
+    };
+    let chain = |a: usize, b: usize| {
+        vec![
+            ("fn:source.update_flow_out".to_owned(), a),
+            ("attr:source.flow_out".to_owned(), a),
+            ("fn:target.update_fed".to_owned(), b),
+            ("attr:target.fed".to_owned(), b),
+        ]
+    };
+    assert_eq!(numbered(5.0), chain(1, 2));
+    // A second event restarts the count at 1.
+    assert_eq!(numbered(15.0), chain(1, 2));
+    // The initial fixpoint numbers its own iterations from 1 as well.
+    let initial = numbered(0.0);
+    assert!(!initial.is_empty());
+    assert_eq!(initial[0].1, 1);
+}
+
 #[test]
 fn journal_records_the_causality_chain() {
     let result = run(&delay_model(), 6.0, true);

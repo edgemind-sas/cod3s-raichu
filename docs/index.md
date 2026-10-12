@@ -144,6 +144,9 @@ print("unavailability:", round(failed.mean[-1], 3),
 
 - **[Tutorial](tutorial/01-first-model.md)**: from your first model to a
   full hybrid system, step by step.
+- **[How the engine works](engine/index.md)**: what the engine does between
+  two events, replayed step by step on a small installation: the fixpoint,
+  the race of firing dates, and a threshold interrupting integration.
 - **[Examples](examples/index.md)**: worked studies with schematics,
   hypotheses and results on charts: the heated tank benchmark, a heated
   room over a winter, a two-out-of-three system solved three ways, a solar

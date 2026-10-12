@@ -1691,6 +1691,18 @@ impl Interactive {
         Self::json(self.snap.history())
     }
 
+    /// JSON array of the causal journal recorded so far, in the record
+    /// shape `simulate(..., journal=True)` returns. A session opened
+    /// without `journal=True` records none, and says so.
+    fn journal(&self) -> PyResult<String> {
+        if !self.config.journal {
+            return Err(SimulationError::new_err(
+                "this session records no causal journal: open it with journal=True",
+            ));
+        }
+        Self::json(self.snap.journal())
+    }
+
     /// Fire the armed transition `name`, optionally **forcing** its
     /// destination branch to the state `to` (bypassing the RNG /
     /// deterministic resolution). Returns the fired event as JSON.

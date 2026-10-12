@@ -399,3 +399,33 @@ fn integer_outside_exact_float_range_is_not_published() {
     assert!(message.contains("least_cost"), "{message}");
     assert!(message.contains("exact f64 range"), "{message}");
 }
+
+#[test]
+fn a_program_opens_the_iteration_its_writes_carry() {
+    let compiled = CompiledModel::compile(&model()).unwrap();
+    let config = EngineConfig {
+        t_max: 16.0,
+        journal: true,
+        ..Default::default()
+    };
+    let result = Engine::new(&compiled, config).unwrap().run().unwrap();
+    let mut solves = 0;
+    let mut open = None;
+    for record in &result.journal {
+        match record {
+            JournalRecord::ProgramSolved { iteration, .. } => {
+                assert!(*iteration >= 1, "a program pop is a fixpoint iteration");
+                open = Some(*iteration);
+                solves += 1;
+            }
+            JournalRecord::FunctionTriggered { iteration, .. } => open = Some(*iteration),
+            JournalRecord::AttributeChanged {
+                cause, iteration, ..
+            } if cause == "least_cost" => {
+                assert_eq!(Some(*iteration), open, "a program write carries its pop");
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(solves, 3);
+}

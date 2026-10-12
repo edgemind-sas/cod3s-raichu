@@ -141,6 +141,7 @@ impl<'m> Engine<'m> {
                 old,
                 new: value,
                 cause: "external.input".to_owned(),
+                iteration: 0,
             });
         }
         self.worklist

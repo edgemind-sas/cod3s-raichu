@@ -90,13 +90,14 @@ Between events the session answers:
 | `state("component.automaton")` | the current state name, `None` if unknown |
 | `attribute("component.attribute")` | the current value, `None` if unknown |
 | `history()` | the events fired so far, chronological |
+| `journal()` | the [causal journal](causal-journal.md) recorded so far, for a session opened with `journal=True` |
 
 ```python
 assert [e.transition for e in session.history()] == ["P.mode.start", "P.mode.fail"]
 ```
 
 `snapshot()` captures the whole trajectory state (time, states, attributes,
-armed transitions, generator position) as an opaque checkpoint, and
+armed transitions, generator position, journal) as an opaque checkpoint, and
 `restore(checkpoint)` reinstates it: an undo that can be taken as many times
 as wanted, and from which the session continues as if nothing had happened
 since. `reset()` goes back to `t = 0` with a fresh generator:
@@ -105,6 +106,14 @@ since. `reset()` goes back to `t = 0` with a fresh generator:
 session.reset()
 assert session.time == 0.0 and session.history() == []
 ```
+
+Because the journal travels with the checkpoint, two outcomes of one choice
+can be recorded side by side, each with its whole cascade: run to the
+choice, `snapshot()`, `fire(name, to=...)` the first outcome and read
+`journal()`, then `restore` and do the same for the second. Both journals
+share every record up to the checkpoint. A forced outcome consumes no random
+draw, so the dates sampled after it differ from those a run with the same
+seed would have drawn; the states and writes it records are the same.
 
 ## Through the muscadet route
 

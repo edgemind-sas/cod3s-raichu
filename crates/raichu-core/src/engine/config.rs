@@ -811,6 +811,11 @@ pub enum JournalRecord {
         objective: Option<f64>,
         /// Whether an exact-input cache entry served the outcome.
         cached: bool,
+        /// Fixpoint iteration (`evolA`) that applies the program, numbered
+        /// like [`JournalRecord::FunctionTriggered`]: this record opens the
+        /// iteration, and the program's writes that follow carry the same
+        /// number.
+        iteration: usize,
     },
     /// A transition fired (`fire_transition` / `schedule_boundary`).
     TransitionFired {
@@ -829,6 +834,12 @@ pub enum JournalRecord {
         time: f64,
         /// Qualified function name.
         function: String,
+        /// Fixpoint iteration (`evolA`) that applies the function: the
+        /// index of its pop from the pending set, counted from 1 and
+        /// restarted at every fixpoint. One iteration applies exactly one
+        /// sensitive function or program: it opens with this record, or
+        /// with [`JournalRecord::ProgramSolved`] when it applies a program.
+        iteration: usize,
     },
     /// An attribute changed value (cause = the enclosing record above).
     AttributeChanged {
@@ -842,6 +853,12 @@ pub enum JournalRecord {
         new: Value,
         /// Qualified name of the function that wrote it.
         cause: String,
+        /// Fixpoint iteration (`evolA`) of the write, as on
+        /// [`JournalRecord::FunctionTriggered`]. `0` marks a write made
+        /// outside the fixpoint: a fired transition's own edge effects
+        /// (`evolT`), an FMU output or an external input, each recorded
+        /// before the fixpoint it triggers.
+        iteration: usize,
     },
     /// A fixed-step unit keeps its previously sampled input until its next point.
     FmuInputHeld {
@@ -1174,6 +1191,15 @@ impl Snapshot {
     #[must_use]
     pub fn history(&self) -> &[Event] {
         &self.events
+    }
+
+    /// Causal journal recorded up to this snapshot, in order; empty when
+    /// the engine ran without [`EngineConfig::journal`]. Restoring a
+    /// snapshot reinstates its journal too, so two branches fired from
+    /// one snapshot each read their own history.
+    #[must_use]
+    pub fn journal(&self) -> &[JournalRecord] {
+        &self.journal
     }
 
     /// Value of an attribute by qualified name (`component.attribute`),
