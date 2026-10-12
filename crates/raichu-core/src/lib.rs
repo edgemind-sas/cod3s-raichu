@@ -29,6 +29,7 @@ pub mod compile;
 pub mod cycle_groups;
 mod dependency;
 pub mod engine;
+pub mod exact_json;
 pub mod fault_tree;
 pub mod flow;
 pub mod loops;

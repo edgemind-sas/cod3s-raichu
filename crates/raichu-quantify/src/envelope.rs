@@ -251,7 +251,8 @@ pub enum ReadQuantificationError {
 /// # Errors
 /// [`ReadQuantificationError`].
 pub fn read_quantification(json: &str) -> Result<Quantification, ReadQuantificationError> {
-    let document = crate::exact_json::parse(json).map_err(ReadQuantificationError::Json)?;
+    let document = raichu_core::exact_json::parse(json)
+        .map_err(|e| ReadQuantificationError::Json(e.to_string()))?;
     let format = document
         .get("format")
         .and_then(serde_json::Value::as_str)

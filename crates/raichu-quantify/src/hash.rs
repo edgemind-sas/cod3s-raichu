@@ -30,8 +30,8 @@ pub fn model_content_hash(model: &Model) -> Result<String, QuantifyError> {
         .map_err(|e| QuantifyError::ModelSerialization(e.to_string()))?;
     // Parsed correctly rounded: two models one ulp apart in a parameter
     // must not hash the same.
-    let value: Value =
-        crate::exact_json::parse(&sealed).map_err(QuantifyError::ModelSerialization)?;
+    let value: Value = raichu_core::exact_json::parse(&sealed)
+        .map_err(|e| QuantifyError::ModelSerialization(e.to_string()))?;
     let mut canonical = String::new();
     write_canonical(&value, &mut canonical)
         .map_err(|e| QuantifyError::ModelSerialization(e.to_string()))?;

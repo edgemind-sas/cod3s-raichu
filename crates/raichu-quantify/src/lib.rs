@@ -63,7 +63,6 @@
 mod cross_entropy;
 mod envelope;
 mod error;
-mod exact_json;
 mod exploration;
 mod hash;
 mod method;
