@@ -669,6 +669,17 @@ def _min(terms: list[dict[str, Any]]) -> dict[str, Any]:
     return {"op": "min", "args": terms}
 
 
+def _max(terms: list[dict[str, Any]]) -> dict[str, Any]:
+    """The maximum of `terms`, degrading to the term itself rather than
+    emitting a one-argument ``max``. An empty list is a caller error,
+    as for :func:`_min`."""
+    if not terms:
+        raise ValueError("a maximum needs at least one term")
+    if len(terms) == 1:
+        return terms[0]
+    return {"op": "max", "args": terms}
+
+
 def _const_bool(value: bool) -> dict[str, Any]:
     return {"op": "const", "value": {"kind": "bool", "value": bool(value)}}
 
@@ -1385,6 +1396,13 @@ def _rate_alias(channel: str) -> str:
     return f"{channel}_rate"
 
 
+def _derating_variable(mode: str, flow: str) -> str:
+    """The variable a standalone mode clamps to derate `flow`: muscadet's
+    own name for it (``muscadet.derating``), so the effect the mode
+    declares names the same variable on both sides."""
+    return f"{mode}_derating_{flow}"
+
+
 def _ratio_alias(channel: str, flow: str) -> str:
     """The name a measurement channel publishes a constituent's ratio
     under. See :func:`_level_alias`.
@@ -1771,6 +1789,10 @@ class ObjFlow:
         self.rule_sets: list[_RuleSet] = []
         self.transfers: list[_Transfer] = []
         self.failure_modes: list[_FailureMode] = []
+        # The (mode, flow) pairs a mode declared OUTSIDE this component
+        # derates (`add_derating`). Each owns a variable here, folded by
+        # minimum into the output's effective rate.
+        self.external_deratings: list[tuple[str, str]] = []
         # Decoration a declaration may carry (`pyraichu.muscadet.declare`). It reaches
         # no generated model: it is held so a declaration survives a round
         # trip through a live component rather than losing what a platform
@@ -4914,6 +4936,50 @@ class ObjFlow:
 
     # --- deratings ------------------------------------------------------
 
+    def add_derating(self, mode: str, flow: str) -> str:
+        """Allocate the derating variable a mode declared OUTSIDE this
+        component clamps on one of its continuous outputs, and return its
+        name, ``{mode}_derating_{flow}``.
+
+        muscadet's ``ObjFlow.add_derating`` (format 1.0.3, the
+        ``deratings`` section): a standalone mode targets the component,
+        and its effects write this variable by name. The variable starts
+        at the nominal 1 and joins the output's effective rate by
+        **minimum**, beside the shared ``{flow}_out_rate`` and the modes
+        declared on the component, so two standalone modes on one output
+        compose like any two caps and a repair of one leaves the other's
+        cap standing. A mode owns its variable, so it owns the release:
+        nothing here writes it after allocation.
+
+        Allocating the same pair twice is a no-op, as in muscadet, so a
+        declaration read back and replayed is not refused for its own
+        echo. A flow that is not a continuous output of this component is
+        refused: a derating reaching nothing would build, run, and report
+        a plant whose modelled failure never happened."""
+        outputs = [declared.name for declared in self.flows_continuous_out]
+        if flow not in outputs:
+            raise ValueError(
+                f"ObjFlow `{self.name}`: derating for mode `{mode}` names `{flow}`, "
+                f"which is not a continuous output of this component. Its "
+                f"continuous outputs are {outputs or 'none'}"
+            )
+        if (mode, flow) not in self.external_deratings:
+            self.external_deratings.append((mode, flow))
+        return _derating_variable(mode, flow)
+
+    def _external_deratings_on(self, flow: str) -> list[str]:
+        """The variables the standalone modes derating `flow` clamp."""
+        return [
+            _derating_variable(mode, derated)
+            for mode, derated in self.external_deratings
+            if derated == flow
+        ]
+
+    def _derated(self, flow: str) -> bool:
+        """Whether `flow` carries an effective rate of its own: a mode
+        declared here caps it, or a standalone mode derates it."""
+        return bool(self._caps_on(flow)) or bool(self._external_deratings_on(flow))
+
     def _resolve_effects(
         self, mode: str, key: str, effects: list[tuple[str, Any]] | None
     ) -> _Effects:
@@ -5406,7 +5472,7 @@ class ObjFlow:
         would signal it."""
         factors = [
             _var(self.name, f"{flow.name}_effective_rate")
-            if self._caps_on(flow.name)
+            if self._derated(flow.name)
             else _var(self.name, f"{flow.name}_out_rate")
         ]
         if flow.profile is not None:
@@ -5462,6 +5528,9 @@ class ObjFlow:
         the return to nominal implicit: leaving the failing state
         restores the rate with nothing declared on the other side."""
         terms = [_var(self.name, f"{flow}_out_rate")]
+        # A standalone mode clamps a variable of its own rather than the
+        # shared one, so two of them on one output fold like two caps.
+        terms += [_var(self.name, name) for name in self._external_deratings_on(flow)]
         for mode, failed, repaired in self._caps_on(flow):
             terms.append(self._mode_term(mode, failed, repaired))
         return _min(terms)
@@ -6395,13 +6464,7 @@ class ObjFlow:
                     "kind": "explicit",
                     "expr": _sum(
                         [
-                            {
-                                "op": "mul",
-                                "args": [
-                                    self._rule_coefficient(rule_set, flow, "cons"),
-                                    _var(me, f"{rule_set.name}_draw_scale"),
-                                ],
-                            }
+                            self._set_draw(rule_set, flow)
                             for rule_set in self.rule_sets
                             if flow in rule_set.consumed()
                         ]
@@ -6547,6 +6610,51 @@ class ObjFlow:
             )
         return _min(terms)
 
+    def _uptake_factor(self, rule_set: _RuleSet) -> dict[str, Any] | None:
+        """What a set's draw on a volume is scaled by when a failure mode
+        derates what it produces (muscadet R-13, ``get_uptake_factor``),
+        or None when no output it produces is derated.
+
+        The **maximum** over the outputs the set produces of what their
+        factors leave of them, clamped at one. Maximum and not minimum: a
+        derating is a loss on the leg it bears on, never a saving on the
+        reagents the other legs still consume, so cutting one output of a
+        two-output reaction to zero must not cut the draw to zero. An
+        output no mode derates counts as nominal.
+
+        Applied to the DRAW only, never to `made`: the production is
+        already multiplied by the output's own factors downstream, so
+        folding this in there would apply a derating of 0.5 twice. A fan
+        whose exhaust a mode cuts to zero then stops drawing the room it
+        ventilates, which is what lets the room fill."""
+        produced = {
+            flow.name: flow
+            for flow in self.flows_continuous_out
+            if flow.name in rule_set.produced()
+        }
+        if not any(self._derated(name) for name in produced):
+            return None
+        legs = [
+            {"op": "mul", "args": self._output_factors(flow)}
+            if self._derated(name)
+            else _float(NOMINAL_RATE)
+            for name, flow in produced.items()
+        ]
+        return _min([_max(legs), _float(NOMINAL_RATE)])
+
+    def _set_draw(self, rule_set: _RuleSet, flow: str) -> dict[str, Any]:
+        """What one set draws of `flow` from a volume upstream: its
+        coefficient times its draw scale, times its uptake factor when a
+        mode derates what it produces."""
+        args = [
+            self._rule_coefficient(rule_set, flow, "cons"),
+            _var(self.name, f"{rule_set.name}_draw_scale"),
+        ]
+        uptake = self._uptake_factor(rule_set)
+        if uptake is not None:
+            args.append(uptake)
+        return {"op": "mul", "args": args}
+
     def _rule_draw(self, flow: str) -> dict[str, Any]:
         """What the rule sets draw of `flow` from the volume upstream of
         them: each consuming set's coefficient times its draw scale. The
@@ -6555,13 +6663,7 @@ class ObjFlow:
         for rule_set in self.rule_sets:
             if flow not in rule_set.consumed():
                 continue
-            coefficient = self._rule_coefficient(rule_set, flow, "cons")
-            terms.append(
-                {
-                    "op": "mul",
-                    "args": [coefficient, _var(self.name, f"{rule_set.name}_draw_scale")],
-                }
-            )
+            terms.append(self._set_draw(rule_set, flow))
         return _sum(terms)
 
     def _build_continuous_in(
@@ -6713,7 +6815,11 @@ class ObjFlow:
             # layer, so a mode that derates the flow has one place to
             # write and nothing to fight over.
             variables.append(_float_attribute(f"{flow_name}_out_rate", NOMINAL_RATE))
-            if self._caps_on(flow_name):
+            # One variable per standalone mode derating this output, at
+            # nominal until its mode writes it.
+            for name in self._external_deratings_on(flow_name):
+                variables.append(_float_attribute(name, NOMINAL_RATE))
+            if self._derated(flow_name):
                 # What the failure modes capping this output leave of it,
                 # folded by minimum with the shared rate above.
                 variables.append(
@@ -8413,7 +8519,7 @@ class System:
                 if flow.profile is not None:
                     step(name, f"{flow.name}_in_profile")
             for flow in obj.flows_continuous_out:
-                if obj._caps_on(flow.name):
+                if obj._derated(flow.name):
                     step(name, f"{flow.name}_effective_rate")
                 if obj._taps_on(flow.name):
                     step(name, f"{flow.name}_tap_rate")
@@ -9387,8 +9493,9 @@ class System:
             for flow in obj.flows_continuous_out:
                 if flow.publish_rate is not None:
                     observable.add(_rate_alias(flow.name))
-                if obj._caps_on(flow.name):
+                if obj._derated(flow.name):
                     observable.add(f"{flow.name}_effective_rate")
+                observable.update(obj._external_deratings_on(flow.name))
                 if obj._taps_on(flow.name):
                     observable.add(f"{flow.name}_tap_rate")
                     observable.add(f"{flow.name}_pre_tap_capability_out")

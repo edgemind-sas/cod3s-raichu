@@ -964,6 +964,7 @@ _OBJFLOW_SECTIONS: tuple[tuple[str, str | None], ...] = (
     ("flows_continuous_in", "FlowContinuousIn"),
     ("flows_continuous_out", "FlowContinuousOut"),
     ("capacities", "capacities"),
+    ("deratings", "deratings"),
     ("failure_modes", None),
     ("rules", "rules"),
     ("transfers", "transfers"),
