@@ -185,6 +185,10 @@ DECLARATION_SECTIONS = (
     "measurements_out",
     # After the continuous inputs a group draws.
     "mixtures",
+    # After every flow, since a pair names a continuous output, and before
+    # the modes, as in muscadet (format 1.0.3): the (mode, flow) pairs a
+    # mode declared OUTSIDE the component derates.
+    "deratings",
     "failure_modes",
     "rules",
     "transfers",
@@ -756,6 +760,13 @@ _TRANSFER = _Vocabulary(
     carried={"name": "name", "flows": "flows", "equation": "equation"},
 )
 
+#: A ``deratings`` entry: the pair muscadet's ``ObjFlow.add_derating`` records
+#: for a mode declared outside the component. Both keys, and nothing else: the
+#: value the mode clamps the variable to belongs to the mode.
+_DERATING = _Vocabulary(
+    carried={"mode": "mode", "flow": "flow"},
+)
+
 _FAILURE_MODE_SHARED = {
     "name": "name",
     "failure_cond": "failure_cond",
@@ -814,6 +825,7 @@ PLAIN_SECTIONS: dict[str, tuple[str, _Vocabulary]] = {
     "capacities": ("add_capacity", _CAPACITY),
     "measurements_out": ("add_measurement_out", _MEASUREMENT_OUT),
     "mixtures": ("add_mixture_in", _MIXTURE_IN),
+    "deratings": ("add_derating", _DERATING),
     "rules": ("add_rule_set", _RULE_SET),
     "transfers": ("add_transfer", _TRANSFER),
 }
