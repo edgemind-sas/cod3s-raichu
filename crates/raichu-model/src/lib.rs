@@ -529,6 +529,35 @@ pub enum TransitionKind {
     Observation,
 }
 
+/// Whether the minimal-sequence reduction may cancel a cycle group, that
+/// is drop a failure repaired before the feared event on the hypothesis
+/// that a repaired component no longer contributes
+/// ([`Transition::cycle_cancellation`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CycleCancellation {
+    /// The engine decides from the compiled model: the group is not
+    /// cancelled when its effect reaches a feared event through a
+    /// quantity that remembers it.
+    #[default]
+    Auto,
+    /// The group is never cancelled: its failures stay in the sequences,
+    /// repaired or not. For an effect the analysis cannot see, such as a
+    /// counter a sensitive function keeps.
+    Never,
+    /// The group is always cancelled, whatever the analysis finds: the
+    /// analyst asserts that the effect of a repaired failure is gone.
+    Always,
+}
+
+impl CycleCancellation {
+    /// Whether this is the default, [`CycleCancellation::Auto`].
+    #[must_use]
+    pub fn is_auto(&self) -> bool {
+        *self == CycleCancellation::Auto
+    }
+}
+
 /// A transition of an automaton.
 ///
 /// Maps to the paper's deterministic transitions ⟨q_src, guard, delay,
@@ -581,6 +610,19 @@ pub struct Transition {
     /// out before the feared event. `None` = not part of a cycle pair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cycle_group: Option<String>,
+    /// **Sequence analysis**: whether the reduction may cancel this
+    /// transition's [`Transition::cycle_group`]
+    /// ([`CycleCancellation`]): `auto` (the default) lets the engine decide
+    /// from the model, `never` and `always` override that decision. Every
+    /// transition of one `(component, cycle_group)` declares the same
+    /// value, and a transition with no `cycle_group` declares none.
+    ///
+    /// Non-baseline construct when not `auto`: a document carrying it must
+    /// declare [`Feature::CycleCancellation`]. An engine that ignored the
+    /// field would cancel a group the analyst declared `never`, which is
+    /// exactly the silent collapse the declaration exists to prevent.
+    #[serde(default, skip_serializing_if = "CycleCancellation::is_auto")]
+    pub cycle_cancellation: CycleCancellation,
     /// **Declared reliability role** (see [`TransitionKind`]): `failure`,
     /// `repair`, or absent (the default, and the reading of every model
     /// written before the field existed). Applies to the first declared
@@ -817,6 +859,12 @@ pub enum Feature {
     /// an event of the mission, and the sequence and importance analyses
     /// would cancel or invent failures without a word.
     MonitoredStates,
+    /// Transition-level [`Transition::cycle_cancellation`] other than
+    /// `auto`: the analyst forces or forbids the cancellation of a cycle
+    /// group. An engine that ignored it would cancel a group declared
+    /// `never`, and the minimal sequences would lose the failures the
+    /// declaration was there to keep, without a word.
+    CycleCancellation,
 }
 
 impl Feature {
@@ -831,6 +879,7 @@ impl Feature {
         Feature::ObserverPriority,
         Feature::InterfaceConnections,
         Feature::MonitoredStates,
+        Feature::CycleCancellation,
     ];
 
     /// Serialized name of the feature.
@@ -846,6 +895,7 @@ impl Feature {
             Feature::ObserverPriority => "observer_priority",
             Feature::InterfaceConnections => "interface_connections",
             Feature::MonitoredStates => "monitored_states",
+            Feature::CycleCancellation => "cycle_cancellation",
         }
     }
 
@@ -1933,6 +1983,15 @@ pub enum ModelError {
         /// What is wrong with the declaration.
         reason: String,
     },
+    /// A transition's [`Transition::cycle_cancellation`] is declared where
+    /// it cannot apply, or disagrees with another transition of its group.
+    #[error("transition `{transition}` declares `cycle_cancellation`, but {reason}")]
+    CycleCancellationInvalid {
+        /// `component.automaton.transition`.
+        transition: String,
+        /// What is wrong with the declaration.
+        reason: String,
+    },
     /// A distribution operator does not sit on an out port of its
     /// component.
     #[error(
@@ -2476,6 +2535,16 @@ impl Model {
             })
         }) {
             features.insert(Feature::MonitoredStates);
+        }
+        if self.components.iter().any(|component| {
+            component.automata.iter().any(|automaton| {
+                automaton
+                    .transitions
+                    .iter()
+                    .any(|t| !t.cycle_cancellation.is_auto())
+            })
+        }) {
+            features.insert(Feature::CycleCancellation);
         }
         if self
             .components
@@ -3607,6 +3676,7 @@ impl Model {
                 automaton.states.iter().map(String::as_str).collect(),
             );
         }
+        Self::check_cycle_cancellation(component)?;
 
         let mut function_names = HashSet::new();
         for function in &component.sensitive_functions {
@@ -3711,6 +3781,48 @@ impl Model {
             ports,
             automata,
         })
+    }
+
+    /// A [`Transition::cycle_cancellation`] other than `auto` sits on a
+    /// transition of a cycle group, and every transition of one
+    /// `(component, cycle_group)` declares the same value: the decision is
+    /// the group's, so two halves of it cannot disagree.
+    fn check_cycle_cancellation(component: &Component) -> Result<(), ModelError> {
+        let mut declared: HashMap<&str, (CycleCancellation, String)> = HashMap::new();
+        for automaton in &component.automata {
+            for transition in &automaton.transitions {
+                let qualified =
+                    || format!("{}.{}.{}", component.name, automaton.name, transition.name);
+                let Some(group) = transition.cycle_group.as_deref() else {
+                    if !transition.cycle_cancellation.is_auto() {
+                        return Err(ModelError::CycleCancellationInvalid {
+                            transition: qualified(),
+                            reason: "the transition has no `cycle_group`, so there is no \
+                                     cancellation to decide"
+                                .to_owned(),
+                        });
+                    }
+                    continue;
+                };
+                match declared.get(group) {
+                    Some((value, first)) if *value != transition.cycle_cancellation => {
+                        return Err(ModelError::CycleCancellationInvalid {
+                            transition: qualified(),
+                            reason: format!(
+                                "`{first}` of the same cycle group `{group}` declares \
+                                 another value; every transition of a group declares \
+                                 the same one"
+                            ),
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        declared.insert(group, (transition.cycle_cancellation, qualified()));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn check_automaton(component: &Component, automaton: &Automaton) -> Result<(), ModelError> {

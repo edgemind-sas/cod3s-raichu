@@ -234,6 +234,32 @@ fn switching_loops_json(model_json: &str) -> PyResult<String> {
     serde_json::to_string(&found).map_err(|e| ModelError::new_err(e.to_string()))
 }
 
+/// Per-group decisions of a model, as JSON: whether the minimal-sequence
+/// reduction may cancel each cycle group, per target, with the path that
+/// keeps it (see `raichu_core::cycle_groups`). Each entry gains a
+/// `messages` list, one line per target the group is kept for.
+#[pyfunction]
+fn cycle_groups_json(model_json: &str) -> PyResult<String> {
+    /// A decision with its one-line messages.
+    #[derive(serde::Serialize)]
+    struct Reported<'a> {
+        #[serde(flatten)]
+        decision: &'a raichu::raichu_core::CycleGroupDecision,
+        messages: Vec<String>,
+    }
+    let compiled = parse_and_compile(model_json)?;
+    // Read off the compiled model, where the analysis already ran.
+    let found: Vec<Reported<'_>> = compiled
+        .cycle_groups
+        .iter()
+        .map(|decision| Reported {
+            decision,
+            messages: decision.describe(),
+        })
+        .collect();
+    serde_json::to_string(&found).map_err(|e| ModelError::new_err(e.to_string()))
+}
+
 /// Unfed triggers of a model, as JSON: a mode sealed for the whole run
 /// by an in port no connection reaches.
 ///
@@ -498,7 +524,7 @@ fn analyse_sequences_json(
             stop_at_targets: false,
             flow,
         };
-        let mut reducer = SequenceReducer::new();
+        let mut reducer = SequenceReducer::with_cycle_groups(compiled.cycle_groups.clone());
         mc_run_sequences_streamed(&compiled, &config, &[], |replica, sequence, _| {
             reducer.push_indexed(replica, sequence);
             Ok::<_, EngineError>(())
@@ -618,7 +644,7 @@ impl ConditionalReduction {
             }
         };
         Ok(ConditionalReduction {
-            reducer: SequenceReducer::new(),
+            reducer: header.reducer(),
             condition,
             total: 0,
             kept: 0,
@@ -763,6 +789,7 @@ fn run_sequences_json(
             t_max,
             compiled.targets.iter().map(|t| t.name.clone()).collect(),
         )
+        .with_cycle_groups(compiled.cycle_groups.clone())
         .with_observations(
             asked
                 .iter()
@@ -1799,6 +1826,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validate_model, module)?)?;
     module.add_function(wrap_pyfunction!(prepare_fmu_export, module)?)?;
     module.add_function(wrap_pyfunction!(switching_loops_json, module)?)?;
+    module.add_function(wrap_pyfunction!(cycle_groups_json, module)?)?;
     module.add_function(wrap_pyfunction!(unfed_triggers_json, module)?)?;
     module.add_function(wrap_pyfunction!(required_features, module)?)?;
     module.add_function(wrap_pyfunction!(seal_model, module)?)?;

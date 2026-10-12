@@ -48,6 +48,7 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
                     monitored: false,
                     monitored_states: None,
                     cycle_group: None,
+                    cycle_cancellation: Default::default(),
                     kind: None,
                     effects: vec![],
                     distrib: Distrib::Delay { time: ttf },
@@ -61,6 +62,7 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
                     monitored: false,
                     monitored_states: None,
                     cycle_group: None,
+                    cycle_cancellation: Default::default(),
                     kind: None,
                     effects: vec![],
                     distrib: Distrib::Delay { time: ttr },
@@ -294,6 +296,7 @@ fn demand_model(ok_prob: f64) -> Model {
                     monitored: false,
                     monitored_states: None,
                     cycle_group: None,
+                    cycle_cancellation: Default::default(),
                     kind: None,
                     effects: vec![],
                     distrib: Distrib::Inst {

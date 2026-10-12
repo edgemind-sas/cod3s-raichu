@@ -37,7 +37,7 @@
 //! inconsistent ([`ReadExplorationError::AlgorithmVersion`]).
 
 use raichu_analysis::{minimal_sequences, ReductionReport, SequenceReducer};
-use raichu_core::{SeqEvent, Sequence};
+use raichu_core::{CycleGroupDecision, SeqEvent, Sequence};
 use raichu_model::TransitionKind;
 use serde::{Deserialize, Serialize};
 
@@ -446,6 +446,15 @@ pub struct ExplorationResult {
     /// its document, which therefore reads back unchanged).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discretisation: Option<Discretisation>,
+    /// The per-group decisions of the explored model, which the reduction
+    /// of this result applies (see [`raichu_core::cycle_groups`]). Absent
+    /// from a document written before 0.86.0, which then reduces with every
+    /// group cancelled. The `version` does not change, since it names the
+    /// algorithm: a reader older than 0.86.0 ignores the field and cancels
+    /// every group, so a result is re-reduced by the engine that wrote it
+    /// or a later one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle_groups: Option<Vec<CycleGroupDecision>>,
 }
 
 /// The discretisation a [`Algorithm::Discretised`] result was computed
@@ -546,7 +555,7 @@ impl ExplorationResult {
     /// mass, part of [`ExplorationResult::lower`].
     #[must_use]
     pub fn minimal_sequences(&self) -> (Vec<Sequence>, ReductionReport) {
-        let mut reducer = SequenceReducer::new();
+        let mut reducer = SequenceReducer::from_decisions(self.cycle_groups.as_deref());
         for (index, sequence) in self.to_sequences().into_iter().enumerate() {
             reducer.push_indexed(index as u64, sequence);
         }

@@ -64,8 +64,11 @@ temperature = attr("room", "temperature")
 A heater has two automata: its thermostat, whose two transitions are
 **watched** crossings of the room temperature, and its health, whose
 failure and repair are exponential. The pair is `monitored` and grouped
-in one `cycle_group`, so a sequence campaign records them and cancels a
-failure that was repaired before the feared event:
+in one `cycle_group`, so a sequence campaign records them. It does not
+cancel a heater failure repaired before the feared event: the room
+temperature integrates the missing heat, so the engine keeps the group
+(see `pyraichu.cycle_groups` in the
+[sequence-analysis guide](../guides/sequence-analysis.md)):
 
 ```python
 def heater(name, on_below, off_above, running):

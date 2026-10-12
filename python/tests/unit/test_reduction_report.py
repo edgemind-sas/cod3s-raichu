@@ -1,11 +1,15 @@
-"""The reduction's safety net, seen from Python.
+"""The reduction's safety net and per-group decision, seen from Python.
 
 Cancelling a failure repaired before the feared event assumes the repair
 undid its effect. In the model below it does not: the failure of `A` sets a
 latch that stays set, and the feared event needs the latch set and `A`
-repaired. Every trajectory reaches the event with its only failure repaired,
-so cancellation would leave it with no cause at all, an empty sequence that
-absorbs every other one. The net keeps those trajectories whole and says so.
+repaired. Every trajectory reaches the event with its only failure repaired.
+
+The per-group decision sees the latch and keeps `A`'s cycles. Declared
+`cycle_cancellation: always`, `A` is cancelled anyway: cancellation then
+leaves each trajectory with no cause at all, an empty sequence that would
+absorb every other one, and the safety net keeps those trajectories whole
+and says so.
 """
 
 import copy
@@ -109,8 +113,16 @@ NB_RUNS = 200
 T_MAX = 50.0
 
 
+def _forced(spec):
+    """`spec` with `A`'s cycle group declared always cancellable."""
+    spec = copy.deepcopy(spec)
+    for transition in spec["components"][0]["automata"][0]["transitions"]:
+        transition["cycle_cancellation"] = "always"
+    return spec
+
+
 def _model():
-    return pyraichu.load_model(LATCH)
+    return pyraichu.load_model(_forced(LATCH))
 
 
 def test_a_campaign_reports_the_trajectories_it_kept_whole(tmp_path):
@@ -177,7 +189,7 @@ def test_the_raw_corpus_carries_the_declared_kinds(tmp_path):
 
 def test_under_a_condition_the_report_names_replicas_of_the_corpus(tmp_path):
     # Skipping replicas must not shift the indices: they name corpus runs.
-    spec = copy.deepcopy(LATCH)
+    spec = _forced(LATCH)
     spec["components"][1]["attributes"] = [{"name": "set", "kind": "float", "init": {"kind": "float", "value": 0.0}}]
     spec["components"][1]["equations"] = [
         {
@@ -207,3 +219,58 @@ def test_under_a_condition_the_report_names_replicas_of_the_corpus(tmp_path):
     assert all(lines[i]["observed"] == [1] and lines[i]["end_cause"] == "feared" for i in indices)
     assert any(i >= kept for i in indices)
     assert pyraichu.analyse_raw_sequences(raw, condition=condition).reduction == campaign.reduction
+
+
+def test_the_per_group_decision_keeps_the_latched_failure():
+    (decision,) = pyraichu.cycle_groups(pyraichu.load_model(LATCH))
+    (target,) = decision["targets"]
+    assert decision["component"] == "A"
+    assert target["cancellable"] is False
+    assert target["origin"] == "analysis"
+    assert target["memory"] == "L.latch"
+    assert decision["messages"] and "L.latch" in decision["messages"][0]
+
+    campaign = pyraichu.run_sequences(pyraichu.load_model(LATCH), NB_RUNS, T_MAX, seed=3)
+    assert campaign.reduction["contradicted"] == 0
+    assert campaign.reduction["cycle_groups"][0]["targets"][0]["cancellable"] is False
+    # Kept, A's cycle stays in every reaching sequence.
+    assert all([(e["obj"], e["attr"]) for e in s["events"]] == [("A", "ko"), ("A", "ok")] for s in campaign.minimal)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", pyraichu.ReductionWarning)
+        assert pyraichu.analyse_sequences(pyraichu.load_model(LATCH), NB_RUNS, T_MAX, seed=3)
+
+
+def test_a_declaration_overrides_the_decision():
+    (decision,) = pyraichu.cycle_groups(_model())
+    assert decision["targets"][0]["cancellable"] is True
+    assert decision["targets"][0]["origin"] == "declared"
+
+
+def test_an_exploration_written_before_the_decisions_warns_when_reduced():
+    current = pyraichu.explore(pyraichu.load_model(LATCH), "feared", 5.0)
+    assert current.cycle_groups is not None
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", pyraichu.ReductionWarning)
+        current.minimal_sequences()
+
+    document = json.loads(current.to_json())
+    del document["cycle_groups"]
+    old = pyraichu.read_exploration(json.dumps(document))
+    assert old.cycle_groups is None
+    _, reduction = old.minimal_sequences_with_report()
+    assert reduction["cycle_groups"] is None
+    assert reduction["cycle_groups_unknown"] is True
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        old.minimal_sequences()
+    assert any("written before the per-group decisions" in str(w.message) for w in caught)
+
+
+def test_a_corpus_read_back_applies_the_decisions_it_carries(tmp_path):
+    raw = tmp_path / "raw.jsonl"
+    campaign = pyraichu.run_sequences(pyraichu.load_model(LATCH), NB_RUNS, T_MAX, seed=3, raw_path=raw)
+    reread = pyraichu.analyse_raw_sequences(raw)
+    assert reread.minimal == campaign.minimal
+    assert reread.reduction == campaign.reduction
+    assert reread.reduction["cycle_groups"][0]["targets"][0]["cancellable"] is False
+    assert all([(e["obj"], e["attr"]) for e in s["events"]] == [("A", "ko"), ("A", "ok")] for s in reread.minimal)

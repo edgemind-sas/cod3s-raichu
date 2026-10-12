@@ -254,6 +254,14 @@ The thermostat holds the room in its 15-20 band.
   precise `ModelError` at `load_model`, not a crash mid-run.
 - **The model is inspectable data.** `model.json` is the whole model;
   diff it, store it, generate it.
+- **Minimal sequences keep a failure whose effect lasts.** The
+  cod3s/PyCATSHOO sequence analysis cancels every failure repaired before
+  the feared event. RAICHU cancels a failure/repair cycle only when the
+  failure's effect does not outlive the repair (a storage it drained, a
+  band controller it switched), and never leaves a feared event without a
+  cause. On a model where every effect acts at once, the two answers are
+  the same; on one with a lasting effect they differ by design (see
+  [sequence analysis](../guides/sequence-analysis.md)).
 
 For the full modelling vocabulary, start at the
 [tutorial](../tutorial/01-first-model.md); for every field, the

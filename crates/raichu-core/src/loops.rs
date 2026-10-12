@@ -22,7 +22,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::compile::{CAllocation, CExpr, CStep, CompiledModel};
+use crate::compile::{CExpr, CompiledModel};
+use crate::dependency::{self, EdgeSet, Node};
 use raichu_expr::Value;
 
 /// One switching loop found in a compiled model.
@@ -68,21 +69,12 @@ impl SwitchingLoop {
     }
 }
 
-/// A node of the dependency graph: the graph is bipartite in kind, and
-/// mixing both in one index space is what gives the walk its
-/// transitivity for nothing.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Node {
-    Var(usize),
-    Aut(usize),
-}
-
 /// Every switching loop of `model`, in a deterministic order.
 ///
 /// Linear in the size of the tables: one pass to build the graph, one
 /// Tarjan pass over it. Called once at compile time.
 pub fn switching_loops(model: &CompiledModel) -> Vec<SwitchingLoop> {
-    let graph = build_graph(model);
+    let graph = dependency::build(model, EdgeSet::Decisions);
     let mut found = Vec::new();
     for component in strongly_connected(&graph, model) {
         let mut automata = BTreeSet::new();
@@ -129,100 +121,6 @@ pub fn switching_loops(model: &CompiledModel) -> Vec<SwitchingLoop> {
         });
     }
     found
-}
-
-/// Successors of every node: an automaton leads to what its guards read,
-/// a variable to what its defining expression reads.
-fn build_graph(model: &CompiledModel) -> HashMap<Node, Vec<Node>> {
-    let mut graph: HashMap<Node, Vec<Node>> = HashMap::new();
-
-    for transition in &model.transitions {
-        let Some(guard) = &transition.guard else {
-            continue;
-        };
-        let (vars, auts) = sensitivity(guard);
-        let entry = graph.entry(Node::Aut(transition.automaton)).or_default();
-        entry.extend(vars.into_iter().map(Node::Var));
-        // A guard reading another automaton's STATE is an edge of its
-        // own: the value it decides on need not pass through a variable.
-        entry.extend(auts.into_iter().map(Node::Aut));
-    }
-
-    let written = |target: usize, expr: &CExpr, graph: &mut HashMap<Node, Vec<Node>>| {
-        let (vars, auts) = sensitivity(expr);
-        let entry = graph.entry(Node::Var(target)).or_default();
-        entry.extend(vars.into_iter().map(Node::Var));
-        entry.extend(auts.into_iter().map(Node::Aut));
-    };
-
-    for step in &model.explicit {
-        match step {
-            CStep::Equation { target, expr } => written(*target, expr, &mut graph),
-            CStep::Allocate(allocation) => allocate_edges(allocation, &mut graph),
-            // Every member of a block is a function of the block's
-            // coefficient inputs: each member leads to everything the
-            // rows read (its own rows never read the other members, so
-            // a solved cycle no longer connects variables to each other
-            // here: the algebraic loop it came from is now a block).
-            CStep::Block(block) => {
-                for &target in &block.targets {
-                    for expr in &block.constants {
-                        written(target, expr, &mut graph);
-                    }
-                    for row in &block.coefficients {
-                        for (_, coefficient) in row {
-                            written(target, coefficient, &mut graph);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    for (target, expr) in &model.ode {
-        written(*target, expr, &mut graph);
-    }
-    for function in &model.functions {
-        for (target, expr) in &function.effects {
-            written(*target, expr, &mut graph);
-        }
-    }
-
-    for successors in graph.values_mut() {
-        successors.sort_by_key(|node| match node {
-            Node::Var(index) => (0, *index),
-            Node::Aut(index) => (1, *index),
-        });
-        successors.dedup_by_key(|node| match node {
-            Node::Var(index) => (0, *index),
-            Node::Aut(index) => (1, *index),
-        });
-    }
-    graph
-}
-
-/// What a distribution operator writes depends on what it has to give
-/// and on every demand competing for it, so each allocated attribute
-/// leads to both.
-fn allocate_edges(allocation: &CAllocation, graph: &mut HashMap<Node, Vec<Node>>) {
-    let (vars, auts) = sensitivity(&allocation.available);
-    for &target in &allocation.allocated {
-        let entry = graph.entry(Node::Var(target)).or_default();
-        entry.extend(vars.iter().copied().map(Node::Var));
-        entry.extend(auts.iter().copied().map(Node::Aut));
-        entry.extend(allocation.demands.iter().copied().map(Node::Var));
-    }
-}
-
-/// The variables and automata one expression reads.
-fn sensitivity(expr: &CExpr) -> (Vec<usize>, Vec<usize>) {
-    let mut vars = Vec::new();
-    let mut auts = Vec::new();
-    expr.collect_sensitivity(&mut vars, &mut auts);
-    vars.sort_unstable();
-    vars.dedup();
-    auts.sort_unstable();
-    auts.dedup();
-    (vars, auts)
 }
 
 /// Whether the automaton is entered and left at the **same** threshold on

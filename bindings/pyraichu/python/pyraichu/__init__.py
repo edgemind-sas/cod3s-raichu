@@ -38,6 +38,7 @@ from ._pyraichu import (
     seal_model,
     simulate_json,
     switching_loops_json,
+    cycle_groups_json,
     unfed_triggers_json,
     validate_exploration,
     validate_fault_tree_envelope,
@@ -108,6 +109,7 @@ __all__ = [
     "__version__",
     "analyse_raw_sequences",
     "analyse_sequences",
+    "cycle_groups",
     "expand_model",
     "exploration_domain",
     "explore",
@@ -624,16 +626,33 @@ class ReductionWarning(UserWarning):
 
 
 def _warn_reduction(reduction: dict[str, Any], full_report: str) -> None:
-    """Emit a :class:`ReductionWarning` when the reduction refused a cancellation;
-    ``full_report`` names where the caller finds the whole report."""
+    """Emit a :class:`ReductionWarning` when the reduction refused a cancellation,
+    or cancelled cycle groups without knowing whether it could; ``full_report``
+    names where the caller finds the whole report."""
     count = reduction["contradicted"]
     if count:
+        if reduction.get("cycle_groups") is None:
+            cause = "Either a repaired failure has a lasting effect in this model"
+        else:
+            cause = (
+                "Either a repaired failure has an effect the per-group decision does not see "
+                "(a latch or a counter a sensitive function keeps; declare "
+                "`cycle_cancellation: never` on its group)"
+            )
         warnings.warn(
             f"{count} trajectories (weight {reduction['contradicted_weight']:g}) reached a feared "
             "event that cancelling their repaired failures would leave without a cause; they were "
-            "reduced with their failure/repair cycles kept. Either a repaired failure has a lasting "
-            "effect in this model, or the feared event has a cause that no monitored transition "
-            f"records: {full_report} returns the full reduction report.",
+            f"reduced with their failure/repair cycles kept. {cause}, or the feared event has a "
+            f"cause that no monitored transition records: {full_report} returns the full "
+            "reduction report.",
+            ReductionWarning,
+            stacklevel=3,
+        )
+    if reduction.get("cycle_groups_unknown"):
+        warnings.warn(
+            "this input was written before the per-group decisions were recorded, so every cycle "
+            "group was cancelled, including any whose repaired failure has a lasting effect; "
+            "re-run the campaign or the exploration with this engine to apply them.",
             ReductionWarning,
             stacklevel=3,
         )
@@ -959,6 +978,7 @@ class Exploration:
     expanded_nodes: int
     imprecise_sequences: int
     discretisation: dict[str, Any] | None = None
+    cycle_groups: list[dict[str, Any]] | None = None
 
     @classmethod
     def _from_json(cls, text: str) -> Exploration:
@@ -968,6 +988,7 @@ class Exploration:
         fields["steps"] = table
         fields["sequences"] = [ExploredSequence._from_dict(s, table) for s in raw["sequences"]]
         fields["discretisation"] = raw.get("discretisation")
+        fields["cycle_groups"] = raw.get("cycle_groups")
         return cls(**fields)
 
     @property
@@ -994,6 +1015,8 @@ class Exploration:
         document["sequences"] = [s._to_dict() for s in self.sequences]
         if self.discretisation is not None:
             document["discretisation"] = self.discretisation
+        if self.cycle_groups is not None:
+            document["cycle_groups"] = self.cycle_groups
         text = json.dumps(document)
         if path is not None:
             Path(path).write_text(text, encoding="utf-8")
@@ -1926,6 +1949,30 @@ def switching_loops(model: Model) -> list[dict]:
     catches the same thing after the wait rather than before it.
     """
     return json.loads(switching_loops_json(model.json))
+
+
+def cycle_groups(model: Model) -> list[dict]:
+    """Whether the minimal-sequence reduction may cancel each cycle group
+    of ``model``, decided without simulating it.
+
+    The reduction drops a failure repaired before the feared event, on the
+    hypothesis that a repaired component no longer contributes. That fails
+    when the failure's effect is remembered: a storage drained during the
+    outage stays low after the repair. A group is **kept** (its whole
+    history stays in the sequences) for a target when its effect reaches
+    that target through a quantity that remembers it: an ODE, an FMU
+    output, a latch its own repair does not reset, a timer that survives an
+    interruption, or a stateful automaton such as a band controller.
+
+    Each entry carries ``component``, ``cycle_group``, ``automata``, and one
+    decision per target, ``{target, cancellable, origin, witness,
+    memory}``: ``origin`` is ``analysis`` or ``declared`` (a transition's
+    ``cycle_cancellation`` overrides the analysis), ``witness`` the path
+    from the group to the target and ``memory`` the quantity that remembers.
+    ``messages`` phrases each kept target in one line. A sequence campaign
+    reports the decisions it applied in ``SequenceCampaign.reduction``.
+    """
+    return json.loads(cycle_groups_json(model.json))
 
 
 def unfed_triggers(model: Model) -> list[dict]:

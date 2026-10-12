@@ -62,6 +62,7 @@ fn exponential_model(rate: f64) -> Model {
                     monitored: false,
                     monitored_states: None,
                     cycle_group: None,
+                    cycle_cancellation: Default::default(),
                     kind: None,
                     effects: vec![],
                     distrib: Distrib::Exp {

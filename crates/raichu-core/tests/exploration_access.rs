@@ -28,6 +28,7 @@ fn transition(name: &str, source: &str, targets: &[&str], distrib: Distrib) -> T
         monitored: false,
         monitored_states: None,
         cycle_group: None,
+        cycle_cancellation: Default::default(),
         kind: None,
         effects: vec![],
         distrib,

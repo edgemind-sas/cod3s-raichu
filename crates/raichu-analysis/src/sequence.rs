@@ -24,10 +24,10 @@
 //! every raw trajectory is distinct (its transient cycles differ), while
 //! the paths left once they are cancelled are few.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use raichu_core::{SeqEvent, Sequence};
+use raichu_core::{CycleGroupDecision, SeqEvent, Sequence};
 use raichu_model::TransitionKind;
 use serde::Serialize;
 
@@ -148,6 +148,11 @@ pub struct SequenceReducer {
     grouping: Grouping,
     report: ReductionReport,
     pushed: u64,
+    /// The cycle groups not to cancel, per end cause, computed from
+    /// [`ReductionReport::cycle_groups`] the first time a cause is met.
+    /// `None` for a cause whose decisions keep nothing, so the hot path
+    /// pays no lookup there.
+    kept: HashMap<Option<String>, Option<KeptGroups>>,
 }
 
 /// How many contradicted trajectories a [`ReductionReport`] identifies by
@@ -177,6 +182,17 @@ pub struct ReductionReport {
     /// replica index for a campaign or a raw corpus, the sequence index for
     /// an exploration.
     pub contradicted_indices: Vec<u64>,
+    /// The per-group decisions the reduction applied (see
+    /// [`raichu_core::cycle_groups`]): a group not cancellable for a
+    /// trajectory's end cause keeps every event. `None` when the reduction
+    /// did not know them, as for a corpus or an exploration written before
+    /// they were recorded: every group was then cancelled, the way earlier
+    /// engines did.
+    pub cycle_groups: Option<Vec<CycleGroupDecision>>,
+    /// Whether the decisions were unknown while some trajectory carried a
+    /// cycle group: the reduction then cancelled groups it could not vouch
+    /// for. Only ever true when [`ReductionReport::cycle_groups`] is `None`.
+    pub cycle_groups_unknown: bool,
 }
 
 impl ReductionReport {
@@ -190,10 +206,36 @@ impl ReductionReport {
 }
 
 impl SequenceReducer {
-    /// An empty reduction.
+    /// An empty reduction that knows no per-group decision: every cycle
+    /// group is cancelled, the reduction of engines before 0.86.0.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty reduction applying `decisions` when they are known, and
+    /// cancelling every group as [`SequenceReducer::new`] does when they
+    /// are not: the reduction of a corpus or an exploration that may
+    /// carry them.
+    #[must_use]
+    pub fn from_decisions(decisions: Option<&[CycleGroupDecision]>) -> Self {
+        match decisions {
+            Some(decisions) => Self::with_cycle_groups(decisions.to_vec()),
+            None => Self::new(),
+        }
+    }
+
+    /// An empty reduction applying the per-group decisions of the model
+    /// the trajectories came from ([`raichu_core::CompiledModel::cycle_groups`]).
+    #[must_use]
+    pub fn with_cycle_groups(decisions: Vec<CycleGroupDecision>) -> Self {
+        SequenceReducer {
+            report: ReductionReport {
+                cycle_groups: Some(decisions),
+                ..ReductionReport::default()
+            },
+            ..Self::default()
+        }
     }
 
     /// Add one trajectory, identified in the report by its push order
@@ -210,7 +252,27 @@ impl SequenceReducer {
     pub fn push_indexed(&mut self, index: u64, sequence: Sequence) {
         self.pushed += 1;
         let weight = sequence.weight;
-        let (sequence, contradicted) = cancel_cycles(sequence);
+        if self.report.cycle_groups.is_none()
+            && !self.report.cycle_groups_unknown
+            && sequence.events.iter().any(|e| e.cycle_group.is_some())
+        {
+            self.report.cycle_groups_unknown = true;
+        }
+        let kept = match &self.report.cycle_groups {
+            Some(decisions) => {
+                // The cause is cloned once per distinct cause, not per push.
+                if !self.kept.contains_key(&sequence.end_cause) {
+                    let groups = kept_groups(decisions, sequence.end_cause.as_deref());
+                    self.kept.insert(
+                        sequence.end_cause.clone(),
+                        (!groups.is_empty()).then_some(groups),
+                    );
+                }
+                self.kept.get(&sequence.end_cause).and_then(Option::as_ref)
+            }
+            None => None,
+        };
+        let (sequence, contradicted) = cancel_cycles(sequence, kept);
         if contradicted {
             self.report.contradicted(index, weight);
         }
@@ -255,7 +317,7 @@ impl SequenceReducer {
 pub fn filter_cycles(sequences: Vec<Sequence>) -> Vec<Sequence> {
     sequences
         .into_iter()
-        .map(|sequence| cancel_cycles(sequence).0)
+        .map(|sequence| cancel_cycles(sequence, None).0)
         .collect()
 }
 
@@ -274,27 +336,35 @@ fn may_cause(event: &SeqEvent) -> bool {
 /// empty or holds no possible cause while a declared failure was removed.
 /// The test runs on the kept set before anything is drained, so a refused
 /// cancellation costs no copy.
-fn cancel_cycles(mut seq: Sequence) -> (Sequence, bool) {
-    // For each (component, group) pair, the index of its last event (kept
-    // iff the pair has an odd count); every other grouped event is
-    // dropped. The component is part of the key so two DIFFERENT failure
-    // modes sharing an automaton name (e.g. every ObjFM's `fm__cc_1`) can
-    // never cancel each other.
+///
+/// `kept` names the `(component, group)` pairs not to cancel at all (the
+/// per-group decisions for this trajectory's end cause); their events all
+/// survive, the full history of the group.
+fn cancel_cycles(mut seq: Sequence, kept: Option<&KeptGroups>) -> (Sequence, bool) {
+    let is_kept = |ev: &SeqEvent, group: &str| {
+        kept.and_then(|kept| kept.get(ev.obj.as_str()))
+            .is_some_and(|groups| groups.contains(group))
+    };
+    // For each cancellable (component, group) pair, the index of its last
+    // event (kept iff the pair has an odd count); every other grouped
+    // event is dropped. The component is part of the key so two DIFFERENT
+    // failure modes sharing an automaton name (e.g. every ObjFM's
+    // `fm__cc_1`) can never cancel each other.
     let mut last: HashMap<(&str, &str), (usize, usize)> = HashMap::new();
-    for (i, ev) in seq.events.iter().enumerate() {
-        if let Some(g) = ev.cycle_group.as_deref() {
-            let entry = last.entry((ev.obj.as_str(), g)).or_insert((0, i));
-            entry.0 += 1;
-            entry.1 = i;
-        }
-    }
     // Whether each event survives, decided once: the scan below and the
     // drain both read it.
-    let mut survives: Vec<bool> = seq
-        .events
-        .iter()
-        .map(|ev| ev.cycle_group.is_none())
-        .collect();
+    let mut survives: Vec<bool> = Vec::with_capacity(seq.events.len());
+    for (i, ev) in seq.events.iter().enumerate() {
+        match ev.cycle_group.as_deref() {
+            Some(g) if !is_kept(ev, g) => {
+                let entry = last.entry((ev.obj.as_str(), g)).or_insert((0, i));
+                entry.0 += 1;
+                entry.1 = i;
+                survives.push(false);
+            }
+            _ => survives.push(true),
+        }
+    }
     for (count, idx) in last.values() {
         if count % 2 == 1 {
             survives[*idx] = true;
@@ -323,6 +393,21 @@ fn cancel_cycles(mut seq: Sequence) -> (Sequence, bool) {
     let mut flags = survives.into_iter();
     seq.events.retain(|_| flags.next().unwrap_or(true));
     (seq, false)
+}
+
+/// The cycle groups not to cancel, by component, then group: looked up by
+/// `&str` on the hot path, with no key to build.
+type KeptGroups = HashMap<String, HashSet<String>>;
+
+/// The groups not to cancel in a trajectory ending on `end_cause`.
+fn kept_groups(decisions: &[CycleGroupDecision], end_cause: Option<&str>) -> KeptGroups {
+    let mut kept = KeptGroups::new();
+    for decision in decisions.iter().filter(|d| !d.cancellable_for(end_cause)) {
+        kept.entry(decision.component.clone())
+            .or_default()
+            .insert(decision.cycle_group.clone());
+    }
+    kept
 }
 
 /// `short` is an ordered (non-contiguous) subsequence of `long`.
@@ -420,6 +505,7 @@ pub fn analyse(raw: Vec<Sequence>) -> Vec<Sequence> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use raichu_core::{DecisionOrigin, TargetDecision};
     use raichu_model::TransitionKind;
 
     /// Build a sequence: `events` are `(obj, attr, group)`, all at time 0.
@@ -685,7 +771,8 @@ mod tests {
             ],
         );
         let (_, report) = reduce(vec![horizon, nothing_recorded, one_failure_left]);
-        assert_eq!(report, ReductionReport::default());
+        assert_eq!(report.contradicted, 0);
+        assert!(report.contradicted_indices.is_empty());
     }
 
     #[test]
@@ -700,6 +787,113 @@ mod tests {
         assert_eq!(report.contradicted_weight, 150.0);
         assert_eq!(report.contradicted_indices.len(), CONTRADICTED_INDICES_CAP);
         assert_eq!(report.contradicted_indices[..3], [1, 3, 5]);
+    }
+
+    fn decision(
+        component: &str,
+        group: &str,
+        kept_for: &[&str],
+        targets: &[&str],
+    ) -> CycleGroupDecision {
+        CycleGroupDecision {
+            component: component.into(),
+            cycle_group: group.into(),
+            automata: vec![format!("{component}.life")],
+            targets: targets
+                .iter()
+                .map(|t| TargetDecision {
+                    target: (*t).into(),
+                    cancellable: !kept_for.contains(t),
+                    origin: DecisionOrigin::Analysis,
+                    witness: Vec::new(),
+                    memory: None,
+                })
+                .collect(),
+        }
+    }
+
+    /// `A` (kept for `T1` only) and `B` (always cancellable) each fail and
+    /// are repaired, then `C` fails for good.
+    fn two_cycles_then(cause: Option<&str>) -> Sequence {
+        kseq(
+            cause,
+            &[
+                ("A", "occ", Some("A"), F),
+                ("A", "rep", Some("A"), R),
+                ("B", "occ", Some("B"), F),
+                ("B", "rep", Some("B"), R),
+                ("C", "occ", Some("C"), F),
+            ],
+        )
+    }
+
+    fn reduced_with_decisions(sequence: Sequence) -> (Vec<(String, String)>, ReductionReport) {
+        let targets = ["T1", "T2"];
+        let mut reducer = SequenceReducer::with_cycle_groups(vec![
+            decision("A", "A", &["T1"], &targets),
+            decision("B", "B", &[], &targets),
+        ]);
+        reducer.push(sequence);
+        let report = reducer.report().clone();
+        (sig_of(&reducer.cleaned()[0]), report)
+    }
+
+    #[test]
+    fn a_group_kept_for_the_end_cause_keeps_its_whole_history() {
+        let (on_t1, report) = reduced_with_decisions(two_cycles_then(Some("T1")));
+        assert_eq!(
+            on_t1,
+            vec![
+                ("A".into(), "occ".into()),
+                ("A".into(), "rep".into()),
+                ("C".into(), "occ".into())
+            ]
+        );
+        assert_eq!(report.contradicted, 0);
+        assert_eq!(report.cycle_groups.as_ref().map(Vec::len), Some(2));
+        assert!(!report.cycle_groups_unknown);
+        // On T2, A is cancellable like B.
+        let (on_t2, _) = reduced_with_decisions(two_cycles_then(Some("T2")));
+        assert_eq!(on_t2, vec![("C".into(), "occ".into())]);
+    }
+
+    #[test]
+    fn a_trajectory_that_reached_no_target_cancels_every_group() {
+        let (none, _) = reduced_with_decisions(two_cycles_then(None));
+        assert_eq!(none, vec![("C".into(), "occ".into())]);
+    }
+
+    #[test]
+    fn without_decisions_every_group_is_cancelled_and_the_report_says_so() {
+        let mut reducer = SequenceReducer::new();
+        reducer.push(two_cycles_then(Some("T1")));
+        assert!(reducer.report().cycle_groups.is_none());
+        assert!(reducer.report().cycle_groups_unknown);
+        assert_eq!(
+            sig_of(&reducer.cleaned()[0]),
+            vec![("C".into(), "occ".into())]
+        );
+        // A corpus without any cycle group needs no decision.
+        let mut plain = SequenceReducer::new();
+        plain.push(kseq(Some("T1"), &[("C", "occ", None, F)]));
+        assert!(!plain.report().cycle_groups_unknown);
+    }
+
+    #[test]
+    fn the_safety_net_still_runs_on_the_groups_left_cancellable() {
+        // B is cancellable for T2 and is the only failure: cancelled, the
+        // trajectory would be left with the target's observation alone.
+        let mut reducer =
+            SequenceReducer::with_cycle_groups(vec![decision("B", "B", &[], &["T2"])]);
+        reducer.push(kseq(
+            Some("T2"),
+            &[
+                ("B", "occ", Some("B"), F),
+                ("B", "rep", Some("B"), R),
+                ("ER", "occ", Some("ER"), O),
+            ],
+        ));
+        assert_eq!(reducer.report().contradicted, 1);
     }
 
     /// The reduction up to 0.81.0: group, filter, group again.

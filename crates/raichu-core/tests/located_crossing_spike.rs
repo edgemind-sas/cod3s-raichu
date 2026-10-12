@@ -58,6 +58,7 @@ fn far_scheduled_automaton() -> Automaton {
             monitored: false,
             monitored_states: None,
             cycle_group: None,
+            cycle_cancellation: Default::default(),
             kind: None,
             effects: vec![],
             distrib: Distrib::Delay {
@@ -88,6 +89,7 @@ fn boundary_automaton(component: &str) -> Automaton {
             monitored: false,
             monitored_states: None,
             cycle_group: None,
+            cycle_cancellation: Default::default(),
             kind: None,
             effects: vec![],
             distrib: Distrib::Watched,

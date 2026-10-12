@@ -10,7 +10,7 @@ campaign, recompute its reduction, or filter it, without running it again.
 engine; `pyraichu.analyse_raw_sequences(path)` reads it back and reduces it
 with the engine's own pipeline.
 
-## `raichu.sequences`, version 1
+## `raichu.sequences`, version 2
 
 [JSON Lines](https://jsonlines.org): one JSON document per line, UTF-8.
 
@@ -19,7 +19,7 @@ with the engine's own pipeline.
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | string | always `"raichu.sequences"` |
-| `version` | integer | `1` |
+| `version` | integer | `2` (`1` before 0.86.0) |
 | `engine_version` | string | the engine version that ran the campaign |
 | `model` | string | the model's name |
 | `seed` | integer | the campaign's master seed |
@@ -27,6 +27,7 @@ with the engine's own pipeline.
 | `t_max` | number | the horizon |
 | `targets` | array of strings | the feared events the campaign stops at, in declaration order |
 | `event_fields` | array of strings | the positions of an event array: `["time", "obj", "attr", "cycle_group"]` |
+| `cycle_groups` | array of objects, optional | the per-group decisions of the model the campaign ran, which the reduction applies (see [Cycle-group decisions](#cycle-group-decisions)); absent from a version 1 corpus |
 | `observations` | array of objects, optional | what each trajectory's `observed` array holds, `{"name", "time"}` each; absent when nothing is observed (see [Observations](#observations)) |
 
 **Then one line per trajectory**, in replica order:
@@ -116,6 +117,26 @@ Both fields are optional within version 1: a corpus that observes nothing
 is written exactly as before, and a reader that predates them ignores them
 and still reads the trajectories right.
 
+## Cycle-group decisions
+
+The header's `cycle_groups` lists, for each `(component, cycle_group)` of
+the model, whether the reduction may cancel the group, per feared event
+(`pyraichu.cycle_groups` gives the same list from a model):
+
+| Field | Meaning |
+|---|---|
+| `component`, `cycle_group` | the group, as events name it (`obj` and the fourth position of an event array) |
+| `automata` | the automata whose transitions belong to it, by qualified name |
+| `targets` | one decision per feared event: `target`, `cancellable`, `origin` (`analysis` or `declared`), and when the analysis keeps the group, `witness` (the path from the group to the feared event) and `memory` (the quantity on it that remembers) |
+
+A group not cancellable for a trajectory's end cause keeps all its events
+in the cleaned level. A trajectory that reached no feared event cancels
+every group: it has no cause to keep, and keeping its history would make
+nearly every such trajectory a path of its own. The decisions are why this is version 2: a
+version 1 reader ignoring them would cancel every group, which is exactly
+what they prevent, so it refuses the corpus instead. A version 1 corpus
+carries none; it still reads, and reduces with every group cancelled.
+
 ## Reading rules
 
 A reader refuses a corpus whose `format` is not `"raichu.sequences"` or whose
@@ -123,15 +144,15 @@ A reader refuses a corpus whose `format` is not `"raichu.sequences"` or whose
 a trajectory count that is not the header's, and a trajectory whose
 `observed` values are not one per declared observation. Fields may be added
 to either kind of line without a new version as long as a reader that
-ignores them still reads the corpus right; a version 1 reader ignores
-fields it does not know.
+ignores them still reads the corpus right; a reader ignores fields it does
+not know.
 
 ## The three levels
 
 | Level | What it holds | Where it comes from |
 |---|---|---|
 | raw | one sequence per trajectory, every event, dates included | this file |
-| cleaned | trajectories grouped by their ordered events, transient failure/repair cycles removed, grouped again | `SequenceCampaign.cleaned` |
+| cleaned | trajectories grouped by their ordered events, the failure/repair cycles of cancellable groups removed, grouped again | `SequenceCampaign.cleaned` |
 | minimal | the cleaned sequences, each longer one absorbed into a shorter one it contains | `SequenceCampaign.minimal`, `analyse_sequences` |
 
 The weights of the cleaned level sum to `nb_runs`; the reduction from the raw
@@ -151,6 +172,8 @@ result reports these trajectories under `reduction`:
 | `contradicted` | how many trajectories kept their cycles for that reason |
 | `contradicted_weight` | their total weight (a trajectory count here) |
 | `contradicted_indices` | the replica indices of the first hundred, in replica order |
+| `cycle_groups` | the decisions the reduction applied, or `null` when it knew none (a version 1 corpus) |
+| `cycle_groups_unknown` | `true` when the decisions were unknown while some trajectory carried a cycle group: every group was then cancelled |
 
 Re-reducing a corpus gives the same report. A corpus written before 0.85.0
 carries no `kinds`, so only the first case is recognised on it: a

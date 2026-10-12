@@ -93,23 +93,18 @@ def ok(comp): return s(comp, "health", "ok")
 ```
 
 Each component that can fail carries the same `health` automaton, whose
-transitions are `monitored` so that sequence analysis records them. The
-compressors also give their pair a `cycle_group`, which is explained with
-the sequences below.
+transitions are `monitored` so that sequence analysis records them, and
+whose failure and repair form a `cycle_group`. Which of those groups the
+reduction may cancel is decided by the engine, as explained with the
+sequences below.
 
 ```python
-#: Failures that act at once: a failure repaired before the feared event
-#: did not cause it.
-IMMEDIATE = {"COMP_A", "COMP_B"}
-
 def health(name):
     mttf, mttr = LAWS[name]
     fail = {"name": "fail", "source": "ok", "targets": ["failed"], "distrib": "exp",
-            "rate": 1 / mttf, "kind": "failure", "monitored": True}
+            "rate": 1 / mttf, "kind": "failure", "monitored": True, "cycle_group": name}
     repair = {"name": "repair", "source": "failed", "targets": ["ok"], "distrib": "exp",
-              "rate": 1 / mttr, "kind": "repair", "monitored": True}
-    if name in IMMEDIATE:
-        fail["cycle_group"] = repair["cycle_group"] = name
+              "rate": 1 / mttr, "kind": "repair", "monitored": True, "cycle_group": name}
     return {"name": "health", "states": ["ok", "failed"], "init": "ok",
             "transitions": [fail, repair]}
 ```
@@ -320,24 +315,44 @@ sequences = pyraichu.analyse_sequences(model, nb_runs=1000, t_max=8760.0, seed=1
 ![Minimal sequences leading to the loss of supply, by share of the 1 000 trajectories](../assets/figures/example-h2-sequences-light.svg#only-light){ .figure }
 ![Minimal sequences leading to the loss of supply, by share of the 1 000 trajectories](../assets/figures/example-h2-sequences-dark.svg#only-dark){ .figure }
 
-**A `cycle_group` on the compressors only.** Sequence reduction
-removes a failure that was repaired before the feared event, on the
-hypothesis that a repaired component no longer contributes. That holds
-for a compressor, whose loss acts at once. It does not hold for the
-production chain, because the storage delays its effect. In 6 of the 421
-trajectories that lose supply, every failure had been repaired by then:
-the PV inverter comes back at 15:30, the electrolyser runs until 17:55 on
+**Which repaired failures still count.** Sequence reduction removes a
+failure that was repaired before the feared event, on the hypothesis
+that a repaired component no longer contributes. That holds for a
+compressor, whose loss acts at once. It does not hold for the production
+chain, because the storage delays its effect: in 6 of the 421
+trajectories that lose supply, every failure had been repaired by then.
+The PV inverter comes back at 15:30, the electrolyser runs until 17:55 on
 the afternoon sun with an empty battery, and the storage, down to 2.8 kg,
-runs dry at 23:50. Declared on the production chain, the hypothesis
-would reduce those trajectories to an **empty** sequence, which is
-contained in every other one and would absorb all 421. Since 0.85.0 the
-reduction refuses that cancellation, keeps those 6 trajectories whole and
-emits a `ReductionWarning`; up to 0.84.0 the analysis answered, silently,
-that no failure is needed. The safety net only catches a trajectory left
-with nothing: one whose repaired PV failure caused the loss while an
-unrelated compressor failure persisted would still be reduced to the
-compressor. The `cycle_group` therefore stays a modelling statement, made
-per component.
+runs dry at 23:50.
+
+The engine decides it from the model, before any run: a group is kept,
+its whole history staying in the sequences, when its effect reaches the
+feared event through a quantity that remembers it.
+
+```python
+for group in pyraichu.cycle_groups(model):
+    (decision,) = group["targets"]
+    kept = "cancellable" if decision["cancellable"] else f"kept, through {decision['memory']}"
+    print(f"{group['component']:7} {kept}")
+```
+
+```text
+BATT    kept, through ELEC.mode
+COMP_A  cancellable
+COMP_B  cancellable
+ELEC    kept, through STORE.level
+PV      kept, through ELEC.mode
+```
+
+The production chain is kept: the storage integrates what the
+electrolyser makes, and the electrolyser's mode switches on a band, so
+both remember a failure after its repair. Each decision also carries the
+path that justifies it (`decision["witness"]`), for instance
+`ELEC.health -> ELEC.h2 -> STORE.level -> USER.supply`. Up to 0.85.0 the
+same choice had to be made by hand, by declaring `cycle_group` on the
+compressors only; up to 0.84.0, declaring it on the production chain
+reduced those 6 trajectories to an empty sequence that absorbed all 421,
+and the analysis answered, silently, that no failure is needed.
 
 ## Reading the results
 

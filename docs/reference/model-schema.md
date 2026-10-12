@@ -294,7 +294,8 @@ automaton**. `init` must be one of `states`.
 | `guard` | [Expr](#expressions) | optional; must hold for the transition to be eligible |
 | `on_interruption` | `"reset"` \| `"resume"` \| `"continue"` | optional (default `reset`); see [below](#interruption-policy) |
 | `monitored` | bool | optional (default `false`); firing is recorded in the trajectory's [sequence](../guides/sequence-analysis.md) |
-| `cycle_group` | string | optional; failure/repair partners share it so transient cycles cancel in the sequence pipeline (paired per component) |
+| `cycle_group` | string | optional; failure/repair partners share it so transient cycles cancel in the sequence pipeline (paired per component), when the engine finds the group's effect does not outlive its repair (`pyraichu.cycle_groups`) |
+| `cycle_cancellation` | `"auto"` \| `"never"` \| `"always"` | optional (default `"auto"`: the engine decides); `"never"` keeps the group's cycles in the sequences, `"always"` cancels them whatever the analysis finds. Only on a transition with a `cycle_group`, the same value on every transition of the group. A value other than `"auto"` requires the feature `cycle_cancellation` |
 | `monitored_states` | array of string | optional (default: every target); the targets whose entry a `monitored` transition records, a non-empty subset of `targets`. A draw `rep → [occ, not_occ]` records `["occ"]`: a lost draw only parks the automaton and is not an event. Requires the feature `monitored_states` |
 | `kind` | `"failure"` \| `"repair"` | optional (default absent); the declared reliability role, see [Declared kind](#declared-kind) |
 | `effects` | array of Assignment | optional; written ONCE when the transition fires, see [Edge effects](#edge-effects) |
@@ -891,6 +892,7 @@ The Python helpers, all in `pyraichu`:
 | `observer_priority` | transition-level [declared kind](#declared-kind) `observation` |
 | `interface_connections` | model-level [interface connections](#interface-connection) |
 | `monitored_states` | transition-level [recorded targets](#transition) |
+| `cycle_cancellation` | transition-level [cycle-group cancellation override](#transition) |
 
 The transition-level [declared kind](#declared-kind) `failure` or
 `repair` is a **baseline** construct and has no feature name (the kind
