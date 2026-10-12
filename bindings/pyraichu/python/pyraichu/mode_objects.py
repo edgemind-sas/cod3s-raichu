@@ -69,8 +69,9 @@ def _one_shot_effects(fm: dict, spec: dict, pairs: tuple[tuple[str, str], ...]) 
     They are written ONCE, on the firing edge of the occurrence or of the
     return (a transition's `effects`), where the state effects are held
     while the state lasts. The plugin's expansion checks the shapes cod3s
-    itself refuses (common cause, an on-demand law, a behaviour with no
-    symmetric edge pair, a variable driven both ways)."""
+    itself refuses (1.21.0: a variable held and written once on the same
+    face, and, where common-cause combinations overlap on a target, the
+    shapes those combinations make ill-posed)."""
     for source, target in pairs:
         if fm.get(source):
             spec[target] = dict(fm[source])
@@ -410,13 +411,6 @@ def _translate_objfminst(fm: dict) -> dict:
     """Legacy on-demand dialect (`cls: ObjFMInst`): the same 3-state
     Bernoulli expansion as the native inst cell, under the historical
     failure/repair vocabulary and scalar per-order gammas."""
-    for key in ("failure_effects_trans", "repair_effects_trans", "occ_effects_trans", "not_occ_effects_trans"):
-        if fm.get(key):
-            raise TranslationError(
-                f"failure mode `{fm.get('fm_name', '<unnamed>')}`: `{key}` on an on-demand "
-                "(inst) mode: a one-shot effect on a branching draw edge is refused, "
-                "as cod3s refuses it (`_validate_trans_effects`)"
-            )
     where = f"failure mode `{fm.get('fm_name', '<unnamed>')}`"
     behaviour = fm.get("behaviour", "internal")
     expander = _on_demand_expander(True, behaviour)
@@ -445,6 +439,16 @@ def _translate_objfminst(fm: dict) -> dict:
     }
     if fm.get("repair_effects"):
         spec["repair_effects"] = dict(fm["repair_effects"])
+    # One-shot effects on the draw are guarded on the landed branch (cod3s
+    # 1.21.0, edgemind-sas/cod3s#9), so the facade no longer refuses them.
+    _one_shot_effects(
+        fm,
+        spec,
+        (
+            ("failure_effects_trans", "failure_effects_trans"),
+            ("repair_effects_trans", "repair_effects_trans"),
+        ),
+    )
     for cond in ("failure_cond", "repair_cond"):
         if cond in fm:
             spec[cond] = fm[cond]

@@ -4955,8 +4955,14 @@ def _refuse_a_pulse_on_a_reinitialized_gate(obj: dict, gates: set[tuple[str, str
     reinitialization, so it is only seen inside one fixpoint; here an edge
     write stays until something else writes the attribute, so the same
     declaration would latch where the reference forgets."""
+    from .plugin import _one_shot_shape
+
     for key in ("failure_effects_trans", "repair_effects_trans"):
         for variable in obj.get(key) or {}:
+            if _one_shot_shape(obj, variable) == "handback":
+                # Absorbed into the held clamp, whose rest is the initial
+                # value the gate is reinitialized to anyway.
+                continue
             for target in obj.get("targets") or []:
                 if (target, variable) in gates:
                     raise ComponentSpecError(

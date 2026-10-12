@@ -75,18 +75,17 @@ run the Monte-Carlo with `stop_at_targets=True`: see
 the two semantics. Each study indicator carries its own `measure`, and the
 declaration carries it too:
 
-- `nb-occurrences` → `IndicatorEstimate.nb_occurrences_mean` / `_std`:
-  the number of rises of the value from `<= 0` to `> 0` by each instant,
-  an active initial value counted as the first, which is what the
-  reference engine's `nb_visits` computation (the one cod3s selects for
-  this measure) returns on a muscadet model (with targets: the
-  probability the event occurred by each instant);
+- `nb-occurrences` → `IndicatorEstimate.zero_departures_mean` / `_std`:
+  the number of departures of the value from exactly `0` by each instant,
+  the initial state not counted, which is the reference engine's
+  `nb_visits` computation (the one cod3s selects for this measure) (with
+  targets: the probability the event occurred by each instant);
 - `sojourn-time` → `IndicatorEstimate.sojourn_mean` / `_std`, the signed
   time-integral of the value, the reference's `res_time` (with targets:
   mean time elapsed since the first occurrence);
 - `value` → `IndicatorEstimate.mean` / `std`, the sampled value;
-- `had_value` → `IndicatorEstimate.reached_mean` / `_std`: the
-  probability the value has been active at least once by each instant,
+- `had_value` → `IndicatorEstimate.nonzero_reached_mean` / `_std`: the
+  probability the value has been non-zero at least once by each instant,
   the initial value included. Per trajectory it stays at 1 after the
   value falls back, as the reference engine's `realized` computation
   does.
@@ -94,21 +93,21 @@ declaration carries it too:
 `pyraichu.muscadet.engine.MEASURE_SERIES` holds this map, and
 `MEASURE_EXTREMES` the `*_extremes` field each measure's `min` and `max`
 statistics read (`extremes`, `sojourn_extremes`,
-`nb_occurrences_extremes`, `reached_extremes`): the smallest and
+`zero_departures_extremes`, `nonzero_reached_extremes`): the smallest and
 the largest value that measure took across the replicas at each instant.
 A launcher imports them rather than restating them.
 
-The `zero_departures_*` and `nonzero_reached_*` series reproduce
-`nb_visits` and `realized` on a natively built PyCATSHOO model, where
-the value an indicator holds once the start methods have run is never
-counted. A muscadet model's `t = 0` value usually reaches the reference
-indicator after the start methods, as a departure from 0, which is why
-this route reads occurrences and reached. Measured on the COD3S platform
-(2026-10-02, 1000 replicas, a predicate true at `t = 0`):
-`nb-occurrences` 5.665 on PyCATSHOO, 5.701 on `nb_occurrences`, 4.701 on
-`zero_departures`. The reference count at `t = 0` depends on
-declaration order (a target declared after the source it reads directly
-is not counted); RAICHU's does not
+The initial state is the fixpoint of the deterministic interactions at
+`t = 0`, whatever the declaration order, and a predicate true there is
+not an occurrence; a transition firing at `t = 0`, a delay-0 initiating
+failure included, is one. That is muscadet's rule since 5.14.0
+(conformance point `initial_state_occurrence`) and RAICHU's since 0.92.0:
+measured on muscadet 5.14.1 (2026-10-12), a source feeding a target counts
+0 occurrences of "target fed" in both declaration orders, and a delay-0
+initiating failure 1 occurrence of "target not fed", on both engines. Up to
+0.91.0 this route read `nb_occurrences` and `reached`, which count a value
+active at the initial fixpoint as one occurrence, as muscadet up to 5.13.0
+did on most models
 ([Indicator measures](../pycatshoo/concept-mapping.md#indicator-measures)).
 
 ## Converting the outputs

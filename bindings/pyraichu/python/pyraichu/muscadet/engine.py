@@ -119,46 +119,49 @@ RUN_TARGETS = "targets"
 #:
 #: A study written through cod3s is defined against the reference engine's
 #: indicator computations, which cod3s selects per measure: ``nb-occurrences``
-#: is ``nb_visits`` and ``had_value`` is ``realized``. This route reads
-#: RAICHU's ``nb_occurrences`` and ``reached`` for them, which count an
-#: initially active value as one occurrence.
+#: is ``nb_visits`` and ``had_value`` is ``realized``. RAICHU's
+#: ``zero_departures`` and ``nonzero_reached`` are those two computations
+#: (measured on PyCATSHOO 1.3.8.0, 2026-10-02): the departures of the value
+#: from exactly 0, and whether it has been non-zero, the initial state
+#: included.
 #:
-#: Measured 2026-10-02 on PyCATSHOO 1.3.8.0. On a natively built model whose
-#: value is set by start methods, ``nb_visits`` never counts the value held
-#: once the start methods have run, and RAICHU's ``zero_departures`` /
-#: ``nonzero_reached`` reproduce ``nb_visits`` / ``realized`` there. A muscadet
-#: model is not that case: a flow's truth at t = 0 usually reaches its
-#: consumer through a sensitive method, and the reference runs sensitive
-#: methods once the start methods are done, so the t = 0 value reaches its
-#: indicator as a departure from 0, which ``nb_occurrences`` counts. On the
-#: platform study that showed it (1000 replicas, a predicate true at t = 0),
-#: ``nb-occurrences`` read 5.665 on PyCATSHOO, 5.701 on ``nb_occurrences``
-#: and 4.701 on ``zero_departures``. The reference count at t = 0 depends on
-#: declaration order: a consumer declared after a source it reads directly
-#: reads the truth in its own start method and the reference counts nothing,
-#: where RAICHU, which runs the initialisation to its fixpoint, counts one
-#: whatever the order. ``reached`` and ``nonzero_reached`` part only on a
-#: value that goes negative, which a boolean predicate never does.
+#: The initial state is the fixpoint of the deterministic interactions at
+#: t = 0, whatever the declaration order, and a predicate true there is not
+#: an occurrence; a transition firing at t = 0 is one. That is muscadet's
+#: rule since 5.14.0 (conformance point ``initial_state_occurrence``), and
+#: it is where RAICHU's change-point series starts: its first entry is the
+#: initial fixpoint, every later one the work of a transition. Measured
+#: 2026-10-12 against muscadet 5.14.1 (cod3s 1.21.0): a source feeding a
+#: target counts 0 occurrences of "target fed" in both declaration orders,
+#: and a delay-0 initiating failure counts 1 occurrence of "target not fed",
+#: on both engines.
+#:
+#: Up to pyraichu 0.91.0 this route read ``nb_occurrences`` and ``reached``,
+#: which count a value active at the initial fixpoint as one occurrence: what
+#: muscadet up to 5.13.0 did on most models, its truth reaching the indicator
+#: after the start methods (5.665 on PyCATSHOO, 5.701 on ``nb_occurrences``,
+#: 4.701 on ``zero_departures`` on the platform study of 2026-10-02), and
+#: what muscadet 5.14.0 stopped doing.
 #:
 #: ``sojourn-time`` is the reference ``res_time``, the signed time-integral of
 #: the value, and ``value`` its ``simple`` computation, the sampled value.
 #: Written once here so a launcher reading a muscadet study (the platform
 #: runner, the corpus benches) imports it rather than restating it.
 MEASURE_SERIES: dict[str, tuple[str, str]] = {
-    "nb-occurrences": ("nb_occurrences_mean", "nb_occurrences_std"),
+    "nb-occurrences": ("zero_departures_mean", "zero_departures_std"),
     "sojourn-time": ("sojourn_mean", "sojourn_std"),
     "value": ("mean", "std"),
-    "had_value": ("reached_mean", "reached_std"),
+    "had_value": ("nonzero_reached_mean", "nonzero_reached_std"),
 }
 
 #: A cod3s/muscadet study measure -> the ``Extremes`` field carrying its
 #: ``min`` and ``max`` over the replicas, on the same pairing as
 #: :data:`MEASURE_SERIES`.
 MEASURE_EXTREMES: dict[str, str] = {
-    "nb-occurrences": "nb_occurrences_extremes",
+    "nb-occurrences": "zero_departures_extremes",
     "sojourn-time": "sojourn_extremes",
     "value": "extremes",
-    "had_value": "reached_extremes",
+    "had_value": "nonzero_reached_extremes",
 }
 
 #: Run-parameter keys that describe HOW the reference engine draws its

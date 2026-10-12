@@ -107,7 +107,7 @@ the user manual V1.3.7.2 describes `res_time`, `nb_visits` and
 |---|---|---|
 | `simple` | value (`mean`, `std`, …) | identical |
 | `res_time` | sojourn (`sojourn_mean`, …) | identical: both integrate the value over time, sign included. A value held at 2 for 10 time units gives 20 on both |
-| `nb_visits` | zero departures (`zero_departures_mean`, …) | identical: both count the departures from exactly 0 to any non-zero value, a non-zero initial value not counted. RAICHU's own occurrences (`nb_occurrences_mean`, …) count every rise from ≤ 0 to > 0, an active initial value included: a state active from `t = 0` and never re-entered counts 0 departures and 1 occurrence |
+| `nb_visits` | zero departures (`zero_departures_mean`, …) | identical: both count the departures from exactly 0 to any non-zero value, a non-zero initial value not counted, a transition firing at `t = 0` counted. RAICHU's own occurrences (`nb_occurrences_mean`, …) count every rise from ≤ 0 to > 0, an active initial value included: a state active from `t = 0` and never re-entered counts 0 departures and 1 occurrence |
 | `realized` | non-zero reached (`nonzero_reached_mean`, …) | identical: 1 once the value has been non-zero, the initial value included. RAICHU's own reached (`reached_mean`, …) holds once the value has been positive |
 
 PyCATSHOO's `distribution` (bounded histogram) and `pctQuantile` restitutions,
@@ -116,18 +116,17 @@ an indicator computed by an arbitrary method and its restriction by
 state or a comparison.
 
 A study authored through cod3s or muscadet reads `nb-occurrences`
-(`nb_visits`) on occurrences and `had_value` (`realized`) on reached, not
-on the zero-departure pair (`pyraichu.muscadet.engine.MEASURE_SERIES`).
-`nb_visits` does not count the value an indicator holds once the start
-methods have run, and on a muscadet model the t = 0 value of a flow
-usually arrives after that, through a sensitive method: the reference
-then counts it as a departure from 0, as occurrences do. Measured on the
-COD3S platform (2026-10-02, 1000 replicas, a predicate true at `t = 0`):
-`nb-occurrences` 5.665 on PyCATSHOO, 5.701 on occurrences, 4.701 on zero
-departures. Where the consumer's own start method already reads the
-truth (a target declared after the source it reads directly), the
-reference counts nothing at `t = 0` and RAICHU counts one: the reference
-count at `t = 0` depends on declaration order, RAICHU's does not.
+(`nb_visits`) on zero departures and `had_value` (`realized`) on non-zero
+reached (`pyraichu.muscadet.engine.MEASURE_SERIES`). Since muscadet 5.14.0
+the reference settles the initial state to its fixpoint before anything
+counts, whatever the declaration order, so a predicate true there is no
+departure, and a transition firing at `t = 0` is one (conformance point
+`initial_state_occurrence`). RAICHU's series starts at the same fixpoint.
+Measured 2026-10-12 on muscadet 5.14.1: a source feeding a target counts 0
+in both declaration orders on both engines. Up to pyraichu 0.91.0 the
+route read occurrences and reached, which matched muscadet up to 5.13.0,
+where a flow's `t = 0` value usually reached its indicator after the start
+methods, and the reference count at `t = 0` depended on declaration order.
 
 ### Result files
 

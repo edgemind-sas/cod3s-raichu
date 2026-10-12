@@ -940,12 +940,14 @@ non-zero reached and never reached. On a state, a `predicate` or a `bool`
 attribute that starts inactive the two pairs coincide. Zero departures
 and non-zero reached are what the reference engine's `nb_visits` and
 `realized` computations return on a natively built model whose value is
-set by start methods. A cod3s or muscadet study reads its
-`nb-occurrences` and `had_value` measures on occurrences and reached
-instead, which is what those computations return on a muscadet model
+set by start methods, and a cod3s or muscadet study reads its
+`nb-occurrences` and `had_value` measures on them
 ([Platform import](../guides/platform-import.md#matching-the-studys-measures)).
-Entries the initial propagation records at the series' first date are
-part of the initial value. A result document written before these two
+The initial value is the series' first entry, the fixpoint the
+initialization reaches; a later entry dated `t = 0` is a transition
+firing at `t = 0` and counts as a departure, as it does on the reference
+(since 0.92.0; before, every entry dated at the first date was read as
+part of the initial value). A result document written before these two
 pairs existed reads back with them empty.
 
 `quantiles` are nearest-rank and computed only when requested

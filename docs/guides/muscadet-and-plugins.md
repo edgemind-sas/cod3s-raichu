@@ -814,16 +814,44 @@ absorbing. Three behaviours:
 
 **One-shot effects** (`failure_effects_trans` / `repair_effects_trans`,
 the platform's `occ_effects_trans` / `not_occ_effects_trans`) are written
-once, on the firing edge of the mode's own occurrence and repair
-transitions (a transition's `effects`), where `failure_effects` is held
-while the failure lasts. They latch a gate declared persistent
-(`fed_available_reset: false`): a detection set by a failure mode and
-cleared by the repair of another. The shapes cod3s refuses are refused
-here too, with its reasons: an on-demand law, `external_rep_indep`, a
-common cause, and a variable driven both as a level and as a pulse. A
-one-shot write on a gate that is reinitialized every step is refused as
-well: the reference undoes the pulse at the next step, where an edge
-write would keep it.
+once, when the failure or the repair happens (a transition's `effects`),
+where `failure_effects` is held while the failure lasts. They follow cod3s
+1.21.0 (edgemind-sas/cod3s#8 and #9):
+
+- `internal`: on each combination automaton's own occurrence and repair
+  edges, onto the targets that combination acts on;
+- `external` and `external_rep_indep`: on each target's mirror automaton,
+  so they fire when the target itself changes state (after the mode in
+  `external`, on the target's own repair in `external_rep_indep`);
+- on an on-demand draw: only when the draw lands in the state it writes
+  for (a lost draw parks without writing, the re-arm writes nothing); on a
+  timed edge after an on-demand failure, at every crossing.
+
+A variable held on one face and written once entering the **other** is
+accepted: typically a clamp held while failed and the nominal value
+handed back at the repair, on a variable that does not reinitialize (a
+discharge ceiling, a controller's `{output}_signal_available`). The held
+effect carries the pair on both of its branches, so several modes
+clamping one variable hold it while any of them is failed and hand it
+back with the last repair, as on the reference. The handed-back value
+must be the variable's initial value (another one would need a memory of
+whether the mode ever failed, and is refused by name). The mirror pair,
+held at rest and written once entering the failure, is accepted for a
+variable no other mode writes.
+
+Refused, with cod3s's reasons: a variable held and written once on the
+**same** face (the held value overwrites the write); and, where
+common-cause combinations overlap on a target (`internal`, several built
+orders), a write entering the failure on a variable held at rest, writes
+on both faces, and a variable held on both faces with different values
+(edgemind-sas/cod3s#4: the reference never settles). Refused here because
+the reference has no answer for them: two modes handing one variable back
+with different clamp values, and a hand-back beside a mode that clamps
+the same variable without handing it back. A one-shot write on a gate
+that is reinitialized every step is refused as well, the hand-back
+excepted (its value is the one the gate is reinitialized to): the
+reference undoes the pulse at the next step, where an edge write would
+keep it.
 
 **A held effect on a gate declared persistent** is an edge write too, since
 0.43.0. Measured on PyCATSHOO: nothing reinitializes such a gate, so the
@@ -833,7 +861,9 @@ writes the other polarity when the mode leaves it, and from t = 0, since the
 mode starts there. The expansion writes exactly that on the mode's own
 transitions. Two modes holding one such gate are refused (the reference has
 no fixpoint for them), and so are a common-cause mode and an on-demand draw
-holding it, which have no single edge to write on.
+holding it, which have no single edge to write on. None of these is refused
+when every writer hands the gate back at its repair: the held effect is then
+exact as it stands (see the one-shot effects above).
 
 Either direction may also carry an **on-demand** law
 (`{"law": "inst", "prob": …}`): one Bernoulli draw per rising edge of

@@ -397,6 +397,40 @@ def _target_init(model: dict, target: str, variable: str) -> dict | None:
     return None
 
 
+def _keep(target: str, variable: str) -> dict:
+    """The attribute's own current value: the branch of a guarded edge
+    write that writes nothing back (see :func:`_edge_effects`)."""
+    return {"op": "attr", "attr": {"component": target, "attribute": variable}}
+
+
+def _same_value(declared: dict, raw: Any) -> bool:
+    """Whether a declared ``{kind, value}`` initial value is `raw`, numbers
+    compared by value whatever their kind, a boolean only to a boolean."""
+    value = declared.get("value")
+    if isinstance(value, bool) or isinstance(raw, bool):
+        return isinstance(value, bool) and isinstance(raw, bool) and value == raw
+    return float(value) == float(raw)
+
+
+def _absorbed_pulses(
+    failure_effects: dict, repair_effects: dict, failure_pulses: dict, repair_pulses: dict
+) -> tuple[set, set]:
+    """The one-shot writes a held effect of the same mode absorbs, as
+    ``(failure, repair)`` variable sets.
+
+    A variable held on one face and written once on the OTHER (cod3s 1.20.0,
+    edgemind-sas/cod3s#8) is carried by the held effect alone, written on
+    both of its branches: the write is then the value the held effect
+    returns to, at the very edge that leaves its face, so it is not written
+    on the edge a second time. That is also what keeps the model valid
+    here, where an edge write beside a level writer of the same attribute
+    is refused (the next evaluation would erase it)."""
+    return (
+        set(failure_pulses) & (set(repair_effects) - set(failure_effects)),
+        set(repair_pulses) & set(failure_effects),
+    )
+
+
 def _reinit_effect(
     name: str,
     target: str,
@@ -404,19 +438,58 @@ def _reinit_effect(
     failure_effects: dict,
     repair_effects: dict,
     model: dict,
+    *,
+    failure_pulses: dict | None = None,
+    repair_pulses: dict | None = None,
 ) -> list[dict]:
     """Reinitialization effects for ONE target under a given `gate`: each
     attribute holds its failure value while `gate` is true, its rest-state
     value otherwise (an explicit ``repair_effects`` entry, else the declared
     initial value, else the boolean complement). `gate` is the OR of impacting
     combinations (internal / ObjFMInst) or the target's own mirror failure
-    state (external)."""
+    state (external).
+
+    **One-shot writes on the opposite face** (cod3s 1.20.0 / 1.21.0,
+    edgemind-sas/cod3s#8, #9). A variable that does not reinitialize on the
+    reference, held by the mode on one face and written once entering the
+    other, is carried by this same conditional:
+
+    * held while failed, handed back at the repair (``failure_effects`` +
+      ``repair_effects_trans``): the reference holds the clamp while ANY
+      writer is failed and the last repair writes the nominal value back,
+      so outside `gate` the variable is the handed-back value. It is the
+      rest branch, provided it is the variable's declared initial value,
+      which is what it is before any failure; another value would need a
+      memory of whether the mode ever failed, and is refused by name;
+    * held at rest, written once entering the failure (``repair_effects`` +
+      ``failure_effects_trans``): the rest value from t = 0 (a held effect
+      applies in the state the mode starts in), the written value while
+      failed.
+
+    The same face is refused upstream (:func:`_check_one_shot_effects`), and
+    the absorbed writes are not written on the edges (:func:`_absorbed_pulses`)."""
+    failure_pulses = failure_pulses or {}
+    repair_pulses = repair_pulses or {}
     effects = []
     for variable, fail_value in failure_effects.items():
-        if variable in repair_effects:
+        declared = _target_init(model, target, variable)
+        if variable in repair_pulses:
+            handed_back = _const(repair_pulses[variable])
+            if declared is not None and not _same_value(declared["value"], repair_pulses[variable]):
+                raise ValueError(
+                    f"ObjFM `{name}`: `{target}.{variable}` is held at "
+                    f"{fail_value!r} while failed and handed back once at the "
+                    f"repair (repair_effects_trans) at {repair_pulses[variable]!r}, "
+                    f"which is not its initial value {declared['value']['value']!r}. The "
+                    "variable would read one value before the first failure and "
+                    "another after the first repair, a memory this expansion "
+                    "does not carry: hand back the initial value"
+                )
+            otherwise = handed_back
+        elif variable in repair_effects:
             otherwise = _const(repair_effects[variable])
         else:
-            otherwise = _target_init(model, target, variable)
+            otherwise = declared
             if otherwise is None:
                 if isinstance(fail_value, bool):
                     otherwise = _const(not fail_value)
@@ -437,6 +510,20 @@ def _reinit_effect(
                 },
             }
         )
+    for variable, rest_value in repair_effects.items():
+        if variable in failure_effects or variable not in failure_pulses:
+            continue
+        effects.append(
+            {
+                "target": {"component": target, "attribute": variable},
+                "value": {
+                    "op": "if",
+                    "cond": gate,
+                    "then": _const(failure_pulses[variable]),
+                    "otherwise": _const(rest_value),
+                },
+            }
+        )
     return effects
 
 
@@ -447,6 +534,9 @@ def _reinit_effects(
     failure_effects: dict,
     repair_effects: dict,
     model: dict,
+    *,
+    failure_pulses: dict | None = None,
+    repair_pulses: dict | None = None,
 ) -> list[dict]:
     """Internal-mode reinitialization effects (shared by the internal ObjFM
     and ObjFMInst CCF expansions): per target, the gate is the OR over the
@@ -457,7 +547,14 @@ def _reinit_effects(
         if not gates:
             continue
         effects += _reinit_effect(
-            name, target, _bool_expr("or", gates), failure_effects, repair_effects, model
+            name,
+            target,
+            _bool_expr("or", gates),
+            failure_effects,
+            repair_effects,
+            model,
+            failure_pulses=failure_pulses,
+            repair_pulses=repair_pulses,
         )
     return effects
 
@@ -665,6 +762,10 @@ def _refuse_a_pulse_on_a_reinitialized_gate(specs: list[dict]) -> None:
             continue
         for key in ("failure_effects_trans", "repair_effects_trans"):
             for attribute in spec.get(key) or {}:
+                if _one_shot_shape(spec, attribute) == "handback":
+                    # Absorbed into the held clamp, whose rest is the
+                    # initial value the gate is reinitialized to anyway.
+                    continue
                 for target in spec.get("targets") or []:
                     flow = gates.get((target, attribute))
                     if flow is None:
@@ -741,7 +842,9 @@ def _latch_held_writes_on_persistent_gates(
     for spec in modes.values():
         failure = spec.get("failure_effects") or {}
         for variable in spec.get("repair_effects") or {}:
-            if variable in failure:
+            if variable in failure or _one_shot_shape(spec, variable) == "rest":
+                # Held at rest and written once entering the failure: the
+                # failure counterpart is the one-shot write.
                 continue
             for target in spec.get("targets") or []:
                 if (target, variable) in gates:
@@ -772,6 +875,17 @@ def _latch_held_writes_on_persistent_gates(
             continue
         component_name, attribute = key
         writers = sorted({mode for mode, _, _ in entries})
+        shapes = [_one_shot_shape(modes.get(mode) or {}, attribute) for mode, _, _ in entries]
+        if shapes and all(shape == "handback" for shape in shapes):
+            # Held while failed and handed back at the repair, by every
+            # writer (cod3s 1.20.0): the reference holds the clamp while any
+            # of them is failed and the last repair writes the initial value
+            # back, which the held conditional already says of a gate that
+            # memorises. Left as it is, and folded with the others by
+            # `_merge_reinit_writers`.
+            continue
+        if any(shapes) and len(entries) > 1:
+            _refuse_ill_posed_one_shot_sharing(component_name, attribute, entries, modes)
         if key in pulsed:
             raise ValueError(
                 f"muscadet plugin: the availability gate `{component_name}.{attribute}` "
@@ -851,6 +965,76 @@ def _latch_held_writes_on_persistent_gates(
             component["sensitive_functions"] = [f for f in functions if f.get("effects")]
 
 
+def _one_shot_shape(spec: dict, attribute: str) -> str | None:
+    """How a mode writes `attribute` when a one-shot write of its own is
+    absorbed into its held effect (:func:`_absorbed_pulses`): ``"handback"``
+    (held while failed, written back once at the repair), ``"rest"`` (held
+    at rest, written once entering the failure), ``None`` otherwise."""
+    if attribute in (spec.get("failure_effects") or {}) and attribute in (
+        spec.get("repair_effects_trans") or {}
+    ):
+        return "handback"
+    if (
+        attribute in (spec.get("repair_effects") or {})
+        and attribute not in (spec.get("failure_effects") or {})
+        and attribute in (spec.get("failure_effects_trans") or {})
+    ):
+        return "rest"
+    return None
+
+
+def _refuse_ill_posed_one_shot_sharing(
+    component_name: str, attribute: str, entries: list, modes: dict
+) -> None:
+    """Refuse the sharings of one attribute that have no answer on the
+    reference once one of its writers hands a value back (cod3s 1.20.0).
+
+    Several modes each holding a clamp while failed and handing the value
+    back at their repair converge on the reference: the clamp holds while
+    ANY of them is failed and the last repair hands it back, which is the
+    OR fold below. Three sharings do not:
+
+    * clamps of DIFFERENT values: two modes failed at once assert two
+      values, which is ill-posed whatever the repair writes (the COD3S
+      Platform refuses it);
+    * a hand-back beside a mode that holds the clamp without handing it
+      back: on a variable that does not reinitialize, which is what a
+      hand-back declares it to be, that other mode leaves its clamp behind
+      at its repair, a memory the fold here does not carry;
+    * a mode holding the variable at rest and writing it once entering the
+      failure, beside any other writer: the rest value it holds overwrites
+      whatever the other one writes."""
+    shapes = [_one_shot_shape(modes.get(mode) or {}, attribute) for mode, _, _ in entries]
+    if not any(shapes):
+        return
+    names = sorted({mode for mode, _, _ in entries})
+    where = f"`{component_name}.{attribute}` is written by the failure modes {names}"
+    if "rest" in shapes:
+        raise ValueError(
+            f"{where}, and one of them holds it at rest (repair_effects) and writes "
+            "it once entering the failure (failure_effects_trans): its held rest "
+            "value overwrites what any other writer sets, which has no fixpoint "
+            "on the reference. Keep that mode the variable's only writer"
+        )
+    if None in shapes:
+        raise ValueError(
+            f"{where}; some hold a clamp while failed and hand the value back once "
+            "at their repair (repair_effects_trans), others hold it without "
+            "handing it back. On a variable that does not reinitialize, which is "
+            "what a hand-back declares it to be, those others leave their clamp "
+            "behind at their repair on the reference: declare the hand-back on "
+            "every mode that clamps it"
+        )
+    clamps = {json.dumps(effect["value"]["then"], sort_keys=True) for _, _, effect in entries}
+    if len(clamps) > 1:
+        raise ValueError(
+            f"{where}, each holding a clamp while failed and handing it back at "
+            "its repair, with DIFFERENT clamp values: two of them failed at once "
+            "assert two values, which is ill-posed on the reference. Clamp the "
+            "variable at one value"
+        )
+
+
 def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
     """Give every reinitialized attribute exactly ONE writer, in place.
 
@@ -873,12 +1057,14 @@ def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
     if not sites:
         return
     claims = _reinit_claims(model, sites)
+    modes = {spec.get("name"): spec for spec in specs if spec.get("type") in ("ObjFM", "ObjFMInst")}
 
     dropped: set[int] = set()
     touched: list[dict] = []
     for (component_name, attribute), entries in claims.items():
         if len(entries) < 2:
             continue
+        _refuse_ill_posed_one_shot_sharing(component_name, attribute, entries, modes)
         values = [effect["value"] for _, _, effect in entries]
         for value in values:
             if not (isinstance(value, dict) and value.get("op") == "if"):
@@ -1397,52 +1583,129 @@ def _expand_objflow(spec: dict, model: dict) -> tuple[list[dict], list[dict], li
     ], [], []
 
 
-def _edge_effects(target: str, effects: dict) -> list[dict]:
+def _edge_effects(
+    targets: list[str], effects: dict, *, landed: dict | None = None
+) -> list[dict]:
     """A mode's one-shot effects as a transition's edge `effects`: each
-    `{attribute: value}` written once, on the target, when the edge fires."""
-    return [
-        {"target": {"component": target, "attribute": attribute}, "value": _const(value)}
-        for attribute, value in effects.items()
-    ]
+    `{attribute: value}` written once, on every target in `targets`, when
+    the edge fires.
+
+    `landed` guards the write on the state the edge lands in, for a
+    branching draw (cod3s 1.21.0, edgemind-sas/cod3s#9): edge effects are
+    applied after the state change, so on the branch that lands elsewhere
+    (a lost draw parking) the write keeps the attribute's own value and
+    moves nothing. On a timed or single-branch edge no guard is needed."""
+    written = []
+    for target in targets:
+        for attribute, value in effects.items():
+            if landed is None:
+                expression = _const(value)
+            else:
+                expression = {
+                    "op": "if",
+                    "cond": landed,
+                    "then": _const(value),
+                    "otherwise": _keep(target, attribute),
+                }
+            written.append(
+                {"target": {"component": target, "attribute": attribute}, "value": expression}
+            )
+    return written
+
+
+def _writers_per_target(behaviour: str, order_max: int, orders: list[int]) -> int:
+    """How many automata write one target's variables (cod3s 1.21.0
+    ``_validate_shared_target_effects``).
+
+    In the external behaviours every effect, held or one-shot, lives on the
+    target's single mirror automaton: one writer whatever the orders. In
+    ``internal`` each built order ``k`` puts ``C(n-1, k-1)`` combination
+    automata on every target, so order 1 alone, or order ``n`` alone, is the
+    single-target case and anything else overlaps."""
+    import math
+
+    if behaviour != "internal":
+        return 1
+    return sum(math.comb(order_max - 1, k - 1) for k in orders)
 
 
 def _check_one_shot_effects(
-    spec: dict, behaviour: str, failure_laws: list, repair_laws: list
+    spec: dict, behaviour: str, orders: list[int], *, what: str = "ObjFM"
 ) -> tuple[dict, dict]:
-    """The one-shot (trans-based) effects of an ObjFM, refused on the shapes
-    cod3s itself refuses (`ObjMode2S._validate_trans_effects`), with its
-    reasons: an on-demand law (a branching draw edge), a behaviour with no
-    symmetric edge pair, a common cause (the both-pulse desynchronises across
-    combinations), and a variable driven both as a level and as a pulse."""
+    """The one-shot (trans-based) effects of a mode, with the shapes cod3s
+    refuses (1.21.0, ``ObjMode2S._validate_trans_effects`` and
+    ``_validate_shared_target_effects``) refused for its reasons.
+
+    Accepted since cod3s 1.20.0 / 1.21.0 (edgemind-sas/cod3s#8, #9): every
+    behaviour, several targets, the on-demand (inst) law, and a variable
+    held on one face and written once on the OTHER (the hand-back of a
+    clamped value). Refused:
+
+    * a variable held and written once on the SAME face: the held effect,
+      re-applied while the state lasts, overwrites the write entering it;
+    * when combinations overlap on a target (``internal``, several built
+      orders, see :func:`_writers_per_target`): a write entering the
+      failure state on a variable held at rest (the combinations at rest
+      overwrite it), writes on both faces (one combination's repair clears
+      what another still in failure set), and a variable held on both
+      faces with different values (a combination failed and one at rest
+      assert opposite values: the reference never settles, cod3s#4, and
+      refuses it at construction since 1.21.0). The last one is refused
+      whether or not the mode carries a one-shot effect."""
     name = spec["name"]
+    held_failure = spec.get("failure_effects") or {}
+    held_repair = spec.get("repair_effects") or {}
     failure = dict(spec.get("failure_effects_trans") or {})
     repair = dict(spec.get("repair_effects_trans") or {})
-    if not (failure or repair):
+    same_face = sorted((set(held_failure) & set(failure)) | (set(held_repair) & set(repair)))
+    if same_face:
+        raise ValueError(
+            f"{what} `{name}`: {same_face} are driven by a held effect and a "
+            "one-shot effect on the SAME face (failure_effects with "
+            "failure_effects_trans, or repair_effects with repair_effects_trans): "
+            "the held value, re-applied while that state lasts, silently "
+            "overwrites the write entering it. Use distinct variables, or put "
+            "the one-shot write on the opposite face, as cod3s requires"
+        )
+    order_max = len(spec["targets"])
+    writers = _writers_per_target(behaviour, order_max, orders)
+    if writers < 2:
         return failure, repair
-    if any(_is_inst_law(law) for law in failure_laws + repair_laws if law is not None):
+    context = (
+        f"{what} `{name}` (behaviour `internal`, {order_max} targets, common-cause "
+        f"orders {orders} built): {writers} combination automata write each target"
+    )
+    held_rest = sorted(set(failure) & set(held_repair))
+    if held_rest:
         raise ValueError(
-            f"ObjFM `{name}`: one-shot effects on an on-demand (inst) law are "
-            "refused, as cod3s refuses them: a pulse on a branching draw edge"
+            f"{context}. {held_rest} are written once entering the failure state "
+            "(failure_effects_trans) and held at rest (repair_effects): the "
+            "combinations at rest covering the same target overwrite the write. "
+            "Use failure_effects for a value held while failed, as cod3s requires"
         )
-    if behaviour not in ("internal", "external"):
-        raise ValueError(
-            f"ObjFM `{name}`: one-shot effects need behaviour `internal` or "
-            f"`external`, not `{behaviour}`, which has no symmetric failure / "
-            "repair edge pair to carry them (as cod3s refuses it)"
-        )
-    if len(spec["targets"]) > 1:
-        raise ValueError(
-            f"ObjFM `{name}`: one-shot effects on a common-cause mode "
-            f"({len(spec['targets'])} targets) are refused, as cod3s refuses "
-            "them: the pulses desynchronise across combinations"
-        )
-    levels = set(spec.get("failure_effects") or {}) | set(spec.get("repair_effects") or {})
-    both = sorted(levels & (set(failure) | set(repair)))
+    both = sorted(set(failure) & set(repair))
     if both:
         raise ValueError(
-            f"ObjFM `{name}`: {both} are driven both as a level (held while "
-            "the state lasts) and as a one-shot write: the level overwrites the "
-            "pulse. Use distinct variables, as cod3s requires"
+            f"{context}. {both} are written once on both faces "
+            "(failure_effects_trans and repair_effects_trans): one combination's "
+            "repair would clear them while another combination covering the same "
+            "target is still failed. Hold the value while failed (failure_effects) "
+            "and hand it back with repair_effects_trans, or use behaviour "
+            "`external`, as cod3s requires"
+        )
+    conflicting = sorted(
+        variable
+        for variable in set(held_failure) & set(held_repair)
+        if held_failure[variable] != held_repair[variable]
+    )
+    if conflicting:
+        raise ValueError(
+            f"{context}. {conflicting} are held on both faces with different "
+            "values (failure_effects and repair_effects): a combination failed and "
+            "another at rest assert opposite values, which the reference never "
+            "settles (edgemind-sas/cod3s#4) and refuses. Hand the value back once "
+            "with repair_effects_trans, or drop repair_effects and let the "
+            "variable return to its initial value"
         )
     return failure, repair
 
@@ -1506,12 +1769,24 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
     )
     failure_laws += [None] * (order_max - len(failure_laws))
     repair_laws += [None] * (order_max - len(repair_laws))
-    # One-shot effects: written on the firing edges of the mode's own
-    # automaton, as cod3s wires them (`_wire_transition_effects` on the
-    # occurrence and on the return transition), whatever the behaviour.
-    failure_edge, repair_edge = _check_one_shot_effects(
-        spec, behaviour, failure_laws, repair_laws
+    # One-shot effects (cod3s 1.21.0). `internal`: written on the firing
+    # edges of each combination automaton, onto the targets that
+    # combination acts on, as cod3s wires them (`_wire_transition_effects`
+    # on the occurrence and on the return transition, guarded on the landed
+    # state for a draw). The external behaviours write them on each
+    # target's mirror automaton instead (below), so they fire when the
+    # target itself changes state (edgemind-sas/cod3s#8).
+    built_orders = [k for k in range(1, order_max + 1) if failure_laws[k - 1] is not None]
+    failure_edge, repair_edge = _check_one_shot_effects(spec, behaviour, built_orders)
+    absorbed_failure, absorbed_repair = _absorbed_pulses(
+        failure_effects, repair_effects, failure_edge, repair_edge
     )
+    edge_failure = {k: v for k, v in failure_edge.items() if k not in absorbed_failure}
+    edge_repair = {k: v for k, v in repair_edge.items() if k not in absorbed_repair}
+    if external:
+        mode_failure_edge, mode_repair_edge = {}, {}
+    else:
+        mode_failure_edge, mode_repair_edge = edge_failure, edge_repair
 
     automata = []
     impacting: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
@@ -1615,6 +1890,11 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                     cycle_group=aut_name,
                     kind=fm_fail_kind,
                 )
+                if mode_failure_edge:
+                    # The draw: written only when it lands in `occ`.
+                    transitions[-2]["effects"] = _edge_effects(
+                        carriers, mode_failure_edge, landed=_state_active(name, aut_name, occ)
+                    )
             else:
                 transitions.append(
                     {
@@ -1629,8 +1909,8 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 )
                 if fm_fail_kind is not None:
                     transitions[-1]["kind"] = fm_fail_kind
-                if failure_edge:
-                    transitions[-1]["effects"] = _edge_effects(targets[0], failure_edge)
+                if mode_failure_edge:
+                    transitions[-1]["effects"] = _edge_effects(carriers, mode_failure_edge)
             if repair_fields is not None:
                 transitions.append(
                     {
@@ -1645,8 +1925,8 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 )
                 if fm_repair_kind is not None:
                     transitions[-1]["kind"] = fm_repair_kind
-                if repair_edge:
-                    transitions[-1]["effects"] = _edge_effects(targets[0], repair_edge)
+                if mode_repair_edge:
+                    transitions[-1]["effects"] = _edge_effects(carriers, mode_repair_edge)
             elif inst_repair:
                 transitions += _inst_edge(
                     occ,
@@ -1658,6 +1938,12 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                     cycle_group=aut_name,
                     kind=fm_repair_kind,
                 )
+                if mode_repair_edge:
+                    # The return draw: written only when it lands in `rep`; a
+                    # lost draw parks, still failed, and writes nothing.
+                    transitions[-2]["effects"] = _edge_effects(
+                        carriers, mode_repair_edge, landed=_state_active(name, aut_name, rep)
+                    )
             automata.append(
                 {
                     "name": aut_name,
@@ -1680,7 +1966,14 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         # cod3s models omit repair_effects here (adding them hangs
         # the simulator on multi-order ObjFMs).
         effects = _reinit_effects(
-            name, targets, logical_occ, failure_effects, repair_effects, model
+            name,
+            targets,
+            logical_occ,
+            failure_effects,
+            repair_effects,
+            model,
+            failure_pulses=failure_edge,
+            repair_pulses=repair_edge,
         )
         functions = [{"name": "apply_effects", "effects": effects}] if effects else []
         component = {
@@ -1844,25 +2137,33 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         # group) key makes the pair unique per (target, ObjFM). The mirror
         # also carries the declared failure / repair kinds, for the same
         # reason: one occurrence counts once per target.
+        failure_transition = {
+            "name": failure_state,
+            "source": repair_state,
+            "targets": [failure_state],
+            "guard": _attr_is(name, ctrl, True),
+            "monitored": True,
+            "cycle_group": name,
+            "kind": "failure",
+            "distrib": "delay",
+            "time": 0.0,
+        }
+        # The one-shot effects ride on the mirror's own edges (cod3s 1.20.0,
+        # `_wire_target_transition_effects`): they fire when THIS target
+        # enters or leaves the failure state, after the mode automaton in
+        # `external` (the delay(0) follow) and on the target's own repair in
+        # `external_rep_indep`. Wired on the mode automaton, a repair write
+        # would fire while the target still holds its clamp and be lost.
+        if edge_failure:
+            failure_transition["effects"] = _edge_effects([target], edge_failure)
+        if edge_repair:
+            repair_transition["effects"] = _edge_effects([target], edge_repair)
         comp.setdefault("automata", []).append(
             {
                 "name": name,
                 "states": [repair_state, failure_state],
                 "init": repair_state,
-                "transitions": [
-                    {
-                        "name": failure_state,
-                        "source": repair_state,
-                        "targets": [failure_state],
-                        "guard": _attr_is(name, ctrl, True),
-                        "monitored": True,
-                        "cycle_group": name,
-                        "kind": "failure",
-                        "distrib": "delay",
-                        "time": 0.0,
-                    },
-                    repair_transition,
-                ],
+                "transitions": [failure_transition, repair_transition],
             }
         )
         effects = _reinit_effect(
@@ -1872,6 +2173,8 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
             failure_effects,
             repair_effects,
             model,
+            failure_pulses=failure_edge,
+            repair_pulses=repair_edge,
         )
         if effects:
             comp.setdefault("sensitive_functions", []).append(
@@ -1912,12 +2215,6 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
     internal CCF). A single scalar `gamma` with one target is the order-1
     special case (no suffix, automaton `fm`).
     """
-    if spec.get("failure_effects_trans") or spec.get("repair_effects_trans"):
-        raise ValueError(
-            f"ObjFMInst `{spec['name']}`: one-shot effects on an on-demand "
-            "(inst) mode are refused, as cod3s refuses them: a pulse on a "
-            "branching draw edge"
-        )
     import itertools
 
     name = spec["name"]
@@ -1979,6 +2276,20 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
             return "none", law
         return "timed", law
 
+    # One-shot effects (cod3s 1.21.0, edgemind-sas/cod3s#9): on the draw,
+    # written only when it lands in `occ` (a lost draw parks without a
+    # write, the re-arm carries none); on a timed repair at every crossing;
+    # on a return draw only when it lands in `rep`.
+    built_orders = [k for k in range(1, order_max + 1) if gamma_of(failure_specs[k - 1]) is not None]
+    failure_pulses, repair_pulses = _check_one_shot_effects(
+        spec, "internal", built_orders, what="ObjFMInst"
+    )
+    absorbed_failure, absorbed_repair = _absorbed_pulses(
+        failure_effects, repair_effects, failure_pulses, repair_pulses
+    )
+    failure_edge = {k: v for k, v in failure_pulses.items() if k not in absorbed_failure}
+    repair_edge = {k: v for k, v in repair_pulses.items() if k not in absorbed_repair}
+
     automata = []
     impacting: dict[str, list[tuple[str, str]]] = {t: [] for t in targets}
     # Armed occ PLUS the parked micro-state of an inst return draw: a lost
@@ -2032,6 +2343,10 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                     kind="failure",
                 ),
             ]
+            if failure_edge:
+                transitions[0]["effects"] = _edge_effects(
+                    carriers, failure_edge, landed=_state_active(name, aut_name, occ)
+                )
             if repair_kind == "timed":
                 transitions.append(
                     {
@@ -2045,6 +2360,8 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                         **repair_law,
                     }
                 )
+                if repair_edge:
+                    transitions[-1]["effects"] = _edge_effects(carriers, repair_edge)
             elif repair_kind == "inst":
                 # A Bernoulli return draw out of `occ`: the repair happens
                 # with probability `repair_gamma`, a lost draw parks in
@@ -2063,6 +2380,10 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
                     cycle_group=aut_name,
                     kind="repair",
                 )
+                if repair_edge:
+                    transitions[-2]["effects"] = _edge_effects(
+                        carriers, repair_edge, landed=_state_active(name, aut_name, rep)
+                    )
             automata.append(
                 {
                     "name": aut_name,
@@ -2083,7 +2404,14 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
     # the initial (or explicit repair) value otherwise:
     # identical to the internal CCF, hence the shared helper.
     effects = _reinit_effects(
-        name, targets, logical_occ, failure_effects, repair_effects, model
+        name,
+        targets,
+        logical_occ,
+        failure_effects,
+        repair_effects,
+        model,
+        failure_pulses=failure_pulses,
+        repair_pulses=repair_pulses,
     )
     functions = [{"name": "apply_effects", "effects": effects}] if effects else []
 

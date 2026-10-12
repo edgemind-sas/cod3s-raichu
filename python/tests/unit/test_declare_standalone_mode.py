@@ -415,10 +415,12 @@ def test_a_one_shot_effect_on_a_gate_reset_every_step_is_refused():
         declare.build_document(a_document(a_source(), a_block(), mode))
 
 
-def test_a_variable_driven_both_ways_is_refused():
-    """A level and a pulse on one variable: the level overwrites the pulse."""
+def test_a_variable_held_and_written_once_on_the_same_face_is_refused():
+    """A level and a pulse on one variable and one face: the level
+    overwrites the pulse (the opposite face is the hand-back, cod3s 1.20.0,
+    `test_one_shot_handback.py`)."""
     mode = a_delay_mode(failure_effects_trans={GATE: False})
-    with pytest.raises(Exception, match="driven both as a level"):
+    with pytest.raises(Exception, match="SAME face"):
         declare.build_document(a_document(a_source(), a_latching_block(), mode))
 
 
