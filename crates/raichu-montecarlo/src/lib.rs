@@ -494,17 +494,23 @@ fn nb_occurrences_at(points: &[(f64, Value)], instant: f64) -> f64 {
     count
 }
 
-/// The value a change-point series **starts** from: the last entry dated
-/// at the series' first date.
+/// The value a change-point series **starts** from: its first entry.
 ///
-/// The initial propagation may record more than one entry at that date
-/// (the declared value, then what the start-up fixpoint settles on); the
-/// trajectory starts from the settled one, so the moves between them are
-/// part of the initial value and not departures from it. `None` for an
-/// empty series.
+/// The engine records an indicator once the initialization axiom has run
+/// its sensitive functions to their fixpoint (`Engine::initialize`), so the
+/// first entry is that fixpoint, the initial state. Every later entry, an
+/// entry dated `0` included, is the work of a transition: a delay-0
+/// initiating failure fires at `t = 0` and is an event of the trajectory,
+/// not part of where it starts. That is muscadet's rule since 5.14.0
+/// (conformance point `initial_state_occurrence`), and the reference
+/// engine's: measured on PyCATSHOO 1.3.8.0 (cod3s 1.21.0, muscadet 5.14.1,
+/// 2026-10-12), `nb_visits` counts a delay-0 transition firing at `t = 0`
+/// as one departure, and a value already true once the start phase has
+/// settled as none. Up to 0.91.0 every entry dated at the first date was
+/// read as part of the initial value, which dropped those `t = 0` events.
+/// `None` for an empty series.
 fn initial_index(points: &[(f64, Value)]) -> Option<usize> {
-    let first = points.first()?.0;
-    Some(points.iter().take_while(|(t, _)| *t == first).count() - 1)
+    (!points.is_empty()).then_some(0)
 }
 
 /// Number of **departures from zero** up to `instant`: moves of the value
@@ -1874,20 +1880,25 @@ mod departure_tests {
     }
 
     #[test]
-    fn moves_at_the_first_date_are_part_of_the_initial_value() {
-        // The declared 0 then what the start-up fixpoint settles on, both at
-        // t = 0: the trajectory starts from 1, so no departure, but reached.
+    fn a_move_at_the_first_date_is_an_event_after_the_initial_value() {
+        // The first entry is the initial fixpoint; a later entry dated 0 is
+        // a transition firing at t = 0 (a delay-0 initiating failure), which
+        // the reference counts: PyCATSHOO `nb_visits` reads 1 at t = 0 on a
+        // flag a delay-0 transition raises (cod3s 1.21.0, 2026-10-12).
         let points = series(&[(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (2.0, -1.0)]);
-        assert_eq!(zero_departures_at(&points, 0.0), 0.0);
-        assert_eq!(zero_departures_at(&points, 1.5), 0.0);
-        assert_eq!(zero_departures_at(&points, 2.0), 1.0);
+        assert_eq!(zero_departures_at(&points, 0.0), 1.0);
+        assert_eq!(zero_departures_at(&points, 1.5), 1.0);
+        assert_eq!(zero_departures_at(&points, 2.0), 2.0);
         assert_eq!(nonzero_reached_at(&points, 0.0), 1.0);
-        // The other way round: a transient non-zero value the start-up
-        // fixpoint settles back to 0 was never the trajectory's value.
-        let points = series(&[(0.0, 1.0), (0.0, 0.0), (3.0, 2.0)]);
-        assert_eq!(nonzero_reached_at(&points, 2.0), 0.0);
-        assert_eq!(nonzero_reached_at(&points, 3.0), 1.0);
+        // A value true at the initial fixpoint is reached, never a departure.
+        let points = series(&[(0.0, 1.0), (1.0, 0.0), (3.0, 2.0)]);
+        assert_eq!(zero_departures_at(&points, 2.0), 0.0);
+        assert_eq!(nonzero_reached_at(&points, 0.0), 1.0);
         assert_eq!(zero_departures_at(&points, 3.0), 1.0);
+        // Left and entered again within one instant: two entries dated 1,
+        // one departure, as `nb_visits` counts a delay-0 re-entry.
+        let points = series(&[(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)]);
+        assert_eq!(zero_departures_at(&points, 1.0), 2.0);
     }
 
     #[test]
