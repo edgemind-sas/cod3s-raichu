@@ -69,6 +69,7 @@ fn ramp_model(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Model {
                     monitored: false,
                     monitored_states: None,
                     cycle_group: None,
+                    cycle_cancellation: Default::default(),
                     kind: None,
                     effects: vec![],
                     distrib: Distrib::Watched,

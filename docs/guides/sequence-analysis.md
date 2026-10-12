@@ -112,8 +112,9 @@ flowchart LR
 2. **Cancel transient cycles**: a failure that was repaired *before*
    the feared event did not cause it: paired failure/repair events of
    the same mode are removed (per component, so distinct modes never
-   cancel each other). A trajectory this would leave without a cause
-   keeps its cycles (see below).
+   cancel each other), unless the engine decided that the mode's effect
+   outlives its repair, or the cancellation would leave the trajectory
+   without a cause (see below).
 3. **Group**: trajectories left with the same ordered event signature
    merge; weights add up and dates are averaged.
 4. **Minimal absorption**: a sequence that contains a shorter reaching
@@ -140,29 +141,85 @@ the cleaned paths and their weights, never on the order they were reduced
 in.
 
 **When a repaired failure still counts.** Step 2 assumes that a repair
-undoes the failure's effect. A continuous state can keep it: a storage that
-drained while a producer was down stays low after the repair, and the
-feared event can come hours later with every failure repaired. Cancelled,
-such a trajectory would have no cause left: nothing at all, or only the
-feared event's own observation. Either sequence is contained in every other
-one, so step 4 would absorb the whole campaign into it, and the analysis
-would answer that no failure is needed.
+undoes the failure's effect. A quantity that remembers can keep it: a
+storage that drained while a producer was down stays low after the repair,
+and the feared event can come hours later with every failure repaired.
+Cancelled, such a trajectory would have no cause left: nothing at all, or
+only the feared event's own observation. Either sequence is contained in
+every other one, so step 4 would absorb the whole campaign into it, and the
+analysis would answer that no failure is needed.
 
-A feared event cannot happen without a cause, so the reduction refuses that
-cancellation: a trajectory that reached a feared event and that
-cancellation would leave empty, or with only repairs and observations while
-a declared failure was cancelled, keeps its cycles. The declared roles come
-from each transition's `kind` (the muscadet plugin declares them); an event
+The engine therefore decides, per cycle group and per feared event, before
+any run, whether step 2 may cancel the group. A group is **kept**, its whole
+history staying in the sequences, when its effect reaches the feared event
+through a quantity that remembers it:
+
+- an ODE, which integrates what it reads;
+- an FMU output, whose state the engine cannot see;
+- an attribute a transition effect writes, unless the group's own repair
+  restores its initial value;
+- a timer that survives an interruption (`on_interruption: resume` or
+  `continue`);
+- an automaton on the way, such as a controller switching on a band or a
+  protection that trips and stays tripped. Exempt are another monitored
+  cycle group, whose persistence the sequence records as its own events,
+  and an automaton entered and left at once on a condition and its
+  negation, whose state follows its inputs.
+
+`pyraichu.cycle_groups(model)` shows the decisions with the path that
+justifies each one, and a campaign reports the ones it applied in
+`campaign.reduction["cycle_groups"]`. On the
+[hydrogen installation](../examples/h2-installation.md) the compressors are
+cancellable and the production chain is kept, through the storage.
+
+What the analysis cannot see is a latch or a counter kept by a sensitive
+function. A transition declares `cycle_cancellation: never` for that: its
+group is then never cancelled. `always` forces the cancellation instead,
+when the analyst knows the effect is gone; `auto`, the default, lets the
+engine decide. Every transition of a group declares the same value, and a
+value other than `auto` needs the `cycle_cancellation` feature.
+
+A last check backs the decision up. A trajectory that reached a feared
+event and that cancellation would still leave empty, or with only repairs
+and observations while a declared failure was cancelled, keeps its cycles:
+a feared event cannot happen without a cause. The declared roles come from
+each transition's `kind` (the muscadet plugin declares them); an event
 whose transition declares none is counted as a possible cause.
-`analyse_sequences` emits a `pyraichu.ReductionWarning` when some trajectory
-kept its cycles, and `run_sequences` reports them in `campaign.reduction`:
-their number, their weight, and the replica indices of the first hundred.
+`analyse_sequences` emits a `pyraichu.ReductionWarning` when that happens,
+since it means a memory the decision did not see or a feared event with an
+unmonitored cause, and `run_sequences` reports those trajectories in
+`campaign.reduction`: their number, their weight, and the replica indices of
+the first hundred.
 
-The net catches only the trajectories left with no cause at all. One whose
-cancellation removes the failure that caused the event but leaves an
-unrelated one still reads wrongly; declare `cycle_group` only on failures
-whose effect ends with the repair. Up to 0.84.0 the collapse happened
-silently.
+Two limits remain. A kept group keeps its whole history in the
+trajectories that reach the feared event, so the cleaned level holds more
+distinct paths; a trajectory that reached no feared event cancels every
+group, having no cause to keep. Measured on 2026-10-12 (seed 1, one
+thread per core, `cycle_group` on every component):
+
+| Model, replicas | Every group cancelled | With the decision |
+|---|---|---|
+| heated room (90 days), 1 000 | 7 paths, 90 MB | 112 paths, 92 MB |
+| heated room (90 days), 10 000 | 7 paths, 105 MB | 553 paths, 123 MB |
+| heated room (90 days), 100 000 | 7 paths, 109 MB | 2 847 paths, 222 MB |
+| hydrogen installation (1 year), 1 000 | 35 paths, 45 MB | 181 paths, 46 MB |
+| hydrogen installation (1 year), 10 000 | 115 paths, 61 MB | 1 042 paths, 79 MB |
+| hydrogen installation (1 year), 100 000 | 622 paths, 79 MB | 4 968 paths, 183 MB |
+
+The paths grow about five times for ten times the replicas, and the run
+time does not move (the reduction is not where a campaign spends it: 422 s
+against 430 s on the heated room at 100 000 replicas, 4 033 s against
+4 045 s on the hydrogen installation). The minimal level holds as many
+sequences in both columns (3 on the heated room, 6 on the hydrogen
+installation); on the hydrogen installation, with every group cancelled,
+736 of the 100 000 trajectories are contradicted and reported, none with
+the decision. A
+trajectory can also be absorbed into an earlier failure of a kept group
+whose effect had already died out. And importance
+measures read the failures active at the feared event, independently of
+`cycle_group`: a repaired failure with a lasting effect is still invisible
+to them. Up to 0.84.0 the collapse happened silently; 0.85.0 added the last
+check, 0.86.0 the decision.
 
 ## Keeping the raw corpus
 

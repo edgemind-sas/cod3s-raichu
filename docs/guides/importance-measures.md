@@ -301,6 +301,12 @@ post-processing is as visible as it will ever be, 32 000 replicas of a
 - The basic events take the automaton from the trajectories the engine
   records. A `raichu.sequences` corpus carries it (its `automata` field),
   except one written before 0.83.0, which names none.
+- A cut is the set of basic events active at the feared event. A failure
+  repaired before it is therefore in no cut, even when its effect lasts
+  (a storage drained during the outage): the minimal sequences keep such
+  a failure (see [sequence analysis](sequence-analysis.md)), the
+  importance measures do not see it. The `q_cuts` against `q_target` gap
+  of the completeness diagnostic is where it shows.
 
 ## References
 

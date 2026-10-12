@@ -159,7 +159,11 @@ fn a_reader_refuses_what_it_cannot_trust() {
     ));
 
     let mut newer = lines.clone();
-    newer[0] = newer[0].replace("\"version\":1", "\"version\":2");
+    newer[0] = newer[0].replace(
+        &format!("\"version\":{RAW_SEQUENCES_VERSION}"),
+        &format!("\"version\":{}", RAW_SEQUENCES_VERSION + 1),
+    );
+    assert_ne!(newer[0], lines[0]);
     assert!(matches!(
         read_text(&newer.join("\n")),
         Err(RawSequencesError::Format(_))
@@ -261,4 +265,33 @@ fn the_kinds_field_is_optional_and_checked() {
         matches!(error, RawSequencesError::Format(ref m) if m.contains("gives 1 kinds for 2 events")),
         "{error}"
     );
+}
+
+/// Version 2 carries the per-group decisions the reduction applies; a
+/// version 1 corpus carries none and reads with them unknown.
+#[test]
+fn the_header_carries_the_cycle_group_decisions() {
+    let compiled = compiled();
+    assert_eq!(compiled.cycle_groups.len(), 2);
+    let raw = run_sequences(&compiled, &config(None)).unwrap();
+    let header = header().with_cycle_groups(compiled.cycle_groups.clone());
+    let mut bytes = Vec::new();
+    write_raw_sequences(&mut bytes, &header, &raw).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(text.starts_with(&format!(
+        "{{\"format\":\"raichu.sequences\",\"version\":{RAW_SEQUENCES_VERSION}"
+    )));
+    let (read_header, _) = read_raw_sequences(text.as_bytes()).unwrap();
+    assert_eq!(
+        read_header.cycle_groups,
+        Some(compiled.cycle_groups.clone())
+    );
+    assert!(read_header.reducer().report().cycle_groups.is_some());
+
+    let v1 = r#"{"format":"raichu.sequences","version":1,"engine_version":"0.85.0","model":"m","seed":1,"nb_runs":1,"t_max":1.0,"targets":[],"event_fields":["time","obj","attr","cycle_group"]}
+{"run":0,"end_cause":null,"end_time":1.0,"events":[[0.5,"A","ko","life"]]}
+"#;
+    let (old, _) = read_raw_sequences(v1.as_bytes()).unwrap();
+    assert!(old.cycle_groups.is_none());
+    assert!(old.reducer().report().cycle_groups.is_none());
 }

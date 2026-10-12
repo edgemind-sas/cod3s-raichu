@@ -1,4 +1,4 @@
-//! The **raw sequence corpus** as an artefact: `raichu.sequences`, version 1.
+//! The **raw sequence corpus** as an artefact: `raichu.sequences`, version 2.
 //!
 //! A sequence campaign records one [`Sequence`] per trajectory, in replica
 //! order, and the analysis ([`crate::sequence::analyse`]) reduces them to the
@@ -11,7 +11,7 @@
 //! [JSON Lines](https://jsonlines.org): one JSON document per line, UTF-8.
 //!
 //! - **Line 1, the header** ([`RawHeader`]): `format` (`"raichu.sequences"`),
-//!   `version` (`1`), `engine_version`, `model`, `seed`, `nb_runs`, `t_max`,
+//!   `version` (`2`), `engine_version`, `model`, `seed`, `nb_runs`, `t_max`,
 //!   `targets` (the feared events the campaign stops at), and `event_fields`,
 //!   the names of the positions of an event array (`["time", "obj", "attr",
 //!   "cycle_group"]`).
@@ -46,24 +46,36 @@
 //! **condition** on the trajectories ([`ObservedCondition`]): keep only
 //! those whose observed value satisfies it, before the reduction.
 //!
+//! # Cycle-group decisions (version 2)
+//!
+//! The header's optional `cycle_groups` carries the per-group decisions of
+//! the model the campaign ran ([`raichu_core::cycle_groups`]): which cycle
+//! groups the reduction may cancel, per feared event. A re-reduction reads
+//! them from here, since it has no model. They are why this is version 2:
+//! a version 1 reader would ignore them and cancel every group, which is
+//! exactly the collapse they prevent, so it must refuse the corpus instead.
+//! A version 1 corpus carries none: it reads, and reduces as before.
+//!
 //! A reader refuses another `format` and a `version` above the one it knows.
 //! Fields may be added to either kind of line without a new version as long
-//! as a reader that ignores them still reads the corpus right; a v1 reader
-//! ignores what it does not know.
+//! as a reader that ignores them still reads the corpus right, and a reader
+//! ignores what it does not know. The decisions are the one field that
+//! failed that test, hence version 2.
 
 use std::io::{BufRead, Write};
 
 use raichu_expr::CmpOp;
 use serde::{Deserialize, Serialize};
 
-use raichu_core::{SeqEvent, Sequence};
+use crate::sequence::SequenceReducer;
+use raichu_core::{CycleGroupDecision, SeqEvent, Sequence};
 use raichu_model::TransitionKind;
 
 /// The `format` of a raw sequence corpus.
 pub const RAW_SEQUENCES_FORMAT: &str = "raichu.sequences";
 
 /// The version this module writes, and the highest it reads.
-pub const RAW_SEQUENCES_VERSION: u32 = 1;
+pub const RAW_SEQUENCES_VERSION: u32 = 2;
 
 /// The positions of an event array, in order.
 const EVENT_FIELDS: [&str; 4] = ["time", "obj", "attr", "cycle_group"];
@@ -93,6 +105,11 @@ pub struct RawHeader {
     /// (and absent from the file) when the campaign observed nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub observations: Vec<RawObservation>,
+    /// The per-group decisions of the model the campaign ran, which the
+    /// reduction applies; `None` (and absent from the file) when the
+    /// writer did not know them, as in every version 1 corpus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle_groups: Option<Vec<CycleGroupDecision>>,
 }
 
 /// One observed quantity: an attribute's value at one instant of every
@@ -110,7 +127,8 @@ pub struct RawObservation {
 }
 
 impl RawHeader {
-    /// A version-1 header.
+    /// A header of the version this module writes, with no observation
+    /// and no cycle-group decision.
     #[must_use]
     pub fn new(
         engine_version: &str,
@@ -131,7 +149,23 @@ impl RawHeader {
             targets,
             event_fields: EVENT_FIELDS.iter().map(|f| (*f).to_owned()).collect(),
             observations: Vec::new(),
+            cycle_groups: None,
         }
+    }
+
+    /// The same header, carrying the per-group decisions the reduction of
+    /// this corpus applies.
+    #[must_use]
+    pub fn with_cycle_groups(mut self, decisions: Vec<CycleGroupDecision>) -> Self {
+        self.cycle_groups = Some(decisions);
+        self
+    }
+
+    /// An empty reduction of this corpus: it applies the corpus's
+    /// per-group decisions when the header carries them.
+    #[must_use]
+    pub fn reducer(&self) -> SequenceReducer {
+        SequenceReducer::from_decisions(self.cycle_groups.as_deref())
     }
 
     /// The same header, declaring what each trajectory's `observed` array

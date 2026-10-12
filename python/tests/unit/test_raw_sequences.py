@@ -70,7 +70,8 @@ def test_the_raw_corpus_holds_a_header_and_one_line_per_replica(tmp_path):
     assert len(lines) == NB_RUNS + 1
     header = json.loads(lines[0])
     assert header["format"] == "raichu.sequences"
-    assert header["version"] == 1
+    assert header["version"] == 2
+    assert [g["component"] for g in header["cycle_groups"]]
     assert header["engine_version"] == pyraichu.__version__
     assert header["model"] == "redundant_pair"
     assert (header["seed"], header["nb_runs"], header["t_max"]) == (42, NB_RUNS, T_MAX)

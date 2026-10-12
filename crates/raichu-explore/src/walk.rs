@@ -834,6 +834,7 @@ pub(crate) fn assemble(
         expanded_nodes: expanded,
         imprecise_sequences,
         discretisation: None,
+        cycle_groups: Some(model.cycle_groups.clone()),
     }
 }
 

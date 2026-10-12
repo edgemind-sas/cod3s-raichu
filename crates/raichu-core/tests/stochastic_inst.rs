@@ -36,6 +36,7 @@ fn demand_model(ok_prob: f64) -> Model {
                     monitored: false,
                     monitored_states: None,
                     cycle_group: None,
+                    cycle_cancellation: Default::default(),
                     kind: None,
                     effects: vec![],
                     distrib: Distrib::Inst {
@@ -137,6 +138,7 @@ fn three_way_branching_covers_every_target() {
                     monitored: false,
                     monitored_states: None,
                     cycle_group: None,
+                    cycle_cancellation: Default::default(),
                     kind: None,
                     effects: vec![],
                     distrib: Distrib::Inst {

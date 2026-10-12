@@ -293,6 +293,7 @@ fn completed_instants_hide_transient_score_peaks() {
             monitored: false,
             monitored_states: None,
             cycle_group: None,
+            cycle_cancellation: Default::default(),
             kind: None,
             effects: vec![],
             distrib: raichu_model::Distrib::Delay { time: 0.0 },

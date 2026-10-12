@@ -543,6 +543,15 @@ the report: how many retained sequences kept their cycles, their indices in
 `result.sequences`, their probability mass, and that mass as a share of
 `result.lower`.
 
+The reduction also applies the per-group decisions of the explored model
+(see [sequence analysis](sequence-analysis.md)), which the result carries in
+`result.cycle_groups` and its document in `cycle_groups`. A document written
+before 0.86.0 carries none: it is reduced with every group cancelled, and
+`minimal_sequences()` warns. The format `version` does not change, since it
+names the algorithm, so an engine older than 0.86.0 reading a newer document
+ignores the decisions: re-reduce a result with the engine that wrote it, or a
+later one.
+
 An exploration result is **not** a valid input to any post-processing
 that replays dated trajectories (reading the state of the model at
 chosen instants, for example). The exact exploration chooses the order

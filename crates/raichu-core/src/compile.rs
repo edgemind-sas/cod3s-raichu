@@ -8,9 +8,9 @@
 use crate::flow::CPolicy;
 use raichu_expr::{AggOp, AttrRef, BoolOp, CmpOp, Expr, PortRef, Value};
 use raichu_model::{
-    AlgebraicBlock, Allocation, AllocationPolicy, Distrib, EquationKind, IndicatorTarget,
-    InterruptionPolicy, Model, ModelError, PortDir, ProgramSense, ProgramTieBreak, SingularReason,
-    TransitionKind,
+    AlgebraicBlock, Allocation, AllocationPolicy, CycleCancellation, Distrib, EquationKind,
+    IndicatorTarget, InterruptionPolicy, Model, ModelError, PortDir, ProgramSense, ProgramTieBreak,
+    SingularReason, TransitionKind,
 };
 use raichu_numeric::LuFactorization;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -59,7 +59,7 @@ pub enum CompileError {
 
 /// A compiled expression: same shape as [`Expr`] but with every
 /// reference resolved to dense indices.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CExpr {
     /// Literal constant.
     Const(Value),
@@ -219,6 +219,9 @@ pub struct CTransition {
     pub monitored_states: Option<Vec<StateIdx>>,
     /// Cycle-pair group id (occ/rep partners share it; sequence analysis).
     pub cycle_group: Option<String>,
+    /// Whether the reduction may cancel this transition's group
+    /// ([`raichu_model::Transition::cycle_cancellation`]).
+    pub cycle_cancellation: CycleCancellation,
     /// Declared reliability role, if any
     /// ([`raichu_model::Transition::kind`]): it applies to the first entry
     /// of [`CTransition::targets`] only, the declared order being kept.
@@ -654,6 +657,14 @@ pub struct CompiledModel {
     /// (see [`crate::triggers`]). Never a refusal either: the model is
     /// valid and runs, it is only almost always an oversight.
     pub unfed_triggers: Vec<crate::triggers::UnfedTrigger>,
+    /// Whether the minimal-sequence reduction may cancel each cycle group,
+    /// per target (see [`crate::cycle_groups`]).
+    ///
+    /// Computed once here like `switching_loops`, so the decision is part
+    /// of the model a campaign or an exploration runs, and the reduction
+    /// applies it without reading the model again. Never a refusal: a
+    /// kept group is the right answer for a failure whose effect lasts.
+    pub cycle_groups: Vec<crate::cycle_groups::CycleGroupDecision>,
     /// Indices of watched transitions (monitored during continuous
     /// evolution, never date-scheduled).
     pub watched: Vec<TransIdx>,
@@ -1772,6 +1783,7 @@ impl CompiledModel {
                         monitored: transition.monitored,
                         monitored_states,
                         cycle_group: transition.cycle_group.clone(),
+                        cycle_cancellation: transition.cycle_cancellation,
                         kind: transition.kind,
                         effects,
                         distrib: distribution,
@@ -2315,6 +2327,7 @@ impl CompiledModel {
             automaton_index,
             switching_loops: Vec::new(),
             unfed_triggers: Vec::new(),
+            cycle_groups: Vec::new(),
         };
         // Structural diagnostics come last, on the finished tables. A
         // warning and never a refusal: the loop itself is legitimate, and
@@ -2331,6 +2344,14 @@ impl CompiledModel {
         compiled.unfed_triggers = crate::triggers::unfed_triggers(model);
         for found in &compiled.unfed_triggers {
             tracing::warn!(model = %compiled.name, "{}", found.describe());
+        }
+        // Not a warning: a kept group is the right reduction for a failure
+        // whose effect lasts, and the analyst reads it in the report.
+        compiled.cycle_groups = crate::cycle_groups::cycle_groups(&compiled);
+        for decision in &compiled.cycle_groups {
+            for line in decision.describe() {
+                tracing::info!(model = %compiled.name, "{line}");
+            }
         }
         Ok(compiled)
     }

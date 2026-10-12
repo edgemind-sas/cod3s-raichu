@@ -26,6 +26,8 @@
 //!   deterministic and single-threaded so replays are exact.
 
 pub mod compile;
+pub mod cycle_groups;
+mod dependency;
 pub mod engine;
 pub mod fault_tree;
 pub mod flow;
@@ -35,6 +37,7 @@ pub mod triggers;
 pub use compile::{
     CIndicator, CIndicatorTarget, CompileError, CompiledModel, MarginIndex, WatchedIdx,
 };
+pub use cycle_groups::{cycle_groups, CycleGroupDecision, DecisionOrigin, TargetDecision};
 pub use engine::{
     CoSimulationHost, DeferredProbe, DeferredTransition, DropReason, Engine, EngineConfig,
     EngineError, Event, Fireable, FireableKind, FlowConfig, FlowStall, FmuProvenance, HazardSample,
