@@ -92,10 +92,13 @@ def run(system, t_max, instants):
 SCENARIOS = {
     # Upstream, unbounded claim: the source gives all it has, the rule
     # draws k*d, the volume rises at S - k*d = 3 and is full at 10/3.
+    # With room left the claim is unbounded, as muscadet publishes it
+    # (`inf` on the demand variable), crossing as UNBOUNDED_SERVICE.
     "in_fill_inf": (
         "in", 5.0, None, 0.0, 10.0,
-        {1.0: (3.0, 1.0, 5.0, 5.0), 2.0: (6.0, 1.0, 5.0, 5.0),
-         3.0: (9.0, 1.0, 5.0, 5.0), 5.0: (10.0, 1.0, 2.0, 2.0),
+        {1.0: (3.0, 1.0, 5.0, mu.UNBOUNDED_SERVICE),
+         2.0: (6.0, 1.0, 5.0, mu.UNBOUNDED_SERVICE),
+         3.0: (9.0, 1.0, 5.0, mu.UNBOUNDED_SERVICE), 5.0: (10.0, 1.0, 2.0, 2.0),
          9.0: (10.0, 1.0, 2.0, 2.0)},
     ),
     # Downstream, unbounded claim: the rule runs at S/k = 2.5, the

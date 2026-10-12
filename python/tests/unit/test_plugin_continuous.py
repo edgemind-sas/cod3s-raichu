@@ -297,7 +297,7 @@ def test_the_plugin_and_the_builder_write_one_document():
 
     A second implementation of any of those five would show up here as a
     difference, because none of them is a detail the engine forgives: the
-    netting between two consumers, the allocation operator's parameters
+    channels between two consumers, the allocation operator's parameters
     and the three-band sweep order are all part of the answer.
     """
     plugin = expanded(declared())
@@ -329,14 +329,17 @@ def test_the_plugin_document_is_not_trivially_equal():
     assert ("R", "duty_scale") in targets  # the rule set
     assert ("W", "cross_moved") in targets  # the transfer pair
     assert ("W", "vol_level") in targets  # the measurement channel
-    # And the netting an isolated object could not write: what T publishes
-    # to D1 is its capability less what D2 was allocated.
-    netted = next(
+    # And the per-edge material an isolated object could not write: what
+    # T is asked on the edge serving D1 is D1's own demand.
+    asked = next(
         equation
         for equation in tank["equations"]
-        if equation["target"] == "product_out__capability__D1__product_in"
+        if equation["target"] == "product_out__demand__D1__product_in"
     )
-    assert json.dumps(netted).count("product_out__alloc__D2__product_in") == 1
+    assert asked["expr"] == {
+        "op": "attr",
+        "attr": {"component": "D1", "attribute": "product_demand_in"},
+    }
     assert len(body["evaluation_order"]) > 40
 
 

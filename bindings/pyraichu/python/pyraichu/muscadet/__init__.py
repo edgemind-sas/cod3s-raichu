@@ -47,8 +47,9 @@ along it again. Per continuous flow ``f``:
 
 The per-connection quantities live in the out port's ``demand``,
 ``capability`` and ``alloc`` channels, so a producer hands each
-consumer its own share and publishes to each what remains once the
-others are accounted for.
+consumer its own share. The capability is published whole to every
+consumer, as muscadet sums it (R-20): what each receives is the
+split's to decide, and what a rule makes is bounded by that receipt.
 
 Capacities (mirroring `muscadet/capacity.py`) buffer one or more of
 those flows in a shared volume. Per capacity ``c`` holding flow ``f``:
@@ -1321,16 +1322,16 @@ def _weighted_fill(component: str, capacity: _Capacity) -> dict[str, Any]:
 
 
 def _fill_claim(
-    capacity: _Capacity, asked: dict[str, Any], capability: dict[str, Any]
+    capacity: _Capacity, asked: dict[str, Any], unbounded: dict[str, Any]
 ) -> dict[str, Any]:
     """What a volume with room asks for: `asked`, plus its `fill_rate`.
 
-    An unbounded fill rate is "whatever the producer can deliver", which
-    a document cannot carry as an infinity: the published `capability`
-    is that quantity, and `asked` still gets through when it exceeds it.
-    A fill rate of zero claims nothing beyond `asked`."""
+    An unbounded fill rate is "whatever there is", which a document
+    cannot carry as an infinity: `unbounded` stands for it, and `asked`
+    still gets through when it exceeds it. A fill rate of zero claims
+    nothing beyond `asked`."""
     if capacity.fill_rate == float("inf"):
-        return {"op": "max", "args": [asked, capability]}
+        return {"op": "max", "args": [asked, unbounded]}
     if capacity.fill_rate:
         return {"op": "add", "args": [asked, _float(capacity.fill_rate)]}
     return asked
@@ -1767,6 +1768,10 @@ class ObjFlow:
     #: it: set by :meth:`_build`, read afterwards by the system's sweep
     #: order and release as well, and empty on a component never built.
     _mixture_sources: Mapping[str, _MixtureSource] = MappingProxyType({})
+    #: The continuous inputs at least one connection feeds, set by
+    #: :meth:`_build`: what the rules may draw of a wired input is what
+    #: its suppliers allocated it (:meth:`_draw_budget`).
+    _wired_in: frozenset[str] = frozenset()
 
     def __init__(self, name: str):
         self.name = name
@@ -3535,7 +3540,14 @@ class ObjFlow:
         # claims for ITSELF is not capped, and rightly: that is the
         # `fill_rate` below, a claim the ceiling has nothing to say about.
         base = {"op": "min", "args": [base, self._capacity_ceiling(capacity, flow)]}
-        claiming = _fill_claim(capacity, base, _var(me, f"{flow}_capability_in"))
+        # An unbounded fill claims without bound, as muscadet publishes
+        # it (`fill_rate = inf` is an infinite demand): the producer's
+        # split truncates every claim at the quantity it has to give
+        # (muscadet `regularize_demands`), so the volume weighs as the
+        # whole supply beside its rivals. Written as the capability this
+        # input reads, it weighed as whatever capability reached it,
+        # which is no claim muscadet makes.
+        claiming = _fill_claim(capacity, base, _float(UNBOUNDED_SERVICE))
         # Full, a volume upstream of the rules asks for what the rules
         # draw from it, which is `base` itself: full is stocked, and a
         # stocked volume serves the rules their whole need. Written as
@@ -3562,11 +3574,12 @@ class ObjFlow:
 
         What the consumers ask, capped by the ceiling, plus the fill rate
         while there is room; unbounded fill is "whatever the rule can
-        make", `capability`, for the reason :meth:`_capacity_bounded_demand`
-        gives. Full, the claim is the consumers' demand alone: the stock
-        serves it whole, so what may still enter is exactly what leaves,
-        and reading the delivery here instead would close the demand band
-        on the production band."""
+        make", `capability`: this claim is read by the component's own
+        rule scale, never weighed at a split, so the quantity it stands
+        for is known here. Full, the claim is the consumers' demand
+        alone: the stock serves it whole, so what may still enter is
+        exactly what leaves, and reading the delivery here instead would
+        close the demand band on the production band."""
         asked = _min(
             [_var(self.name, f"{flow}_demand_out"), self._capacity_ceiling(capacity, flow)]
         )
@@ -4818,7 +4831,7 @@ class ObjFlow:
     def _expected_scale(self, rule_set: _RuleSet) -> dict[str, Any]:
         """The scale `rule_set` can be EXPECTED to run at, from the demand
         band: its scale, bounded by what a mixed volume feeding one of its
-        inputs will hand it.
+        inputs will leave it.
 
         A mixed volume (:meth:`_mixed_volume`) passes what transits and a
         share of the excess pro rata of its content, so a set asking it
@@ -4826,23 +4839,51 @@ class ObjFlow:
         runs at that draw. The declaration-order cascade that follows
         must subtract what the set will MAKE, not what it asked for:
         subtracting the request left the next set asked for nothing, and
-        the ventilation exhausted 0.39 where it exhausts 50. The expected
-        delivery is taken from that input's own excess only,
-        ``transit + max(need - transit, 0) x ratio``, which is the pooled
-        delivery exactly when the volume's other held flows are covered
-        by what transits them (a ventilated room, whose returned air
-        covers the air asked); otherwise it under-states it, and the next
-        set is asked a little more, never less. The transit is read from
-        the capability band, what could arrive, so this reads nothing the
-        production band has yet to settle."""
+        the ventilation exhausted 0.39 where it exhausts 50.
+
+        The volume's offer is estimated on the needs of this set and of
+        the sets declared before it on the same input,
+        ``transit + max(need - transit, 0) x ratio`` capped at that need,
+        which is the pooled delivery exactly when the volume's other held
+        flows are covered by what transits them (a ventilated room, whose
+        returned air covers the air asked); otherwise it under-states it,
+        and the next set is asked a little more, never less. The earlier
+        sets are served out of it first, each taking at most its own
+        need and drawing it at its uptake factor, since the draw shares
+        the input in declaration order (:meth:`_rule_draw_scale`): a
+        natural draft declared after a forced extraction is expected to
+        make nothing while the extraction runs, so the demand it leaves
+        on a contested output is handed on to the next producer, and
+        everything once a mode has cut the extraction's output. The
+        transit is read from the capability band, what could arrive, so
+        this reads nothing the production band has yet to settle."""
         scale = _var(self.name, f"{rule_set.name}_scale")
         bounds = [scale]
+        position = self.rule_sets.index(rule_set)
         for flow in rule_set.consumed():
             source = self._mixture_sources.get(flow)
             if source is None or not self._fed_by_a_mixture(flow):
                 continue
             coefficient = self._rule_coefficient(rule_set, flow, "cons")
             need = {"op": "mul", "args": [coefficient, scale]}
+            earlier = [
+                before
+                for before in self.rule_sets[:position]
+                if flow in before.consumed() and self._runs_at_a_draw(before)
+            ]
+            asked = _sum(
+                [
+                    {
+                        "op": "mul",
+                        "args": [
+                            self._rule_coefficient(before, flow, "cons"),
+                            _var(self.name, f"{before.name}_scale"),
+                        ],
+                    }
+                    for before in earlier
+                ]
+                + [need]
+            )
             # A constituent the volume holds but is never fed transits
             # nothing, as `_transit` reads it on the volume's side.
             transit = (
@@ -4850,10 +4891,10 @@ class ObjFlow:
                 if source.has_inlet
                 else _float(0.0)
             )
-            excess = _clamped_at_zero({"op": "sub", "lhs": need, "rhs": transit})
-            expected = _min(
+            excess = _clamped_at_zero({"op": "sub", "lhs": asked, "rhs": transit})
+            offered = _min(
                 [
-                    need,
+                    asked,
                     {
                         "op": "add",
                         "args": [
@@ -4872,6 +4913,23 @@ class ObjFlow:
                     },
                 ]
             )
+            # The earlier sets are served first out of that offer, each
+            # taking at most its own need of what is left, and drawing it
+            # at its uptake factor (:meth:`_rule_draw_scale`).
+            for before in earlier:
+                wanted = {
+                    "op": "mul",
+                    "args": [
+                        self._rule_coefficient(before, flow, "cons"),
+                        _var(self.name, f"{before.name}_scale"),
+                    ],
+                }
+                taken = _min([wanted, offered])
+                uptake = self._uptake_factor(before)
+                if uptake is not None:
+                    taken = {"op": "mul", "args": [taken, uptake]}
+                offered = _clamped_at_zero({"op": "sub", "lhs": offered, "rhs": taken})
+            expected = _min([need, offered])
             bounds.append(
                 {
                     "op": "if",
@@ -5730,6 +5788,7 @@ class ObjFlow:
         connected_in: set[str] | None = None,
         ring_torn_out: set[str] | None = None,
         mixture_fed_in: dict[str, _MixtureSource] | None = None,
+        wired_in: set[str] | None = None,
     ) -> dict[str, Any]:
         """The native component this declaration generates.
 
@@ -5753,6 +5812,12 @@ class ObjFlow:
         (:meth:`_rule_draw_scale`). Kept on the component, since the
         system's sweep order and release read it after the build. Left
         out, no input is.
+
+        `wired_in` names the continuous in-flows at least one connection
+        feeds. What the rules may draw of one is what its suppliers
+        allocated it, while one nothing feeds supplies its declared
+        constant (:meth:`_draw_budget`). Left out, every declared
+        continuous in-flow counts as wired.
 
         `connected_in` names the in-ports at least one connection feeds,
         the same kind of knowledge at the other end of the wire, and it
@@ -5779,6 +5844,11 @@ class ObjFlow:
         # that may legitimately be declared after the mode taking it.
         self._refuse_ill_formed_taps()
         self._mixture_sources = dict(mixture_fed_in or {})
+        self._wired_in = (
+            {flow.name for flow in self.flows_continuous_in}
+            if wired_in is None
+            else set(wired_in)
+        )
 
         variables: list[dict] = []
         ports: list[dict] = []
@@ -6356,11 +6426,15 @@ class ObjFlow:
           ``{flow}_claimed_out`` (:meth:`_capacity_claim_out`), before the
           scale is taken on it: the rule is asked to make what is taken
           plus what the volume claims for itself;
-        - upstream (``side="in"``), the set runs at ``{set}_draw_scale``,
-          its scale bounded by what the volume actually lets it draw
-          (:meth:`_rule_supply` on what arrived). The scale itself stays
-          the NEED the demand band publishes upstream; the draw is what
-          the production band makes, and what empties the volume."""
+        - upstream (``side="in"``), the volume is what the rules draw
+          from (:meth:`_rule_supply` on what arrived).
+
+        Every set that draws a continuous input runs at
+        ``{set}_draw_scale`` (:meth:`_rule_draw_scale`): its scale bounded
+        by what its inputs actually supply, shared in declaration order
+        between the sets consuming one input. The scale itself stays the
+        NEED the demand band publishes upstream; the draw is what the
+        production band makes, and what empties a volume."""
         me = self.name
         claimed = self._claimed_outputs()
         # A volume downstream of the rules bounds them through its claim
@@ -6416,7 +6490,7 @@ class ObjFlow:
                 }
             )
             made = scale
-            if self._draws_from_a_volume(rule_set):
+            if self._runs_at_a_draw(rule_set):
                 made = f"{rule_set.name}_draw_scale"
                 variables.append(_float_attribute(made, 0.0))
                 equations.append(
@@ -6426,7 +6500,7 @@ class ObjFlow:
                         "expr": self._rule_choice(
                             rule_set,
                             [
-                                self._rule_draw_scale(rule, _var(me, scale))
+                                self._rule_draw_scale(rule_set, rule, _var(me, scale))
                                 for rule in rule_set.rules
                             ],
                         ),
@@ -6501,13 +6575,20 @@ class ObjFlow:
             if self._beside_rules(flow.name, "out") is not None
         }
 
-    def _draws_from_a_volume(self, rule_set: _RuleSet) -> bool:
-        """Whether `rule_set` consumes a flow held in a volume upstream
-        of the rules, or one another component serves as a mixture, and
-        so runs at a draw scale of its own."""
+    def _runs_at_a_draw(self, rule_set: _RuleSet) -> bool:
+        """Whether `rule_set` actually draws a continuous input, and so
+        runs at a draw scale of its own (:meth:`_rule_draw_scale`): some
+        rule of it consumes a continuous in-flow of this component at a
+        positive coefficient.
+
+        A set naming its inputs at a zero coefficient only (the catalyst
+        idiom) draws nothing, and one consuming nothing makes its
+        declared quantities: both run at their scale."""
+        continuous = {flow.name for flow in self.flows_continuous_in}
         return any(
-            self._beside_rules(flow, "in") is not None or self._fed_by_a_mixture(flow)
-            for flow in rule_set.consumed()
+            coefficient > 0 and flow in continuous
+            for rule in rule_set.rules
+            for flow, coefficient in rule.cons.items()
         )
 
     def _fed_by_a_mixture(self, flow: str) -> bool:
@@ -6527,25 +6608,7 @@ class ObjFlow:
             and any(flow in rule_set.consumed() for rule_set in self.rule_sets)
         )
 
-    def _rule_need(self, flow: str) -> dict[str, Any]:
-        """What the rule sets ask of `flow`, each at the scale the demand
-        band settled: the need the draw below measures an arrival
-        against."""
-        return _sum(
-            [
-                {
-                    "op": "mul",
-                    "args": [
-                        self._rule_coefficient(rule_set, flow, "cons"),
-                        _var(self.name, f"{rule_set.name}_scale"),
-                    ],
-                }
-                for rule_set in self.rule_sets
-                if flow in rule_set.consumed()
-            ]
-        )
-
-    def _mixture_offered(self, flow: str) -> dict[str, Any]:
+    def _offered(self, flow: str) -> dict[str, Any]:
         """What the suppliers of `flow` hand this input, before any of it
         is handed back: the sum of their allocations on it."""
         return {
@@ -6555,60 +6618,75 @@ class ObjFlow:
             "channel": "alloc",
         }
 
+    def _draw_budget(self, flow: str) -> dict[str, Any]:
+        """What the rule sets here may draw of `flow` between them, in
+        the production band: what actually reaches them, never what
+        could.
+
+        - A volume **upstream of the rules** lets them take whatever its
+          ceiling allows while the flow is stocked, and once it has run
+          out what arrived and no more (:meth:`_rule_supply`).
+        - A **wired** input reads what its suppliers allocated it, before
+          any release hands part of it back: the release is settled at
+          the end of the band and reads the draws, so the draws cannot
+          read it. Through a single supplier and no release this is
+          ``{flow}_fed_in`` exactly.
+        - An input **no connection feeds** reads ``{flow}_fed_in``, its
+          declared constant (an empty port sums to zero, which is not
+          what such an input supplies)."""
+        capacity = self._beside_rules(flow, "in")
+        if capacity is not None:
+            return self._rule_supply(capacity, flow, _var(self.name, f"{flow}_fed_in"))
+        if flow in self._wired_in:
+            return self._offered(flow)
+        return _var(self.name, f"{flow}_fed_in")
+
     def _rule_draw_scale(
-        self, rule: _Rule, scale: dict[str, Any]
+        self, rule_set: _RuleSet, rule: _Rule, scale: dict[str, Any]
     ) -> dict[str, Any]:
-        """The scale `rule` actually runs at when it draws from a volume
-        upstream of it: its `scale`, bounded by what each such volume
-        lets it take of what it holds, over the coefficient.
+        """The scale `rule` actually runs at, in the production band: its
+        `scale` (the need the demand band published upstream), bounded
+        by what each input it consumes actually supplies it, over the
+        coefficient.
 
-        What arrived (``{flow}_fed_in``) and not what could: this is the
-        production band, where the delivery is settled, and an empty
-        volume hands on what reached it and no more. A volume still
-        stocked lets the rule take its whole need, so the draw is the
-        scale itself until the flow runs out.
+        **What arrived, not what could** (muscadet's `rule_scale` on
+        `get_input_available`). The demand band sizes a claim on the
+        suppliers' capability, which is published unapportioned (R-20):
+        two consumers of one source each read the whole of it. Producing
+        at that scale would make what never arrived, so the production
+        is bounded here by the budget of each input
+        (:meth:`_draw_budget`), and an input that delivered less than it
+        was asked caps the whole set, its other legs included.
 
-        An input another component serves as a mixture bounds the draw
-        by what ARRIVED of it, muscadet's reading of a rule fed by
-        `draw_from_capacity`: the rule runs at the scale its scarcest
-        arrival allows and hands back what it does not consume of the
-        others (:meth:`System._releasing_inputs`). Written as the scale
-        times the fraction of the need that arrived, rather than as the
-        arrival over the coefficient: the two are the same number for a
-        single set, and with several sets on one input the fraction is
-        what keeps their draws inside what arrived, each taking its
-        share of the shortfall instead of each taking the whole of it."""
+        **Several sets on one input share it, in declaration order**
+        (muscadet R-17): each is offered what the sets declared before it
+        left, and what an earlier set leaves is what it actually drew,
+        its uptake factor included (R-13, :meth:`_set_draw`). A set whose
+        outputs a mode derated to zero therefore takes nothing from a
+        sibling declared after it, which keeps its whole demand. An
+        unbounded budget is never spent down: it crosses this layer as
+        :data:`UNBOUNDED_SERVICE`, a magnitude no draw moves."""
         terms = [scale]
+        position = self.rule_sets.index(rule_set)
         for flow, coefficient in rule.cons.items():
-            if coefficient > 0 and self._fed_by_a_mixture(flow):
-                need = self._rule_need(flow)
-                offered = self._mixture_offered(flow)
-                terms.append(
-                    {
-                        "op": "if",
-                        "cond": {"op": "cmp", "cmp": "gt", "lhs": need, "rhs": offered},
-                        "then": {
-                            "op": "div",
-                            "lhs": {"op": "mul", "args": [scale, offered]},
-                            "rhs": need,
-                        },
-                        "otherwise": scale,
-                    }
+            if coefficient <= 0 or not self._is_continuous_in(flow):
+                continue
+            remaining = self._draw_budget(flow)
+            earlier = [
+                self._set_draw(before, flow)
+                for before in self.rule_sets[:position]
+                if flow in before.consumed() and self._runs_at_a_draw(before)
+            ]
+            if earlier:
+                remaining = _clamped_at_zero(
+                    {"op": "sub", "lhs": remaining, "rhs": _sum(earlier)}
                 )
-                continue
-            capacity = self._beside_rules(flow, "in")
-            if capacity is None or coefficient <= 0:
-                continue
-            terms.append(
-                {
-                    "op": "div",
-                    "lhs": self._rule_supply(
-                        capacity, flow, _var(self.name, f"{flow}_fed_in")
-                    ),
-                    "rhs": _float(coefficient),
-                }
-            )
+            terms.append({"op": "div", "lhs": remaining, "rhs": _float(coefficient)})
         return _min(terms)
+
+    def _is_continuous_in(self, flow: str) -> bool:
+        """Whether `flow` names a continuous in-flow of this component."""
+        return any(declared.name == flow for declared in self.flows_continuous_in)
 
     def _uptake_factor(self, rule_set: _RuleSet) -> dict[str, Any] | None:
         """What a set's draw on a volume is scaled by when a failure mode
@@ -8017,27 +8095,27 @@ class System:
                 served = out_edges.get((name, flow.name), [])
                 capability = _var(name, f"{flow.name}_capability_out")
 
-                # What remains for one consumer once the others are
-                # accounted for (R11): a supply read by several
-                # consumers publishes to each what is left, never its
-                # whole capability, so neither sizes itself as though
-                # the other were absent.
-                for index, edge in enumerate(served):
-                    others = [
-                        _var(name, _channel_attr(port, "alloc", other.name))
-                        for position, other in enumerate(served)
-                        if position != index
-                    ]
-                    remaining = (
-                        capability
-                        if not others
-                        else {"op": "sub", "lhs": capability, "rhs": _sum(others)}
-                    )
+                # What the output could deliver, published WHOLE to every
+                # consumer, as muscadet's `incoming_capability` sums it
+                # (R-20): a capability is asked before any demand exists
+                # to apportion it against, so it is not apportioned. Two
+                # consumers of one source each read all of it and size
+                # their claim as if the other were absent; the split
+                # settles what each receives, and what a rule makes is
+                # bounded by that receipt (`ObjFlow._rule_draw_scale`).
+                #
+                # Netted per consumer (the capability less the others'
+                # allocations), it made each consumer's claim depend on
+                # the others' shares: an unbounded fill claim weighed at
+                # what was left after a rival rather than at the supply,
+                # and a rule bounded by it ratcheted down with its own
+                # share.
+                for edge in served:
                     component["equations"].append(
                         {
                             "target": _channel_attr(port, "capability", edge.name),
                             "kind": "explicit",
-                            "expr": {"op": "max", "args": [_float(0.0), remaining]},
+                            "expr": capability,
                         }
                     )
 
@@ -8204,7 +8282,7 @@ class System:
                     # same dynamic, hidden by its fixed step. Passing on
                     # what arrives is that sliding motion's own average,
                     # the content held at zero.
-                    offered = obj._mixture_offered(flow.name)
+                    offered = obj._offered(flow.name)
                     need = _var(
                         name,
                         f"{flow.name}_consumed_in"
@@ -8628,11 +8706,12 @@ class System:
                 fed(edge)
 
         for producer in topological:
-            # What the rules draw from a volume upstream of them reads
-            # what arrived, settled by the producers visited before this
-            # one; everything this component makes reads the draw.
+            # What the rules draw reads what arrived, settled by the
+            # producers visited before this one, in declaration order
+            # since each set is offered what the earlier ones left;
+            # everything this component makes reads the draw.
             for rule_set in self.comp[producer].rule_sets:
-                if self.comp[producer]._draws_from_a_volume(rule_set):
+                if self.comp[producer]._runs_at_a_draw(rule_set):
                     step(producer, f"{rule_set.name}_draw_scale")
             # What the rules consume of an input served as a mixture, at
             # the draw just swept: the release at the end of the band
@@ -9407,7 +9486,7 @@ class System:
         refused.
 
         This is the one continuous generation. :meth:`build_dict` and the
-        plugin reach the per-edge equations, the R11 netting, the allocation
+        plugin reach the per-edge equations, the allocation
         operators and the three-band order through it, so the two authoring
         surfaces cannot answer one model differently."""
         edges = self._continuous_edges()
@@ -9433,12 +9512,16 @@ class System:
                         for declared in supplier.flows_continuous_in
                     ),
                 )
+        wired: dict[str, set[str]] = {}
+        for edge in edges:
+            wired.setdefault(edge.consumer, set()).add(edge.flow_in)
         components = [
             obj._build(
                 reading.get(name, set()),
                 connected_in_flows(self._connections, name),
                 torn.get(name, set()),
                 mixture_fed.get(name, {}),
+                wired.get(name, set()),
             )
             for name, obj in self.comp.items()
         ]
@@ -9461,7 +9544,7 @@ class System:
             for rule_set in obj.rule_sets:
                 observable.add(f"{rule_set.name}_scale")
                 observable.add(f"{rule_set.name}_capability_scale")
-                if obj._draws_from_a_volume(rule_set):
+                if obj._runs_at_a_draw(rule_set):
                     observable.add(f"{rule_set.name}_draw_scale")
             for flow_name, claimed in obj._claimed_outputs().items():
                 observable.add(claimed)

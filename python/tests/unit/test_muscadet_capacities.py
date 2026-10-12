@@ -548,10 +548,12 @@ def test_a_measurement_reading_an_unheld_constituent_is_refused():
         system.connect_measurement("T", "reservoir", "P")
 
 
-def test_an_unbounded_fill_rate_asks_for_the_whole_capability():
-    """muscadet's `math.inf` fill rate: whatever the producer can
-    deliver, which is the published capability rather than a number the
-    document cannot carry."""
+def test_an_unbounded_fill_rate_claims_without_bound():
+    """muscadet's `math.inf` fill rate is an unbounded demand, published
+    as such (muscadet 5.14.0 writes `inf` on the demand variable). The
+    document cannot carry an infinity, so it crosses as
+    `UNBOUNDED_SERVICE`, and the producer's split truncates it at what it
+    has to give: the volume fills at the producer's whole rate."""
 
     class Greedy(mu.ObjFlow):
         def add_flows(self):
@@ -565,7 +567,8 @@ def test_an_unbounded_fill_rate_asks_for_the_whole_capability():
     system.add_component(Greedy, "T")
     system.connect("S", "water", "T", "water")
     result = system.simulate(t_max=10.0, samples=[5.0])
-    assert abs(sampled(result, "T_water_demand_in", 5.0) - 5.0) < TOL
+    assert sampled(result, "T_water_demand_in", 5.0) == mu.UNBOUNDED_SERVICE
+    assert abs(sampled(result, "T_water_fed_in", 5.0) - 5.0) < TOL
     # The bound (capacity 100 at rate 5) is not reached within t_max=10:
     # ordinary ODE integration, TOL not CROSSING_TOL.
     assert abs(sampled(result, "T_tank_content", 5.0) - 25.0) < TOL

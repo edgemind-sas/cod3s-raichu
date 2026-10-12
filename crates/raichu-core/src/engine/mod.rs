@@ -109,9 +109,7 @@ use config::OperatorDate;
 use config::{attribute_of, state_of};
 use deferred::DeferredAge;
 use eval::{eval_bool, eval_expr, eval_f64, predicate_holds};
-use flow::{
-    flows_settled, read_flow_inputs, recompute_explicit, value_settled, FlowScratch, PassContext,
-};
+use flow::{read_flow_inputs, settle_explicit, value_settled, FlowScratch, PassContext};
 use notes::ChangeLog;
 use ode::{ContinuousSystem, FrozenFlow};
 use restart::DrawnClock;

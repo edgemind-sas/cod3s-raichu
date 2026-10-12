@@ -533,6 +533,47 @@ fn decision_sites(expr: &CExpr) -> usize {
     }
 }
 
+/// Run the explicit sweep at `(time, vars)`, **settled**: one pass when
+/// the sweep reads nothing ahead of its writer, and otherwise (a ring the
+/// evaluation order had to tear, [`CompiledModel::sweep_reads_ahead`]) the
+/// pass repeated until it moves nothing by more than `tolerance`.
+///
+/// One pass of a torn sweep reads, at the tear, whatever the attribute
+/// vector held before it: the previous evaluation inside the solver, the
+/// segment-start values in a dense-sample callback. Repeating it makes
+/// the result a function of `(time, state)` again, the fixpoint the flow
+/// resolution settles to at a boundary. Bounded by `budget` passes (the
+/// resolution's own [`FlowConfig::sweep_budget`]); a ring that does not
+/// settle inside it keeps its last pass, and the resolution at the next
+/// boundary is where a genuine stall is diagnosed. A sweep without a tear
+/// keeps its single pass, bit for bit.
+///
+/// `before` is caller-owned scratch, reused across calls.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn settle_explicit(
+    model: &CompiledModel,
+    vars: &mut [Value],
+    states: &[StateIdx],
+    time: f64,
+    ctx: &mut PassContext<'_>,
+    budget: usize,
+    tolerance: f64,
+    before: &mut Vec<Value>,
+) -> Result<(), EngineError> {
+    if !model.sweep_reads_ahead {
+        return recompute_explicit(model, vars, states, time, ctx);
+    }
+    for _ in 0..budget.max(1) {
+        before.clear();
+        before.extend_from_slice(vars);
+        recompute_explicit(model, vars, states, time, ctx)?;
+        if flows_settled(before, vars, tolerance) {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// Whether one sweep moved every quantity by less than the per-edge flow
 /// tolerance: the numeric half of the resolution's stopping test, applied
 /// only once the combinatorial half has settled.

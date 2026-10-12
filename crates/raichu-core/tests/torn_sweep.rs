@@ -92,7 +92,9 @@ fn balanced_source(torn: bool) -> String {
   ],
   "indicators": [
     {{"name": "got", "target": "attribute",
-      "attr": {{"component": "sink", "attribute": "got"}}}}
+      "attr": {{"component": "sink", "attribute": "got"}}}},
+    {{"name": "avail", "target": "attribute",
+      "attr": {{"component": "src", "attribute": "avail"}}}}
   ]
 }}
 "#
@@ -116,15 +118,23 @@ fn run(torn: bool) -> SimulationResult {
     .expect("the run completes")
 }
 
-fn got(result: &SimulationResult) -> Vec<f64> {
-    result.samples[0]
+fn sampled(result: &SimulationResult, index: usize) -> Vec<f64> {
+    result.samples[index]
         .points
         .iter()
         .map(|(_, value)| match value {
             Value::Float(f) => *f,
-            other => panic!("`got` is not a float: {other:?}"),
+            other => panic!("indicator {index} is not a float: {other:?}"),
         })
         .collect()
+}
+
+fn got(result: &SimulationResult) -> Vec<f64> {
+    sampled(result, 0)
+}
+
+fn avail(result: &SimulationResult) -> Vec<f64> {
+    sampled(result, 1)
 }
 
 #[test]
@@ -160,6 +170,31 @@ fn the_torn_and_the_untorn_order_integrate_alike() {
         untorn.work.solver_steps_rejected
     );
     for (a, b) in got(&torn).iter().zip(got(&untorn)) {
+        assert!((a - b).abs() <= FLOW_TOLERANCE * 5.0, "{a} against {b}");
+    }
+}
+
+/// **A dense sample of a torn sweep is settled like the dynamics.** The
+/// sample callback rebuilds the attribute vector from the segment START
+/// and loads the interpolated state into it; a single pass then reads, at
+/// the tear, `v` as the segment start left it, and reports
+/// `avail = 5 + x(t) - x(t0)`: the segment opens at 0, so the samples read
+/// 7.5, 10, 12.5 and 15, the offer of a state the trajectory has left. The
+/// consumer's share hides it (it is capped at its demand of 5), which is
+/// why the offer itself is observed. Settled, every sample reads the
+/// fixpoint, 5, as the right-hand side does.
+#[test]
+fn a_dense_sample_of_a_torn_sweep_reads_the_settled_value() {
+    let result = run(true);
+    for (instant, value) in [2.5, 5.0, 7.5, 10.0].iter().zip(avail(&result)) {
+        assert!(
+            (value - 5.0).abs() <= FLOW_TOLERANCE * 5.0,
+            "the offer sampled at t = {instant} reads {value}, where the settled \
+             sweep offers 5"
+        );
+    }
+    // The untorn order agrees sample for sample.
+    for (a, b) in avail(&result).iter().zip(avail(&run(false))) {
         assert!((a - b).abs() <= FLOW_TOLERANCE * 5.0, "{a} against {b}");
     }
 }

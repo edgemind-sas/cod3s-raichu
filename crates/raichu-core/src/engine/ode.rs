@@ -95,35 +95,20 @@ impl ContinuousSystem<'_> {
                 scratch: &mut self.scratch,
                 changed: &mut changed,
             };
-            if !self.model.sweep_reads_ahead {
-                if let Err(error) =
-                    recompute_explicit(self.model, &mut self.vars, &self.states, t, &mut ctx)
-                {
-                    self.error = Some(error);
-                }
-                return;
-            }
-            // A torn ring: one pass reads, at the tear, what the previous
-            // evaluation left there, which may be a rejected trial step.
-            // Repeating the pass until it settles to the flow tolerance
-            // makes the right-hand side a function of `(t, y)` again, the
-            // same fixpoint the resolution settles to at the segment
-            // boundary. Bounded by the resolution's own sweep budget; a
-            // ring that does not settle inside it keeps the last pass, the
-            // single-pass behaviour, and the resolution at the next
-            // boundary is where a genuine stall is diagnosed.
-            for _ in 0..self.sweep_budget.max(1) {
-                self.settle_scratch.clear();
-                self.settle_scratch.extend_from_slice(&self.vars);
-                if let Err(error) =
-                    recompute_explicit(self.model, &mut self.vars, &self.states, t, &mut ctx)
-                {
-                    self.error = Some(error);
-                    return;
-                }
-                if flows_settled(&self.settle_scratch, &self.vars, self.flow_tolerance) {
-                    return;
-                }
+            // A torn ring settles inside the right-hand side, so that it is
+            // a function of `(t, y)` and not of the evaluation history,
+            // rejected trial steps included (`settle_explicit`).
+            if let Err(error) = settle_explicit(
+                self.model,
+                &mut self.vars,
+                &self.states,
+                t,
+                &mut ctx,
+                self.sweep_budget,
+                self.flow_tolerance,
+                &mut self.settle_scratch,
+            ) {
+                self.error = Some(error);
             }
         }
     }

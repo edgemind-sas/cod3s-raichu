@@ -408,8 +408,11 @@ def test_a_stock_only_mixture_feeds_a_cascade():
 
 def test_two_rule_sets_on_one_mixed_input_never_draw_more_than_arrives():
     """Two rule sets of one component both consume the room's hydrogen.
-    Each is bounded by the share of the need that arrived, so together
-    they consume exactly what the room handed over, never more."""
+    They share what arrived in declaration order (muscadet R-17): the
+    first takes what it needs of it, the second what the first left, so
+    together they consume exactly what the room handed over, never more.
+    The room hands over a trace of the 15 asked, which the first set's
+    need of 10 absorbs whole."""
 
     class TwoUsers(mu.ObjFlow):
         def add_flows(self):
@@ -433,7 +436,8 @@ def test_two_rule_sets_on_one_mixed_input_never_draw_more_than_arrives():
     made_q = sampled(result, "Q_q_fed_in", 0.5)
     assert arrived < 15.0 * 0.05  # a trace share of the 15 asked
     assert abs(10.0 * made_p + 5.0 * made_q - arrived) < 1e-9
-    assert abs(made_p / made_q - 1.0) < 1e-9  # both sets scaled alike
+    assert abs(made_p - arrived / 10.0) < 1e-9  # first declared, first served
+    assert made_q < 1e-12  # nothing left for the second
 
 
 def test_a_room_whose_own_rules_carry_a_held_flow_does_not_mix():
