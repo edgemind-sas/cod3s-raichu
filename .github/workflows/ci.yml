@@ -115,8 +115,10 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # The `ci` profile optimises while keeping debug assertions and
+      # overflow checks (see the workspace Cargo.toml).
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace --profile ci
 
   wheel:
     name: Python wheel (maturin)
