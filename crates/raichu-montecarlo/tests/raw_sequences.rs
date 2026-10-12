@@ -6,7 +6,7 @@
 
 use raichu_analysis::{
     analyse, clean, minimal_sequences, read_raw_sequences, write_raw_sequences, RawHeader,
-    RawSequencesError, RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
+    RawObservation, RawSequencesError, RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
 };
 use raichu_core::{CompiledModel, SolverParams};
 use raichu_model::{Model, TransitionKind};
@@ -95,6 +95,24 @@ fn the_corpus_reads_back_exactly_what_the_campaign_recorded() {
             .any(|e| e.kind == Some(TransitionKind::Repair))),
         "the corpus must carry kinds, or the round trip proves nothing about them"
     );
+}
+
+#[test]
+fn the_header_reads_back_to_the_same_bits() {
+    // A value serde_json's default float parser reads one ulp off.
+    let x = 0.248_720_059_264_354_14;
+    let mut header = RawHeader::new("test", "pair", 11, 0, x, vec!["both_down".into()]);
+    header.observations.push(RawObservation {
+        name: "late".into(),
+        time: x,
+    });
+    let mut bytes = Vec::new();
+    write_raw_sequences(&mut bytes, &header, &[]).unwrap();
+    let (read, sequences) = read_raw_sequences(bytes.as_slice()).unwrap();
+    assert!(sequences.is_empty());
+    assert_eq!(read.t_max.to_bits(), x.to_bits());
+    assert_eq!(read.observations[0].time.to_bits(), x.to_bits());
+    assert_eq!(read, header);
 }
 
 #[test]
