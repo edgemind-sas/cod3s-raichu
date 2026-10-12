@@ -22,12 +22,18 @@
 //!   (`on_interruption: resume | continue`);
 //! - any other automaton the search goes through, because a band
 //!   controller, a protection trip or a latched standby holds the
-//!   failure's effect after the repair. Three shapes are exempt: the
+//!   failure's effect after the repair. Four shapes are exempt: the
 //!   group's own automata; an automaton of another cycle group with
 //!   monitored transitions, whose persistence the sequence records as its
-//!   own events; and a memoryless automaton, two states left and entered
-//!   instantly on complementary guards, whose state is a function of its
-//!   current inputs.
+//!   own events; an automaton echoed by recorded followers, whose state
+//!   reaches the rest of the model only through recorded automata that
+//!   copy it at once (two states, left instantly and without effect on
+//!   complementary guards), so that its state is at every instant the
+//!   followers' recorded state (the occ/rep automaton of a muscadet
+//!   `external` failure mode and the mirror it drives on each target);
+//!   and a memoryless automaton, two states left and entered instantly on
+//!   complementary guards, whose state is a function of its current
+//!   inputs.
 //!
 //! The search never goes through a target automaton that has a single
 //! non-target state: until the target is reached, that automaton sits in
@@ -35,11 +41,14 @@
 //!
 //! What it does not see: a latch or counter written by a sensitive
 //! function (level semantics), which `cycle_cancellation: never` covers.
+//! The echo exemption narrows that blind spot rather than widening it: a
+//! variable between an echoed automaton and its follower may not read the
+//! follower, the one shape in which such a function would latch it.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
-use raichu_expr::{BoolOp, Value};
+use raichu_expr::{BoolOp, CmpOp, Value};
 use raichu_model::{CycleCancellation, InterruptionPolicy, TransitionKind};
 use serde::{Deserialize, Serialize};
 
@@ -159,7 +168,7 @@ pub fn cycle_groups(model: &CompiledModel) -> Vec<CycleGroupDecision> {
         list.sort_unstable();
         list.dedup();
     }
-    let facts = Facts::new(model);
+    let facts = Facts::new(model, &readers);
 
     groups
         .into_iter()
@@ -240,7 +249,8 @@ struct Facts {
     memory_vars: HashSet<usize>,
     /// Automata with a timer that survives an interruption.
     timed: HashSet<usize>,
-    /// Automata of a cycle group with monitored transitions.
+    /// Automata of a cycle group with monitored transitions, and the
+    /// automata recorded followers echo (see [`echoed`]).
     recorded: HashSet<usize>,
     /// Automata whose state is a function of their current inputs.
     memoryless: HashSet<usize>,
@@ -249,7 +259,7 @@ struct Facts {
 }
 
 impl Facts {
-    fn new(model: &CompiledModel) -> Self {
+    fn new(model: &CompiledModel, readers: &HashMap<Node, Vec<Node>>) -> Self {
         let mut memory_vars: HashSet<usize> = model.ode.iter().map(|(target, _)| *target).collect();
         for unit in &model.fmu_units {
             memory_vars.extend(
@@ -291,7 +301,7 @@ impl Facts {
         // sequence never shows. A draw that records its won branch only
         // (`monitored_states`) parks on a loss until the solicitation
         // falls, which follows the solicitation and remembers nothing.
-        let recorded = (0..model.automata.len())
+        let mut recorded: HashSet<usize> = (0..model.automata.len())
             .filter(|&a| {
                 !by_automaton[a].is_empty()
                     && by_automaton[a]
@@ -299,6 +309,20 @@ impl Facts {
                         .all(|t| t.monitored && t.cycle_group.is_some())
             })
             .collect();
+        // A recorded automaton that copies its input at once: what an
+        // echoed automaton may be read by.
+        let followers: HashSet<usize> = recorded
+            .iter()
+            .copied()
+            .filter(|&a| {
+                two_state_switch(model, a, &by_automaton[a])
+                    .is_some_and(|(g1, g2)| complementary(g1, g2))
+            })
+            .collect();
+        let echoed: Vec<usize> = (0..model.automata.len())
+            .filter(|&a| !recorded.contains(&a) && echoed(a, readers, &followers, &memory_vars))
+            .collect();
+        recorded.extend(echoed);
         let memoryless = (0..model.automata.len())
             .filter(|&a| is_memoryless(model, a, &by_automaton[a]))
             .collect();
@@ -427,6 +451,60 @@ impl Facts {
     }
 }
 
+/// Whether automaton `a` reaches the rest of the model only through
+/// recorded followers: every reader of its state, followed through
+/// variables that remember nothing, is a recorded automaton that copies
+/// what it reads at once (see `followers` in [`Facts::new`]), and there is
+/// at least one. The state of `a` is then, at every instant, what the
+/// followers' recorded events show: the occ/rep automaton of a muscadet
+/// `external` failure mode and the mirrors it drives through a control
+/// attribute.
+///
+/// A follower is required, not any recorded reader: a reader whose
+/// transition waits (a rate, a delay) or reads `a` in a law fires later,
+/// after the repair that a cancelled cycle hides, and nothing would show
+/// that `a` held the effect meanwhile. A variable on the way may not read
+/// the follower it leads to: through it the follower would latch itself.
+///
+/// A follower is not walked past: what lies behind it is reached from it,
+/// and it is its own events that the sequence keeps.
+fn echoed(
+    a: usize,
+    readers: &HashMap<Node, Vec<Node>>,
+    followers: &HashSet<usize>,
+    memory_vars: &HashSet<usize>,
+) -> bool {
+    let mut seen: HashSet<Node> = HashSet::from([Node::Aut(a)]);
+    let mut queue: VecDeque<Node> = VecDeque::from([Node::Aut(a)]);
+    let mut vars: HashSet<Node> = HashSet::new();
+    let mut reached: BTreeSet<usize> = BTreeSet::new();
+    while let Some(node) = queue.pop_front() {
+        for &next in readers.get(&node).map(Vec::as_slice).unwrap_or(&[]) {
+            match next {
+                Node::Aut(b) if b == a => {}
+                Node::Aut(b) if followers.contains(&b) => {
+                    reached.insert(b);
+                }
+                Node::Aut(_) => return false,
+                Node::Var(v) if memory_vars.contains(&v) => return false,
+                Node::Var(_) => {
+                    if seen.insert(next) {
+                        vars.insert(next);
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
+    }
+    // No variable on the way reads a follower it leads to.
+    !reached.is_empty()
+        && reached.iter().all(|&b| {
+            readers
+                .get(&Node::Aut(b))
+                .is_none_or(|list| list.iter().all(|reader| !vars.contains(reader)))
+        })
+}
+
 /// Whether every write of `var` by a transition effect comes from one
 /// cycle group of a single automaton that sets it on failure and restores
 /// its initial value on **every** repair, constants all: its value is then
@@ -486,16 +564,20 @@ fn same_value(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Whether automaton `a` has two states, each left by one instantaneous
-/// transition without effects, on guards that are each other's negation:
-/// its state is then a function of what the guards read, and remembers
-/// nothing.
-fn is_memoryless(model: &CompiledModel, a: usize, transitions: &[&CTransition]) -> bool {
+/// The two guards of automaton `a` when it is a **switch**: two states,
+/// each left by one instantaneous transition without effects towards the
+/// other, on guards that do not read the automaton's own state (a guard
+/// reading it can latch it: once on, `G or on` never turns false).
+fn two_state_switch<'a>(
+    model: &CompiledModel,
+    a: usize,
+    transitions: &[&'a CTransition],
+) -> Option<(&'a CExpr, &'a CExpr)> {
     if model.automata[a].states.len() != 2 {
-        return false;
+        return None;
     }
     let [first, second] = transitions else {
-        return false;
+        return None;
     };
     let instant = |t: &&CTransition| {
         t.effects.is_empty()
@@ -508,16 +590,49 @@ fn is_memoryless(model: &CompiledModel, a: usize, transitions: &[&CTransition]) 
             }
     };
     if first.source == second.source || !instant(first) || !instant(second) {
-        return false;
+        return None;
     }
     let (Some(g1), Some(g2)) = (&first.guard, &second.guard) else {
-        return false;
+        return None;
     };
-    // A guard reading the automaton's own state can latch it: once on,
-    // `G or on` never turns false.
     if dependency::sensitivity(g1).1.contains(&a) || dependency::sensitivity(g2).1.contains(&a) {
-        return false;
+        return None;
     }
-    let negates = |a: &CExpr, b: &CExpr| matches!(b, CExpr::Bool { op: BoolOp::Not, args } if args.len() == 1 && args[0] == *a);
-    negates(g1, g2) || negates(g2, g1)
+    Some((g1, g2))
+}
+
+/// Whether automaton `a` is a switch on a condition and its syntactic
+/// negation: its state is then a function of what the guards read, and
+/// remembers nothing.
+fn is_memoryless(model: &CompiledModel, a: usize, transitions: &[&CTransition]) -> bool {
+    two_state_switch(model, a, transitions)
+        .is_some_and(|(g1, g2)| negates(g1, g2) || negates(g2, g1))
+}
+
+fn negates(a: &CExpr, b: &CExpr) -> bool {
+    matches!(b, CExpr::Bool { op: BoolOp::Not, args } if args.len() == 1 && args[0] == *a)
+}
+
+/// Whether two guards are each other's negation: syntactically (`G`,
+/// `not G`), or as the equality of one operand with two opposite boolean
+/// constants (`x == true`, `x == false`), the guards of the mirror a
+/// muscadet `external` failure mode grafts on its targets.
+fn complementary(g1: &CExpr, g2: &CExpr) -> bool {
+    if negates(g1, g2) || negates(g2, g1) {
+        return true;
+    }
+    let bool_eq = |g: &CExpr| match g {
+        CExpr::Cmp {
+            op: CmpOp::Eq,
+            lhs,
+            rhs,
+        } => match (lhs.as_ref(), rhs.as_ref()) {
+            (operand, CExpr::Const(Value::Bool(b))) | (CExpr::Const(Value::Bool(b)), operand) => {
+                Some((operand.clone(), *b))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    matches!((bool_eq(g1), bool_eq(g2)), (Some((x, p)), Some((y, q))) if x == y && p != q)
 }

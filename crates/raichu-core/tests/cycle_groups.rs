@@ -340,6 +340,201 @@ fn a_standby_failing_on_demand_records_its_own_failure() {
     assert!(cancellable(&model, "A"));
 }
 
+/// How [`external_mode`] departs from the muscadet `external` expansion.
+#[derive(Clone, Copy, PartialEq)]
+enum Shape {
+    /// The expansion as muscadet writes it.
+    Plain,
+    /// `M.fm`'s state also reaches `T.flow` directly, past the mirror.
+    Leak,
+    /// The control also reads the mirror (the `external_rep_indep`
+    /// latch), so the mirror holds itself once it fails.
+    Latch,
+    /// `M.fm`'s failure clock survives an interruption.
+    Timed,
+    /// The mirror repairs on its own law: it no longer copies `M.fm`.
+    SlowMirror,
+}
+
+/// The shape the muscadet `external` behaviour expands a failure mode
+/// into: the mode `M` owns its occ/rep automaton `fm`, unmonitored, whose
+/// guards read the mirror it drives (mutual lock); a control attribute
+/// follows `fm`; the mirror `T.M` follows the control at once and carries
+/// the recorded events. The target reads the mirror through `T.flow`.
+fn external_mode(shape: Shape) -> CompiledModel {
+    let mut failure = json!({"name": "failure", "source": "rep", "targets": ["occ"],
+        "distrib": "exp", "rate": 0.1, "guard": s("T", "M", "rep"),
+        "monitored": false, "cycle_group": "fm"});
+    if shape == Shape::Timed {
+        failure = json!({"name": "failure", "source": "rep", "targets": ["occ"],
+            "distrib": "delay", "time": 5.0, "on_interruption": "continue",
+            "guard": s("T", "M", "rep"), "monitored": false, "cycle_group": "fm"});
+    }
+    let control = if shape == Shape::Latch {
+        or(vec![s("M", "fm", "occ"), s("T", "M", "occ")])
+    } else {
+        s("M", "fm", "occ")
+    };
+    let mode = json!({
+        "name": "M",
+        "attributes": [bvar("ctrl_M_T", false)],
+        "automata": [{"name": "fm", "states": ["rep", "occ"], "init": "rep", "transitions": [
+            failure,
+            {"name": "repair", "source": "occ", "targets": ["rep"], "distrib": "exp", "rate": 1.0,
+             "guard": s("T", "M", "occ"), "monitored": false, "cycle_group": "fm"}]}],
+        "sensitive_functions": [{"name": "update_ctrl_M_T", "effects": [
+            {"target": {"component": "M", "attribute": "ctrl_M_T"}, "value": control}]}],
+        "equations": []
+    });
+    let ctrl = |v: bool| cmp("==", a("M", "ctrl_M_T"), cb(v));
+    let repair = if shape == Shape::SlowMirror {
+        json!({"name": "rep", "source": "occ", "targets": ["rep"], "distrib": "exp", "rate": 1.0,
+               "guard": ctrl(false), "monitored": true, "cycle_group": "M", "kind": "repair"})
+    } else {
+        json!({"name": "rep", "source": "occ", "targets": ["rep"], "distrib": "delay", "time": 0.0,
+               "guard": ctrl(false), "monitored": true, "cycle_group": "M", "kind": "repair"})
+    };
+    let mirror = json!({"name": "M", "states": ["rep", "occ"], "init": "rep", "transitions": [
+        {"name": "occ", "source": "rep", "targets": ["occ"], "distrib": "delay", "time": 0.0,
+         "guard": ctrl(true), "monitored": true, "cycle_group": "M", "kind": "failure"},
+        repair]});
+    let down = if shape == Shape::Leak {
+        or(vec![s("T", "M", "occ"), s("M", "fm", "occ")])
+    } else {
+        s("T", "M", "occ")
+    };
+    let pump = component(
+        "T",
+        vec![fvar("flow", 1.0)],
+        vec![mirror],
+        vec![json!({"target": "flow", "kind": "explicit", "expr": ite(down, c(0.0), c(1.0))})],
+    );
+    compile(
+        vec![mode, pump, watcher("SYS", cmp("<", a("T", "flow"), c(0.5)))],
+        vec![target("no_flow", "SYS", "ev", "occ")],
+    )
+}
+
+#[test]
+fn an_external_mode_echoed_by_its_mirror_leaves_the_group_cancellable() {
+    // `M.fm` holds nothing the mirror's own events do not show: it acts on
+    // the model only through the mirror, which copies it at once.
+    let model = external_mode(Shape::Plain);
+    assert!(cancellable(&model, "T"), "{:?}", decision(&model, "T"));
+}
+
+#[test]
+fn an_external_mode_read_past_its_mirror_keeps_the_group() {
+    // `M.fm` reaches the feared event without a recorded automaton in
+    // between: its state is no longer what the sequence shows.
+    let model = external_mode(Shape::Leak);
+    let kept = &decision(&model, "T").targets[0];
+    assert!(!kept.cancellable);
+    assert_eq!(kept.memory.as_deref(), Some("M.fm"));
+}
+
+#[test]
+fn an_external_mode_whose_control_reads_its_mirror_keeps_the_group() {
+    // Through the control the mirror latches itself: it no longer copies
+    // `M.fm`, whose state the sequence then does not show.
+    let model = external_mode(Shape::Latch);
+    assert!(!cancellable(&model, "T"), "{:?}", decision(&model, "T"));
+}
+
+#[test]
+fn an_external_mode_with_a_surviving_clock_keeps_the_group() {
+    // An echo exempts the state, not a clock that outlives the repair.
+    let model = external_mode(Shape::Timed);
+    let kept = &decision(&model, "T").targets[0];
+    assert!(!kept.cancellable);
+    assert_eq!(kept.memory.as_deref(), Some("M.fm"));
+}
+
+#[test]
+fn an_external_mode_whose_mirror_repairs_on_its_own_law_keeps_the_group() {
+    // The mirror waits before following `M.fm` back: meanwhile it shows a
+    // failure `M.fm` no longer holds, so it is no follower.
+    let model = external_mode(Shape::SlowMirror);
+    assert!(!cancellable(&model, "T"), "{:?}", decision(&model, "T"));
+}
+
+/// `A`'s failure trips the latch `E.latch`, unmonitored and never reset;
+/// `R`'s failure reads the latch, in its guard or in its rate.
+fn latched_standby(in_rate: bool) -> CompiledModel {
+    let latch = component(
+        "E",
+        vec![],
+        vec![
+            json!({"name": "latch", "states": ["ok", "tripped"], "init": "ok", "transitions": [
+            {"name": "trip", "source": "ok", "targets": ["tripped"], "distrib": "delay", "time": 0.0,
+             "guard": s("A", "health", "failed")}]}),
+        ],
+        vec![],
+    );
+    let mut r = unit("R");
+    if in_rate {
+        r["automata"][0]["transitions"][0] = json!({"name": "fail", "source": "ok",
+            "targets": ["failed"], "distrib": "exp",
+            "rate_expr": ite(s("E", "latch", "tripped"), c(1.0), c(0.001)),
+            "monitored": true, "cycle_group": "R", "kind": "failure"});
+    } else {
+        r["automata"][0]["transitions"][0]["guard"] = s("E", "latch", "tripped");
+    }
+    compile(
+        vec![
+            unit("A"),
+            latch,
+            r,
+            watcher("SYS", s("R", "health", "failed")),
+        ],
+        vec![target("standby_lost", "SYS", "ev", "occ")],
+    )
+}
+
+#[test]
+fn a_latch_read_by_a_waiting_recorded_reader_keeps_the_group() {
+    // `R` is recorded, but its failure comes later, after `A`'s repair:
+    // nothing in the sequence shows that the latch held `A`'s effect.
+    let model = latched_standby(false);
+    let kept = &decision(&model, "A").targets[0];
+    assert!(!kept.cancellable);
+    assert_eq!(kept.memory.as_deref(), Some("E.latch"));
+}
+
+#[test]
+fn a_latch_read_in_a_recorded_rate_keeps_the_group() {
+    let model = latched_standby(true);
+    let kept = &decision(&model, "A").targets[0];
+    assert!(!kept.cancellable);
+    assert_eq!(kept.memory.as_deref(), Some("E.latch"));
+}
+
+#[test]
+fn a_latch_read_by_the_group_itself_keeps_it() {
+    // `A`'s failure trips a damage latch that arms `A`'s own relapse: the
+    // relapse is an event of the very group a cancellation would erase, so
+    // the latch is no echo of anything the sequence keeps.
+    let damage = component(
+        "E",
+        vec![],
+        vec![
+            json!({"name": "latch", "states": ["ok", "damaged"], "init": "ok", "transitions": [
+            {"name": "damage", "source": "ok", "targets": ["damaged"], "distrib": "delay",
+             "time": 0.0, "guard": s("A", "health", "failed")}]}),
+        ],
+        vec![],
+    );
+    let mut a_unit = unit("A");
+    a_unit["automata"][0]["transitions"][0]["guard"] = s("E", "latch", "damaged");
+    let model = compile(
+        vec![a_unit, damage, watcher("SYS", s("A", "health", "failed"))],
+        vec![target("relapse", "SYS", "ev", "occ")],
+    );
+    let kept = &decision(&model, "A").targets[0];
+    assert!(!kept.cancellable);
+    assert_eq!(kept.memory.as_deref(), Some("E.latch"));
+}
+
 #[test]
 fn a_timer_that_survives_the_repair_keeps_the_group() {
     // The feared event comes 2 h after A fails, even if A is repaired
