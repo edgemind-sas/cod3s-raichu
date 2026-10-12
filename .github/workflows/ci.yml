@@ -119,7 +119,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # The key names the profile: rust-cache never re-saves an existing
+      # key, so without it the `ci` profile dependencies were rebuilt on
+      # every run.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-profile
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (warnings are errors)
@@ -163,13 +168,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libclang-dev cmake g++
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-profile
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      # The `ci` profile optimises the engine and keeps its debug
+      # assertions: the suite runs about six times faster than unoptimised.
       - name: Build and install the wheel
         run: |
           python scripts/build_fmu_runtime.py --target x86_64-unknown-linux-gnu --release
-          pipx run maturin build -m bindings/pyraichu/Cargo.toml
+          pipx run maturin build --profile ci -m bindings/pyraichu/Cargo.toml
           pip install target/wheels/pyraichu-*.whl pytest
       - name: Run the unit suite
         run: pytest python/tests/unit -q
@@ -183,13 +192,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libclang-dev cmake g++
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-profile
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      # The `ci` profile optimises the engine and keeps its debug
+      # assertions: the suite runs about six times faster than unoptimised.
       - name: Build and install the wheel
         run: |
           python scripts/build_fmu_runtime.py --target x86_64-unknown-linux-gnu --release
-          pipx run maturin build -m bindings/pyraichu/Cargo.toml
+          pipx run maturin build --profile ci -m bindings/pyraichu/Cargo.toml
           pip install target/wheels/pyraichu-*.whl pytest
       # Executes every runnable code block in the documentation, guarding
       # the docs against engine drift (pyraichu-only; no PyCATSHOO).
