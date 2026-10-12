@@ -263,6 +263,7 @@ impl<'m> Engine<'m> {
                     old,
                     new,
                     cause: format!("FMU unit `{unit}`"),
+                    iteration: 0,
                 });
             }
         }
@@ -648,6 +649,7 @@ impl<'m> Engine<'m> {
                         old,
                         new,
                         cause: transition.name.clone(),
+                        iteration: 0,
                     });
                 }
                 self.worklist
@@ -676,6 +678,7 @@ impl<'m> Engine<'m> {
                         old,
                         new,
                         cause: function.name.clone(),
+                        iteration: self.fixpoint_iteration,
                     });
                 }
                 if trigger {
@@ -726,6 +729,7 @@ impl<'m> Engine<'m> {
                 old,
                 new: value,
                 cause: name.to_owned(),
+                iteration: self.fixpoint_iteration,
             });
         }
         if trigger {
@@ -844,6 +848,7 @@ impl<'m> Engine<'m> {
                         status: "optimal",
                         objective: Some(objective),
                         cached,
+                        iteration: self.fixpoint_iteration,
                     });
                 }
                 for (variable, value) in program.variables.iter().zip(solution.values) {
@@ -867,6 +872,7 @@ impl<'m> Engine<'m> {
                         status: "infeasible",
                         objective: None,
                         cached,
+                        iteration: self.fixpoint_iteration,
                     });
                 }
                 for variable in &program.variables {
@@ -980,6 +986,15 @@ impl<'m> Engine<'m> {
 
     /// Converge the current worklist, ascending or descending order.
     fn converge(&mut self, reverse: bool) -> Result<(), EngineError> {
+        let outcome = self.converge_counted(reverse);
+        self.fixpoint_iteration = 0;
+        outcome
+    }
+
+    /// The loop of [`Self::converge`]: one iteration pops one pending
+    /// function or program, and its index is kept in
+    /// `fixpoint_iteration` for the journal while it runs.
+    fn converge_counted(&mut self, reverse: bool) -> Result<(), EngineError> {
         let mut iterations = 0usize;
         loop {
             let next = if reverse {
@@ -989,6 +1004,7 @@ impl<'m> Engine<'m> {
             };
             let Some(fn_idx) = next else { break };
             iterations += 1;
+            self.fixpoint_iteration = iterations;
             if iterations > self.config.max_fixpoint_iterations {
                 self.worklist.clear();
                 return Err(EngineError::InstantaneousLoop {
@@ -1001,6 +1017,7 @@ impl<'m> Engine<'m> {
                     self.journal.push(JournalRecord::FunctionTriggered {
                         time: self.time,
                         function: self.model.functions[fn_idx].name.clone(),
+                        iteration: iterations,
                     });
                 }
                 self.apply_function(fn_idx, true)?;

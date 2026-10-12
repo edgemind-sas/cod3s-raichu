@@ -399,9 +399,8 @@ impl<'m> Engine<'m> {
             self.resolve_flows()?;
 
             // Commit the located flips and the dense samples in time
-            // order (samples strictly before the reached time: a sample at
-            // exactly an event date is recorded post-event by the flush in
-            // the next advance). A flip is a change point at its located
+            // order (samples strictly before a located crossing: a sample
+            // at exactly the crossing is recorded after this loop). A flip is a change point at its located
             // date; a sample after it then reads the same verdict and adds
             // none. Interleaved, because a sample read before a LATER flip
             // must not be pushed after it.
@@ -469,6 +468,17 @@ impl<'m> Engine<'m> {
                 }
             }
             commit_flips_through(t_reached, &mut self.indicator_series);
+            // A sample due exactly at a located crossing was held back
+            // above (the segment ended on an event there). Record it now,
+            // from the state reached at the crossing and before the event
+            // fires, as a sample at a dated event's instant is: the next
+            // segment's dense callback starts after that instant and would
+            // never report it, and the cursor, which advances once per
+            // recorded sample, would then shift every later sample onto
+            // the wrong instant.
+            if fired.is_some() || crossed.is_some() {
+                self.flush_samples_through(t_reached);
+            }
             match crossed {
                 None => Ok(fired.map_or(Segment::Reached, Segment::Watched)),
                 Some(index) => {

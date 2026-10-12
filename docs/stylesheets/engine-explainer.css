@@ -1,0 +1,477 @@
+/* Engine explainer player (docs/javascripts/engine-explainer.js).
+   Every colour comes from the tokens below, one set per colour scheme. */
+
+:root,
+[data-md-color-scheme="default"] {
+  --ee-fg: #1b2533;
+  --ee-muted: #4a5568;
+  --ee-panel: #f7f9fc;
+  --ee-box: #ffffff;
+  --ee-border: #c9d4e6;
+  --ee-primary: var(--md-primary-fg-color, #1f416d);
+  --ee-primary-fg: #ffffff;
+  --ee-accent: var(--md-accent-fg-color, #ef7b26);
+  --ee-accent-text: #9c4a0e;
+  --ee-highlight: rgba(239, 123, 38, 0.16);
+  --ee-ok: #2e7d32;
+  --ee-fault: #c62828;
+  --ee-caution: #9a5b00;
+  --ee-neutral: #5b6b82;
+  --ee-grid: #e3e9f2;
+  --ee-level: #1f416d;
+  --ee-threshold: #5b6b82;
+  --ee-focus: #ef7b26;
+  --ee-error-bg: #fdecec;
+}
+
+[data-md-color-scheme="slate"] {
+  --ee-fg: #e6ebf2;
+  --ee-muted: #aab4c3;
+  --ee-panel: #232834;
+  --ee-box: #1b1f28;
+  --ee-border: #45526a;
+  --ee-primary: var(--md-typeset-a-color, #8fb3e0);
+  --ee-primary-fg: #10192a;
+  --ee-accent: var(--md-accent-fg-color, #ef7b26);
+  --ee-accent-text: #f5a463;
+  --ee-highlight: rgba(239, 123, 38, 0.24);
+  --ee-ok: #74d07a;
+  --ee-fault: #ff8a80;
+  --ee-caution: #f2b552;
+  --ee-neutral: #a3b1c6;
+  --ee-grid: #303a4a;
+  --ee-level: #8fb3e0;
+  --ee-threshold: #a3b1c6;
+  --ee-focus: #f5a463;
+  --ee-error-bg: #3a2326;
+}
+
+.engine-player {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 1.5em 0;
+  padding: 12px;
+  border: 1px solid var(--ee-border);
+  border-radius: 8px;
+  background: var(--ee-panel);
+  color: var(--ee-fg);
+  font-size: 15px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+.engine-player:focus {
+  outline: none;
+}
+
+.engine-player:focus-visible {
+  outline: 3px solid var(--ee-focus);
+  outline-offset: 2px;
+}
+
+.engine-player .ee-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.engine-player .ee-figure {
+  width: 100%;
+  min-width: 0;
+}
+
+.engine-player .ee-figure + .ee-figure {
+  border-top: 1px solid var(--ee-grid);
+  padding-top: 8px;
+}
+
+.engine-player .ee-svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* ---- SVG text ---- */
+
+.engine-player .ee-text {
+  fill: var(--ee-fg);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.engine-player .ee-muted,
+.engine-player .ee-tick {
+  fill: var(--ee-muted);
+  font-size: 12px;
+}
+
+.engine-player .ee-box-title {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.engine-player .ee-strong {
+  font-weight: 700;
+}
+
+.engine-player .ee-tag {
+  fill: var(--ee-accent-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ---- diagram ---- */
+
+.engine-player .ee-box-frame {
+  fill: var(--ee-box);
+  stroke: var(--ee-border);
+  stroke-width: 1.5;
+}
+
+.engine-player .ee-box-frame.ee-evaluating {
+  stroke: var(--ee-accent);
+  stroke-width: 3;
+  stroke-dasharray: 6 3;
+}
+
+.engine-player .ee-box-frame.ee-firing {
+  stroke: var(--ee-accent);
+  stroke-width: 3;
+}
+
+.engine-player .ee-row-highlight {
+  fill: var(--ee-highlight);
+  stroke: var(--ee-accent);
+  stroke-width: 1.5;
+}
+
+.engine-player .ee-flow {
+  fill: none;
+  stroke: var(--ee-primary);
+  stroke-width: 2;
+}
+
+.engine-player .ee-signal {
+  fill: none;
+  stroke: var(--ee-muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.engine-player .ee-signal-label {
+  fill: var(--ee-muted);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.engine-player .ee-arrowhead {
+  fill: var(--ee-primary);
+}
+
+.engine-player .ee-icon-shape {
+  stroke-width: 1.5;
+}
+
+.engine-player .ee-icon-mark {
+  fill: none;
+  stroke: var(--ee-box);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.engine-player .ee-tone-ok .ee-icon-shape { fill: var(--ee-ok); stroke: var(--ee-ok); }
+.engine-player .ee-tone-fault .ee-icon-shape { fill: var(--ee-fault); stroke: var(--ee-fault); }
+.engine-player .ee-tone-caution .ee-icon-shape { fill: var(--ee-caution); stroke: var(--ee-caution); }
+.engine-player .ee-tone-neutral .ee-icon-shape { fill: none; stroke: var(--ee-neutral); }
+.engine-player .ee-tone-neutral .ee-icon-mark { stroke: var(--ee-neutral); }
+
+.engine-player .ee-tone-text-ok { fill: var(--ee-ok); }
+.engine-player .ee-tone-text-fault { fill: var(--ee-fault); }
+.engine-player .ee-tone-text-caution { fill: var(--ee-caution); }
+.engine-player .ee-tone-text-neutral { fill: var(--ee-fg); }
+.engine-player .ee-state-text { font-weight: 600; }
+
+.engine-player .ee-bool {
+  stroke: var(--ee-primary);
+  stroke-width: 1.5;
+}
+
+.engine-player .ee-bool-true { fill: var(--ee-primary); }
+.engine-player .ee-bool-false { fill: none; }
+
+.engine-player .ee-num-mark {
+  fill: none;
+  stroke: var(--ee-primary);
+  stroke-width: 1.5;
+}
+
+/* ---- timeline and chart ---- */
+
+/* A halo in the panel colour keeps labels readable over lines. */
+.engine-player .ee-timeline .ee-text,
+.engine-player .ee-chart .ee-text {
+  paint-order: stroke;
+  stroke: var(--ee-panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.engine-player .ee-grid {
+  stroke: var(--ee-grid);
+  stroke-width: 1;
+}
+
+.engine-player .ee-axis {
+  stroke: var(--ee-muted);
+  stroke-width: 1.5;
+}
+
+.engine-player .ee-row-line {
+  stroke: var(--ee-grid);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.engine-player .ee-cursor {
+  stroke: var(--ee-accent);
+  stroke-width: 2;
+}
+
+.engine-player .ee-cursor-label {
+  fill: var(--ee-accent-text);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.engine-player .ee-mark {
+  fill: var(--ee-primary);
+  stroke: var(--ee-primary);
+  stroke-width: 1.5;
+}
+
+.engine-player .ee-mark-cross {
+  fill: none;
+  stroke: var(--ee-muted);
+  stroke-width: 2.5;
+}
+
+.engine-player .ee-mark-winner {
+  fill: var(--ee-accent);
+  stroke: var(--ee-accent);
+}
+
+.engine-player .ee-mark-ring {
+  fill: none;
+  stroke-width: 2;
+}
+
+.engine-player .ee-beyond {
+  fill: none;
+  stroke: var(--ee-muted);
+  stroke-width: 2;
+}
+
+.engine-player .ee-winner-text {
+  fill: var(--ee-accent-text);
+  font-weight: 700;
+}
+
+.engine-player .ee-dropped-text {
+  fill: var(--ee-muted);
+  text-decoration: line-through;
+}
+
+.engine-player .ee-level {
+  fill: none;
+  stroke: var(--ee-level);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+.engine-player .ee-level-dot {
+  fill: var(--ee-level);
+}
+
+.engine-player .ee-threshold {
+  stroke: var(--ee-threshold);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+
+.engine-player .ee-threshold-label {
+  fill: var(--ee-muted);
+  font-size: 12px;
+}
+
+.engine-player .ee-next-date {
+  stroke: var(--ee-primary);
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
+}
+
+.engine-player .ee-crossed {
+  stroke: var(--ee-fault);
+  stroke-width: 2;
+}
+
+.engine-player .ee-vmark-label {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.engine-player .ee-next-date-label { fill: var(--ee-primary); }
+.engine-player .ee-crossed-label { fill: var(--ee-fault); }
+
+/* ---- text regions ---- */
+
+.engine-player .ee-caption {
+  margin: 12px 0 8px;
+  min-height: 2.9em;
+  font-size: 15px;
+}
+
+.engine-player .ee-branch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.engine-player details {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border: 1px solid var(--ee-border);
+  border-radius: 6px;
+  background: var(--ee-box);
+}
+
+.engine-player summary {
+  cursor: pointer;
+  min-height: 32px;
+  line-height: 32px;
+  font-weight: 600;
+}
+
+.engine-player summary:focus-visible {
+  outline: 3px solid var(--ee-focus);
+  outline-offset: 2px;
+}
+
+.engine-player details p,
+.engine-player details ul {
+  margin: 4px 0 8px;
+  font-size: 14px;
+}
+
+.engine-player .ee-writes {
+  padding-left: 1.2em;
+}
+
+.engine-player .ee-further-body a {
+  color: var(--ee-primary);
+  text-decoration: underline;
+}
+
+.engine-player .ee-error {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-left: 4px solid var(--ee-fault);
+  background: var(--ee-error-bg);
+  color: var(--ee-fg);
+  font-size: 14px;
+}
+
+/* ---- controls ---- */
+
+.engine-player .ee-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.engine-player .ee-btn {
+  box-sizing: border-box;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  border: 1.5px solid var(--ee-primary);
+  border-radius: 6px;
+  background: var(--ee-box);
+  color: var(--ee-primary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.engine-player .ee-btn-primary,
+.engine-player .ee-choice[aria-pressed="true"] {
+  background: var(--ee-primary);
+  color: var(--ee-primary-fg);
+}
+
+.engine-player .ee-choice[aria-pressed="true"]::before {
+  content: "\2713\00a0";
+}
+
+.engine-player .ee-btn:hover:not(:disabled) {
+  border-color: var(--ee-accent);
+}
+
+.engine-player .ee-btn:focus-visible {
+  outline: 3px solid var(--ee-focus);
+  outline-offset: 2px;
+}
+
+.engine-player .ee-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.engine-player .ee-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  font-size: 14px;
+}
+
+.engine-player .ee-counter {
+  color: var(--ee-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.engine-player .ee-end {
+  padding: 2px 8px;
+  border: 1.5px solid var(--ee-accent);
+  border-radius: 4px;
+  color: var(--ee-accent-text);
+  font-weight: 700;
+}
+
+.engine-player .ee-end[hidden],
+.engine-player [hidden] {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .engine-player {
+    padding: 8px;
+  }
+
+  .engine-player .ee-btn {
+    flex: 1 1 auto;
+    padding: 0 10px;
+  }
+
+  .engine-player .ee-status {
+    margin-left: 0;
+    width: 100%;
+  }
+}

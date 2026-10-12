@@ -1040,12 +1040,15 @@ flowchart LR
 |---|---|
 | `schDT` | schedule a deterministic transition at its delay |
 | `schST` | schedule a stochastic transition at a date drawn from its law |
-| `schWT` | schedule a watched transition at the predicted boundary crossing |
+| `schWT` | fire a watched transition at its boundary crossing, located during integration (never predicted in advance) |
 | `evolC` | integrate the continuous state up to the next scheduled date |
 | `evolT` | fire the earliest transition |
 | `evolA` | run the sensitive functions it triggers, to a fixpoint |
 | `updateMT` | reschedule a modifiable transition whose rate changed (cumulative hazard) |
 | `updateIT` | drop an interruptible transition whose guard became false |
+
+[How the engine works](../engine/index.md) follows these steps one at a time
+on a small installation, with diagrams replayed from the engine itself.
 
 ## Simulation configuration
 

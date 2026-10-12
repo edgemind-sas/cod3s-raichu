@@ -1,0 +1,2082 @@
+{
+ "scenario": "continuous-level",
+ "model": "explainer_continuous",
+ "seed": 1,
+ "horizon": 60.0,
+ "attributes": [
+  "P1.delivers",
+  "P2.solicited",
+  "P2.delivers",
+  "Tank.fed",
+  "Tank.inflow",
+  "Tank.level"
+ ],
+ "automata": [
+  "P1.mode",
+  "P2.mode",
+  "Tank.regime"
+ ],
+ "steps": [
+  {
+   "kind": "stable",
+   "time": 0.0,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "standby",
+    "Tank.fed": true,
+    "Tank.inflow": 2.0,
+    "Tank.level": 5.0,
+    "Tank.regime": "normal"
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 22.345161,
+     "status": "armed"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 0.0,
+   "to": 3.0,
+   "next_date": 22.345161,
+   "stopped_at_threshold": true,
+   "samples": [
+    [
+     0.0,
+     5.0
+    ],
+    [
+     0.25,
+     5.25
+    ],
+    [
+     0.5,
+     5.5
+    ],
+    [
+     0.75,
+     5.75
+    ],
+    [
+     1.0,
+     6.0
+    ],
+    [
+     1.25,
+     6.25
+    ],
+    [
+     1.5,
+     6.5
+    ],
+    [
+     1.75,
+     6.75
+    ],
+    [
+     2.0,
+     7.0
+    ],
+    [
+     2.25,
+     7.25
+    ],
+    [
+     2.5,
+     7.5
+    ],
+    [
+     2.75,
+     7.75
+    ],
+    [
+     3.0,
+     8.0
+    ],
+    [
+     3.0,
+     8.0
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 0.0,
+   "armed": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 22.345161
+    }
+   ],
+   "next_date": 22.345161,
+   "winner": "Tank.regime.reach_high"
+  },
+  {
+   "kind": "fired",
+   "time": 3.0,
+   "transition": "Tank.regime.reach_high",
+   "from_state": "normal",
+   "to_state": "full",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 3.0,
+   "index": 1,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.inflow",
+     "old": 2.0,
+     "new": 1.0
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 3.0,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "standby",
+    "Tank.fed": true,
+    "Tank.inflow": 1.0,
+    "Tank.level": 8.0,
+    "Tank.regime": "full"
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 22.345161,
+     "status": "kept"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 3.0,
+   "to": 22.345161,
+   "next_date": 22.345161,
+   "stopped_at_threshold": false,
+   "samples": [
+    [
+     3.0,
+     8.0
+    ],
+    [
+     3.25,
+     8.0
+    ],
+    [
+     3.5,
+     8.0
+    ],
+    [
+     3.75,
+     8.0
+    ],
+    [
+     4.0,
+     8.0
+    ],
+    [
+     4.25,
+     8.0
+    ],
+    [
+     4.5,
+     8.0
+    ],
+    [
+     4.75,
+     8.0
+    ],
+    [
+     5.0,
+     8.0
+    ],
+    [
+     5.25,
+     8.0
+    ],
+    [
+     5.5,
+     8.0
+    ],
+    [
+     5.75,
+     8.0
+    ],
+    [
+     6.0,
+     8.0
+    ],
+    [
+     6.25,
+     8.0
+    ],
+    [
+     6.5,
+     8.0
+    ],
+    [
+     6.75,
+     8.0
+    ],
+    [
+     7.0,
+     8.0
+    ],
+    [
+     7.25,
+     8.0
+    ],
+    [
+     7.5,
+     8.0
+    ],
+    [
+     7.75,
+     8.0
+    ],
+    [
+     8.0,
+     8.0
+    ],
+    [
+     8.25,
+     8.0
+    ],
+    [
+     8.5,
+     8.0
+    ],
+    [
+     8.75,
+     8.0
+    ],
+    [
+     9.0,
+     8.0
+    ],
+    [
+     9.25,
+     8.0
+    ],
+    [
+     9.5,
+     8.0
+    ],
+    [
+     9.75,
+     8.0
+    ],
+    [
+     10.0,
+     8.0
+    ],
+    [
+     10.25,
+     8.0
+    ],
+    [
+     10.5,
+     8.0
+    ],
+    [
+     10.75,
+     8.0
+    ],
+    [
+     11.0,
+     8.0
+    ],
+    [
+     11.25,
+     8.0
+    ],
+    [
+     11.5,
+     8.0
+    ],
+    [
+     11.75,
+     8.0
+    ],
+    [
+     12.0,
+     8.0
+    ],
+    [
+     12.25,
+     8.0
+    ],
+    [
+     12.5,
+     8.0
+    ],
+    [
+     12.75,
+     8.0
+    ],
+    [
+     13.0,
+     8.0
+    ],
+    [
+     13.25,
+     8.0
+    ],
+    [
+     13.5,
+     8.0
+    ],
+    [
+     13.75,
+     8.0
+    ],
+    [
+     14.0,
+     8.0
+    ],
+    [
+     14.25,
+     8.0
+    ],
+    [
+     14.5,
+     8.0
+    ],
+    [
+     14.75,
+     8.0
+    ],
+    [
+     15.0,
+     8.0
+    ],
+    [
+     15.25,
+     8.0
+    ],
+    [
+     15.5,
+     8.0
+    ],
+    [
+     15.75,
+     8.0
+    ],
+    [
+     16.0,
+     8.0
+    ],
+    [
+     16.25,
+     8.0
+    ],
+    [
+     16.5,
+     8.0
+    ],
+    [
+     16.75,
+     8.0
+    ],
+    [
+     17.0,
+     8.0
+    ],
+    [
+     17.25,
+     8.0
+    ],
+    [
+     17.5,
+     8.0
+    ],
+    [
+     17.75,
+     8.0
+    ],
+    [
+     18.0,
+     8.0
+    ],
+    [
+     18.25,
+     8.0
+    ],
+    [
+     18.5,
+     8.0
+    ],
+    [
+     18.75,
+     8.0
+    ],
+    [
+     19.0,
+     8.0
+    ],
+    [
+     19.25,
+     8.0
+    ],
+    [
+     19.5,
+     8.0
+    ],
+    [
+     19.75,
+     8.0
+    ],
+    [
+     20.0,
+     8.0
+    ],
+    [
+     20.25,
+     8.0
+    ],
+    [
+     20.5,
+     8.0
+    ],
+    [
+     20.75,
+     8.0
+    ],
+    [
+     21.0,
+     8.0
+    ],
+    [
+     21.25,
+     8.0
+    ],
+    [
+     21.5,
+     8.0
+    ],
+    [
+     21.75,
+     8.0
+    ],
+    [
+     22.0,
+     8.0
+    ],
+    [
+     22.25,
+     8.0
+    ],
+    [
+     22.345161,
+     8.0
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 3.0,
+   "armed": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 22.345161
+    }
+   ],
+   "next_date": 22.345161,
+   "winner": "P1.mode.fail"
+  },
+  {
+   "kind": "fired",
+   "time": 22.345161,
+   "transition": "P1.mode.fail",
+   "from_state": "working",
+   "to_state": "failed",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 1,
+   "function": "P1.update_P1",
+   "writes": [
+    {
+     "attribute": "P1.delivers",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 2,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.solicited",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 3,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.fed",
+     "old": true,
+     "new": false
+    },
+    {
+     "attribute": "Tank.inflow",
+     "old": 1.0,
+     "new": 0.0
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 22.345161,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": false,
+    "P2.mode": "standby",
+    "Tank.fed": false,
+    "Tank.inflow": 0.0,
+    "Tank.level": 8.0,
+    "Tank.regime": "full"
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.start",
+     "date": 22.345161,
+     "status": "new"
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 23.9121713,
+     "status": "new"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 22.345161,
+   "to": 22.345161,
+   "next_date": 22.345161,
+   "stopped_at_threshold": false,
+   "samples": [
+    [
+     22.345161,
+     8.0
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 22.345161,
+   "armed": [
+    {
+     "transition": "P2.mode.start",
+     "date": 22.345161
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 23.9121713
+    }
+   ],
+   "next_date": 22.345161,
+   "winner": "P2.mode.start"
+  },
+  {
+   "kind": "fired",
+   "time": 22.345161,
+   "transition": "P2.mode.start",
+   "from_state": "standby",
+   "to_state": "running",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 1,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.delivers",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 2,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.fed",
+     "old": false,
+     "new": true
+    },
+    {
+     "attribute": "Tank.inflow",
+     "old": 0.0,
+     "new": 0.5
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 22.345161,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": true,
+    "P2.mode": "running",
+    "Tank.fed": true,
+    "Tank.inflow": 0.5,
+    "Tank.level": 8.0,
+    "Tank.regime": "full"
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.repair",
+     "date": 23.9121713,
+     "status": "kept"
+    },
+    {
+     "transition": "P2.mode.fail",
+     "date": 33.9538793,
+     "status": "new"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 22.345161,
+   "to": 23.9121713,
+   "next_date": 23.9121713,
+   "stopped_at_threshold": false,
+   "samples": [
+    [
+     22.345161,
+     8.0
+    ],
+    [
+     22.5,
+     7.92258051
+    ],
+    [
+     22.75,
+     7.79758051
+    ],
+    [
+     23.0,
+     7.67258051
+    ],
+    [
+     23.25,
+     7.54758051
+    ],
+    [
+     23.5,
+     7.42258051
+    ],
+    [
+     23.75,
+     7.29758051
+    ],
+    [
+     23.9121713,
+     7.21649486
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 22.345161,
+   "armed": [
+    {
+     "transition": "P1.mode.repair",
+     "date": 23.9121713
+    },
+    {
+     "transition": "P2.mode.fail",
+     "date": 33.9538793
+    }
+   ],
+   "next_date": 23.9121713,
+   "winner": "P1.mode.repair"
+  },
+  {
+   "kind": "fired",
+   "time": 23.9121713,
+   "transition": "P1.mode.repair",
+   "from_state": "failed",
+   "to_state": "working",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 23.9121713,
+   "index": 1,
+   "function": "P1.update_P1",
+   "writes": [
+    {
+     "attribute": "P1.delivers",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 23.9121713,
+   "index": 2,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.solicited",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 23.9121713,
+   "index": 3,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.inflow",
+     "old": 0.5,
+     "new": 1.0
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 23.9121713,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": true,
+    "P2.mode": "running",
+    "Tank.fed": true,
+    "Tank.inflow": 1.0,
+    "Tank.level": 7.21649486,
+    "Tank.regime": "full"
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.release",
+     "date": 23.9121713,
+     "status": "new"
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 31.4926375,
+     "status": "new"
+    },
+    {
+     "transition": "P2.mode.fail",
+     "date": 33.9538793,
+     "status": "kept"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 23.9121713,
+   "to": 23.9121713,
+   "next_date": 23.9121713,
+   "stopped_at_threshold": false,
+   "samples": [
+    [
+     23.9121713,
+     7.21649486
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 23.9121713,
+   "armed": [
+    {
+     "transition": "P2.mode.release",
+     "date": 23.9121713
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 31.4926375
+    },
+    {
+     "transition": "P2.mode.fail",
+     "date": 33.9538793
+    }
+   ],
+   "next_date": 23.9121713,
+   "winner": "P2.mode.release"
+  },
+  {
+   "kind": "fired",
+   "time": 23.9121713,
+   "transition": "P2.mode.release",
+   "from_state": "running",
+   "to_state": "standby",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 23.9121713,
+   "index": 1,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.delivers",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 23.9121713,
+   "index": 2,
+   "function": "Tank.update_Tank",
+   "writes": []
+  },
+  {
+   "kind": "stable",
+   "time": 23.9121713,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "standby",
+    "Tank.fed": true,
+    "Tank.inflow": 1.0,
+    "Tank.level": 7.21649486,
+    "Tank.regime": "full"
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 31.4926375,
+     "status": "kept"
+    },
+    {
+     "transition": "P2.mode.fail",
+     "date": 33.9538793,
+     "status": "dropped"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 23.9121713,
+   "to": 31.4926375,
+   "next_date": 31.4926375,
+   "stopped_at_threshold": false,
+   "samples": [
+    [
+     23.9121713,
+     7.21649486
+    ],
+    [
+     24.0,
+     7.21649486
+    ],
+    [
+     24.25,
+     7.21649486
+    ],
+    [
+     24.5,
+     7.21649486
+    ],
+    [
+     24.75,
+     7.21649486
+    ],
+    [
+     25.0,
+     7.21649486
+    ],
+    [
+     25.25,
+     7.21649486
+    ],
+    [
+     25.5,
+     7.21649486
+    ],
+    [
+     25.75,
+     7.21649486
+    ],
+    [
+     26.0,
+     7.21649486
+    ],
+    [
+     26.25,
+     7.21649486
+    ],
+    [
+     26.5,
+     7.21649486
+    ],
+    [
+     26.75,
+     7.21649486
+    ],
+    [
+     27.0,
+     7.21649486
+    ],
+    [
+     27.25,
+     7.21649486
+    ],
+    [
+     27.5,
+     7.21649486
+    ],
+    [
+     27.75,
+     7.21649486
+    ],
+    [
+     28.0,
+     7.21649486
+    ],
+    [
+     28.25,
+     7.21649486
+    ],
+    [
+     28.5,
+     7.21649486
+    ],
+    [
+     28.75,
+     7.21649486
+    ],
+    [
+     29.0,
+     7.21649486
+    ],
+    [
+     29.25,
+     7.21649486
+    ],
+    [
+     29.5,
+     7.21649486
+    ],
+    [
+     29.75,
+     7.21649486
+    ],
+    [
+     30.0,
+     7.21649486
+    ],
+    [
+     30.25,
+     7.21649486
+    ],
+    [
+     30.5,
+     7.21649486
+    ],
+    [
+     30.75,
+     7.21649486
+    ],
+    [
+     31.0,
+     7.21649486
+    ],
+    [
+     31.25,
+     7.21649486
+    ],
+    [
+     31.4926375,
+     7.21649486
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 23.9121713,
+   "armed": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 31.4926375
+    }
+   ],
+   "next_date": 31.4926375,
+   "winner": "P1.mode.fail"
+  },
+  {
+   "kind": "fired",
+   "time": 31.4926375,
+   "transition": "P1.mode.fail",
+   "from_state": "working",
+   "to_state": "failed",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 31.4926375,
+   "index": 1,
+   "function": "P1.update_P1",
+   "writes": [
+    {
+     "attribute": "P1.delivers",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 31.4926375,
+   "index": 2,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.solicited",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 31.4926375,
+   "index": 3,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.fed",
+     "old": true,
+     "new": false
+    },
+    {
+     "attribute": "Tank.inflow",
+     "old": 1.0,
+     "new": 0.0
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 31.4926375,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": false,
+    "P2.mode": "standby",
+    "Tank.fed": false,
+    "Tank.inflow": 0.0,
+    "Tank.level": 7.21649486,
+    "Tank.regime": "full"
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.start",
+     "date": 31.4926375,
+     "status": "new"
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686,
+     "status": "new"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 31.4926375,
+   "to": 31.4926375,
+   "next_date": 31.4926375,
+   "stopped_at_threshold": false,
+   "samples": [
+    [
+     31.4926375,
+     7.21649486
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 31.4926375,
+   "armed": [
+    {
+     "transition": "P2.mode.start",
+     "date": 31.4926375
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686
+    }
+   ],
+   "next_date": 31.4926375,
+   "winner": "P2.mode.start"
+  },
+  {
+   "kind": "fired",
+   "time": 31.4926375,
+   "transition": "P2.mode.start",
+   "from_state": "standby",
+   "to_state": "running",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 31.4926375,
+   "index": 1,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.delivers",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 31.4926375,
+   "index": 2,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.fed",
+     "old": false,
+     "new": true
+    },
+    {
+     "attribute": "Tank.inflow",
+     "old": 0.0,
+     "new": 0.5
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 31.4926375,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": true,
+    "P2.mode": "running",
+    "Tank.fed": true,
+    "Tank.inflow": 0.5,
+    "Tank.level": 7.21649486,
+    "Tank.regime": "full"
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.fail",
+     "date": 36.0743317,
+     "status": "new"
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686,
+     "status": "kept"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 31.4926375,
+   "to": 31.9256273,
+   "next_date": 36.0743317,
+   "stopped_at_threshold": true,
+   "samples": [
+    [
+     31.4926375,
+     7.21649486
+    ],
+    [
+     31.5,
+     7.21281363
+    ],
+    [
+     31.75,
+     7.08781363
+    ],
+    [
+     31.9256273,
+     7.0
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 31.4926375,
+   "armed": [
+    {
+     "transition": "P2.mode.fail",
+     "date": 36.0743317
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686
+    }
+   ],
+   "next_date": 36.0743317,
+   "winner": "Tank.regime.leave_high"
+  },
+  {
+   "kind": "fired",
+   "time": 31.9256273,
+   "transition": "Tank.regime.leave_high",
+   "from_state": "full",
+   "to_state": "normal",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 31.9256273,
+   "index": 1,
+   "function": "Tank.update_Tank",
+   "writes": []
+  },
+  {
+   "kind": "stable",
+   "time": 31.9256273,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": true,
+    "P2.mode": "running",
+    "Tank.fed": true,
+    "Tank.inflow": 0.5,
+    "Tank.level": 7.0,
+    "Tank.regime": "normal"
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.fail",
+     "date": 36.0743317,
+     "status": "kept"
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686,
+     "status": "kept"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 31.9256273,
+   "to": 36.0743317,
+   "next_date": 36.0743317,
+   "stopped_at_threshold": false,
+   "samples": [
+    [
+     31.9256273,
+     7.0
+    ],
+    [
+     32.0,
+     6.96281363
+    ],
+    [
+     32.25,
+     6.83781363
+    ],
+    [
+     32.5,
+     6.71281363
+    ],
+    [
+     32.75,
+     6.58781363
+    ],
+    [
+     33.0,
+     6.46281363
+    ],
+    [
+     33.25,
+     6.33781363
+    ],
+    [
+     33.5,
+     6.21281363
+    ],
+    [
+     33.75,
+     6.08781363
+    ],
+    [
+     34.0,
+     5.96281363
+    ],
+    [
+     34.25,
+     5.83781363
+    ],
+    [
+     34.5,
+     5.71281363
+    ],
+    [
+     34.75,
+     5.58781363
+    ],
+    [
+     35.0,
+     5.46281363
+    ],
+    [
+     35.25,
+     5.33781363
+    ],
+    [
+     35.5,
+     5.21281363
+    ],
+    [
+     35.75,
+     5.08781363
+    ],
+    [
+     36.0,
+     4.96281363
+    ],
+    [
+     36.0743317,
+     4.92564779
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 31.9256273,
+   "armed": [
+    {
+     "transition": "P2.mode.fail",
+     "date": 36.0743317
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686
+    }
+   ],
+   "next_date": 36.0743317,
+   "winner": "P2.mode.fail"
+  },
+  {
+   "kind": "fired",
+   "time": 36.0743317,
+   "transition": "P2.mode.fail",
+   "from_state": "running",
+   "to_state": "failed",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 36.0743317,
+   "index": 1,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.delivers",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 36.0743317,
+   "index": 2,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.fed",
+     "old": true,
+     "new": false
+    },
+    {
+     "attribute": "Tank.inflow",
+     "old": 0.5,
+     "new": 0.0
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 36.0743317,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": false,
+    "P2.mode": "failed",
+    "Tank.fed": false,
+    "Tank.inflow": 0.0,
+    "Tank.level": 4.92564779,
+    "Tank.regime": "normal"
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686,
+     "status": "kept"
+    },
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615,
+     "status": "new"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 36.0743317,
+   "to": 38.9999795,
+   "next_date": 47.4050686,
+   "stopped_at_threshold": true,
+   "samples": [
+    [
+     36.0743317,
+     4.92564779
+    ],
+    [
+     36.25,
+     4.74997946
+    ],
+    [
+     36.5,
+     4.49997946
+    ],
+    [
+     36.75,
+     4.24997946
+    ],
+    [
+     37.0,
+     3.99997946
+    ],
+    [
+     37.25,
+     3.74997946
+    ],
+    [
+     37.5,
+     3.49997946
+    ],
+    [
+     37.75,
+     3.24997946
+    ],
+    [
+     38.0,
+     2.99997946
+    ],
+    [
+     38.25,
+     2.74997946
+    ],
+    [
+     38.5,
+     2.49997946
+    ],
+    [
+     38.75,
+     2.24997946
+    ],
+    [
+     38.9999795,
+     2.0
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 36.0743317,
+   "armed": [
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686
+    },
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615
+    }
+   ],
+   "next_date": 47.4050686,
+   "winner": "Tank.regime.reach_low"
+  },
+  {
+   "kind": "fired",
+   "time": 38.9999795,
+   "transition": "Tank.regime.reach_low",
+   "from_state": "normal",
+   "to_state": "alarm",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 38.9999795,
+   "index": 1,
+   "function": "Tank.update_Tank",
+   "writes": []
+  },
+  {
+   "kind": "stable",
+   "time": 38.9999795,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": false,
+    "P2.mode": "failed",
+    "Tank.fed": false,
+    "Tank.inflow": 0.0,
+    "Tank.level": 2.0,
+    "Tank.regime": "alarm"
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686,
+     "status": "kept"
+    },
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615,
+     "status": "kept"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 38.9999795,
+   "to": 47.4050686,
+   "next_date": 47.4050686,
+   "stopped_at_threshold": false,
+   "samples": [
+    [
+     38.9999795,
+     2.0
+    ],
+    [
+     39.0,
+     2.0
+    ],
+    [
+     39.25,
+     2.0
+    ],
+    [
+     39.5,
+     2.0
+    ],
+    [
+     39.75,
+     2.0
+    ],
+    [
+     40.0,
+     2.0
+    ],
+    [
+     40.25,
+     2.0
+    ],
+    [
+     40.5,
+     2.0
+    ],
+    [
+     40.75,
+     2.0
+    ],
+    [
+     41.0,
+     2.0
+    ],
+    [
+     41.25,
+     2.0
+    ],
+    [
+     41.5,
+     2.0
+    ],
+    [
+     41.75,
+     2.0
+    ],
+    [
+     42.0,
+     2.0
+    ],
+    [
+     42.25,
+     2.0
+    ],
+    [
+     42.5,
+     2.0
+    ],
+    [
+     42.75,
+     2.0
+    ],
+    [
+     43.0,
+     2.0
+    ],
+    [
+     43.25,
+     2.0
+    ],
+    [
+     43.5,
+     2.0
+    ],
+    [
+     43.75,
+     2.0
+    ],
+    [
+     44.0,
+     2.0
+    ],
+    [
+     44.25,
+     2.0
+    ],
+    [
+     44.5,
+     2.0
+    ],
+    [
+     44.75,
+     2.0
+    ],
+    [
+     45.0,
+     2.0
+    ],
+    [
+     45.25,
+     2.0
+    ],
+    [
+     45.5,
+     2.0
+    ],
+    [
+     45.75,
+     2.0
+    ],
+    [
+     46.0,
+     2.0
+    ],
+    [
+     46.25,
+     2.0
+    ],
+    [
+     46.5,
+     2.0
+    ],
+    [
+     46.75,
+     2.0
+    ],
+    [
+     47.0,
+     2.0
+    ],
+    [
+     47.25,
+     2.0
+    ],
+    [
+     47.4050686,
+     2.0
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 38.9999795,
+   "armed": [
+    {
+     "transition": "P1.mode.repair",
+     "date": 47.4050686
+    },
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615
+    }
+   ],
+   "next_date": 47.4050686,
+   "winner": "P1.mode.repair"
+  },
+  {
+   "kind": "fired",
+   "time": 47.4050686,
+   "transition": "P1.mode.repair",
+   "from_state": "failed",
+   "to_state": "working",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 47.4050686,
+   "index": 1,
+   "function": "P1.update_P1",
+   "writes": [
+    {
+     "attribute": "P1.delivers",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 47.4050686,
+   "index": 2,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.solicited",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 47.4050686,
+   "index": 3,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.fed",
+     "old": false,
+     "new": true
+    },
+    {
+     "attribute": "Tank.inflow",
+     "old": 0.0,
+     "new": 2.0
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 47.4050686,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "failed",
+    "Tank.fed": true,
+    "Tank.inflow": 2.0,
+    "Tank.level": 2.0,
+    "Tank.regime": "alarm"
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615,
+     "status": "kept"
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 235.476263,
+     "status": "new"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 47.4050686,
+   "to": 47.9050686,
+   "next_date": 73.4033615,
+   "stopped_at_threshold": true,
+   "samples": [
+    [
+     47.4050686,
+     2.0
+    ],
+    [
+     47.5,
+     2.18986276
+    ],
+    [
+     47.75,
+     2.68986276
+    ],
+    [
+     47.9050686,
+     3.0
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 47.4050686,
+   "armed": [
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 235.476263
+    }
+   ],
+   "next_date": 73.4033615,
+   "winner": "Tank.regime.leave_low"
+  },
+  {
+   "kind": "fired",
+   "time": 47.9050686,
+   "transition": "Tank.regime.leave_low",
+   "from_state": "alarm",
+   "to_state": "normal",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 47.9050686,
+   "index": 1,
+   "function": "Tank.update_Tank",
+   "writes": []
+  },
+  {
+   "kind": "stable",
+   "time": 47.9050686,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "failed",
+    "Tank.fed": true,
+    "Tank.inflow": 2.0,
+    "Tank.level": 3.0,
+    "Tank.regime": "normal"
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615,
+     "status": "kept"
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 235.476263,
+     "status": "kept"
+    }
+   ]
+  },
+  {
+   "kind": "integrate",
+   "from": 47.9050686,
+   "to": 52.9050686,
+   "next_date": 73.4033615,
+   "stopped_at_threshold": true,
+   "samples": [
+    [
+     47.9050686,
+     3.0
+    ],
+    [
+     48.0,
+     3.09493138
+    ],
+    [
+     48.25,
+     3.34493138
+    ],
+    [
+     48.5,
+     3.59493138
+    ],
+    [
+     48.75,
+     3.84493138
+    ],
+    [
+     49.0,
+     4.09493138
+    ],
+    [
+     49.25,
+     4.34493138
+    ],
+    [
+     49.5,
+     4.59493138
+    ],
+    [
+     49.75,
+     4.84493138
+    ],
+    [
+     50.0,
+     5.09493138
+    ],
+    [
+     50.25,
+     5.34493138
+    ],
+    [
+     50.5,
+     5.59493138
+    ],
+    [
+     50.75,
+     5.84493138
+    ],
+    [
+     51.0,
+     6.09493138
+    ],
+    [
+     51.25,
+     6.34493138
+    ],
+    [
+     51.5,
+     6.59493138
+    ],
+    [
+     51.75,
+     6.84493138
+    ],
+    [
+     52.0,
+     7.09493138
+    ],
+    [
+     52.25,
+     7.34493138
+    ],
+    [
+     52.5,
+     7.59493138
+    ],
+    [
+     52.75,
+     7.84493138
+    ],
+    [
+     52.9050686,
+     8.0
+    ]
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 47.9050686,
+   "armed": [
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 235.476263
+    }
+   ],
+   "next_date": 73.4033615,
+   "winner": "Tank.regime.reach_high"
+  },
+  {
+   "kind": "fired",
+   "time": 52.9050686,
+   "transition": "Tank.regime.reach_high",
+   "from_state": "normal",
+   "to_state": "full",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 52.9050686,
+   "index": 1,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.inflow",
+     "old": 2.0,
+     "new": 1.0
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 52.9050686,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "failed",
+    "Tank.fed": true,
+    "Tank.inflow": 1.0,
+    "Tank.level": 8.0,
+    "Tank.regime": "full"
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.repair",
+     "date": 73.4033615,
+     "status": "kept"
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 235.476263,
+     "status": "kept"
+    }
+   ]
+  }
+ ]
+}

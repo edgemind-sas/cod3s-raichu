@@ -104,6 +104,11 @@ class AttributeChange:
     #: Transition whose firing (directly or through the cascade)
     #: triggered the write, `"initialization"` for the t = 0 fixpoint.
     trigger: str
+    #: Fixpoint iteration of the write: the index, counted from 1 and
+    #: restarted at every fixpoint, of the sensitive function application
+    #: that made it; 0 for a write made before the fixpoint (a fired
+    #: transition's own edge effects, an FMU output, an external input).
+    iteration: int = 0
 
     def __str__(self) -> str:
         return (
@@ -225,6 +230,7 @@ class JournalQuery:
                         new=_value(record["new"]),
                         cause=record["cause"],
                         trigger=trigger,
+                        iteration=record.get("iteration", 0),
                     )
                 )
         return changes
@@ -271,6 +277,7 @@ class JournalQuery:
                         new=_value(record["new"]),
                         cause=record["cause"],
                         trigger=transition,
+                        iteration=record.get("iteration", 0),
                     )
                 )
             elif kind in ("transition_scheduled", "transition_rescheduled"):

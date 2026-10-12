@@ -8,9 +8,10 @@ chain of each event. It is **zero-cost when off** and enabled per run
 with `journal=True`:
 
 Each mixed-integer program solve adds a `program_solved` record with its
-name, date, `optimal` or `infeasible` status, optional objective, and a
-`cached` flag. Decision, feasibility and objective writes appear as
-`attribute_changed` records caused by the program.
+name, date, `optimal` or `infeasible` status, optional objective, a
+`cached` flag and the fixpoint `iteration` that applied it (see below).
+Decision, feasibility and objective writes appear as `attribute_changed`
+records caused by the program.
 
 <!-- skip -->
 ```python
@@ -27,6 +28,19 @@ flowchart LR
     V -->|trigger| F
     V --> R["transitions scheduled,<br/>rescheduled or dropped"]
 ```
+
+The writes of one event are numbered by **fixpoint iteration**. After a
+transition fires, the engine applies the pending sensitive functions one at
+a time, always the one with the lowest index first, until none is left
+(the `evolA` rule). Each `function_triggered`, `program_solved` and
+`attribute_changed` record carries the `iteration` that applied it,
+counted from 1 and restarted at every fixpoint. A write made before the fixpoint starts (the
+fired transition's own [edge effects](../reference/model-schema.md#edge-effects),
+an FMU output, an external input) carries 0. One iteration applies exactly
+one function or program, so it opens with one `function_triggered` or
+`program_solved` record, and all its writes share that `cause`. The
+[fixpoint chapter](../engine/fixpoint-and-race.md) of "How the engine works"
+replays such a cascade iteration by iteration.
 
 Every record carries its cause, so the chain can be walked either way: from an
 event to its consequences (`cascade_after`), from an attribute back to its

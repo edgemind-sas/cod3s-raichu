@@ -17,7 +17,9 @@ Two new ingredients:
   when the guard flips: the crossing is located by root-finding, not by
   stepping. You declare this intent explicitly (`"distrib": "watched"`): the
   engine cannot guess, from a comparison alone, whether you mean "fire at
-  the crossing" or merely "be eligible while true".
+  the crossing" or merely "be eligible while true". The
+  [boundaries chapter](../engine/boundaries.md) of "How the engine works"
+  shows a crossing interrupting integration, step by step.
 
 ## The room: a continuous attribute
 

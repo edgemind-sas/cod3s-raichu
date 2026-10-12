@@ -1,0 +1,313 @@
+{
+ "scenario": "discrete-backup-fails",
+ "model": "explainer_discrete",
+ "seed": 1,
+ "horizon": 40.0,
+ "attributes": [
+  "P1.delivers",
+  "P2.solicited",
+  "P2.delivers",
+  "Tank.fed"
+ ],
+ "automata": [
+  "P1.mode",
+  "P2.mode"
+ ],
+ "steps": [
+  {
+   "kind": "stable",
+   "time": 0.0,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "standby",
+    "Tank.fed": true
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 22.345161,
+     "status": "armed"
+    }
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 0.0,
+   "armed": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 22.345161
+    }
+   ],
+   "next_date": 22.345161,
+   "winner": "P1.mode.fail"
+  },
+  {
+   "kind": "fired",
+   "time": 22.345161,
+   "transition": "P1.mode.fail",
+   "from_state": "working",
+   "to_state": "failed",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 1,
+   "function": "P1.update_P1",
+   "writes": [
+    {
+     "attribute": "P1.delivers",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 2,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.solicited",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 3,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.fed",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 22.345161,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": false,
+    "P2.mode": "standby",
+    "Tank.fed": false
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.start",
+     "date": 22.345161,
+     "status": "new"
+    },
+    {
+     "transition": "P1.mode.repair",
+     "date": 23.9121713,
+     "status": "new"
+    }
+   ]
+  },
+  {
+   "kind": "branch",
+   "time": 22.345161,
+   "transition": "P2.mode.start",
+   "options": [
+    {
+     "label": "P2 starts",
+     "to": "running",
+     "scenario": "discrete-backup-starts"
+    },
+    {
+     "label": "P2 fails on demand",
+     "to": "failed",
+     "scenario": "discrete-backup-fails"
+    }
+   ]
+  },
+  {
+   "kind": "fired",
+   "time": 22.345161,
+   "transition": "P2.mode.start",
+   "from_state": "standby",
+   "to_state": "failed",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 22.345161,
+   "index": 1,
+   "function": "P2.update_P2",
+   "writes": []
+  },
+  {
+   "kind": "stable",
+   "time": 22.345161,
+   "state": {
+    "P1.delivers": false,
+    "P1.mode": "failed",
+    "P2.solicited": true,
+    "P2.delivers": false,
+    "P2.mode": "failed",
+    "Tank.fed": false
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.repair",
+     "date": 23.9121713,
+     "status": "kept"
+    },
+    {
+     "transition": "P2.mode.repair",
+     "date": 34.4931432,
+     "status": "new"
+    }
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 22.345161,
+   "armed": [
+    {
+     "transition": "P1.mode.repair",
+     "date": 23.9121713
+    },
+    {
+     "transition": "P2.mode.repair",
+     "date": 34.4931432
+    }
+   ],
+   "next_date": 23.9121713,
+   "winner": "P1.mode.repair"
+  },
+  {
+   "kind": "fired",
+   "time": 23.9121713,
+   "transition": "P1.mode.repair",
+   "from_state": "failed",
+   "to_state": "working",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 23.9121713,
+   "index": 1,
+   "function": "P1.update_P1",
+   "writes": [
+    {
+     "attribute": "P1.delivers",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 23.9121713,
+   "index": 2,
+   "function": "P2.update_P2",
+   "writes": [
+    {
+     "attribute": "P2.solicited",
+     "old": true,
+     "new": false
+    }
+   ]
+  },
+  {
+   "kind": "iteration",
+   "time": 23.9121713,
+   "index": 3,
+   "function": "Tank.update_Tank",
+   "writes": [
+    {
+     "attribute": "Tank.fed",
+     "old": false,
+     "new": true
+    }
+   ]
+  },
+  {
+   "kind": "stable",
+   "time": 23.9121713,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "failed",
+    "Tank.fed": true
+   },
+   "schedule": [
+    {
+     "transition": "P2.mode.repair",
+     "date": 34.4931432,
+     "status": "kept"
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 52.933967,
+     "status": "new"
+    }
+   ]
+  },
+  {
+   "kind": "race",
+   "time": 23.9121713,
+   "armed": [
+    {
+     "transition": "P2.mode.repair",
+     "date": 34.4931432
+    },
+    {
+     "transition": "P1.mode.fail",
+     "date": 52.933967
+    }
+   ],
+   "next_date": 34.4931432,
+   "winner": "P2.mode.repair"
+  },
+  {
+   "kind": "fired",
+   "time": 34.4931432,
+   "transition": "P2.mode.repair",
+   "from_state": "failed",
+   "to_state": "standby",
+   "edge_writes": []
+  },
+  {
+   "kind": "iteration",
+   "time": 34.4931432,
+   "index": 1,
+   "function": "P2.update_P2",
+   "writes": []
+  },
+  {
+   "kind": "stable",
+   "time": 34.4931432,
+   "state": {
+    "P1.delivers": true,
+    "P1.mode": "working",
+    "P2.solicited": false,
+    "P2.delivers": false,
+    "P2.mode": "standby",
+    "Tank.fed": true
+   },
+   "schedule": [
+    {
+     "transition": "P1.mode.fail",
+     "date": 52.933967,
+     "status": "kept"
+    }
+   ]
+  }
+ ]
+}

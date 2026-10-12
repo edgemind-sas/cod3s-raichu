@@ -55,9 +55,11 @@ markdown_extensions:
 
 extra_css:
   - stylesheets/extra.css
+  - stylesheets/engine-explainer.css
 
 extra_javascript:
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+  - javascripts/engine-explainer.js
 
 nav:
   - Home: index.md
@@ -66,6 +68,10 @@ nav:
       - 2. Connecting components: tutorial/02-connecting-components.md
       - 3. Stochastic & Monte-Carlo: tutorial/03-stochastic-and-monte-carlo.md
       - 4. Going hybrid: tutorial/04-going-hybrid.md
+  - How the engine works:
+      - The installation: engine/index.md
+      - Fixpoint and race of dates: engine/fixpoint-and-race.md
+      - Boundaries: engine/boundaries.md
   - Examples:
       - Overview: examples/index.md
       - Heated tank: examples/heated-tank.md

@@ -190,6 +190,9 @@ pub struct Engine<'m> {
     /// Scratch worklist for the fixpoint (reused across steps: no
     /// allocation in the hot loop once warmed up).
     worklist: BTreeSet<FnIdx>,
+    /// Pop index of the fixpoint iteration in progress (`evolA`), `0`
+    /// outside a fixpoint: stamped on the journal's writes.
+    fixpoint_iteration: usize,
     /// Counted work (see [`WorkCounters`]): cumulative instrumentation
     /// over this engine's life, deliberately outside the snapshot.
     work: WorkCounters,
@@ -452,6 +455,7 @@ impl<'m> Engine<'m> {
             rng,
             stochastic,
             worklist: BTreeSet::new(),
+            fixpoint_iteration: 0,
             work: WorkCounters::default(),
             flow_scratch: FlowScratch::default(),
             active_set_budget: config

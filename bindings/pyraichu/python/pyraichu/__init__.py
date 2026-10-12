@@ -2163,8 +2163,8 @@ class Interactive:
     - :meth:`set_date`: reschedule an armed transition;
     - :meth:`snapshot` / :meth:`restore`: checkpoint and undo;
     - :meth:`reset`: back to ``t = 0``;
-    - :attr:`time`, :meth:`attribute`, :meth:`state`, :meth:`history`:
-      inspection between events.
+    - :attr:`time`, :meth:`attribute`, :meth:`state`, :meth:`history`,
+      :meth:`journal`: inspection between events.
 
     Models carrying a ``"plugins"`` section are expanded and validated
     (as :func:`load_model` does). ``seed``/``rng_stream`` drive the
@@ -2281,6 +2281,16 @@ class Interactive:
     def history(self) -> list[Event]:
         """The events fired so far, chronological."""
         return [self._event_from_dict(e) for e in json.loads(self._raw.history())]
+
+    def journal(self) -> list[dict[str, Any]]:
+        """The causal journal recorded so far, as :func:`simulate` returns it.
+
+        Requires a session opened with ``journal=True``; raises
+        :class:`SimulationError` otherwise. After :meth:`restore`, it is
+        the journal of the restored state, so branches fired from one
+        snapshot each read their own history.
+        """
+        return json.loads(self._raw.journal())
 
     def snapshot(self) -> Any:
         """Capture the full state as an opaque checkpoint (for :meth:`restore`)."""
