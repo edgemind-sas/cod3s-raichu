@@ -1,9 +1,18 @@
 name: CI
 
+# A branch reaches GitHub only to open a pull request, so the
+# `pull_request` event already covers it; also triggering on pushes to
+# feature branches ran every PR twice.
 on:
   push:
-    branches: ["master", "main", "feat/**", "fix/**"]
+    branches: ["main"]
   pull_request:
+
+# A new commit on a pull request cancels the run it makes obsolete.
+# Runs on `main` are grouped by commit, so none is ever cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
