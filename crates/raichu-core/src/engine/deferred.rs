@@ -117,24 +117,39 @@ impl<'m> Engine<'m> {
             return Ok((self.time, ProbeStop::Watched { index: watched }));
         }
         let t_max = self.config.t_max;
-        let (target, reason) = match self.next_pending() {
-            Some((idx, date)) if date <= limit && date <= t_max => {
-                (date.max(self.time), ProbeStop::Deterministic { index: idx })
+        loop {
+            let next = self.next_pending();
+            let (target, reason) = match next {
+                Some((idx, date)) if date <= limit && date <= t_max => {
+                    (date.max(self.time), ProbeStop::Deterministic { index: idx })
+                }
+                _ if t_max < limit => (t_max.max(self.time), ProbeStop::Horizon),
+                _ => (limit, ProbeStop::Limit),
+            };
+            if self.needs_integration() && target > self.time && target.is_finite() {
+                if let Some(index) = self.advance_continuous(target)? {
+                    // A located observer handed back is a countdown falling
+                    // due, a dated firing, not a boundary crossing.
+                    let stop = if self.model.transitions[index].located.is_some() {
+                        ProbeStop::Deterministic { index }
+                    } else {
+                        ProbeStop::Watched { index }
+                    };
+                    return Ok((self.time, stop));
+                }
+                // A located crossing may have moved the schedule on the
+                // way: probe again from the instant reached.
+                if self.next_pending() != next {
+                    continue;
+                }
             }
-            _ if t_max < limit => (t_max.max(self.time), ProbeStop::Horizon),
-            _ => (limit, ProbeStop::Limit),
-        };
-        if self.needs_integration() && target > self.time && target.is_finite() {
-            if let Some(watched) = self.advance_continuous(target)? {
-                return Ok((self.time, ProbeStop::Watched { index: watched }));
+            if target > self.time {
+                self.flush_samples_before(target);
+                self.time = target;
+                self.note_time_change();
             }
+            return Ok((target, reason));
         }
-        if target > self.time {
-            self.flush_samples_before(target);
-            self.time = target;
-            self.note_time_change();
-        }
-        Ok((target, reason))
     }
 
     /// The current cumulative hazards of `transitions` as one sample.

@@ -53,6 +53,15 @@ impl<'m> Engine<'m> {
     ) -> Result<Option<TransIdx>, EngineError> {
         let mut stuck_at = f64::NEG_INFINITY;
         let mut stuck: Vec<usize> = Vec::new();
+        // The located observer whose countdown, armed during this advance,
+        // falls due first and before `t_target`: integration stops there
+        // and hands it back to fire, as a watched crossing is handed back.
+        // A countdown armed before the advance is the caller's to plan
+        // (an interactive firing may deliberately pass it over), so the
+        // ones pending on entry are set aside.
+        let armed_before = self.located_pending();
+        let mut due: Option<(TransIdx, f64)> = None;
+        let mut limit = t_target;
         let mut segment_target = t_target;
         let mut pending_error: Option<(f64, EngineError)> = None;
         loop {
@@ -70,12 +79,43 @@ impl<'m> Engine<'m> {
                         pending_error = Some((failed_at, error));
                     }
                 }
-                Segment::Reached if pending_error.is_none() => return Ok(None),
+                Segment::Reached if pending_error.is_none() => {
+                    return Ok(due
+                        .filter(|(_, date)| self.time >= *date)
+                        .map(|(idx, _)| idx));
+                }
                 Segment::Reached => {}
+                Segment::Watched(trans_idx)
+                    if self.model.transitions[trans_idx].located.is_some() =>
+                {
+                    // A located observer's condition crossed: only the
+                    // located observers' schedules move (armed on a rise,
+                    // interrupted on a fall). All of them are settled at
+                    // once, since their conditions are followed
+                    // continuously anyway: observers sharing one crossing
+                    // instant cost one segment, not one each. Counted like
+                    // one firing, so a condition re-crossing on the spot
+                    // cannot spin here.
+                    pending_error = None;
+                    self.note_watched_firing()?;
+                    for position in self.watched_active.clone() {
+                        let idx = self.model.watched[position];
+                        if self.model.transitions[idx].located.is_some() {
+                            self.refresh_transition(idx)?;
+                        }
+                    }
+                    due = self.located_due(t_target, &armed_before);
+                    if let Some((idx, _)) = due.filter(|(_, date)| *date <= self.time) {
+                        return Ok(Some(idx));
+                    }
+                    limit = due.map_or(t_target, |(_, date)| date);
+                    segment_target = limit;
+                    continue;
+                }
                 Segment::Watched(trans_idx) => return Ok(Some(trans_idx)),
                 Segment::Resolved(edge) => {
                     pending_error = None;
-                    segment_target = t_target;
+                    segment_target = limit;
                     if self.time > stuck_at + self.config.ode.tol_event {
                         stuck_at = self.time;
                         stuck.clear();
@@ -89,8 +129,10 @@ impl<'m> Engine<'m> {
                         });
                     }
                     self.note_flow_restart(&stuck)?;
-                    if self.time >= t_target {
-                        return Ok(None);
+                    if self.time >= limit {
+                        return Ok(due
+                            .filter(|(_, date)| self.time >= *date)
+                            .map(|(idx, _)| idx));
                     }
                     continue;
                 }
@@ -102,7 +144,7 @@ impl<'m> Engine<'m> {
                 // Approach the barrier through fresh, clean prefixes.
                 // Only a validated event can end this frozen segment;
                 // without one, the original typed error remains fatal.
-                let ceiling = if retrying { segment_target } else { t_target };
+                let ceiling = if retrying { segment_target } else { limit };
                 let until = self.time + (failed_at.min(ceiling) - self.time) * 0.5;
                 if until <= self.time + self.config.ode.tol_event
                     || (retrying && until >= segment_target)
@@ -113,6 +155,32 @@ impl<'m> Engine<'m> {
                 pending_error = Some((failed_at, error));
             }
         }
+    }
+
+    /// Every located observer with a countdown running, with its date.
+    fn located_pending(&self) -> Vec<(TransIdx, f64)> {
+        self.model
+            .watched
+            .iter()
+            .filter(|&&idx| self.model.transitions[idx].located.is_some())
+            .filter_map(|&idx| self.pending[idx].map(|date| (idx, date)))
+            .collect()
+    }
+
+    /// The located observer whose countdown, armed since `armed_before`
+    /// was taken, falls due first, when that is before `t_target`. A tie
+    /// at `t_target` itself is left to the caller's schedule, which ranks
+    /// it in the same-date waves.
+    fn located_due(
+        &self,
+        t_target: f64,
+        armed_before: &[(TransIdx, f64)],
+    ) -> Option<(TransIdx, f64)> {
+        self.located_pending()
+            .into_iter()
+            .filter(|entry| !armed_before.contains(entry))
+            .filter(|(_, date)| *date < t_target)
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
     }
 
     /// Whether continuous evolution must run: the model has ODE
@@ -156,6 +224,22 @@ impl<'m> Engine<'m> {
             .watched_active
             .iter()
             .map(|&position| self.model.watched[position])
+            .collect();
+        // A located observer is read in the sense its schedule calls for:
+        // idle, the start of its condition arms it; counting down, the end
+        // of its condition interrupts it, unless nothing interrupts it.
+        let senses: Vec<MarginSense> = margins
+            .iter()
+            .map(|&idx| {
+                let transition = &self.model.transitions[idx];
+                if transition.located.is_none() || self.pending[idx].is_none() {
+                    MarginSense::Rising
+                } else if transition.on_interruption == raichu_model::InterruptionPolicy::Continue {
+                    MarginSense::Inert
+                } else {
+                    MarginSense::Falling
+                }
+            })
             .collect();
 
         // Armed continuously-varying hazards ride along as auxiliary
@@ -245,6 +329,7 @@ impl<'m> Engine<'m> {
             vars: self.vars.clone(),
             states: self.states.clone(),
             margins,
+            senses,
             hazards: hazard_monitors,
             flows,
             observed,

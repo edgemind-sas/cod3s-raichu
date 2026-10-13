@@ -192,244 +192,168 @@ impl<'m> Engine<'m> {
 
     pub(super) fn refresh_schedule(&mut self) -> Result<(), EngineError> {
         for trans_idx in 0..self.model.transitions.len() {
-            let transition = &self.model.transitions[trans_idx];
-            // A located observer is armed here like the zero-delay
-            // observer it was declared as; only its crossing during
-            // integration is located.
-            if matches!(transition.distrib, CLaw::Watched { .. }) && !transition.located_observer()
-            {
-                continue;
-            }
-            let in_source = self.states[transition.automaton] == transition.source;
-            if !in_source {
-                // Leaving the source cancels any paused countdown and
-                // discards the banked hazard.
-                self.frozen[trans_idx] = None;
-                self.hazards[trans_idx] = None;
-            }
-            let guard_ok = match &transition.guard {
-                None => true,
-                Some(guard) => eval_bool(self.model, &self.vars, &self.states, self.time, guard)?,
-            };
-            if self.config.stochastic_dates != StochasticDates::Drawn
-                && is_stochastic(&transition.distrib)
-            {
-                self.refresh_deferred(trans_idx, in_source, guard_ok)?;
-                self.refresh_operator_date(trans_idx, in_source, guard_ok);
-                continue;
-            }
+            self.refresh_transition(trans_idx)?;
+        }
+        Ok(())
+    }
+
+    /// `schedule_deterministic` + `drop_disabled` for one transition:
+    /// arm it when it sits in its source with its guard holding, drop or
+    /// pause it when either stops holding, reschedule a modifiable rate.
+    /// [`Engine::refresh_schedule`] runs it over every transition after a
+    /// discrete step; a located crossing runs it over the one transition
+    /// whose condition crossed, so no other guard is read at that instant.
+    pub(super) fn refresh_transition(&mut self, trans_idx: TransIdx) -> Result<(), EngineError> {
+        let transition = &self.model.transitions[trans_idx];
+        if matches!(transition.distrib, CLaw::Watched { .. }) {
+            return Ok(());
+        }
+        let in_source = self.states[transition.automaton] == transition.source;
+        if !in_source {
+            // Leaving the source cancels any paused countdown and
+            // discards the banked hazard.
+            self.frozen[trans_idx] = None;
+            self.hazards[trans_idx] = None;
+        }
+        let guard_ok = match &transition.guard {
+            None => true,
+            Some(guard) => eval_bool(self.model, &self.vars, &self.states, self.time, guard)?,
+        };
+        if self.config.stochastic_dates != StochasticDates::Drawn
+            && is_stochastic(&transition.distrib)
+        {
+            self.refresh_deferred(trans_idx, in_source, guard_ok)?;
             self.refresh_operator_date(trans_idx, in_source, guard_ok);
-            self.refresh_drawn_clock(trans_idx, in_source, guard_ok);
-            match self.pending[trans_idx] {
-                Some(_) if !in_source => {
-                    self.pending[trans_idx] = None;
-                    if self.config.journal {
-                        self.journal.push(JournalRecord::TransitionDropped {
-                            time: self.time,
-                            transition: transition.name.clone(),
-                            reason: DropReason::SourceLeft,
-                        });
-                    }
+            return Ok(());
+        }
+        self.refresh_operator_date(trans_idx, in_source, guard_ok);
+        self.refresh_drawn_clock(trans_idx, in_source, guard_ok);
+        match self.pending[trans_idx] {
+            Some(_) if !in_source => {
+                self.pending[trans_idx] = None;
+                if self.config.journal {
+                    self.journal.push(JournalRecord::TransitionDropped {
+                        time: self.time,
+                        transition: transition.name.clone(),
+                        reason: DropReason::SourceLeft,
+                    });
                 }
-                Some(date)
-                    if !guard_ok
-                        && transition.on_interruption
-                            != raichu_model::InterruptionPolicy::Continue =>
-                {
-                    // `drop_disabled`: reset cancels the occurrence duration
-                    // (interruptible transition); resume
-                    // pauses it (RAICHU extension); continue never
-                    // reaches this arm.
-                    let reason = match transition.on_interruption {
-                        raichu_model::InterruptionPolicy::Resume => {
-                            if let Some(hazard) = self.hazards[trans_idx].as_mut() {
-                                // Pause the hazard clock: bank what has
-                                // accrued (continuous hazards are already
-                                // committed by the integrator); the
-                                // re-arm recomputes λ at resumption.
-                                if !matches!(
-                                    transition.distrib,
-                                    CLaw::ExpVar {
-                                        continuous: true,
-                                        ..
-                                    }
-                                ) {
-                                    hazard.accumulated += hazard.rate * (self.time - hazard.since);
+            }
+            Some(date)
+                if !guard_ok
+                    && transition.on_interruption != raichu_model::InterruptionPolicy::Continue =>
+            {
+                // `drop_disabled`: reset cancels the occurrence duration
+                // (interruptible transition); resume
+                // pauses it (RAICHU extension); continue never
+                // reaches this arm.
+                let reason = match transition.on_interruption {
+                    raichu_model::InterruptionPolicy::Resume => {
+                        if let Some(hazard) = self.hazards[trans_idx].as_mut() {
+                            // Pause the hazard clock: bank what has
+                            // accrued (continuous hazards are already
+                            // committed by the integrator); the
+                            // re-arm recomputes λ at resumption.
+                            if !matches!(
+                                transition.distrib,
+                                CLaw::ExpVar {
+                                    continuous: true,
+                                    ..
                                 }
-                                hazard.since = self.time;
-                            } else {
-                                self.frozen[trans_idx] = Some(date - self.time);
+                            ) {
+                                hazard.accumulated += hazard.rate * (self.time - hazard.since);
                             }
-                            DropReason::GuardPaused
+                            hazard.since = self.time;
+                        } else {
+                            self.frozen[trans_idx] = Some(date - self.time);
                         }
-                        _ => {
-                            self.hazards[trans_idx] = None;
-                            DropReason::GuardFalse
-                        }
+                        DropReason::GuardPaused
+                    }
+                    _ => {
+                        self.hazards[trans_idx] = None;
+                        DropReason::GuardFalse
+                    }
+                };
+                self.pending[trans_idx] = None;
+                if self.config.journal {
+                    self.journal.push(JournalRecord::TransitionDropped {
+                        time: self.time,
+                        transition: transition.name.clone(),
+                        reason,
+                    });
+                }
+            }
+            #[allow(clippy::float_cmp)] // λ is re-evaluated exactly
+            Some(previous) if in_source => {
+                // `reschedule_modifiable`: a pending state-dependent rate whose
+                // inputs changed at this discrete step is
+                // rescheduled against the same `Exp(1)` threshold
+                // (reached with the guard still true, or with the
+                // `continue` policy riding through a false guard).
+                // Continuously-varying rates need no rescheduling:
+                // their hazard is integrated by `integrate_continuous` directly.
+                let CLaw::ExpVar {
+                    rate,
+                    continuous: false,
+                } = &self.model.transitions[trans_idx].distrib
+                else {
+                    return Ok(());
+                };
+                let lambda = self.eval_rate(trans_idx, rate)?;
+                let Some(hazard) = self.hazards[trans_idx].as_mut() else {
+                    return Ok(());
+                };
+                if lambda != hazard.rate {
+                    hazard.accumulated += hazard.rate * (self.time - hazard.since);
+                    hazard.since = self.time;
+                    hazard.rate = lambda;
+                    let firing_at = if lambda > 0.0 {
+                        self.time + (hazard.threshold - hazard.accumulated) / lambda
+                    } else {
+                        f64::INFINITY
                     };
-                    self.pending[trans_idx] = None;
-                    if self.config.journal {
-                        self.journal.push(JournalRecord::TransitionDropped {
+                    self.arm(trans_idx, firing_at);
+                    if self.config.journal && firing_at != previous {
+                        self.journal.push(JournalRecord::TransitionRescheduled {
                             time: self.time,
-                            transition: transition.name.clone(),
-                            reason,
+                            transition: self.model.transitions[trans_idx].name.clone(),
+                            firing_at,
                         });
                     }
                 }
-                #[allow(clippy::float_cmp)] // λ is re-evaluated exactly
-                Some(previous) if in_source => {
-                    // `reschedule_modifiable`: a pending state-dependent rate whose
-                    // inputs changed at this discrete step is
-                    // rescheduled against the same `Exp(1)` threshold
-                    // (reached with the guard still true, or with the
-                    // `continue` policy riding through a false guard).
-                    // Continuously-varying rates need no rescheduling:
-                    // their hazard is integrated by `integrate_continuous` directly.
-                    let CLaw::ExpVar {
-                        rate,
-                        continuous: false,
-                    } = &self.model.transitions[trans_idx].distrib
-                    else {
-                        continue;
-                    };
-                    let lambda = self.eval_rate(trans_idx, rate)?;
-                    let Some(hazard) = self.hazards[trans_idx].as_mut() else {
-                        continue;
-                    };
-                    if lambda != hazard.rate {
-                        hazard.accumulated += hazard.rate * (self.time - hazard.since);
-                        hazard.since = self.time;
-                        hazard.rate = lambda;
-                        let firing_at = if lambda > 0.0 {
-                            self.time + (hazard.threshold - hazard.accumulated) / lambda
-                        } else {
-                            f64::INFINITY
-                        };
-                        self.arm(trans_idx, firing_at);
-                        if self.config.journal && firing_at != previous {
-                            self.journal.push(JournalRecord::TransitionRescheduled {
-                                time: self.time,
-                                transition: self.model.transitions[trans_idx].name.clone(),
-                                firing_at,
-                            });
-                        }
-                    }
+            }
+            None if in_source && guard_ok => {
+                if self.clocks[trans_idx].is_some_and(|clock| clock.redraw) {
+                    self.redraw_clock(trans_idx, false)?;
+                    return Ok(());
                 }
-                None if in_source && guard_ok => {
-                    if self.clocks[trans_idx].is_some_and(|clock| clock.redraw) {
-                        self.redraw_clock(trans_idx, false)?;
-                        continue;
-                    }
-                    // `schedule_stochastic` for a state-dependent rate: draw the
-                    // `Exp(1)` threshold (fresh arming) or keep the
-                    // banked hazard (resume re-arm), then schedule
-                    // against the current λ: `+∞` while λ = 0 or while
-                    // the hazard is integrated continuously (`integrate_continuous`
-                    // locates the firing like a boundary crossing).
-                    if let CLaw::ExpVar { rate, continuous } =
-                        &self.model.transitions[trans_idx].distrib
-                    {
-                        let lambda = self.eval_rate(trans_idx, rate)?;
-                        let mut hazard = match self.hazards[trans_idx] {
-                            Some(banked) => banked,
-                            None => Hazard {
-                                threshold: rand_distr::Exp1.sample(&mut self.rng),
-                                accumulated: 0.0,
-                                rate: lambda,
-                                since: self.time,
-                            },
-                        };
-                        hazard.rate = lambda;
-                        hazard.since = self.time;
-                        let firing_at = if *continuous || lambda <= 0.0 {
-                            f64::INFINITY
-                        } else {
-                            self.time + (hazard.threshold - hazard.accumulated) / lambda
-                        };
-                        self.hazards[trans_idx] = Some(hazard);
-                        self.arm(trans_idx, firing_at);
-                        if self.config.journal {
-                            self.journal.push(JournalRecord::TransitionScheduled {
-                                time: self.time,
-                                transition: self.model.transitions[trans_idx].name.clone(),
-                                firing_at,
-                            });
-                        }
-                        continue;
-                    }
-                    // A paused countdown resumes where it stopped.
-                    if let Some(remaining) = self.frozen[trans_idx].take() {
-                        let firing_at = self.time + remaining;
-                        self.arm(trans_idx, firing_at);
-                        if self.config.journal {
-                            self.journal.push(JournalRecord::TransitionScheduled {
-                                time: self.time,
-                                transition: self.model.transitions[trans_idx].name.clone(),
-                                firing_at,
-                            });
-                        }
-                        continue;
-                    }
-                    // `schedule_stochastic`: stochastic firing dates are sampled at
-                    // source-state entry. Draws happen here, in
-                    // transition-index order: replay is bit-identical
-                    // for a fixed (seed, stream).
-                    let time_now = self.time;
-                    let bad_law = move |detail: String| EngineError::TypeError {
-                        time: time_now,
-                        detail,
+                // `schedule_stochastic` for a state-dependent rate: draw the
+                // `Exp(1)` threshold (fresh arming) or keep the
+                // banked hazard (resume re-arm), then schedule
+                // against the current λ: `+∞` while λ = 0 or while
+                // the hazard is integrated continuously (`integrate_continuous`
+                // locates the firing like a boundary crossing).
+                if let CLaw::ExpVar { rate, continuous } =
+                    &self.model.transitions[trans_idx].distrib
+                {
+                    let lambda = self.eval_rate(trans_idx, rate)?;
+                    let mut hazard = match self.hazards[trans_idx] {
+                        Some(banked) => banked,
+                        None => Hazard {
+                            threshold: rand_distr::Exp1.sample(&mut self.rng),
+                            accumulated: 0.0,
+                            rate: lambda,
+                            since: self.time,
+                        },
                     };
-                    let firing_at = match &self.model.transitions[trans_idx].distrib {
-                        CLaw::Delay(delay) => self.time + delay,
-                        CLaw::Inst(_) => self.time,
-                        CLaw::Watched { .. }
-                            if self.model.transitions[trans_idx].located_observer() =>
-                        {
-                            self.time
-                        }
-                        CLaw::Watched { .. } => continue,
-                        // Armed by the dedicated block above.
-                        CLaw::ExpVar { .. } => continue,
-                        CLaw::Exp(rate) => {
-                            // The biased rate `f·λ` (`EngineConfig::rate_factors`):
-                            // `Exp` samples `Exp1 / rate`, so the draw consumes
-                            // the nominal random numbers, and `f = 1` is exact.
-                            let rate = rate
-                                * self
-                                    .config
-                                    .rate_factors
-                                    .get(trans_idx)
-                                    .copied()
-                                    .unwrap_or(1.0);
-                            let distribution = rand_distr::Exp::new(rate)
-                                .map_err(|e| bad_law(format!("exp({rate}): {e}")))?;
-                            self.time + distribution.sample(&mut self.rng)
-                        }
-                        CLaw::Weibull(shape, scale) => {
-                            let distribution = rand_distr::Weibull::new(*scale, *shape)
-                                .map_err(|e| bad_law(format!("weibull: {e}")))?;
-                            self.time + distribution.sample(&mut self.rng)
-                        }
-                        CLaw::Lognormal(mu, sigma) => {
-                            let distribution = rand_distr::LogNormal::new(*mu, *sigma)
-                                .map_err(|e| bad_law(format!("lognormal: {e}")))?;
-                            self.time + distribution.sample(&mut self.rng)
-                        }
-                        CLaw::Gamma(shape, scale) => {
-                            let distribution = rand_distr::Gamma::new(*shape, *scale)
-                                .map_err(|e| bad_law(format!("gamma: {e}")))?;
-                            self.time + distribution.sample(&mut self.rng)
-                        }
-                        CLaw::Uniform(low, high) => {
-                            let distribution = rand_distr::Uniform::new(*low, *high)
-                                .map_err(|e| bad_law(format!("uniform: {e}")))?;
-                            self.time + distribution.sample(&mut self.rng)
-                        }
-                        CLaw::Empirical(points) => {
-                            let u: f64 = rand::Rng::random(&mut self.rng);
-                            self.time + sample_empirical(points, u)
-                        }
+                    hazard.rate = lambda;
+                    hazard.since = self.time;
+                    let firing_at = if *continuous || lambda <= 0.0 {
+                        f64::INFINITY
+                    } else {
+                        self.time + (hazard.threshold - hazard.accumulated) / lambda
                     };
+                    self.hazards[trans_idx] = Some(hazard);
                     self.arm(trans_idx, firing_at);
                     if self.config.journal {
                         self.journal.push(JournalRecord::TransitionScheduled {
@@ -438,9 +362,86 @@ impl<'m> Engine<'m> {
                             firing_at,
                         });
                     }
+                    return Ok(());
                 }
-                _ => {}
+                // A paused countdown resumes where it stopped.
+                if let Some(remaining) = self.frozen[trans_idx].take() {
+                    let firing_at = self.time + remaining;
+                    self.arm(trans_idx, firing_at);
+                    if self.config.journal {
+                        self.journal.push(JournalRecord::TransitionScheduled {
+                            time: self.time,
+                            transition: self.model.transitions[trans_idx].name.clone(),
+                            firing_at,
+                        });
+                    }
+                    return Ok(());
+                }
+                // `schedule_stochastic`: stochastic firing dates are sampled at
+                // source-state entry. Draws happen here, in
+                // transition-index order: replay is bit-identical
+                // for a fixed (seed, stream).
+                let time_now = self.time;
+                let bad_law = move |detail: String| EngineError::TypeError {
+                    time: time_now,
+                    detail,
+                };
+                let firing_at = match &self.model.transitions[trans_idx].distrib {
+                    CLaw::Delay(delay) => self.time + delay,
+                    CLaw::Inst(_) => self.time,
+                    CLaw::Watched { .. } => return Ok(()),
+                    // Armed by the dedicated block above.
+                    CLaw::ExpVar { .. } => return Ok(()),
+                    CLaw::Exp(rate) => {
+                        // The biased rate `f·λ` (`EngineConfig::rate_factors`):
+                        // `Exp` samples `Exp1 / rate`, so the draw consumes
+                        // the nominal random numbers, and `f = 1` is exact.
+                        let rate = rate
+                            * self
+                                .config
+                                .rate_factors
+                                .get(trans_idx)
+                                .copied()
+                                .unwrap_or(1.0);
+                        let distribution = rand_distr::Exp::new(rate)
+                            .map_err(|e| bad_law(format!("exp({rate}): {e}")))?;
+                        self.time + distribution.sample(&mut self.rng)
+                    }
+                    CLaw::Weibull(shape, scale) => {
+                        let distribution = rand_distr::Weibull::new(*scale, *shape)
+                            .map_err(|e| bad_law(format!("weibull: {e}")))?;
+                        self.time + distribution.sample(&mut self.rng)
+                    }
+                    CLaw::Lognormal(mu, sigma) => {
+                        let distribution = rand_distr::LogNormal::new(*mu, *sigma)
+                            .map_err(|e| bad_law(format!("lognormal: {e}")))?;
+                        self.time + distribution.sample(&mut self.rng)
+                    }
+                    CLaw::Gamma(shape, scale) => {
+                        let distribution = rand_distr::Gamma::new(*shape, *scale)
+                            .map_err(|e| bad_law(format!("gamma: {e}")))?;
+                        self.time + distribution.sample(&mut self.rng)
+                    }
+                    CLaw::Uniform(low, high) => {
+                        let distribution = rand_distr::Uniform::new(*low, *high)
+                            .map_err(|e| bad_law(format!("uniform: {e}")))?;
+                        self.time + distribution.sample(&mut self.rng)
+                    }
+                    CLaw::Empirical(points) => {
+                        let u: f64 = rand::Rng::random(&mut self.rng);
+                        self.time + sample_empirical(points, u)
+                    }
+                };
+                self.arm(trans_idx, firing_at);
+                if self.config.journal {
+                    self.journal.push(JournalRecord::TransitionScheduled {
+                        time: self.time,
+                        transition: self.model.transitions[trans_idx].name.clone(),
+                        firing_at,
+                    });
+                }
             }
+            _ => {}
         }
         Ok(())
     }

@@ -68,6 +68,7 @@
 use crate::compile::{
     AutIdx, CAllocation, CExpr, CFlowMargins, CIndicatorTarget, CLaw, CProgramAffine,
     CProgramTieBreak, CStep, CompiledModel, FnIdx, StateIdx, TransIdx, VarIdx, WatchedIdx,
+    STRICT_MARGIN_EPS,
 };
 use crate::flow::{allocate, classify, edge_margin, flow_band, EdgeClass, FLOW_TOLERANCE};
 use raichu_expr::{AggOp, BoolOp, CmpOp, Value};
@@ -113,7 +114,7 @@ use eval::{eval_bool, eval_expr, eval_f64, predicate_holds};
 use extrapolation::Extrapolation;
 use flow::{read_flow_inputs, settle_explicit, value_settled, FlowScratch, PassContext};
 use notes::ChangeLog;
-use ode::{ContinuousSystem, FrozenFlow};
+use ode::{ContinuousSystem, FrozenFlow, MarginSense};
 use restart::DrawnClock;
 use sampling::indicator_value;
 use schedule::{fireable_kind, validate_rate_factors, ExposureTally, Hazard};
