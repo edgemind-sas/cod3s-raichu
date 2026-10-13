@@ -851,12 +851,20 @@ whether the mode ever failed, and is refused by name). The mirror pair,
 held at rest and written once entering the failure, is accepted for a
 variable no other mode writes.
 
+A variable held on **both** faces with different values (a failure value
+and a rest value) is accepted, where common-cause combinations overlap on
+a target too: each target is clamped once, to the failure value while any
+combination covering it is failed and to the rest value only while all of
+them are at rest. That is the reference's rule since cod3s 1.22.0
+(edgemind-sas/cod3s#10; 1.21.0 refused the shape, #4).
+
 Refused, with cod3s's reasons: a variable held and written once on the
 **same** face (the held value overwrites the write); and, where
 common-cause combinations overlap on a target (`internal`, several built
-orders), a write entering the failure on a variable held at rest, writes
-on both faces, and a variable held on both faces with different values
-(edgemind-sas/cod3s#4: the reference never settles). Refused here because
+orders), writes on both faces. A write entering the failure on a variable
+held at rest over overlapping combinations stays refused here, although
+cod3s 1.22.0 accepts it, until a replay measures the two engines on it.
+Refused here because
 the reference has no answer for them: two modes handing one variable back
 with different clamp values, and a hand-back beside a mode that clamps
 the same variable without handing it back. A one-shot write on a gate
