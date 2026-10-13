@@ -121,6 +121,32 @@ def _const(value: Any) -> dict:
     return {"op": "const", "value": {"kind": kind, "value": value}}
 
 
+def _document_float(value: Any) -> float:
+    """A written float as the document spells it: ``math.inf`` as
+    :data:`~pyraichu.muscadet.UNBOUNDED_SERVICE`.
+
+    JSON has no literal for an infinity, and the model this layer builds
+    declares that magnitude as its "unbounded" (`unbounded_rate`). It is the
+    value an undeclared capacity ceiling is created at, so a mode writing
+    ``inf`` on it -- muscadet's spelling, the one a declaration shared with
+    the reference engine carries -- writes that same value
+    (edgemind-sas/cod3s-raichu#159)."""
+    value = float(value)
+    return authoring.UNBOUNDED_SERVICE if value == float("inf") else value
+
+
+def _written(value: Any) -> dict:
+    """A value a mode writes, as a constant (:func:`_document_float`).
+
+    Writes only: a condition comparing with ``inf`` is left to the document,
+    which refuses it, because a quantity derived from the sentinel (two
+    unbounded ceilings summed) is not the sentinel, and ``== inf`` would read
+    false there where muscadet reads true."""
+    if isinstance(value, float):
+        value = _document_float(value)
+    return _const(value)
+
+
 _OPE = {"==": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge"}
 
 
@@ -405,11 +431,12 @@ def _keep(target: str, variable: str) -> dict:
 
 def _same_value(declared: dict, raw: Any) -> bool:
     """Whether a declared ``{kind, value}`` initial value is `raw`, numbers
-    compared by value whatever their kind, a boolean only to a boolean."""
+    compared by value whatever their kind and as the document spells them
+    (:func:`_document_float`), a boolean only to a boolean."""
     value = declared.get("value")
     if isinstance(value, bool) or isinstance(raw, bool):
         return isinstance(value, bool) and isinstance(raw, bool) and value == raw
-    return float(value) == float(raw)
+    return _document_float(value) == _document_float(raw)
 
 
 def _absorbed_pulses(
@@ -474,7 +501,7 @@ def _reinit_effect(
     for variable, fail_value in failure_effects.items():
         declared = _target_init(model, target, variable)
         if variable in repair_pulses:
-            handed_back = _const(repair_pulses[variable])
+            handed_back = _written(repair_pulses[variable])
             if declared is not None and not _same_value(declared["value"], repair_pulses[variable]):
                 raise ValueError(
                     f"ObjFM `{name}`: `{target}.{variable}` is held at "
@@ -487,7 +514,7 @@ def _reinit_effect(
                 )
             otherwise = handed_back
         elif variable in repair_effects:
-            otherwise = _const(repair_effects[variable])
+            otherwise = _written(repair_effects[variable])
         else:
             otherwise = declared
             if otherwise is None:
@@ -505,7 +532,7 @@ def _reinit_effect(
                 "value": {
                     "op": "if",
                     "cond": gate,
-                    "then": _const(fail_value),
+                    "then": _written(fail_value),
                     "otherwise": otherwise,
                 },
             }
@@ -519,8 +546,8 @@ def _reinit_effect(
                 "value": {
                     "op": "if",
                     "cond": gate,
-                    "then": _const(failure_pulses[variable]),
-                    "otherwise": _const(rest_value),
+                    "then": _written(failure_pulses[variable]),
+                    "otherwise": _written(rest_value),
                 },
             }
         )
@@ -1599,12 +1626,12 @@ def _edge_effects(
     for target in targets:
         for attribute, value in effects.items():
             if landed is None:
-                expression = _const(value)
+                expression = _written(value)
             else:
                 expression = {
                     "op": "if",
                     "cond": landed,
-                    "then": _const(value),
+                    "then": _written(value),
                     "otherwise": _keep(target, attribute),
                 }
             written.append(

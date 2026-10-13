@@ -469,6 +469,95 @@ def test_a_volume_declaring_no_ceiling_is_observed_at_the_unbounded_sentinel():
     )
 
 
+def unbounded_document(effects: dict) -> dict:
+    """The volume above with no ceiling of its own, and a mode carrying
+    `effects` on it that fails at t = 5 and is repaired at t = 8."""
+    document = commanded_document(serve_rate=2.0, throttle_at=THROTTLED)
+    del document["components"]["CAP"]["capacities"][0]["serve_rate"]
+    mode = document["components"]["CAP__throttle"]
+    del mode["failure_effects"]
+    mode.update(effects, repair_param=[3])
+    document["indicators"] = [ceiling_indicator()]
+    return document
+
+
+def test_an_unbounded_ceiling_clamped_then_handed_back_at_inf_is_unbounded_again():
+    """edgemind-sas/cod3s-raichu#159. muscadet creates an undeclared ceiling
+    at ``math.inf``, so the platform hands a clamped one back at ``inf``: the
+    only value that keeps muscadet's own evaluation on its unbounded branch,
+    in a declaration both engines read.
+
+    Here the ceiling was created at :data:`pyraichu.muscadet.UNBOUNDED_SERVICE`,
+    the document's spelling of that same infinity, so the hand-back IS its
+    initial value. It was refused as a different one, the study never ran.
+    """
+    document = unbounded_document(
+        {
+            "failure_effects": {"tank_serve_rate_q": 0.0},
+            "repair_effects_trans": {"tank_serve_rate_q": float("inf")},
+        }
+    )
+    result = pyraichu.simulate(
+        engine.build_model(document), t_max=12.0, samples=[1.0, 6.0, 10.0]
+    )
+    ceiling = dict(result.samples["CAP_tank_serve_rate_q"])
+    fed = dict(result.samples["SINK_q_fed_in"])
+
+    assert ceiling == pytest.approx(
+        {1.0: mu.UNBOUNDED_SERVICE, 6.0: 0.0, 10.0: mu.UNBOUNDED_SERVICE}
+    )
+    assert fed == pytest.approx({1.0: 2 * SOURCE_RATE, 6.0: 0.0, 10.0: 2 * SOURCE_RATE}), (
+        "clamped to zero the volume releases nothing, handed back it serves the "
+        "consumer's whole demand again, off the source and its stock"
+    )
+
+
+@pytest.mark.parametrize(
+    "effects, failed, rest",
+    [
+        (
+            {
+                "failure_effects": {"tank_serve_rate_q": 0.0},
+                "repair_effects": {"tank_serve_rate_q": float("inf")},
+            },
+            0.0,
+            mu.UNBOUNDED_SERVICE,
+        ),
+        (
+            {"failure_effects": {"tank_serve_rate_q": float("inf")}},
+            mu.UNBOUNDED_SERVICE,
+            mu.UNBOUNDED_SERVICE,
+        ),
+        (
+            {
+                "repair_effects": {"tank_serve_rate_q": THROTTLED},
+                "failure_effects_trans": {"tank_serve_rate_q": float("inf")},
+            },
+            mu.UNBOUNDED_SERVICE,
+            THROTTLED,
+        ),
+    ],
+    ids=["held-at-rest", "held-while-failed", "written-once-entering-the-failure"],
+)
+def test_every_write_of_inf_by_a_mode_reads_as_the_unbounded_spelling(
+    effects, failed, rest
+):
+    """The same infinity written by a mode in any other shape, held or once.
+
+    Before #159 these did not even reach the check above: ``inf`` went into
+    the document as is, which JSON cannot carry, and the engine refused the
+    whole model as malformed without naming the mode.
+    """
+    result = pyraichu.simulate(
+        engine.build_model(unbounded_document(effects)),
+        t_max=12.0,
+        samples=[6.0, 10.0],
+    )
+    ceiling = dict(result.samples["CAP_tank_serve_rate_q"])
+
+    assert ceiling == pytest.approx({6.0: failed, 10.0: rest})
+
+
 # --- 5. the pre-run loop diagnostic sees it --------------------------
 
 
