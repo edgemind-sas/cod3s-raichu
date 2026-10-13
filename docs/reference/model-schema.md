@@ -794,7 +794,21 @@ volume holding 5 read -9.3e19, and the run ended normally.
 `unbounded_rate` declares that magnitude. The engine then refuses any ODE
 right-hand side whose absolute value reaches it, with an error naming
 the integrated variable, the date and the rate, instead of integrating
-it. The physics of such a draw is an instantaneous transfer, which a
+it.
+
+The stand-in can also arrive diluted. A volume holding a mixture serves
+each constituent at its share, so an unbounded draw on a constituent at
+2 % integrates at 2e28: under the magnitude, and far beyond anything a
+step can follow. The step controller then collapses ("step size
+underflow ... too stiff"). When an integration fails that way, the
+engine doubles the stand-in wherever the model writes it (an
+attribute's value or a literal of the continuous section) and evaluates
+the rates again; a rate that moves with it is set by the stand-in, and
+the failure is reported as the same refusal, naming that rate (a
+draining one first, the stock that empties). A physical
+rate does not depend on the value chosen for "unbounded", so a model
+that is genuinely stiff keeps the solver's error, and a run that
+integrates is not touched. The physics of such a draw is an instantaneous transfer, which a
 rate cannot express; the modeller bounds one of the two sides (a finite
 fill or serve rate, or a finite demand). From Python the refusal is a
 `pyraichu.UnboundedRateError`, a `SimulationError` whose `variable`,

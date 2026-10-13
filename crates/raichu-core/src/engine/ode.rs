@@ -114,6 +114,166 @@ impl ContinuousSystem<'_> {
     }
 }
 
+impl ContinuousSystem<'_> {
+    /// The [`EngineError::UnboundedRate`] refusal a solver failure at
+    /// `(t, y)` really is, if any.
+    ///
+    /// `evolC` refuses a rate that *reaches* the magnitude the model
+    /// reserves for "unbounded". The same draw can arrive diluted: a
+    /// volume holding a mixture serves each constituent at its share of
+    /// the stand-in, so an unbounded draw on a 2 % constituent integrates
+    /// at 2e28, under the magnitude and far beyond what any step can
+    /// follow. The step controller then collapses, and its report
+    /// ("too stiff") names a symptom rather than the model's statement.
+    ///
+    /// The test is the one the reservation implies: a physical rate does
+    /// not depend on the value chosen for "unbounded". The stand-in is
+    /// doubled wherever the model writes it, in an attribute or as a
+    /// literal of the continuous section, the explicit sweep is settled
+    /// again, and a rate that moves with it is set by the stand-in. One
+    /// that does not (a stand-in a `min` takes away) is untouched, so a
+    /// genuinely stiff model keeps the solver's error. Called only on a
+    /// failed integration: a trajectory the solver could follow costs
+    /// nothing and reads nothing new.
+    pub(super) fn unbounded_dependence(&self, t: f64, y: &[f64]) -> Option<EngineError> {
+        let unbounded = self.model.unbounded_rate?;
+        let mut doubled_model = self.model.clone();
+        let mut moved = false;
+        for (_, expr) in &mut doubled_model.ode {
+            moved |= double_stand_in(expr, unbounded);
+        }
+        for step in &mut doubled_model.explicit {
+            match step {
+                CStep::Equation { expr, .. } => moved |= double_stand_in(expr, unbounded),
+                CStep::Allocate(allocation) => {
+                    moved |= double_stand_in(&mut allocation.available, unbounded);
+                }
+                CStep::Block(block) => {
+                    for constant in &mut block.constants {
+                        moved |= double_stand_in(constant, unbounded);
+                    }
+                    for (_, coefficient) in block.coefficients.iter_mut().flatten() {
+                        moved |= double_stand_in(coefficient, unbounded);
+                    }
+                }
+            }
+        }
+        let mut doubled_vars = self.vars.clone();
+        for value in &mut doubled_vars {
+            if let Value::Float(v) = value {
+                if v.abs() >= unbounded {
+                    *v *= 2.0;
+                    moved = true;
+                }
+            }
+        }
+        if !moved {
+            return None;
+        }
+        let base = self.rates_at(self.model, self.vars.clone(), t, y)?;
+        let doubled = self.rates_at(&doubled_model, doubled_vars, t, y)?;
+        // What is refused is a stock drained without bound, so a draining
+        // rate is named first: the stock it fills downstream moves by the
+        // same magnitude, and naming it would point at the wrong volume.
+        let (slot, rate) = base
+            .iter()
+            .zip(&doubled)
+            .enumerate()
+            .filter(|(_, (rate, again))| {
+                rate.is_finite()
+                    && (*again - *rate).abs() > 1e-6 * rate.abs().max(again.abs()).max(1.0)
+            })
+            .max_by(|(_, (a, _)), (_, (b, _))| {
+                (**a < 0.0)
+                    .cmp(&(**b < 0.0))
+                    .then(a.abs().total_cmp(&b.abs()))
+            })
+            .map(|(slot, (rate, _))| (slot, *rate))?;
+        Some(EngineError::UnboundedRate {
+            time: t,
+            variable: self.model.var_names[self.model.ode[slot].0].clone(),
+            rate,
+            unbounded,
+        })
+    }
+
+    /// The integrated rates of `model` at `(t, y)`, the explicit sweep
+    /// settled from `vars` exactly as the right-hand side settles it.
+    /// `None` when an evaluation fails: the diagnosis then has nothing to
+    /// say and the solver's error stands.
+    fn rates_at(
+        &self,
+        model: &CompiledModel,
+        mut vars: Vec<Value>,
+        t: f64,
+        y: &[f64],
+    ) -> Option<Vec<f64>> {
+        for (slot, (var, _)) in model.ode.iter().enumerate() {
+            vars[*var] = Value::Float(y[slot]);
+        }
+        let (mut work, mut scratch) = (WorkCounters::default(), FlowScratch::default());
+        let mut changed = ChangeLog::discarding(self.flow_tolerance);
+        let mut ctx = PassContext {
+            work: &mut work,
+            scratch: &mut scratch,
+            changed: &mut changed,
+        };
+        settle_explicit(
+            model,
+            &mut vars,
+            &self.states,
+            t,
+            &mut ctx,
+            self.sweep_budget,
+            self.flow_tolerance,
+            &mut Vec::new(),
+        )
+        .ok()?;
+        model
+            .ode
+            .iter()
+            .map(|(_, expr)| eval_f64(model, &vars, &self.states, t, expr).ok())
+            .collect()
+    }
+}
+
+/// Double, in place, every float literal of `expr` at or beyond the
+/// declared `unbounded` magnitude; whether any was found.
+fn double_stand_in(expr: &mut CExpr, unbounded: f64) -> bool {
+    match expr {
+        CExpr::Const(Value::Float(v)) if v.abs() >= unbounded => {
+            *v *= 2.0;
+            true
+        }
+        CExpr::Const(_)
+        | CExpr::Var(_)
+        | CExpr::StateActive { .. }
+        | CExpr::PortAgg { .. }
+        | CExpr::Time => false,
+        CExpr::Cmp { lhs, rhs, .. } | CExpr::Sub { lhs, rhs } | CExpr::Div { lhs, rhs } => {
+            let left = double_stand_in(lhs, unbounded);
+            double_stand_in(rhs, unbounded) | left
+        }
+        CExpr::Bool { args, .. }
+        | CExpr::Add { args }
+        | CExpr::Mul { args }
+        | CExpr::Min { args }
+        | CExpr::Max { args } => args
+            .iter_mut()
+            .fold(false, |found, arg| double_stand_in(arg, unbounded) | found),
+        CExpr::If {
+            cond,
+            then,
+            otherwise,
+        } => {
+            let found = double_stand_in(cond, unbounded);
+            let found = double_stand_in(then, unbounded) | found;
+            double_stand_in(otherwise, unbounded) | found
+        }
+        CExpr::Sin(arg) | CExpr::Exp(arg) => double_stand_in(arg, unbounded),
+    }
+}
+
 impl OdeSystem for ContinuousSystem<'_> {
     fn dim(&self) -> usize {
         self.model.ode.len() + self.hazards.len()

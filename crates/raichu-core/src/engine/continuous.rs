@@ -351,9 +351,24 @@ impl<'m> Engine<'m> {
                         error,
                     });
                 }
-                // Preserve the historical solver-error priority for all
-                // other callback failures, including models without blocks.
-                (Err(error), _) => return Err(error.into()),
+                // A solver failure on a rate the "unbounded" stand-in
+                // sets is the `evolC` refusal arriving diluted, and is
+                // reported as that refusal (`unbounded_dependence`). `y`
+                // holds the last accepted state, the one the failed step
+                // started from.
+                (Err(error), _) => {
+                    let failed_at = match error {
+                        raichu_numeric::OdeError::StepSizeUnderflow { t, .. }
+                        | raichu_numeric::OdeError::NonFinite { t } => t,
+                    };
+                    if let Some(refusal) = system.unbounded_dependence(failed_at, &y) {
+                        return Err(refusal);
+                    }
+                    // Preserve the historical solver-error priority for
+                    // all other callback failures, including models
+                    // without blocks.
+                    return Err(error.into());
+                }
                 (Ok(_), Some(error)) => return Err(error),
                 (Ok(outcome), None) => outcome,
             };
