@@ -274,6 +274,12 @@ impl<'m> Engine<'m> {
         for index in 0..self.watched_active.len() {
             let position = self.watched_active[index];
             let trans_idx = model.watched[position];
+            // A located observer whose condition holds at a discrete
+            // instant is armed by the schedule, which ranks it in the
+            // same-date waves; firing it here would jump them.
+            if model.transitions[trans_idx].located_observer() {
+                continue;
+            }
             let Some(guard) = &model.transitions[trans_idx].guard else {
                 continue;
             };

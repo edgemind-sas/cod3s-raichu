@@ -1178,7 +1178,7 @@ impl Builder<'_> {
             let source = transition.source;
             let guard = transition.guard.clone();
             let observer = transition.kind == Some(TransitionKind::Observation);
-            if observer && !matches!(transition.distrib, CLaw::Delay(d) if d == 0.0) {
+            if observer && !zero_wait(&transition.distrib) {
                 return Err(FaultTreeError::Unsupported(format!(
                     "the observer transition `{}` waits before it fires, so the \
                      state it enters lags its condition, which a tree at one \
@@ -1361,6 +1361,11 @@ impl Builder<'_> {
     /// or a constant for a transition no draw governs.
     fn event(&mut self, t_idx: usize, position: usize) -> Result<FtNode, FaultTreeError> {
         let transition = &self.model.transitions[t_idx];
+        // A located observer is still an observer with no wait: crossed as
+        // its condition, which the caller has already conjoined.
+        if transition.kind == Some(TransitionKind::Observation) && zero_wait(&transition.distrib) {
+            return Ok(FtNode::Constant { value: true });
+        }
         let law = match &transition.distrib {
             CLaw::Exp(rate) => BasicLaw::Exponential { rate: *rate },
             CLaw::ExpVar { rate, .. } => {
@@ -1641,6 +1646,17 @@ fn size_of(expr: &CExpr) -> usize {
             otherwise,
         } => size_of(cond) + size_of(then) + size_of(otherwise),
         CExpr::Sin(arg) | CExpr::Exp(arg) => size_of(arg),
+    }
+}
+
+/// Whether a law fires the moment its guard holds: a zero delay, or a
+/// watched boundary (which an observer with no wait compiles to when its
+/// condition moves during continuous evolution).
+fn zero_wait(law: &CLaw) -> bool {
+    match law {
+        CLaw::Delay(time) => *time == 0.0,
+        CLaw::Watched { .. } => true,
+        _ => false,
     }
 }
 
