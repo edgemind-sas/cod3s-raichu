@@ -72,22 +72,42 @@ import_exception!(pyraichu, UnboundedRateError);
 /// `UnboundedRateError` when the run met the model's reserved
 /// "unbounded" magnitude (so a caller can name the construct to bound),
 /// `SimulationError` for every other failure.
+///
+/// A campaign's replica failure keeps the class of what the replica
+/// raised, so a caller catching `UnboundedRateError` catches it from a
+/// campaign as from a single run; the message is the campaign's, and the
+/// exception carries `replica`, `nb_runs` and `seed` as attributes, the
+/// coordinates that replay the replica with `simulate`.
 fn engine_error(error: EngineError) -> PyErr {
-    match &error {
+    let message = error.to_string();
+    let raised = match error.cause() {
         EngineError::UnboundedRate {
             time,
             variable,
             rate,
             unbounded,
-        } => UnboundedRateError::new_err((
-            error.to_string(),
-            variable.clone(),
-            *time,
-            *rate,
-            *unbounded,
-        )),
-        _ => SimulationError::new_err(error.to_string()),
+        } => UnboundedRateError::new_err((message, variable.clone(), *time, *rate, *unbounded)),
+        _ => SimulationError::new_err(message),
+    };
+    if let EngineError::ReplicaFailed {
+        replica,
+        nb_runs,
+        seed,
+        ..
+    } = &error
+    {
+        Python::attach(|py| {
+            let value = raised.value(py);
+            // Setting an attribute on a fresh exception instance cannot
+            // fail short of memory exhaustion; the exception is raised
+            // either way, so a failure here only loses the coordinates,
+            // which the message also states.
+            let _ = value.setattr("replica", *replica);
+            let _ = value.setattr("nb_runs", *nb_runs);
+            let _ = value.setattr("seed", *seed);
+        });
     }
+    raised
 }
 
 /// Convergence policy of the continuous flow resolution, as **one

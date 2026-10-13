@@ -281,6 +281,32 @@ refills: declare `var_demand_default` on its inlet and the cycle
 disappears. The second commonest is a guard comparing a **rate**, whose
 value depends on the decision the guard makes.
 
+## When one replica of a campaign fails
+
+A Monte-Carlo campaign is refused as a whole when one of its replicas
+fails: the replicas that fail are the trajectories that reached the
+failing state, often the ones reaching the feared event, and an estimate
+over the others would leave exactly those out. The error is the one the
+replica's own run raised (an `UnboundedRateError` stays one), names the
+replica in its message, and carries `replica`, `nb_runs` and `seed` as
+attributes. One simulation at those coordinates, with the campaign's
+horizon, sample instants and flow policy, replays it alone:
+
+```text
+except pyraichu.SimulationError as failure:
+    pyraichu.simulate(model, t_max, samples=samples, flow=flow,
+                      seed=failure.seed, rng_stream=failure.replica)
+```
+
+The replay is exact only if the campaign ran the solver at its default
+settings: `simulate` does not take the solver knobs of the first section
+(`rtol`, `atol`, `max_step`, `tol_event`, `sub_samples`,
+`event_resolution`), and under other settings the trajectory is another
+one.
+
+The replica reported is the lowest-numbered one that failed, whatever the
+thread count, so every replica numbered below it completed.
+
 ## Finding the loop before the run
 
 Both budgets above are run-time: they name the culprit after the fact and

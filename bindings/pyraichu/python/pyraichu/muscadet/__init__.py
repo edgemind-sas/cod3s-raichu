@@ -495,9 +495,17 @@ def explain_unbounded_rate(error: UnboundedRateError, model: Model) -> Unbounded
         f"a stock beside rules), so its answer depends on the study's time "
         f"unit"
     )
-    return UnboundedRateError(
+    explained = UnboundedRateError(
         message, error.variable, error.time, error.rate, error.unbounded
     )
+    # What the engine set on the instance travels on: a campaign's replica
+    # failure carries `replica`, `nb_runs` and `seed`, the coordinates that
+    # replay it.
+    carried = vars(explained)
+    explained.__dict__.update(
+        {key: value for key, value in vars(error).items() if key not in carried}
+    )
+    return explained
 
 
 def run_explained(run: Any, model: Model, **kwargs: Any) -> Any:

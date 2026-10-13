@@ -768,13 +768,12 @@ fn stream_replicas<F>(
 where
     F: FnMut(ReplicaSamples, Option<ReplicaEnd>) + Send,
 {
-    use rayon::prelude::*;
-
     if serial {
         let mut host = prepared.map(PreparedCoSimulation::spawn_host);
         for replica in 0..config.nb_runs {
             let (samples, end) =
-                replica_samples(model, config, replica, record_end, prepared, host.as_mut())?;
+                replica_samples(model, config, replica, record_end, prepared, host.as_mut())
+                    .map_err(|error| replica_failed(config, replica, error))?;
             sink(samples, end);
         }
         return Ok(());
@@ -784,10 +783,9 @@ where
         let mut first = 0;
         while first < config.nb_runs {
             let last = (first + chunk).min(config.nb_runs);
-            let chunk = (first..last)
-                .into_par_iter()
-                .map(|replica| replica_samples(model, config, replica, record_end, prepared, None))
-                .collect::<Result<Vec<_>, _>>()?;
+            let chunk = simulate_chunk(config, first..last, |replica| {
+                replica_samples(model, config, replica, record_end, prepared, None)
+            })?;
             for (samples, end) in chunk {
                 sink(samples, end);
             }
@@ -795,6 +793,44 @@ where
         }
         Ok(())
     })
+}
+
+/// Simulate the replicas of `range` in parallel and return their results
+/// in replica order, or refuse the campaign with the **lowest-numbered**
+/// replica that failed (see [`EngineError::ReplicaFailed`]).
+///
+/// The whole chunk runs before the failures are read. Collecting into a
+/// `Result` would stop at whichever failure a worker reported first, which
+/// depends on the thread count and the scheduling; reading the results in
+/// replica order makes the reported replica a function of the campaign
+/// alone, as every estimate already is, and it guarantees that every
+/// replica numbered below it completed. The cost is the rest of one chunk,
+/// paid only on a campaign that is refused anyway.
+fn simulate_chunk<T: Send>(
+    config: &McConfig,
+    range: std::ops::Range<u64>,
+    simulate: impl Fn(u64) -> Result<T, EngineError> + Sync + Send,
+) -> Result<Vec<T>, EngineError> {
+    use rayon::prelude::*;
+
+    let first = range.start;
+    let results: Vec<Result<T, EngineError>> = range.into_par_iter().map(simulate).collect();
+    let mut done = Vec::with_capacity(results.len());
+    for (replica, result) in (first..).zip(results) {
+        done.push(result.map_err(|error| replica_failed(config, replica, error))?);
+    }
+    Ok(done)
+}
+
+/// Wrap what `replica`'s own run raised into the campaign's refusal,
+/// carrying the coordinates that replay it.
+fn replica_failed(config: &McConfig, replica: u64, error: EngineError) -> EngineError {
+    EngineError::ReplicaFailed {
+        replica,
+        nb_runs: config.nb_runs,
+        seed: config.seed,
+        source: Box::new(error),
+    }
 }
 
 struct PreparedCampaign {
@@ -1589,16 +1625,18 @@ where
     E: Send + From<EngineError>,
     F: FnMut(u64, Sequence, Vec<f64>) -> Result<(), E> + Send,
 {
-    use rayon::prelude::*;
-
+    // A model that declares an FMU is refused here, as the estimating
+    // campaign refuses it before its replicas: otherwise every replica
+    // would refuse it in turn and the campaign would report a model's
+    // refusal as the failure of replica 0.
+    prepare_campaign(model, None, false)?;
     in_pool(config.threads, || {
         let mut first = 0;
         while first < config.nb_runs {
             let last = (first + SEQUENCE_CHUNK).min(config.nb_runs);
-            let chunk = (first..last)
-                .into_par_iter()
-                .map(|replica| plan.replica(model, config, stop_at_targets, replica))
-                .collect::<Result<Vec<_>, EngineError>>()?;
+            let chunk = simulate_chunk(config, first..last, |replica| {
+                plan.replica(model, config, stop_at_targets, replica)
+            })?;
             for (replica, (sequence, row)) in (first..last).zip(chunk) {
                 sink(replica, sequence, row)?;
             }

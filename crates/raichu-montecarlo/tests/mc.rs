@@ -114,6 +114,12 @@ fn imported_unit_requires_permission_and_records_identity() {
         run(&compiled, &config),
         Err(raichu_core::EngineError::FmuPermission { unit }) if unit == "dahlquist"
     ));
+    // The sequence campaign refuses the model up front too, rather than
+    // reporting each replica's refusal as the failure of replica 0.
+    assert!(matches!(
+        raichu_montecarlo::run_sequences(&compiled, &config),
+        Err(raichu_core::EngineError::FmuPermission { unit }) if unit == "dahlquist"
+    ));
     let result = run_with_fmu(&compiled, &config, Path::new("."), true, false).unwrap();
     assert_eq!(result.fmu_units.len(), 1);
     assert_eq!(result.fmu_units[0].name, "dahlquist");

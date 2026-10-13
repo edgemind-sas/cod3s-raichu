@@ -134,6 +134,15 @@ __all__ = [
 ]
 
 
+# The extension declares its exceptions in `_pyraichu`, a name pickle cannot
+# import back, so an error crossing a process boundary (a campaign worker)
+# could not be pickled. They are published here, under the package that
+# re-exports them.
+for _exported in (ModelError, SimulationError):
+    _exported.__module__ = __name__
+del _exported
+
+
 class UnboundedRateError(SimulationError):
     """An integrated rate reached the magnitude the model reserves for "unbounded".
 
@@ -153,6 +162,10 @@ class UnboundedRateError(SimulationError):
         The right-hand side value the engine met.
     unbounded : float
         The magnitude the model declares as "unbounded".
+
+    Raised by a Monte-Carlo campaign, it also carries ``replica``,
+    ``nb_runs`` and ``seed``, like any :class:`SimulationError` a campaign
+    raises (see :func:`monte_carlo`).
     """
 
     def __init__(
@@ -165,9 +178,13 @@ class UnboundedRateError(SimulationError):
         self.unbounded = unbounded
 
     def __reduce__(self):
+        # The instance dictionary travels too: a campaign's replica failure
+        # sets `replica`, `nb_runs` and `seed` on it, and a worker process
+        # hands its error back pickled.
         return (
             type(self),
             (str(self), self.variable, self.time, self.rate, self.unbounded),
+            self.__dict__,
         )
 
 
@@ -553,6 +570,20 @@ def monte_carlo(
     value. ``quantiles`` (e.g. ``[0.25, 0.75]``) adds nearest-rank
     quantile series on both the sampled value and the cumulated
     sojourn. The GIL is released while the replicas run.
+
+    A replica whose run fails refuses the whole campaign: an estimate over
+    the other replicas would leave out the trajectory that failed, which
+    is often one reaching the feared event. The error raised is the one
+    the replica's own run raised (an :class:`UnboundedRateError` stays
+    one), names the replica in its message, and carries ``replica``,
+    ``nb_runs`` and ``seed`` as attributes: ``simulate(model, t_max,
+    samples=samples, flow=flow, seed=error.seed, rng_stream=error.replica)``
+    replays it alone, provided the campaign ran the solver at its default
+    settings (``simulate`` does not take ``rtol``, ``atol``, ``max_step``,
+    ``tol_event``, ``sub_samples`` or ``event_resolution``; under other
+    settings the trajectory is another one). The replica reported is the
+    lowest-numbered one that failed, whatever ``threads`` is, so every
+    replica numbered below it completed.
 
     ``confidence`` is the confidence level of the interval every
     estimator carries, a **study parameter** in ``(0, 1)``: state
