@@ -410,12 +410,8 @@ def test_held_and_written_once_on_the_same_face_is_refused(behaviour, held, puls
             },
             "on both faces",
         ),
-        (
-            {"occ_effects": {"ceiling": C}, "not_occ_effects": {"ceiling": N}},
-            "different values",
-        ),
     ],
-    ids=["write-occ-held-rest", "both-faces-written", "held-both-faces"],
+    ids=["write-occ-held-rest", "both-faces-written"],
 )
 def test_ill_posed_shapes_over_overlapping_combinations_are_refused(fields, words):
     message = refused(["A", "B", "C"], [mode("m", ["A", "B", "C"], **E3, **fields)])
@@ -423,6 +419,30 @@ def test_ill_posed_shapes_over_overlapping_combinations_are_refused(fields, word
     assert (
         "orders [1, 2, 3] built): 4 combination automata write each target" in message
     )
+
+
+def test_a_value_held_on_both_faces_over_overlapping_combinations_follows_every_one():
+    """Held while failed (`occ_effects`) and held at rest with another value
+    (`not_occ_effects`) over two targets and two orders. Order 1 fails at 2
+    for 2 (again at 6, 10, 14), order 2 at 3 for 10. A target holds the
+    failure value while ANY combination covering it is failed, the rest
+    value only while ALL of them are at rest: the order-1 repairs at 4, 8
+    and 12 leave it failed under the order-2 combination, which repairs at
+    13. cod3s refused this shape in 1.21.0 (cod3s#4) and applies this rule
+    since 1.22.0 (cod3s#10); the cross-validation replay of
+    `repair_effects_ccf` agrees with it event for event."""
+    modes = [
+        mode(
+            "m",
+            ["A", "B"],
+            occ_law={"cls": "delay", "time": [2.0, 3.0]},
+            not_occ_law={"cls": "delay", "time": [2.0, 10.0]},
+            occ_effects={"ceiling": C},
+            not_occ_effects={"ceiling": REST},
+        )
+    ]
+    expected = [REST, C, C, C, C, REST, C]
+    assert timeline(["A", "B"], modes, S_CCF) == {"A": expected, "B": expected}
 
 
 def test_overlapping_combinations_accept_the_hand_back_and_the_external_behaviours():

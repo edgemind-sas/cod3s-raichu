@@ -1673,12 +1673,18 @@ def _check_one_shot_effects(
     * when combinations overlap on a target (``internal``, several built
       orders, see :func:`_writers_per_target`): a write entering the
       failure state on a variable held at rest (the combinations at rest
-      overwrite it), writes on both faces (one combination's repair clears
-      what another still in failure set), and a variable held on both
-      faces with different values (a combination failed and one at rest
-      assert opposite values: the reference never settles, cod3s#4, and
-      refuses it at construction since 1.21.0). The last one is refused
-      whether or not the mode carries a one-shot effect."""
+      overwrite it), and writes on both faces (one combination's repair
+      clears what another still in failure set).
+
+    A variable held on both faces with different values is accepted, over
+    overlapping combinations too: :func:`_reinit_effects` clamps each
+    target once, to the failure value while any covering combination is
+    failed and to the rest value only while all of them are at rest. The
+    reference refused it at construction in cod3s 1.21.0 (cod3s#4) and
+    applies the same rule since 1.22.0 (cod3s#10); the cross-validation
+    replay of ``repair_effects_ccf`` agrees event for event. The reference
+    lifted the held-at-rest refusal in 1.22.0 as well; it stays here until
+    a replay on a persistent gate measures the parity."""
     name = spec["name"]
     held_failure = spec.get("failure_effects") or {}
     held_repair = spec.get("repair_effects") or {}
@@ -1719,20 +1725,6 @@ def _check_one_shot_effects(
             "target is still failed. Hold the value while failed (failure_effects) "
             "and hand it back with repair_effects_trans, or use behaviour "
             "`external`, as cod3s requires"
-        )
-    conflicting = sorted(
-        variable
-        for variable in set(held_failure) & set(held_repair)
-        if held_failure[variable] != held_repair[variable]
-    )
-    if conflicting:
-        raise ValueError(
-            f"{context}. {conflicting} are held on both faces with different "
-            "values (failure_effects and repair_effects): a combination failed and "
-            "another at rest assert opposite values, which the reference never "
-            "settles (edgemind-sas/cod3s#4) and refuses. Hand the value back once "
-            "with repair_effects_trans, or drop repair_effects and let the "
-            "variable return to its initial value"
         )
     return failure, repair
 
