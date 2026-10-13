@@ -163,17 +163,45 @@ fn jumping_demand() -> String {
     )
 }
 
-/// A demand that creeps: `d = 0.01 + 0.999·a`, converging monotonically
-/// on 10 at a rate of 0.999 per sweep, so about 13 800 sweeps to the flow
-/// tolerance. The active set settles on the first sweep and never moves
-/// again: nothing here is combinatorial, and nothing cycles.
-fn creeping_demand() -> String {
+/// A demand that drifts: `d = 0.01 + a`, always 0.01 above what it holds,
+/// so the allocation grows by 0.01 per sweep and the capacity caps it only
+/// 100 000 sweeps away. The active set settles on the first sweep and
+/// never moves again: nothing here is combinatorial, nothing cycles, and
+/// the ratio of successive steps is exactly one, so there is no limit to
+/// extrapolate to.
+///
+/// A creep onto a limit (`d = 0.01 + 0.999·a`) used to stand here. It is
+/// geometric, and the resolution now extrapolates it to its limit
+/// (`flow_extrapolation.rs`), so it no longer stalls.
+fn drifting_demand() -> String {
     format!(
         r#"{{"op": "add", "args": [
              {{"op": "const", "value": {{"kind": "float", "value": 0.01}}}},
-             {{"op": "mul", "args": [
-               {{"op": "const", "value": {{"kind": "float", "value": 0.999}}}},
-               {ALLOCATED}]}}]}}"#
+             {ALLOCATED}]}}"#
+    )
+}
+
+/// A demand that **alternates first and drifts after**: 9 while the
+/// consumer holds at most 3, 1 above 8.5, and `0.01 + a` in between.
+///
+/// From the cold start the undamped sweeps go 0 → 9 → 1 → 9, which is a
+/// two-cycle, and under-relaxation latches. The damped iterate then lands
+/// at `(9 + 1)/2 = 5`, inside the drift band, where it creeps by 0.005 per
+/// sweep for good: the alternation is over, and what exhausts the budget
+/// is a drift.
+fn alternating_then_drifting_demand() -> String {
+    format!(
+        r#"{{"op": "if",
+             "cond": {{"op": "cmp", "cmp": "gt", "lhs": {ALLOCATED},
+                      "rhs": {{"op": "const", "value": {{"kind": "float", "value": 8.5}}}}}},
+             "then": {{"op": "const", "value": {{"kind": "float", "value": 1.0}}}},
+             "otherwise": {{"op": "if",
+               "cond": {{"op": "cmp", "cmp": "gt", "lhs": {ALLOCATED},
+                        "rhs": {{"op": "const", "value": {{"kind": "float", "value": 3.0}}}}}},
+               "then": {{"op": "add", "args": [
+                 {{"op": "const", "value": {{"kind": "float", "value": 0.01}}}},
+                 {ALLOCATED}]}},
+               "otherwise": {{"op": "const", "value": {{"kind": "float", "value": 9.0}}}}}}}}"#
     )
 }
 
@@ -415,13 +443,13 @@ fn a_wide_non_converging_network_stops_within_its_declared_round_count() {
 // A stall with no cycle in it at all.
 // ---------------------------------------------------------------------
 
-/// A monotone sequence creeping toward its limit exhausts the numeric
-/// budget without ever matching the two-cycle test, and it must still say
-/// which flows were moving. This is the path that a diagnostic built
-/// around cycle detection alone would leave mute.
+/// A monotone sequence drifting with no limit in reach exhausts the
+/// numeric budget without ever matching the two-cycle test, and it must
+/// still say which flows were moving. This is the path that a diagnostic
+/// built around cycle detection alone would leave mute.
 #[test]
 fn a_slow_monotone_sequence_exhausts_the_flow_budget_and_names_its_edges() {
-    let body = one_consumer("creeping", 1000.0, &creeping_demand(), "");
+    let body = one_consumer("drifting", 1000.0, &drifting_demand(), "");
     let error = build_failure(&body);
     let EngineError::FlowNotConverged {
         sweeps,
@@ -449,6 +477,35 @@ fn a_slow_monotone_sequence_exhausts_the_flow_budget_and_names_its_edges() {
         "{sweeps} sweeps were spent against a numeric budget of \
          {FLOW_SWEEP_BUDGET}"
     );
+}
+
+/// The cause names what the iteration was doing **when the budget ran
+/// out**, not what it once did. Here a transient alternation from the
+/// cold start latches the damping, then a drift exhausts the numeric
+/// budget; reporting the latched alternation would send the reader
+/// looking for two allocations in conflict that the run left long ago
+/// (issue #160: a slow creep read "two allocations alternate").
+#[test]
+fn a_stall_after_a_transient_alternation_is_reported_as_the_drift_it_is() {
+    let body = one_consumer(
+        "alternating_then_drifting",
+        1000.0,
+        &alternating_then_drifting_demand(),
+        "",
+    );
+    let error = build_failure(&body);
+    let EngineError::FlowNotConverged {
+        cause, ref moving, ..
+    } = error
+    else {
+        panic!("expected a flow non-convergence diagnostic, got {error:?}");
+    };
+    assert_eq!(
+        cause,
+        FlowStall::Quantities,
+        "the alternation was over long before the budget ran out: {error}"
+    );
+    assert_eq!(moving, "supply.split[supply.out__alloc__ea]");
 }
 
 // ---------------------------------------------------------------------

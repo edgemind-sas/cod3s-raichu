@@ -30,6 +30,158 @@ pub(super) struct FlowScratch {
     /// Reusable algebraic buffers, indexed by final sweep position.
     blocks: Vec<BlockScratch>,
     block_model: Option<u64>,
+    /// History of a torn sweep repeated inside one right-hand side
+    /// ([`settle_explicit`]), reset on entry so nothing carries from one
+    /// evaluation to the next.
+    extrapolation: Extrapolation,
+}
+
+/// Probes the search for the longest admissible jump may spend (see
+/// [`jump_within_active_set`]): the jump lands within 2⁻¹² of its measured
+/// length of the breakpoint that cut it, close enough that the plain
+/// sweeps that follow reach the breakpoint in a handful of passes.
+const EXTRAPOLATION_PROBES: usize = 12;
+
+/// Take the **longest part of a proposed jump that keeps the active set
+/// it was measured on**, and return whether any of it was taken.
+///
+/// The jump is exact only where the map is affine, that is inside one
+/// active set; a map that is merely smooth there (a quantity multiplied by
+/// another, an exponential) lets the three steps agree well before the
+/// jump is accurate, and it can overshoot. Inside the same active set an
+/// overshoot is harmless: the plain sweeps that follow take it back. Past
+/// a breakpoint it is not: a conditional or a capping on the far side may
+/// hold a fixed point of its own, and the resolution would settle there,
+/// on an equilibrium the plain sequence never reaches.
+///
+/// A candidate is swept once on a copy of the attribute vector and kept
+/// only if that sweep produces `held`. The whole jump is tried first,
+/// which is the answer whenever the limit lies inside the active set;
+/// otherwise a bisection on its length finds the longest part that keeps
+/// it, which lands the iterate just short of the breakpoint. The
+/// breakpoint itself is then crossed by a plain sweep, as the plain
+/// sequence crosses it, so the extrapolation only ever shortens the walk
+/// to the equilibrium the plain sequence was approaching. The probes are
+/// work, not sweeps of the resolution: they run on a copy and are charged
+/// to no budget.
+#[allow(clippy::too_many_arguments)]
+fn jump_within_active_set(
+    model: &CompiledModel,
+    vars: &mut [Value],
+    states: &[StateIdx],
+    time: f64,
+    work: &mut WorkCounters,
+    changed: &mut ChangeLog,
+    extrapolation: &Extrapolation,
+    reach: f64,
+    held: &ActiveSet,
+) -> Result<bool, EngineError> {
+    let torn = &model.torn_reads;
+    let tolerance = changed.tolerance;
+    let mut probe = vars.to_vec();
+    let mut keeps = |length: f64, work: &mut WorkCounters| -> Result<bool, EngineError> {
+        probe.copy_from_slice(vars);
+        extrapolation.write_jump(
+            torn,
+            &mut probe,
+            length,
+            &mut ChangeLog::discarding(tolerance),
+        );
+        Ok(active_set_after_sweep(model, &mut probe, states, time, work, tolerance)? == *held)
+    };
+    let length = if keeps(reach, work)? {
+        reach
+    } else {
+        // `kept` keeps the active set (the iterate itself, at zero),
+        // `crossed` leaves it.
+        let (mut kept, mut crossed) = (0.0f64, reach);
+        for _ in 0..EXTRAPOLATION_PROBES {
+            let middle = 0.5 * (kept + crossed);
+            if keeps(middle, work)? {
+                kept = middle;
+            } else {
+                crossed = middle;
+            }
+        }
+        kept
+    };
+    if length > 0.0 {
+        extrapolation.write_jump(torn, vars, length, changed);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// The active set a sweep from `vars` produces, the sweep running on
+/// `vars` itself: callers hand it a copy.
+fn active_set_after_sweep(
+    model: &CompiledModel,
+    vars: &mut [Value],
+    states: &[StateIdx],
+    time: f64,
+    work: &mut WorkCounters,
+    tolerance: f64,
+) -> Result<ActiveSet, EngineError> {
+    let mut scratch = FlowScratch {
+        classes: Some(Vec::new()),
+        ..FlowScratch::default()
+    };
+    let mut changed = ChangeLog::discarding(tolerance);
+    let mut ctx = PassContext {
+        work,
+        scratch: &mut scratch,
+        changed: &mut changed,
+    };
+    recompute_explicit(model, vars, states, time, &mut ctx)?;
+    Ok(ActiveSet {
+        edges: scratch.classes.unwrap_or_default(),
+        branches: branches_taken(model, vars, states, time)?,
+    })
+}
+
+/// Which branch of every comparison the current `vars` resolve, over the
+/// whole sweep (the branch half of an [`ActiveSet`]).
+fn branches_taken(
+    model: &CompiledModel,
+    vars: &[Value],
+    states: &[StateIdx],
+    time: f64,
+) -> Result<Vec<u32>, EngineError> {
+    let mut branches = Vec::new();
+    for step in &model.explicit {
+        match step {
+            CStep::Equation { expr, .. } => {
+                record_branches(model, vars, states, time, expr, &mut branches)?;
+            }
+            CStep::Allocate(allocation) => {
+                record_branches(
+                    model,
+                    vars,
+                    states,
+                    time,
+                    &allocation.available,
+                    &mut branches,
+                )?;
+            }
+            // The block's constants and coefficients are its decision
+            // surface: the Ifs they carry are over non-unknowns
+            // (conditions reading a member are refused at build time),
+            // so they are active-set branches like an operator's. The
+            // walk keeps the lazy traversal: only the taken branch is
+            // visited.
+            CStep::Block(block) => {
+                for expr in &block.constants {
+                    record_branches(model, vars, states, time, expr, &mut branches)?;
+                }
+                for row in &block.coefficients {
+                    for (_, coefficient) in row {
+                        record_branches(model, vars, states, time, coefficient, &mut branches)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(branches)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -535,8 +687,10 @@ fn decision_sites(expr: &CExpr) -> usize {
 
 /// Run the explicit sweep at `(time, vars)`, **settled**: one pass when
 /// the sweep reads nothing ahead of its writer, and otherwise (a ring the
-/// evaluation order had to tear, [`CompiledModel::sweep_reads_ahead`]) the
-/// pass repeated until it moves nothing by more than `tolerance`.
+/// evaluation order had to tear, [`CompiledModel::torn_reads`]) the
+/// pass repeated until it moves nothing by more than `tolerance`. A
+/// repetition converging geometrically is extrapolated to its limit
+/// ([`Extrapolation`]), exactly as the boundary resolution does.
 ///
 /// One pass of a torn sweep reads, at the tear, whatever the attribute
 /// vector held before it: the previous evaluation inside the solver, the
@@ -560,16 +714,84 @@ pub(super) fn settle_explicit(
     tolerance: f64,
     before: &mut Vec<Value>,
 ) -> Result<(), EngineError> {
-    if !model.sweep_reads_ahead {
+    if !model.sweep_reads_ahead() {
         return recompute_explicit(model, vars, states, time, ctx);
     }
+    // Taken out of the scratch for the loop, so the passes can borrow the
+    // rest of it; put back on every exit so its buffers are reused.
+    let mut extrapolation = std::mem::take(&mut ctx.scratch.extrapolation);
+    extrapolation.reset();
+    let outcome = repeat_torn_sweep(
+        model,
+        vars,
+        states,
+        time,
+        ctx,
+        budget,
+        tolerance,
+        before,
+        &mut extrapolation,
+    );
+    ctx.scratch.extrapolation = extrapolation;
+    outcome
+}
+
+/// The repetition of [`settle_explicit`], with its extrapolation history
+/// handed in so the caller can return the buffers to the scratch.
+#[allow(clippy::too_many_arguments)]
+fn repeat_torn_sweep(
+    model: &CompiledModel,
+    vars: &mut [Value],
+    states: &[StateIdx],
+    time: f64,
+    ctx: &mut PassContext<'_>,
+    budget: usize,
+    tolerance: f64,
+    before: &mut Vec<Value>,
+    extrapolation: &mut Extrapolation,
+) -> Result<(), EngineError> {
+    let mut jumped = false;
     for _ in 0..budget.max(1) {
         before.clear();
         before.extend_from_slice(vars);
         recompute_explicit(model, vars, states, time, ctx)?;
         if flows_settled(before, vars, tolerance) {
-            break;
+            return Ok(());
         }
+        // A slow ring is a geometric sequence, and its limit is one jump
+        // away: without the jump a contraction at 0.99 leaves half of its
+        // residual after the whole budget, silently.
+        jumped = false;
+        if let Some(reach) = extrapolation.observe(&model.torn_reads, vars) {
+            // No resolution runs here to hand over the active set the
+            // sequence was measured on: the jump is held to the one a
+            // sweep from the current iterate produces.
+            let held = active_set_after_sweep(
+                model,
+                &mut vars.to_vec(),
+                states,
+                time,
+                ctx.work,
+                tolerance,
+            )?;
+            jumped = jump_within_active_set(
+                model,
+                vars,
+                states,
+                time,
+                ctx.work,
+                ctx.changed,
+                extrapolation,
+                reach,
+                &held,
+            )?;
+            extrapolation.reset();
+        }
+    }
+    if jumped {
+        // A jump writes the torn attributes only: the pass that derives
+        // everything else from them is owed, budget or not.
+        recompute_explicit(model, vars, states, time, ctx)?;
     }
     Ok(())
 }
@@ -661,13 +883,21 @@ impl<'m> Engine<'m> {
     /// descent, and charging its first class flips against a spent budget
     /// would refuse networks that damping is about to settle.
     ///
+    /// **Extrapolation** ([`Extrapolation`]) is what keeps the numeric
+    /// budget a constant. Under a held active set the quantities follow an
+    /// affine map whose rate is a property of the state (a full volume
+    /// holding a small share of what it admits contracts at nearly one),
+    /// so a slow approach that stays geometric is carried to its limit in
+    /// one jump instead of being paid for in sweeps.
+    ///
     /// Exhausting either budget raises [`EngineError::FlowNotConverged`],
     /// naming every edge that moved in the final sweep. The cause
-    /// distinguishes a two-cycle that survived damping from a pattern
-    /// that never settled and from quantities that never stopped
-    /// creeping, but all three carry the same payload: a long cycle and a
-    /// slow monotone sequence exhaust a budget without ever matching the
-    /// two-cycle test, and they are the commonest stalls.
+    /// distinguishes a two-cycle still alternating on the failing sweep
+    /// from a pattern that never settled and from quantities that never
+    /// stopped creeping, but all three carry the same payload: a long
+    /// cycle and a slow sequence that is not geometric exhaust a budget
+    /// without ever matching the two-cycle test, and they are the
+    /// commonest stalls.
     ///
     /// Whatever the resolution moves is drained into the stale marks of
     /// the indexed watched set on every exit path, the failing ones
@@ -726,6 +956,11 @@ impl<'m> Engine<'m> {
         let mut relaxation = 1.0f64;
         let mut cycled = false;
         let mut sweeps = 0usize;
+        // A local like the relaxation, for the same reason. Not pooled in
+        // the scratch as the right-hand side's is: a resolution runs once
+        // per boundary, where its buffers are noise beside the clones of
+        // the attribute vector it already takes.
+        let mut extrapolation = Extrapolation::default();
         // Read once: the policy is fixed for the engine's life, and
         // taking a copy keeps the loop from re-borrowing `self.config`
         // while it mutates `self.vars`.
@@ -765,7 +1000,11 @@ impl<'m> Engine<'m> {
                 set_spent += 1;
             }
             if set_spent > self.active_set_budget || flow_spent > policy.sweep_budget {
-                let cause = if cycled {
+                // What the iteration is doing NOW, not what it once did:
+                // a transient alternation latched long before a slow
+                // creep exhausted the numeric budget would otherwise be
+                // reported as a conflict between allocations.
+                let cause = if cycles {
                     FlowStall::TwoCycle
                 } else if pattern_held {
                     FlowStall::Quantities
@@ -773,6 +1012,26 @@ impl<'m> Engine<'m> {
                     FlowStall::ActiveSet
                 };
                 return Err(self.flow_stalled(cause, sweeps, &before, previous.as_ref(), &current));
+            }
+            // The quantities of one held active set follow an affine map,
+            // so a slow approach is extrapolated to its limit; a sweep
+            // that moved the pattern starts a new sequence.
+            if !pattern_held {
+                extrapolation.reset();
+            }
+            if let Some(reach) = extrapolation.observe(&model.torn_reads, &self.vars) {
+                jump_within_active_set(
+                    model,
+                    &mut self.vars,
+                    &self.states,
+                    self.time,
+                    &mut self.work,
+                    &mut self.changed,
+                    &extrapolation,
+                    reach,
+                    &current,
+                )?;
+                extrapolation.reset();
             }
             two_back_values = Some(before.clone());
             two_back = previous;
@@ -923,57 +1182,7 @@ impl<'m> Engine<'m> {
         let edges = self.flow_scratch.classes.take().unwrap_or_default();
         outcome?;
         self.work.flow_sweeps += 1;
-        let mut branches = Vec::new();
-        for step in &self.model.explicit {
-            match step {
-                CStep::Equation { expr, .. } => record_branches(
-                    self.model,
-                    &self.vars,
-                    &self.states,
-                    self.time,
-                    expr,
-                    &mut branches,
-                )?,
-                CStep::Allocate(allocation) => record_branches(
-                    self.model,
-                    &self.vars,
-                    &self.states,
-                    self.time,
-                    &allocation.available,
-                    &mut branches,
-                )?,
-                // The block's constants and coefficients are its
-                // decision surface: the Ifs they carry are over
-                // non-unknowns (conditions reading a member are
-                // refused at build time), so they are active-set
-                // branches like an operator's. The walk keeps the lazy
-                // traversal: only the taken branch is visited.
-                CStep::Block(block) => {
-                    for expr in &block.constants {
-                        record_branches(
-                            self.model,
-                            &self.vars,
-                            &self.states,
-                            self.time,
-                            expr,
-                            &mut branches,
-                        )?;
-                    }
-                    for row in &block.coefficients {
-                        for (_, coefficient) in row {
-                            record_branches(
-                                self.model,
-                                &self.vars,
-                                &self.states,
-                                self.time,
-                                coefficient,
-                                &mut branches,
-                            )?;
-                        }
-                    }
-                }
-            }
-        }
+        let branches = branches_taken(self.model, &self.vars, &self.states, self.time)?;
         Ok(ActiveSet { edges, branches })
     }
 

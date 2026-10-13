@@ -635,21 +635,22 @@ pub struct CompiledModel {
     /// re-evaluated as the clock advances rather than once at the
     /// initial instant and never again.
     pub explicit_reads_time: bool,
-    /// Whether some step of the explicit sweep reads an attribute that the
-    /// same step or a LATER one writes: a ring the evaluation order had to
-    /// tear somewhere.
+    /// The attributes read at a tear: every attribute some step reads
+    /// while its last writer sits at or after that step, sorted and
+    /// without repeats. Empty exactly when the sweep has no tear
+    /// ([`Self::sweep_reads_ahead`]).
     ///
-    /// One pass of such a sweep reads, at the tear, the value the previous
-    /// evaluation left behind, so its result depends on what was evaluated
-    /// before rather than on the state alone. The flow resolution iterates
-    /// to the fixpoint and does not care; the solver's right-hand side,
-    /// which runs one pass per stage, does: it becomes a function of the
-    /// evaluation history, including rejected trial steps, and an active-set
-    /// margin sitting on an exact balance crosses its band on that noise
-    /// and restarts the segment over and over. The engine reads this flag
-    /// to repeat the pass inside the right-hand side until it settles
-    /// (`evolC`); a sweep without a tear keeps its single pass, bit for bit.
-    pub(crate) sweep_reads_ahead: bool,
+    /// These are the **variables of the iteration** a torn sweep runs:
+    /// every other attribute is recomputed from them within one pass, so
+    /// the sequence of passes is a map on this vector alone. (Under the
+    /// under-relaxation a resolution latches after a two-cycle, the
+    /// blended allocated quantities carry state too; an extrapolation on
+    /// this vector then moves part of the iterate, which costs sweeps but
+    /// not correctness, acceptance being a settled pass.) The flow
+    /// resolution extrapolates a geometrically converging sequence on it
+    /// (`Extrapolation`), and doing so on any wider vector would mix in
+    /// derived quantities that are not part of the map's state.
+    pub(crate) torn_reads: Vec<VarIdx>,
     /// Switching loops found in this model: an automaton whose guard
     /// reads a quantity its own decision moves, where some automaton on
     /// the cycle switches on a single threshold.
@@ -943,9 +944,10 @@ impl Resolver {
     }
 }
 
-/// Whether a step of `explicit` reads an attribute written by itself or by
-/// a later step (see [`CompiledModel::sweep_reads_ahead`]).
-fn sweep_reads_ahead(explicit: &[CStep]) -> bool {
+/// The attributes a step of `explicit` reads while their last writer is
+/// that step or a later one (see [`CompiledModel::torn_reads`]), sorted
+/// and without repeats.
+fn torn_reads(explicit: &[CStep]) -> Vec<VarIdx> {
     // The last step writing each attribute: a read is ahead of its writer
     // when that writer sits at or after the reading step.
     let mut last_writer: HashMap<VarIdx, usize> = HashMap::new();
@@ -968,7 +970,8 @@ fn sweep_reads_ahead(explicit: &[CStep]) -> bool {
         }
     }
     let (mut vars, mut auts) = (Vec::new(), Vec::new());
-    explicit.iter().enumerate().any(|(index, step)| {
+    let mut torn = Vec::new();
+    for (index, step) in explicit.iter().enumerate() {
         vars.clear();
         match step {
             CStep::Equation { expr, .. } => expr.collect_sensitivity(&mut vars, &mut auts),
@@ -991,9 +994,15 @@ fn sweep_reads_ahead(explicit: &[CStep]) -> bool {
                 }
             }
         }
-        vars.iter()
-            .any(|var| last_writer.get(var).is_some_and(|&writer| writer >= index))
-    })
+        torn.extend(
+            vars.iter()
+                .copied()
+                .filter(|var| last_writer.get(var).is_some_and(|&writer| writer >= index)),
+        );
+    }
+    torn.sort_unstable();
+    torn.dedup();
+    torn
 }
 
 /// One node of the sweep-ordering graph: a surviving step (an equation
@@ -1556,6 +1565,24 @@ fn order_steps(
 }
 
 impl CompiledModel {
+    /// Whether some step of the explicit sweep reads an attribute that the
+    /// same step or a LATER one writes: a ring the evaluation order had to
+    /// tear somewhere.
+    ///
+    /// One pass of such a sweep reads, at the tear, the value the previous
+    /// evaluation left behind, so its result depends on what was evaluated
+    /// before rather than on the state alone. The flow resolution iterates
+    /// to the fixpoint and does not care; the solver's right-hand side,
+    /// which runs one pass per stage, does: it becomes a function of the
+    /// evaluation history, including rejected trial steps, and an active-set
+    /// margin sitting on an exact balance crosses its band on that noise
+    /// and restarts the segment over and over. The engine reads this test
+    /// to repeat the pass inside the right-hand side until it settles
+    /// (`evolC`); a sweep without a tear keeps its single pass, bit for bit.
+    pub(crate) fn sweep_reads_ahead(&self) -> bool {
+        !self.torn_reads.is_empty()
+    }
+
     /// Validate `model` then resolve every name to dense indices.
     pub fn compile(model: &Model) -> Result<Self, CompileError> {
         model.validate()?;
@@ -2333,6 +2360,7 @@ impl CompiledModel {
             .map(|(i, a)| (a.name.clone(), i))
             .collect();
 
+        let torn = torn_reads(&explicit);
         let mut compiled = CompiledModel {
             cache_id: {
                 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -2370,7 +2398,7 @@ impl CompiledModel {
                             .any(|(_, coefficient)| coefficient.reads_time())
                 }
             }),
-            sweep_reads_ahead: sweep_reads_ahead(&explicit),
+            torn_reads: torn,
             explicit,
             watched,
             flow_margins,
