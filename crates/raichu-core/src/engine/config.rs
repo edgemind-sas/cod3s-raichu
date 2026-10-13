@@ -490,13 +490,15 @@ pub enum EngineError {
     #[error("continuous evolution failed: {0}")]
     Ode(#[from] raichu_numeric::OdeError),
     /// An ODE right-hand side reached the magnitude the model declares
-    /// as "unbounded" ([`raichu_model::Model::unbounded_rate`]): a stand-in
-    /// for "no ceiling" became the rate of a stock. Integrated, it steps
-    /// the stock far past its bound before any event is located, so the
-    /// run is refused instead of answering a non-physical number.
+    /// as "unbounded" ([`raichu_model::Model::unbounded_rate`]), or, on a
+    /// solver failure, moves with it: a stand-in for "no ceiling" became
+    /// the rate of a stock, whole or scaled by a share. Integrated, it
+    /// steps the stock far past its bound before any event is located,
+    /// or collapses the step controller, so the run is refused instead of
+    /// answering a non-physical number or reporting stiffness.
     #[error(
         "`{variable}` would change at {rate:e} per unit time at t={time}, \
-         the magnitude this model reserves for \"unbounded\" ({unbounded:e}): \
+         a rate set by the magnitude this model reserves for \"unbounded\" ({unbounded:e}): \
          an unbounded draw met an unbounded supply, whose physics is an \
          instantaneous transfer that a rate cannot express; bound one of \
          the two (a finite fill or serve rate, or a finite demand)"

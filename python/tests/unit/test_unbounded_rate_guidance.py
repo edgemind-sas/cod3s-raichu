@@ -158,3 +158,125 @@ def test_a_declared_serve_rate_drains_the_stock_at_that_rate(serve_rate):
             expected_room = ROOM_INIT + STOCK + INFLOW * t
         assert membrane == pytest.approx(expected_membrane, abs=1e-6), t
         assert room == pytest.approx(expected_room, abs=1e-6), t
+
+
+def leaking_room(serve_rate=None):
+    """A leak into a room holding H2 in air, extracted by a fan whose exhaust
+    nothing reads (issue #158, reduced from a platform study).
+
+    The room's volume holds a mixture and serves each constituent at its
+    share, so with ``serve_rate`` unbounded the fan's draw on H2 is the
+    stand-in scaled by the H2 share (2 % here): under the magnitude the
+    engine checks, and far beyond what the step controller can follow. The
+    run used to end on "step size underflow ... too stiff"."""
+
+    class Leak(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_out(name="H2", var_fed_default=1.0)
+
+    class Room(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="H2")
+            self.add_flow_continuous_out(name="H2")
+            self.add_flow_continuous_out(name="AIR")
+            ceiling = {} if serve_rate is None else {"serve_rate": serve_rate}
+            self.add_capacity(
+                name="local",
+                flows=[{"name": "H2", "weight": 1.0}, {"name": "AIR", "weight": 1.0}],
+                capacity=1000.0,
+                side="out",
+                content_init={"H2": 2.0, "AIR": 100.0},
+                fill_rate=1.0,
+                transmits=True,
+                **ceiling,
+            )
+
+    class Fan(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="H2")
+            self.add_flow_continuous_out(name="exhaust")
+            self.add_rule_set(
+                name="extraction",
+                rules=[{"cons": {"H2": 51.0}, "prod": {"exhaust": 51.0}}],
+            )
+
+    system = mu.System("leaking_room")
+    system.add_component(Leak, "LEAK")
+    system.add_component(Room, "LOCAL")
+    system.add_component(Fan, "VENTILATION")
+    system.connect("LEAK", "H2", "LOCAL", "H2")
+    system.connect("LOCAL", "H2", "VENTILATION", "H2")
+    return system
+
+
+def test_a_draw_diluted_by_a_mixture_share_is_refused_rather_than_called_stiff():
+    with pytest.raises(pyraichu.UnboundedRateError) as caught:
+        leaking_room().simulate(t_max=1.0, samples=[1.0])
+    error = caught.value
+    assert error.variable == "LOCAL.local_content_H2"
+    assert error.time == 0.0
+    assert 0.0 < abs(error.rate) < error.unbounded
+    message = str(error)
+    assert ENGINE_WORDING in message, message
+    assert "capacity `local` of `LOCAL`" in message, message
+    assert "whose outputs nothing reads" in message, message
+
+
+def test_the_diluted_draw_runs_once_the_volume_states_its_rate():
+    """The advice works: with a finite ceiling the H2 stock drains at its
+    share of it. Over the first instants the share is about 2/102, so the
+    stock, fed at 1, moves at 1 - 51 x 2/102 = 0, within a percent."""
+    result = leaking_room(serve_rate=51.0).simulate(t_max=0.01, samples=[0.01])
+    (h2,) = [
+        points[-1][1]
+        for name, points in result.samples.items()
+        if name.endswith("local_content_H2")
+    ] or [None]
+    assert h2 is not None and abs(h2 - 2.0) < 0.02, h2
+
+
+def test_a_mixture_volume_feeding_an_unbounded_room_is_refused_too():
+    """The diluted draw where the stand-in is the room's fill claim (an
+    infinite ``fill_rate``), written inline rather than held by an
+    attribute: the same refusal, on the same variable."""
+
+    class Leak(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_out(name="H2", var_fed_default=1.0)
+
+    class Local(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="H2")
+            self.add_flow_continuous_out(name="H2")
+            self.add_flow_continuous_out(name="AIR")
+            self.add_capacity(
+                name="local",
+                flows=[{"name": "H2", "weight": 1.0}, {"name": "AIR", "weight": 1.0}],
+                capacity=1000.0,
+                side="out",
+                content_init={"H2": 2.0, "AIR": 100.0},
+                fill_rate=1.0,
+                transmits=True,
+            )
+
+    class Room(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="H2")
+            self.add_capacity(
+                name="room",
+                flow="H2",
+                capacity=100.0,
+                content_init={"H2": 0.0},
+                fill_rate=math.inf,
+            )
+
+    system = mu.System("mixture_into_room")
+    system.add_component(Leak, "LEAK")
+    system.add_component(Local, "LOCAL")
+    system.add_component(Room, "ROOM")
+    system.connect("LEAK", "H2", "LOCAL", "H2")
+    system.connect("LOCAL", "H2", "ROOM", "H2")
+    with pytest.raises(pyraichu.UnboundedRateError) as caught:
+        system.simulate(t_max=1.0, samples=[1.0])
+    assert caught.value.variable == "LOCAL.local_content_H2"
+    assert "capacity `local` of `LOCAL`" in str(caught.value)

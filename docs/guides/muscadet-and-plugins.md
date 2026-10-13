@@ -741,6 +741,18 @@ continuous model (`unbounded_rate`, see the model schema), and the
 engine refuses the rate by name. Bound one of the two sides: a finite
 `fill_rate` on the room, or a finite `serve_rate` on the volume.
 
+The same refusal covers a rule set whose outputs nothing reads and which
+declares no `max_rate`: nothing asks it for less, so it draws whatever its
+input allows, and a volume with no `serve_rate` allows without bound.
+When that volume holds a mixture, the draw on each constituent is the
+stand-in scaled by its share, and the run used to end on "step size
+underflow ... too stiff" the instant the rule started (a leak into a room
+extracted by a fan, issue #158). It is now refused by name like the
+undiluted case, and so is a mixture volume feeding a room with an
+infinite `fill_rate`. A `max_rate` on the rule's output or a `serve_rate` on
+the volume runs it; on that study either gives the reference engine's
+trajectory.
+
 The refusal is a `pyraichu.UnboundedRateError` (a `SimulationError`)
 carrying the integrated `variable`, the `time`, the `rate` and the
 declared `unbounded` magnitude. When the variable is a volume's content,
