@@ -247,6 +247,17 @@ impl CTransition {
                 .is_none_or(|states| states.contains(&target))
     }
 
+    /// Whether this is an observer with no wait whose condition moves during
+    /// continuous evolution, compiled [`CLaw::Watched`] so its crossing is
+    /// located during integration. At a discrete instant it is armed at
+    /// zero delay instead, so it keeps the same-date wave rank of the
+    /// zero-delay observer it was declared as.
+    #[must_use]
+    pub fn located_observer(&self) -> bool {
+        self.kind == Some(TransitionKind::Observation)
+            && matches!(self.distrib, CLaw::Watched { .. })
+    }
+
     /// The declared kind of an entry into `target`: [`CTransition::kind`]
     /// when `target` is the first declared target, which is the only entry
     /// the declaration speaks for, `None` for any other branch.
@@ -898,15 +909,23 @@ impl Resolver {
                 })
             }
             // NOT: the guard flips exactly where the margin changes
-            // sign: negate it.
+            // sign, and the complement of `m >= 0` is the STRICT `m < 0`:
+            // negate it and tighten it by STRICT_MARGIN_EPS, as a strict
+            // comparison is. Without the shift a guard and its negation
+            // both hold on the boundary, so a two-state automaton watched
+            // on `c` and `not(c)` would fire back and forth at the
+            // crossing without time advancing.
             Expr::Bool {
                 bool_op: BoolOp::Not,
                 args,
             } if args.len() == 1 => {
                 let inner = self.compile_watched_margin(&args[0])?;
                 Ok(CExpr::Sub {
-                    lhs: Box::new(CExpr::Const(Value::Float(0.0))),
-                    rhs: Box::new(inner),
+                    lhs: Box::new(CExpr::Sub {
+                        lhs: Box::new(CExpr::Const(Value::Float(0.0))),
+                        rhs: Box::new(inner),
+                    }),
+                    rhs: Box::new(CExpr::Const(Value::Float(STRICT_MARGIN_EPS))),
                 })
             }
             // Any other boolean operand is a *discrete gate*: constant
@@ -1675,6 +1694,10 @@ impl CompiledModel {
         let mut explicit: Vec<CStep> = Vec::new();
         let mut ode: Vec<(VarIdx, CExpr)> = Vec::new();
         let mut functions = Vec::new();
+        // Observers with no wait, each with the margin its guard would have
+        // as a watched boundary: pass 3-bis locates those whose guard moves
+        // during continuous evolution.
+        let mut zero_wait_observers: Vec<(TransIdx, CExpr)> = Vec::new();
         for component in &model.components {
             for automaton in &component.automata {
                 let aut_idx = resolver.automata[&(component.name.clone(), automaton.name.clone())];
@@ -1771,6 +1794,17 @@ impl CompiledModel {
                         })
                         .collect::<Result<Vec<_>, CompileError>>()?;
                     let trans_idx = transitions.len();
+                    if let (Some(TransitionKind::Observation), CLaw::Delay(time), Some(guard), 1) = (
+                        transition.kind,
+                        &distribution,
+                        &transition.guard,
+                        targets.len(),
+                    ) {
+                        if *time == 0.0 {
+                            zero_wait_observers
+                                .push((trans_idx, resolver.compile_watched_margin(guard)?));
+                        }
+                    }
                     automata[aut_idx].transitions.push(trans_idx);
                     transitions.push(CTransition {
                         name: format!("{}.{}.{}", component.name, automaton.name, transition.name),
@@ -1822,13 +1856,6 @@ impl CompiledModel {
                 explicit.push(CStep::Allocate(compiled));
             }
         }
-        let watched: Vec<TransIdx> = transitions
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| matches!(t.distrib, CLaw::Watched { .. }))
-            .map(|(i, _)| i)
-            .collect();
-
         // Pass 3-ter: the **declared evaluation order**, applied once,
         // here, as a permutation of the explicit table.
         //
@@ -1977,6 +2004,31 @@ impl CompiledModel {
                 *continuous = flag;
             }
         }
+        // An observer with no wait fires the moment its condition holds.
+        // Re-evaluated only at discrete events, a condition on a quantity
+        // that moves between them would be seen late, at the next discrete
+        // event, or never (edgemind-sas/cod3s-raichu#162): such an observer
+        // is located like a watched transition during integration. At a
+        // discrete instant it is still armed at zero delay
+        // ([`CTransition::located_observer`]), so it keeps its same-date
+        // wave rank. An observer whose condition only moves at discrete
+        // events is left as declared.
+        for (trans_idx, margin) in zero_wait_observers {
+            let transition = &mut transitions[trans_idx];
+            if transition
+                .guard
+                .as_ref()
+                .is_some_and(|guard| expr_is_continuous(guard, &continuous_vars))
+            {
+                transition.distrib = CLaw::Watched { margin };
+            }
+        }
+        let watched: Vec<TransIdx> = transitions
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t.distrib, CLaw::Watched { .. }))
+            .map(|(i, _)| i)
+            .collect();
 
         // Pass 3-quater: the **active-set margins**, one entry per
         // distribution operator, indexed against the *final* sweep table

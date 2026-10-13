@@ -365,7 +365,7 @@ The muscadet plugin declares them on the failure-mode edges it emits:
 
 Feared events (`ObjEvent`) declare their two edges `observation`.
 
-**`observation` changes the firing order, and nothing else.** Transitions
+**`observation` changes the firing order, and when an observer fires.** Transitions
 due at the same date fire in **waves**: a transition armed before a wave
 fires before the transitions that wave arms, which is how the reference
 engine orders them (two failures due at one date both fire before the feared
@@ -376,6 +376,19 @@ changes is what the observer sees: a state the model reaches and leaves
 within one instant (an alarm raised then cleared by a zero-delay repair) is
 observed and counted, as the reference counts it. Unlike the two
 reliability roles, it therefore requires the feature `observer_priority`.
+
+An observer with no wait (`delay` 0) whose guard **varies during
+continuous evolution** (it reads the simulation time, an ODE-integrated
+attribute, or one the explicit equations tie to one) is compiled as a
+[watched](#watched-a-guard-on-continuous-attributes) transition: the
+crossing of its condition is located during integration, as a threshold
+indicator on the same predicate is, instead of being noticed at the next
+discrete event (or never, when none follows). When a discrete event
+makes its condition hold instead, it is armed at zero delay and keeps its
+place in the waves above, exactly as an observer that is not located. An
+observer whose guard moves only at discrete events is not located at
+all. An observer with a non-zero `time` is not located: its countdown
+starts when a discrete event finds its condition holding.
 
 ### Target
 
@@ -434,6 +447,11 @@ the guard alone**: the same comparison could instead gate a timed
 transition's eligibility. A watched transition takes no distribution parameters
 and requires a `guard` containing an ordering comparison
 (`lt`/`le`/`gt`/`ge`).
+
+A `not` in a watched guard is the **strict** complement: `not(x >= c)`
+holds for `x < c`, as `lt` does, so a guard and its negation never hold
+together on the boundary, and a two-state automaton watched on `cond` and
+`not(cond)` settles at the crossing instead of firing back and forth.
 
 ### Interruption policy
 

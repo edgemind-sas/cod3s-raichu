@@ -193,7 +193,11 @@ impl<'m> Engine<'m> {
     pub(super) fn refresh_schedule(&mut self) -> Result<(), EngineError> {
         for trans_idx in 0..self.model.transitions.len() {
             let transition = &self.model.transitions[trans_idx];
-            if matches!(transition.distrib, CLaw::Watched { .. }) {
+            // A located observer is armed here like the zero-delay
+            // observer it was declared as; only its crossing during
+            // integration is located.
+            if matches!(transition.distrib, CLaw::Watched { .. }) && !transition.located_observer()
+            {
                 continue;
             }
             let in_source = self.states[transition.automaton] == transition.source;
@@ -378,6 +382,11 @@ impl<'m> Engine<'m> {
                     let firing_at = match &self.model.transitions[trans_idx].distrib {
                         CLaw::Delay(delay) => self.time + delay,
                         CLaw::Inst(_) => self.time,
+                        CLaw::Watched { .. }
+                            if self.model.transitions[trans_idx].located_observer() =>
+                        {
+                            self.time
+                        }
                         CLaw::Watched { .. } => continue,
                         // Armed by the dedicated block above.
                         CLaw::ExpVar { .. } => continue,

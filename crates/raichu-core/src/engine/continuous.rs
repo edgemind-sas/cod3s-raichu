@@ -132,6 +132,15 @@ impl<'m> Engine<'m> {
         !self.model.ode.is_empty()
             || self.model.explicit_reads_time
             || self.continuous_rates.iter().any(|&idx| self.is_armed(idx))
+            // A boundary on the clock alone moves with nothing else to
+            // integrate: without this a watched `time >= c` is never
+            // located and never fires.
+            || self
+                .model
+                .margin_index
+                .watched_by_time
+                .iter()
+                .any(|position| self.watched_active.contains(position))
     }
 
     /// `integrate_continuous`: integrate the continuous state to `t_target`, monitoring
