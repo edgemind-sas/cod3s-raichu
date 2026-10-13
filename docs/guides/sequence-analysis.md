@@ -162,9 +162,16 @@ through a quantity that remembers it:
   `continue`);
 - an automaton on the way, such as a controller switching on a band or a
   protection that trips and stays tripped. Exempt are another monitored
-  cycle group, whose persistence the sequence records as its own events,
-  and an automaton entered and left at once on a condition and its
-  negation, whose state follows its inputs.
+  cycle group, whose persistence the sequence records as its own events;
+  an automaton read only by recorded automata that copy it at once (two
+  states, left instantly and without effect on complementary guards), so
+  that its state is at every instant what their recorded events show: the
+  own automaton of a muscadet `external` failure mode and the mirrors it
+  drives on its targets; and an automaton entered and left at once on a
+  condition and its negation, whose state follows its inputs. A recorded
+  reader that waits (a rate, a delay) does not exempt what it reads: it
+  fires after the repair, and the sequence would not show that its input
+  held the effect meanwhile.
 
 `pyraichu.cycle_groups(model)` shows the decisions with the path that
 justifies each one, and a campaign reports the ones it applied in
