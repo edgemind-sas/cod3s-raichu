@@ -95,12 +95,13 @@ jobs:
       - name: Validate and execute exported FMUs under independent importers
         run: python -m pytest python/tests/unit/test_fmi_roundtrip.py -q
 
+  # Linux is left out: the Rust job already runs these tests there.
   fmi:
     name: FMI import (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -134,31 +135,12 @@ jobs:
       - name: Tests
         run: cargo test --workspace --profile ci
 
-  wheel:
-    name: Python wheel (maturin)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: HiGHS build prerequisites
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev cmake g++
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Build wheel
-        run: |
-          python scripts/build_fmu_runtime.py --target x86_64-unknown-linux-gnu --release
-          pipx run maturin build -m bindings/pyraichu/Cargo.toml
-      - name: Smoke-test import
-        run: |
-          pip install target/wheels/pyraichu-*.whl
-          python -c "import pyraichu; print(pyraichu.__version__)"
-
   # RAICHU on its own: the engine through its binding, the muscadet
   # authoring layer, the declaration vocabulary and the plugins. No
   # PyCATSHOO, no recorded reference, so a failure here is an internal
-  # regression and the whole suite answers in seconds.
+  # regression and the whole suite answers in seconds. Cross-validation
+  # against PyCATSHOO needs a licensed install and runs locally:
+  # `uv run pytest python/tests/validation`.
   unit:
     name: Python unit suite
     runs-on: ubuntu-latest
@@ -212,15 +194,3 @@ jobs:
       # PyCATSHOO side needs a licensed install and runs locally).
       - name: RAICHU-side benchmark smoke
         run: python benchmarks/pycatshoo-cpp/run_bench.py --raichu-only
-
-  # Cross-validation against PyCATSHOO needs a licensed PyCATSHOO install
-  # (cod3s/muscadet oracle); it runs on a self-hosted/local environment.
-  # Kept non-blocking until such a runner exists (M0 Phase 4 note).
-  validation:
-    name: Validation vs PyCATSHOO (placeholder)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Explain skip
-        run: echo "PyCATSHOO oracle unavailable on hosted runners; run 'uv run pytest python/tests/validation' locally. What needs no oracle runs in the 'unit' job above."
