@@ -99,9 +99,21 @@ def test_a_single_trajectory_is_refused_with_the_capacity_to_bound():
 
 
 def test_a_campaign_is_refused_the_same_way():
+    """The class survives the campaign's replica wrapping, and so do the
+    replay coordinates, through a pickle round trip as well."""
+    import pickle
+
     with pytest.raises(pyraichu.UnboundedRateError) as caught:
         stocked_membrane().monte_carlo(nb_runs=2, t_max=1.0, samples=[1.0])
     assert_explained(caught.value)
+    assert (caught.value.replica, caught.value.nb_runs) == (0, 2)
+    copy = pickle.loads(pickle.dumps(caught.value))
+    assert (copy.variable, copy.replica, copy.nb_runs, copy.seed) == (
+        caught.value.variable,
+        0,
+        2,
+        caught.value.seed,
+    )
 
 
 def test_the_platform_route_is_refused_the_same_way(monkeypatch):

@@ -750,6 +750,62 @@ pub enum EngineError {
         /// What that event is, in words.
         cause: String,
     },
+    /// One replica of a Monte-Carlo campaign failed, and the campaign is
+    /// refused with it.
+    ///
+    /// **Refused rather than estimated over the others.** The replicas
+    /// that fail are not a random subset: a network that stops settling,
+    /// a rate that turns unbounded, are states a trajectory reaches, and
+    /// the trajectories reaching them are often the ones reaching the
+    /// feared event. An estimate over the survivors would leave out
+    /// exactly those, and under-estimate what the study asks about.
+    ///
+    /// **Deterministic, and replayable.** The replica reported is the
+    /// lowest-numbered one that failed, whatever the thread count, so
+    /// every replica numbered below it completed; and its random
+    /// coordinates are the run's own (`seed`, and `rng_stream` =
+    /// `replica`), so a single simulation with them **and the campaign's
+    /// own settings** (horizon, sample instants, flow policy, solver
+    /// tolerances) replays it exactly, for diagnosis or for a bug report.
+    /// Under other settings the trajectory is another one.
+    #[error("{}", replica_failed_message(*replica, *nb_runs, *seed, source))]
+    ReplicaFailed {
+        /// The failing replica, which is also its RNG substream.
+        replica: u64,
+        /// The replicas the campaign asked for.
+        nb_runs: u64,
+        /// The campaign's master seed.
+        seed: u64,
+        /// What the replica's own run raised.
+        #[source]
+        source: Box<EngineError>,
+    },
+}
+
+/// The message of [`EngineError::ReplicaFailed`]: the replica, what
+/// completed before it, the coordinates that replay it, then the cause.
+fn replica_failed_message(replica: u64, nb_runs: u64, seed: u64, source: &EngineError) -> String {
+    let before = match replica {
+        0 => "no replica had completed before it".to_owned(),
+        1 => "replica 0 completed".to_owned(),
+        n => format!("replicas 0 to {} completed", n - 1),
+    };
+    format!(
+        "replica {replica} of {nb_runs} failed ({before}); replay it alone with seed={seed}, \
+         rng_stream={replica} and the campaign's settings: {source}"
+    )
+}
+
+impl EngineError {
+    /// The error a run itself raised: the cause behind a campaign's
+    /// [`EngineError::ReplicaFailed`], or this error when it is not one.
+    #[must_use]
+    pub fn cause(&self) -> &EngineError {
+        match self {
+            EngineError::ReplicaFailed { source, .. } => source.cause(),
+            other => other,
+        }
+    }
 }
 
 /// Why a continuous-flow resolution stopped without settling.

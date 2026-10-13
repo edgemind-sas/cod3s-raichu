@@ -150,7 +150,9 @@ fn the_estimating_replicas_reproduce_the_single_trajectory_answer() {
 }
 
 /// A tightened budget refuses the same network on **both** driver
-/// entry points, exactly as it refuses it on the single-trajectory path.
+/// entry points, exactly as it refuses it on the single-trajectory path
+/// (the campaign wraps it as the failure of its replica, see
+/// `replica_failure.rs`; the cause is what is compared here).
 /// Each entry point builds its own engine config, so this is two
 /// separate wirings under one assertion.
 #[test]
@@ -170,7 +172,9 @@ fn both_driver_entry_points_honour_a_tightened_budget() {
     );
     assert!(
         matches!(
-            run(&model, &mc_config(tightened.clone())),
+            run(&model, &mc_config(tightened.clone()))
+                .as_ref()
+                .map_err(EngineError::cause),
             Err(EngineError::FlowNotConverged { .. })
         ),
         "the estimating replicas ignored the tightened budget"
@@ -181,7 +185,9 @@ fn both_driver_entry_points_honour_a_tightened_budget() {
     };
     assert!(
         matches!(
-            run_sequences(&model, &sequences),
+            run_sequences(&model, &sequences)
+                .as_ref()
+                .map_err(EngineError::cause),
             Err(EngineError::FlowNotConverged { .. })
         ),
         "the sequence-recording replicas ignored the tightened budget: \
