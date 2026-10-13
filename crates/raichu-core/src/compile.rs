@@ -231,6 +231,15 @@ pub struct CTransition {
     pub effects: Vec<(VarIdx, CExpr)>,
     /// Occurrence distribution.
     pub distrib: CLaw,
+    /// The signed boundary margin of the guard (guard true ⇔ margin ≥ 0)
+    /// when the guard's crossing is **located** during integration while
+    /// the law stays what was declared: set for an observer
+    /// ([`TransitionKind::Observation`]) with a deterministic delay whose
+    /// guard varies during continuous evolution. Its countdown then starts
+    /// at the located crossing, and a located fall interrupts it, instead
+    /// of both waiting for the next discrete event. `None` otherwise; a
+    /// [`CLaw::Watched`] transition carries its margin in its law.
+    pub located: Option<CExpr>,
 }
 
 impl CTransition {
@@ -247,15 +256,15 @@ impl CTransition {
                 .is_none_or(|states| states.contains(&target))
     }
 
-    /// Whether this is an observer with no wait whose condition moves during
-    /// continuous evolution, compiled [`CLaw::Watched`] so its crossing is
-    /// located during integration. At a discrete instant it is armed at
-    /// zero delay instead, so it keeps the same-date wave rank of the
-    /// zero-delay observer it was declared as.
+    /// The boundary margin monitored during integration: a watched
+    /// transition's, or the [`CTransition::located`] guard's. `None` for a
+    /// transition whose guard is evaluated at discrete events only.
     #[must_use]
-    pub fn located_observer(&self) -> bool {
-        self.kind == Some(TransitionKind::Observation)
-            && matches!(self.distrib, CLaw::Watched { .. })
+    pub fn boundary_margin(&self) -> Option<&CExpr> {
+        match &self.distrib {
+            CLaw::Watched { margin } => Some(margin),
+            _ => self.located.as_ref(),
+        }
     }
 
     /// The declared kind of an entry into `target`: [`CTransition::kind`]
@@ -1721,10 +1730,10 @@ impl CompiledModel {
         let mut explicit: Vec<CStep> = Vec::new();
         let mut ode: Vec<(VarIdx, CExpr)> = Vec::new();
         let mut functions = Vec::new();
-        // Observers with no wait, each with the margin its guard would have
-        // as a watched boundary: pass 3-bis locates those whose guard moves
-        // during continuous evolution.
-        let mut zero_wait_observers: Vec<(TransIdx, CExpr)> = Vec::new();
+        // Observers with a deterministic delay, each with the margin its
+        // guard would have as a watched boundary: pass 3-bis locates those
+        // whose guard moves during continuous evolution.
+        let mut delayed_observers: Vec<(TransIdx, CExpr)> = Vec::new();
         for component in &model.components {
             for automaton in &component.automata {
                 let aut_idx = resolver.automata[&(component.name.clone(), automaton.name.clone())];
@@ -1821,16 +1830,14 @@ impl CompiledModel {
                         })
                         .collect::<Result<Vec<_>, CompileError>>()?;
                     let trans_idx = transitions.len();
-                    if let (Some(TransitionKind::Observation), CLaw::Delay(time), Some(guard), 1) = (
+                    if let (Some(TransitionKind::Observation), CLaw::Delay(_), Some(guard), 1) = (
                         transition.kind,
                         &distribution,
                         &transition.guard,
                         targets.len(),
                     ) {
-                        if *time == 0.0 {
-                            zero_wait_observers
-                                .push((trans_idx, resolver.compile_watched_margin(guard)?));
-                        }
+                        delayed_observers
+                            .push((trans_idx, resolver.compile_watched_margin(guard)?));
                     }
                     automata[aut_idx].transitions.push(trans_idx);
                     transitions.push(CTransition {
@@ -1848,6 +1855,7 @@ impl CompiledModel {
                         kind: transition.kind,
                         effects,
                         distrib: distribution,
+                        located: None,
                     });
                 }
             }
@@ -2031,29 +2039,32 @@ impl CompiledModel {
                 *continuous = flag;
             }
         }
-        // An observer with no wait fires the moment its condition holds.
+        // An observer's countdown starts the moment its condition holds.
         // Re-evaluated only at discrete events, a condition on a quantity
         // that moves between them would be seen late, at the next discrete
         // event, or never (edgemind-sas/cod3s-raichu#162): such an observer
-        // is located like a watched transition during integration. At a
-        // discrete instant it is still armed at zero delay
-        // ([`CTransition::located_observer`]), so it keeps its same-date
-        // wave rank. An observer whose condition only moves at discrete
-        // events is left as declared.
-        for (trans_idx, margin) in zero_wait_observers {
+        // keeps its delay and has the crossing of its condition located
+        // during integration ([`CTransition::located`]). Its arming stays
+        // the schedule's, so a zero delay keeps its same-date wave rank.
+        // An observer whose condition only moves at discrete events is
+        // left as declared.
+        for (trans_idx, margin) in delayed_observers {
             let transition = &mut transitions[trans_idx];
             if transition
                 .guard
                 .as_ref()
                 .is_some_and(|guard| expr_is_continuous(guard, &continuous_vars))
             {
-                transition.distrib = CLaw::Watched { margin };
+                transition.located = Some(margin);
             }
         }
+        // The monitored population: watched transitions and located
+        // observers, which share the arming filter, the margin index and
+        // the solver's event slots.
         let watched: Vec<TransIdx> = transitions
             .iter()
             .enumerate()
-            .filter(|(_, t)| matches!(t.distrib, CLaw::Watched { .. }))
+            .filter(|(_, t)| t.boundary_margin().is_some())
             .map(|(i, _)| i)
             .collect();
 

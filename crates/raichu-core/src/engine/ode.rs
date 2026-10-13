@@ -20,6 +20,23 @@ pub(super) struct FrozenFlow<'m> {
     pub(super) classes: Vec<EdgeClass>,
 }
 
+/// Which crossing of a monitored margin ends the segment.
+///
+/// A watched transition and an idle located observer wait for their
+/// condition to start holding. A located observer whose countdown is
+/// running waits for it to stop holding, which interrupts the countdown;
+/// under the `continue` policy nothing interrupts it, so its margin is
+/// not monitored at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarginSense {
+    /// The guard starts holding: the margin itself crosses 0 upward.
+    Rising,
+    /// The guard stops holding: its strict complement crosses 0 upward.
+    Falling,
+    /// No crossing ends the segment.
+    Inert,
+}
+
 /// Adapter exposing the compiled continuous section to `raichu-numeric`.
 /// Errors raised inside the solver callbacks are stashed and re-raised
 /// after integration (the trait is infallible by design).
@@ -27,8 +44,11 @@ pub(super) struct ContinuousSystem<'m> {
     pub(super) model: &'m CompiledModel,
     pub(super) vars: Vec<Value>,
     pub(super) states: Vec<StateIdx>,
-    /// Active watched transitions monitored this segment.
+    /// Active watched transitions and located observers monitored this
+    /// segment.
     pub(super) margins: Vec<TransIdx>,
+    /// Which crossing of each entry of `margins` ends the segment.
+    pub(super) senses: Vec<MarginSense>,
     /// Active continuously-varying hazards monitored this segment:
     /// `(transition, remaining threshold E − H)`. Each occupies one
     /// auxiliary state slot after the ODE attributes, integrating
@@ -385,12 +405,21 @@ impl OdeSystem for ContinuousSystem<'_> {
     fn events(&mut self, t: f64, y: &[f64], out: &mut [f64]) {
         self.load(t, y);
         self.work.margin_evaluations += self.margins.len() as u64;
-        for (slot, trans_idx) in self.margins.iter().enumerate() {
-            let CLaw::Watched { margin } = &self.model.transitions[*trans_idx].distrib else {
+        for (slot, (trans_idx, sense)) in self.margins.iter().zip(&self.senses).enumerate() {
+            let Some(margin) = self.model.transitions[*trans_idx].boundary_margin() else {
                 out[slot] = -1.0;
                 continue;
             };
+            if *sense == MarginSense::Inert {
+                out[slot] = -1.0;
+                continue;
+            }
             match eval_f64(self.model, &self.vars, &self.states, t, margin) {
+                // The complement of `margin >= 0` is the strict
+                // `margin < 0`, tightened as a strict comparison is.
+                Ok(value) if *sense == MarginSense::Falling => {
+                    out[slot] = -value - STRICT_MARGIN_EPS;
+                }
                 Ok(value) => out[slot] = value,
                 Err(error) => {
                     self.error.get_or_insert(error);

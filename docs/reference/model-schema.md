@@ -377,18 +377,19 @@ within one instant (an alarm raised then cleared by a zero-delay repair) is
 observed and counted, as the reference counts it. Unlike the two
 reliability roles, it therefore requires the feature `observer_priority`.
 
-An observer with no wait (`delay` 0) whose guard **varies during
-continuous evolution** (it reads the simulation time, an ODE-integrated
-attribute, or one the explicit equations tie to one) is compiled as a
-[watched](#watched-a-guard-on-continuous-attributes) transition: the
-crossing of its condition is located during integration, as a threshold
-indicator on the same predicate is, instead of being noticed at the next
-discrete event (or never, when none follows). When a discrete event
-makes its condition hold instead, it is armed at zero delay and keeps its
-place in the waves above, exactly as an observer that is not located. An
-observer whose guard moves only at discrete events is not located at
-all. An observer with a non-zero `time` is not located: its countdown
-starts when a discrete event finds its condition holding.
+An observer with a `delay` whose guard **varies during continuous
+evolution** (it reads the simulation time, an ODE-integrated attribute,
+or one the explicit equations tie to one) has the crossing of its
+condition **located** during integration, as a threshold indicator on the
+same predicate is, instead of noticed at the next discrete event (or
+never, when none follows). Its delay is a countdown that starts at the
+located crossing: with `time` 0 it fires there, with `time` d it fires d
+later, and a located fall of the condition before then interrupts the
+countdown under the transition's `on_interruption` policy (`reset`, the
+default, cancels it). When a discrete event makes the condition hold
+instead, the observer is armed as any delay is, and a zero delay keeps its
+place in the waves above. An observer whose guard moves only at discrete
+events is not located at all.
 
 ### Target
 

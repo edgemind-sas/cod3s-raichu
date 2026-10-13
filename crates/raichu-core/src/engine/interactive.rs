@@ -238,6 +238,12 @@ impl<'m> Engine<'m> {
             if self.states[transition.automaton] != transition.source {
                 continue;
             }
+            // An armed located observer is listed with its date among the
+            // scheduled transitions; an idle one, like a watched
+            // transition, waits for a crossing nobody has located yet.
+            if transition.located.is_some() && self.pending[idx].is_some() {
+                continue;
+            }
             // Guard already true ⇒ fireable at the current instant; else
             // its boundary has not been located yet (date unknown). A
             // guard type error is treated as "not fireable now" here; it
@@ -791,6 +797,10 @@ impl<'m> Engine<'m> {
     ///   branch is never forced).
     /// - A watched transition may be fired only while its guard already
     ///   holds (at the current instant).
+    /// - A located observer whose condition stops holding on the way
+    ///   (its countdown interrupted, or restarted with a later date) is no
+    ///   longer due at the date asked for: [`EngineError::NotFireable`],
+    ///   the engine left unchanged.
     ///
     /// Choosing a non-earliest transition deliberately overrides the
     /// schedule: the interactive counterpart of a manually driven run.
@@ -836,9 +846,27 @@ impl<'m> Engine<'m> {
             // current instant.
             let t_new = date.max(self.time);
             if self.needs_integration() && t_new > self.time {
+                // A located observer's countdown can be interrupted (or
+                // restarted, later) on the way; the refusal then leaves the
+                // engine as it found it, as every other refusal does.
+                let located = operator.is_none()
+                    && explicit_now.is_none()
+                    && self.model.transitions[trans_idx].located.is_some();
+                let before = if located {
+                    Some(self.try_snapshot()?)
+                } else {
+                    None
+                };
                 if let Some(watched_idx) = self.advance_continuous(t_new)? {
                     self.note_watched_firing()?;
                     return self.fire(watched_idx, None);
+                }
+                if let Some(before) = before.filter(|_| self.pending[trans_idx] != Some(date)) {
+                    self.try_restore(&before)?;
+                    return Err(EngineError::NotFireable {
+                        transition: name,
+                        time: self.time,
+                    });
                 }
             }
             if t_new > self.time {

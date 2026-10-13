@@ -148,9 +148,12 @@ def declaration() -> dict:
     }
 
 
-def run():
+def run(tempo: float = 0.0):
+    document = declaration()
+    if tempo:
+        document["components"]["room_over_threshold"]["tempo_occ"] = tempo
     # Through JSON, as a platform export reaches the layer.
-    model = engine.build_model(json.loads(json.dumps(declaration())))
+    model = engine.build_model(json.loads(json.dumps(document)))
     return pyraichu.simulate(model, t_max=20.0, samples=[0.0, 20.0])
 
 
@@ -163,3 +166,10 @@ def test_the_event_and_the_indicator_on_its_predicate_agree():
     flips = [t for t, value in result.indicators["room_over_threshold_had_value"] if value]
     assert flips, "the indicator never saw the crossing"
     assert abs(fired_at(result, "occ") - flips[0]) < CROSSING_TOL
+
+
+def test_a_tempo_runs_from_the_crossing():
+    # The room keeps filling past the threshold, so the condition holds
+    # through the whole tempo: the event fires one hour after the crossing,
+    # with nothing discrete happening in between to start the countdown.
+    assert abs(fired_at(run(tempo=1.0), "occ") - (CROSSING + 1.0)) < CROSSING_TOL

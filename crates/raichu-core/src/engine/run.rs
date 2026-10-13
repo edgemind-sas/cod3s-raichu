@@ -131,49 +131,59 @@ impl<'m> Engine<'m> {
             return self.fire(trans_idx, None).map(Some);
         }
 
-        let next_discrete = self.next_pending();
-        let next_fmu = self.host.as_ref().and_then(|host| host.next_point());
-        let t_target = next_discrete
-            .map_or(self.config.t_max, |(_, date)| date.min(self.config.t_max))
-            .min(next_fmu.unwrap_or(f64::INFINITY));
+        loop {
+            let next_discrete = self.next_pending();
+            let next_fmu = self.host.as_ref().and_then(|host| host.next_point());
+            let t_target = next_discrete
+                .map_or(self.config.t_max, |(_, date)| date.min(self.config.t_max))
+                .min(next_fmu.unwrap_or(f64::INFINITY));
 
-        if self.needs_integration() && t_target > self.time && t_target.is_finite() {
-            if let Some(trans_idx) = self.advance_continuous(t_target)? {
-                self.note_watched_firing()?;
-                return self.fire(trans_idx, None).map(Some);
-            }
-        }
-
-        match next_discrete {
-            Some((trans_idx, date))
-                if date <= self.config.t_max && next_fmu.is_none_or(|point| date <= point) =>
-            {
-                // The clock never runs backwards: in a step-driven run
-                // every scheduled date is ≥ the current time, so `max`
-                // is a no-op; it only guards an *overdue* transition left
-                // behind after an interactive `fire_idx` skipped ahead.
-                let t_new = date.max(self.time);
-                self.flush_samples_before(t_new);
-                self.time = t_new;
-                self.note_time_change();
-                self.watched_streak = (t_new, 0);
-                self.fire(trans_idx, None).map(Some)
-            }
-            _ => {
-                if let Some(point) = next_fmu.filter(|point| *point <= self.config.t_max) {
-                    self.flush_samples_before(point);
-                    self.time = point;
-                    self.note_time_change();
-                    self.watched_streak = (point, 0);
-                    self.process_fmu_point()?;
-                    return Ok(Some(Event {
-                        time: point,
-                        transition: "fmi.communication".to_owned(),
-                        from: String::new(),
-                        to: String::new(),
-                    }));
+            if self.needs_integration() && t_target > self.time && t_target.is_finite() {
+                if let Some(trans_idx) = self.advance_continuous(t_target)? {
+                    self.note_watched_firing()?;
+                    return self.fire(trans_idx, None).map(Some);
                 }
-                Ok(None)
+                // A located crossing may have moved the schedule on the
+                // way: interrupted the countdown that set this target, or
+                // armed one due at the target itself, which the waves rank.
+                // Plan again from the instant reached; time has advanced,
+                // or nothing moved, so this ends.
+                if self.next_pending() != next_discrete {
+                    continue;
+                }
+            }
+
+            match next_discrete {
+                Some((trans_idx, date))
+                    if date <= self.config.t_max && next_fmu.is_none_or(|point| date <= point) =>
+                {
+                    // The clock never runs backwards: in a step-driven run
+                    // every scheduled date is ≥ the current time, so `max`
+                    // is a no-op; it only guards an *overdue* transition left
+                    // behind after an interactive `fire_idx` skipped ahead.
+                    let t_new = date.max(self.time);
+                    self.flush_samples_before(t_new);
+                    self.time = t_new;
+                    self.note_time_change();
+                    self.watched_streak = (t_new, 0);
+                    return self.fire(trans_idx, None).map(Some);
+                }
+                _ => {
+                    if let Some(point) = next_fmu.filter(|point| *point <= self.config.t_max) {
+                        self.flush_samples_before(point);
+                        self.time = point;
+                        self.note_time_change();
+                        self.watched_streak = (point, 0);
+                        self.process_fmu_point()?;
+                        return Ok(Some(Event {
+                            time: point,
+                            transition: "fmi.communication".to_owned(),
+                            from: String::new(),
+                            to: String::new(),
+                        }));
+                    }
+                    return Ok(None);
+                }
             }
         }
     }

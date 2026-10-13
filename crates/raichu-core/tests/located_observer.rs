@@ -15,7 +15,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use raichu_core::{
-    fault_tree_for_targets, CompiledModel, Engine, EngineConfig, FaultTreeError, FaultTreeSettings,
+    fault_tree_for_targets, CompiledModel, Engine, EngineConfig, EngineError, FaultTreeError,
+    FaultTreeSettings,
 };
 use raichu_model::Model;
 use serde_json::{json, Value as Json};
@@ -162,16 +163,33 @@ fn an_event_on_a_discrete_threshold_is_not_located() {
 }
 
 #[test]
-fn a_waiting_event_is_not_located() {
-    // A tempo starts its countdown when the condition holds: locating the
-    // condition is not enough to honour it, so a waiting observer is left
-    // as it was declared.
+fn a_waiting_event_counts_its_tempo_from_the_crossing() {
+    // x = t crosses 1.5 at t = 1.5 and nothing discrete happens after it:
+    // the tempo of 0.5 runs from the crossing, so the event fires at 2.0.
+    // It used to wait for a discrete event to start its countdown, and
+    // with none before the horizon it never fired.
     let model = ramp_with_event("ge", 1.5, None, 0.5);
-    let compiled = CompiledModel::compile(&model).unwrap();
-    assert_eq!(
-        compiled.watched.len(),
-        1,
-        "only the return edge, which has no tempo"
+    assert_events(&events(&model, 3.0), &[(2.0, "ev_c.ev.occ")]);
+}
+
+#[test]
+fn a_waiting_event_whose_condition_falls_back_first_never_fires() {
+    // x rises to 1 at t = 1 and falls back: above 0.8 on [0.8, 1.2] only,
+    // 0.4 in all. A tempo of 0.5 is never served, and the countdown the
+    // fall interrupts is cancelled, as a guard turning false cancels any
+    // countdown (the default `reset` interruption policy).
+    let model = ramp_with_event("gt", 0.8, Some(1.0), 0.5);
+    assert_events(&events(&model, 2.0), &[]);
+}
+
+#[test]
+fn a_waiting_event_shorter_than_its_condition_fires_then_returns() {
+    // The same window of 0.4, a tempo of 0.3: the event fires at
+    // 0.8 + 0.3 = 1.1 and returns, with no tempo, at the fall at 1.2.
+    let model = ramp_with_event("gt", 0.8, Some(1.0), 0.3);
+    assert_events(
+        &events(&model, 2.0),
+        &[(1.1, "ev_c.ev.occ"), (1.2, "ev_c.ev.not_occ")],
     );
 }
 
@@ -253,4 +271,271 @@ fn an_event_on_the_clock_alone_fires_at_its_date_with_nothing_to_integrate() {
     }))
     .expect("model");
     assert_events(&events(&model, 3.0), &[(1.5, "ev_c.ev.occ")]);
+}
+
+/// `x = 1 - t`, a switch turning `on` at t = 0.1, and an event on `on`
+/// with `x > 0.5` and a tempo of 0.5: armed at 0.1, due at 0.6, while its
+/// condition stops holding at t = 0.5.
+fn countdown_cut_short() -> Model {
+    let on = json!({"op": "state_active",
+                    "state": {"component": "c", "automaton": "sw", "state": "on"}});
+    let cond = json!({"op": "bool", "bool_op": "and", "args": [
+        on,
+        {"op": "cmp", "cmp": "gt", "lhs": x(), "rhs": {"op": "const", "value": float(0.5)}}
+    ]});
+    serde_json::from_value(json!({
+        "name": "interrupted",
+        "components": [
+            {"name": "c",
+             "attributes": [{"name": "x", "kind": "float", "init": float(1.0)}],
+             "equations": [{"target": "x", "kind": "ode",
+                            "expr": {"op": "const", "value": float(-1.0)}}],
+             "automata": [{"name": "sw", "states": ["off", "on"], "init": "off",
+                 "transitions": [{"name": "switch", "source": "off", "targets": ["on"],
+                                  "distrib": "delay", "time": 0.1}]}]},
+            event(cond, 0.5)
+        ]
+    }))
+    .expect("model")
+}
+
+#[test]
+fn a_countdown_armed_at_a_discrete_instant_is_interrupted_by_a_located_fall() {
+    // The event is armed by a discrete event, so its date is the next one
+    // on the schedule when the integration towards it starts; the fall at
+    // 0.5 interrupts it on the way and it never fires.
+    assert_events(
+        &events(&countdown_cut_short(), 2.0),
+        &[(0.1, "c.sw.switch")],
+    );
+}
+
+#[test]
+fn firing_an_interrupted_countdown_by_hand_is_refused() {
+    // Driven interactively: once armed, the event is listed as fireable at
+    // 0.6, but asking for it integrates through the fall at 0.5, so it is
+    // no longer due when its date comes.
+    let compiled = CompiledModel::compile(&countdown_cut_short()).unwrap();
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 2.0,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    engine.step().unwrap().expect("the switch at 0.1");
+    let armed = engine
+        .fireable()
+        .into_iter()
+        .find(|f| f.transition == "ev_c.ev.occ")
+        .expect("the event is armed");
+    assert!((armed.date.unwrap() - 0.6).abs() < 1e-9, "{armed:?}");
+    let refused = engine.fire_idx(armed.index);
+    assert!(
+        matches!(refused, Err(EngineError::NotFireable { .. })),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn firing_a_countdown_restarted_on_the_way_by_hand_is_refused() {
+    // Armed at 0.1, due at 0.6; its condition stops holding on [0.2, 0.3)
+    // and holds again from 0.3, so the reset countdown is re-armed there,
+    // due at 0.8. Asking for it at its old date must not fire it early.
+    let on = json!({"op": "state_active",
+                    "state": {"component": "c", "automaton": "sw", "state": "on"}});
+    let clock = |cmp: &str, value: f64| {
+        json!({"op": "cmp", "cmp": cmp, "lhs": {"op": "time"},
+               "rhs": {"op": "const", "value": float(value)}})
+    };
+    let cond = json!({"op": "bool", "bool_op": "and", "args": [
+        on,
+        {"op": "bool", "bool_op": "or", "args": [clock("lt", 0.2), clock("ge", 0.3)]}
+    ]});
+    let model: Model = serde_json::from_value(json!({
+        "name": "restarted",
+        "components": [
+            {"name": "c",
+             "attributes": [{"name": "x", "kind": "float", "init": float(0.0)}],
+             "equations": [{"target": "x", "kind": "ode", "expr": ramp_rate(None)}],
+             "automata": [{"name": "sw", "states": ["off", "on"], "init": "off",
+                 "transitions": [{"name": "switch", "source": "off", "targets": ["on"],
+                                  "distrib": "delay", "time": 0.1}]}]},
+            event(cond, 0.5)
+        ]
+    }))
+    .expect("model");
+    assert_events(
+        &events(&model, 0.9),
+        &[(0.1, "c.sw.switch"), (0.8, "ev_c.ev.occ")],
+    );
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 0.9,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    engine.step().unwrap().expect("the switch at 0.1");
+    let armed = engine
+        .fireable()
+        .into_iter()
+        .find(|f| f.transition == "ev_c.ev.occ")
+        .expect("the event is armed");
+    let refused = engine.fire_idx(armed.index);
+    assert!(
+        matches!(refused, Err(EngineError::NotFireable { .. })),
+        "{refused:?}"
+    );
+}
+
+/// The event `time >= 0.5` (gated by `gate`, when given) with a tempo of
+/// 1.0, due at 1.5, beside a component `b` failing at `b_fail`.
+fn countdown_due_at(b_fail: f64, gated: bool) -> Model {
+    let clock = json!({"op": "cmp", "cmp": "ge", "lhs": {"op": "time"},
+                       "rhs": {"op": "const", "value": float(0.5)}});
+    let cond = if gated {
+        let up = json!({"op": "state_active",
+                        "state": {"component": "b", "automaton": "h", "state": "up"}});
+        json!({"op": "bool", "bool_op": "and", "args": [up, clock]})
+    } else {
+        clock
+    };
+    serde_json::from_value(json!({
+        "name": "tie",
+        "components": [
+            {"name": "b",
+             "automata": [{"name": "h", "states": ["up", "down"], "init": "up",
+                 "transitions": [{"name": "fail", "source": "up", "targets": ["down"],
+                                  "distrib": "delay", "time": b_fail}]}]},
+            event(cond, 1.0)
+        ]
+    }))
+    .expect("model")
+}
+
+#[test]
+fn a_countdown_due_with_a_failure_keeps_its_observer_rank() {
+    // Both are armed before the instant at 1.5 and both are due then: the
+    // observer fires first, as it does when neither is located, and only
+    // then does the failure end its condition.
+    let got = events(&countdown_due_at(1.5, true), 3.0);
+    assert_events(
+        &got,
+        &[
+            (1.5, "ev_c.ev.occ"),
+            (1.5, "b.h.fail"),
+            (1.5, "ev_c.ev.not_occ"),
+        ],
+    );
+}
+
+#[test]
+fn a_countdown_due_at_the_horizon_fires_there() {
+    // Due at 1.5 with the horizon at 1.5, like a delay transition dated
+    // exactly at the horizon.
+    let got = events(&countdown_due_at(10.0, false), 1.5);
+    assert_events(&got, &[(1.5, "ev_c.ev.occ")]);
+}
+
+/// The cut-short countdown of [`countdown_cut_short`] with its condition
+/// back from t = 0.7 (`x < 0.3`), under the interruption policy `policy`.
+fn countdown_paused(policy: &str) -> Model {
+    let on = json!({"op": "state_active",
+                    "state": {"component": "c", "automaton": "sw", "state": "on"}});
+    let level = |cmp: &str, value: f64| json!({"op": "cmp", "cmp": cmp, "lhs": x(), "rhs": {"op": "const", "value": float(value)}});
+    let cond = json!({"op": "bool", "bool_op": "and", "args": [
+        on,
+        {"op": "bool", "bool_op": "or", "args": [level("gt", 0.5), level("lt", 0.3)]}
+    ]});
+    let mut event = event(cond, 0.5);
+    event["automata"][0]["transitions"][0]["on_interruption"] = json!(policy);
+    serde_json::from_value(json!({
+        "name": "paused",
+        "components": [
+            {"name": "c",
+             "attributes": [{"name": "x", "kind": "float", "init": float(1.0)}],
+             "equations": [{"target": "x", "kind": "ode",
+                            "expr": {"op": "const", "value": float(-1.0)}}],
+             "automata": [{"name": "sw", "states": ["off", "on"], "init": "off",
+                 "transitions": [{"name": "switch", "source": "off", "targets": ["on"],
+                                  "distrib": "delay", "time": 0.1}]}]},
+            event
+        ]
+    }))
+    .expect("model")
+}
+
+#[test]
+fn an_interrupted_countdown_follows_its_interruption_policy() {
+    // Armed at 0.1, the condition holds on [0.1, 0.5) and again from 0.7.
+    // `reset` restarts the 0.5 at 0.7: due 1.2. `resume` keeps the 0.4
+    // already served: due 0.8. `continue` never stops: due 0.6, the
+    // return edge fires at once, since the condition is false then, and the
+    // next occurrence counts its own tempo from 0.7: due 1.2.
+    let at = |policy: &str| events(&countdown_paused(policy), 2.0);
+    assert_events(&at("reset"), &[(0.1, "c.sw.switch"), (1.2, "ev_c.ev.occ")]);
+    assert_events(&at("resume"), &[(0.1, "c.sw.switch"), (0.8, "ev_c.ev.occ")]);
+    assert_events(
+        &at("continue"),
+        &[
+            (0.1, "c.sw.switch"),
+            (0.6, "ev_c.ev.occ"),
+            (0.6, "ev_c.ev.not_occ"),
+            (1.2, "ev_c.ev.occ"),
+        ],
+    );
+}
+
+#[test]
+fn many_countdowns_armed_at_one_crossing_all_fire() {
+    // 1100 events on `time >= 1` with a tempo of 0.5 share one crossing:
+    // they are armed together, without tripping the guard against a
+    // boundary that fires again and again at one instant.
+    let cond = json!({"op": "cmp", "cmp": "ge", "lhs": {"op": "time"},
+                      "rhs": {"op": "const", "value": float(1.0)}});
+    let components: Vec<Json> = (0..1100)
+        .map(|i| {
+            let mut event = event(cond.clone(), 0.5);
+            event["name"] = json!(format!("ev_{i}"));
+            event
+        })
+        .collect();
+    let model: Model =
+        serde_json::from_value(json!({"name": "many", "components": components})).expect("model");
+    let got = events(&model, 2.0);
+    assert_eq!(got.len(), 1100);
+    assert!(
+        got.iter().all(|(t, _)| (t - 1.5).abs() < 1e-6),
+        "{:?}",
+        &got[..3]
+    );
+}
+
+#[test]
+fn a_refused_firing_leaves_the_engine_where_it_was() {
+    let compiled = CompiledModel::compile(&countdown_cut_short()).unwrap();
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 2.0,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    engine.step().unwrap().expect("the switch at 0.1");
+    let before = engine.current_time();
+    let armed = engine
+        .fireable()
+        .into_iter()
+        .find(|f| f.transition == "ev_c.ev.occ")
+        .expect("the event is armed");
+    assert!(engine.fire_idx(armed.index).is_err());
+    assert_eq!(engine.current_time(), before);
+    // And the run then goes on as if nothing had been asked.
+    let rest: Vec<_> = std::iter::from_fn(|| engine.step().unwrap()).collect();
+    assert!(rest.is_empty(), "{rest:?}");
 }
