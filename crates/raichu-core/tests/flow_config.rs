@@ -135,17 +135,22 @@ fn jumping_demand() -> String {
     )
 }
 
-/// A demand that creeps: `d = 0.01 + 0.999*a`, monotone onto 10 at a
-/// rate of 0.999 per sweep. Nothing here is combinatorial and nothing
-/// cycles: the numeric budget alone stops it, and the number of sweeps
-/// it spends before it does is a direct reading of that budget.
-fn creeping_demand() -> String {
+/// A demand that drifts: `d = 0.01 + a`, always 0.01 above what the
+/// consumer holds, so the allocation grows by 0.01 per sweep until the
+/// capacity of 1000 caps it, 100 000 sweeps away. Nothing here is
+/// combinatorial and nothing cycles, and the ratio of successive steps is
+/// exactly one, so there is no limit for the extrapolation to jump to:
+/// the numeric budget alone stops it, and the number of sweeps it spends
+/// before it does is a direct reading of that budget.
+///
+/// (A creep onto a limit, `d = 0.01 + 0.999*a`, no longer serves here:
+/// it is geometric, and the resolution extrapolates it to 10 in a handful
+/// of sweeps, see `flow_extrapolation.rs`.)
+fn drifting_demand() -> String {
     format!(
         r#"{{"op": "add", "args": [
              {{"op": "const", "value": {{"kind": "float", "value": 0.01}}}},
-             {{"op": "mul", "args": [
-               {{"op": "const", "value": {{"kind": "float", "value": 0.999}}}},
-               {ALLOCATED}]}}]}}"#
+             {ALLOCATED}]}}"#
     )
 }
 
@@ -251,7 +256,7 @@ fn the_numeric_budget_stops_a_network_the_default_settles() {
 /// that were stored and ignored would produce the same count twice.
 #[test]
 fn the_numeric_budget_sizes_the_work_a_monotone_stall_spends() {
-    let body = one_consumer("creeping", 1000.0, &creeping_demand());
+    let body = one_consumer("drifting", 1000.0, &drifting_demand());
     let spent = |budget: usize| -> usize {
         let error = run(
             &body,
@@ -260,7 +265,7 @@ fn the_numeric_budget_sizes_the_work_a_monotone_stall_spends() {
                 ..FlowConfig::default()
             },
         )
-        .expect_err("the creeping network never settles");
+        .expect_err("the drifting network never settles");
         match error {
             EngineError::FlowNotConverged { sweeps, .. } => sweeps,
             other => panic!("expected the flow non-convergence diagnostic, got {other:?}"),
@@ -334,16 +339,17 @@ fn the_relaxation_weight_decides_whether_an_alternation_settles() {
     );
 }
 
-/// The tolerance: a monotone sequence creeping at 0.999 per sweep needs
-/// about 13 800 sweeps to reach 1e-9 and a couple of dozen to reach
-/// 1e-2. The default refuses it on the numeric budget; a tolerance loose
-/// enough for the same budget accepts it. Nothing else about the model
-/// changes, so only the tolerance can account for the difference.
+/// The tolerance: a sequence drifting by 0.01 per sweep never moves by
+/// less than 1e-9, and moves by no more than 1e-2 of a unit from its
+/// first sweep on. The default refuses it on the numeric budget; a
+/// tolerance loose enough to call a step of 0.01 settled accepts it.
+/// Nothing else about the model changes, so only the tolerance can
+/// account for the difference.
 #[test]
 fn the_tolerance_decides_when_the_quantities_have_settled() {
-    let body = one_consumer("creeping", 1000.0, &creeping_demand());
+    let body = one_consumer("drifting", 1000.0, &drifting_demand());
     let error = run(&body, FlowConfig::default())
-        .expect_err("at 1e-9 the creeping sequence exhausts the numeric budget");
+        .expect_err("at 1e-9 the drifting sequence exhausts the numeric budget");
     assert!(
         matches!(error, EngineError::FlowNotConverged { .. }),
         "expected the flow non-convergence diagnostic, got {error:?}"
