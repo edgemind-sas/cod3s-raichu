@@ -115,11 +115,19 @@ fn imported_unit_requires_permission_and_records_identity() {
         Err(raichu_core::EngineError::FmuPermission { unit }) if unit == "dahlquist"
     ));
     // The sequence campaign refuses the model up front too, rather than
-    // reporting each replica's refusal as the failure of replica 0.
+    // reporting each replica's refusal as the failure of replica 0, and
+    // it does not ask for a permission it has no way to take: no sequence
+    // campaign runs an FMU host.
+    let refusal = raichu_montecarlo::run_sequences(&compiled, &config).unwrap_err();
     assert!(matches!(
-        raichu_montecarlo::run_sequences(&compiled, &config),
-        Err(raichu_core::EngineError::FmuPermission { unit }) if unit == "dahlquist"
+        &refusal,
+        raichu_core::EngineError::FmuSnapshotApi { unit, operation, .. }
+            if unit == "dahlquist" && *operation == "sequence campaigns"
     ));
+    assert!(
+        !refusal.to_string().contains("allow_fmu_import"),
+        "the refusal points at a permission no sequence campaign takes: {refusal}"
+    );
     let result = run_with_fmu(&compiled, &config, Path::new("."), true, false).unwrap();
     assert_eq!(result.fmu_units.len(), 1);
     assert_eq!(result.fmu_units[0].name, "dahlquist");

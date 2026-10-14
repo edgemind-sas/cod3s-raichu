@@ -1625,11 +1625,20 @@ where
     E: Send + From<EngineError>,
     F: FnMut(u64, Sequence, Vec<f64>) -> Result<(), E> + Send,
 {
-    // A model that declares an FMU is refused here, as the estimating
-    // campaign refuses it before its replicas: otherwise every replica
-    // would refuse it in turn and the campaign would report a model's
-    // refusal as the failure of replica 0.
-    prepare_campaign(model, None, false)?;
+    // A model that declares an FMU is refused here, before its replicas:
+    // otherwise every replica would refuse it in turn and the campaign
+    // would report a model's refusal as the failure of replica 0. The
+    // refusal names what is missing. No sequence campaign takes an FMU
+    // host, so the import permission an estimating campaign asks for
+    // would not lift it; splitting refuses an FMU model the same way.
+    if let Some(unit) = model.fmu_units.first() {
+        return Err(EngineError::FmuSnapshotApi {
+            unit: unit.name.clone(),
+            operation: "sequence campaigns",
+            alternative: "a native model without imported FMU units",
+        }
+        .into());
+    }
     in_pool(config.threads, || {
         let mut first = 0;
         while first < config.nb_runs {

@@ -290,19 +290,32 @@ over the others would leave exactly those out. The error is the one the
 replica's own run raised (an `UnboundedRateError` stays one), names the
 replica in its message, and carries `replica`, `nb_runs` and `seed` as
 attributes. One simulation at those coordinates, with the campaign's
-horizon, sample instants and flow policy, replays it alone:
+own horizon, sample instants, flow policy, solver settings and
+`stop_at_targets`, replays it alone: `simulate` takes the same solver
+keywords as `monte_carlo` (`rtol`, `atol`, `max_step`, `tol_event`,
+`sub_samples`, `event_resolution`), and under other settings the
+trajectory would be another one.
 
 ```text
+settings = dict(max_step=100.0, stop_at_targets=False)
+try:
+    pyraichu.monte_carlo(model, nb_runs, t_max, samples, seed=seed,
+                         flow=flow, **settings)
 except pyraichu.SimulationError as failure:
+    if not hasattr(failure, "replica"):
+        raise  # refused before any replica ran: nothing to replay
     pyraichu.simulate(model, t_max, samples=samples, flow=flow,
-                      seed=failure.seed, rng_stream=failure.replica)
+                      seed=failure.seed, rng_stream=failure.replica,
+                      **settings)
 ```
 
-The replay is exact only if the campaign ran the solver at its default
-settings: `simulate` does not take the solver knobs of the first section
-(`rtol`, `atol`, `max_step`, `tol_event`, `sub_samples`,
-`event_resolution`), and under other settings the trajectory is another
-one.
+Only a replica's own failure carries the coordinates. A campaign
+refused before any replica runs (an invalid setting, an FMU model
+without its import permission) raises the same exception class without
+them. Cross-entropy and splitting campaigns also report a failure that does
+not depend on the thread count (the first failing trajectory in their
+own order), but with the replica's own error and no coordinates: their trajectories run under biased rates or restart from
+a clone, so no plain simulation replays them.
 
 The replica reported is the lowest-numbered one that failed, whatever the
 thread count, so every replica numbered below it completed.

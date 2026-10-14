@@ -340,11 +340,14 @@ fn seal_model(model_json: &str) -> PyResult<String> {
 ///
 /// `flow` is an optional [`FlowConfig`] overriding the convergence
 /// policy of the continuous flow resolution (engine defaults when
-/// omitted).
+/// omitted). The `rtol`/`atol`/`max_step`/`tol_event`/`sub_samples`/
+/// `event_resolution` keywords and `stop_at_targets` are the ones
+/// [`monte_carlo_json`] takes, so one replica of a campaign replays here
+/// under the campaign's own settings.
 ///
 /// The GIL is released while the engine runs.
 #[pyfunction]
-#[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, samples = None, seed = 0, rng_stream = 0, flow = None, max_transition_firings = None, max_flow_restarts = None, allow_fmu_import = false, fmu_base_dir = None))]
+#[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, samples = None, seed = 0, rng_stream = 0, flow = None, max_transition_firings = None, max_flow_restarts = None, allow_fmu_import = false, fmu_base_dir = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, event_resolution = None, stop_at_targets = false))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn simulate_json(
     py: Python<'_>,
@@ -360,7 +363,22 @@ fn simulate_json(
     max_flow_restarts: Option<u64>,
     allow_fmu_import: bool,
     fmu_base_dir: Option<&str>,
+    rtol: Option<f64>,
+    atol: Option<f64>,
+    max_step: Option<f64>,
+    tol_event: Option<f64>,
+    sub_samples: Option<usize>,
+    event_resolution: Option<f64>,
+    stop_at_targets: bool,
 ) -> PyResult<String> {
+    let ode = solver_params(
+        rtol,
+        atol,
+        max_step,
+        tol_event,
+        sub_samples,
+        event_resolution,
+    )?;
     let compiled = parse_and_compile(model_json)?;
     let flow = flow_policy(flow);
     py.detach(|| {
@@ -377,6 +395,8 @@ fn simulate_json(
                 .unwrap_or(defaults.max_transition_firings),
             max_flow_restarts: max_flow_restarts.unwrap_or(defaults.max_flow_restarts),
             allow_fmu_import,
+            ode,
+            stop_at_targets,
             ..defaults
         };
         let result = if compiled.fmu_units.is_empty() {
@@ -398,6 +418,46 @@ fn simulate_json(
         };
         serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
     })
+}
+
+/// The ODE-backend parameters a caller overrides by keyword, over the
+/// engine defaults. `simulate` and `monte_carlo` take the same set, so a
+/// campaign's replica replays alone under the campaign's own solver
+/// settings.
+fn solver_params(
+    rtol: Option<f64>,
+    atol: Option<f64>,
+    max_step: Option<f64>,
+    tol_event: Option<f64>,
+    sub_samples: Option<usize>,
+    event_resolution: Option<f64>,
+) -> PyResult<SolverParams> {
+    if let Some(v) = event_resolution {
+        if !(v.is_finite() && v > 0.0) {
+            return Err(SimulationError::new_err(format!(
+                "event_resolution is the widest spacing accepted between two \
+                 crossing scan points, a finite positive time, got {v}"
+            )));
+        }
+    }
+    let mut ode = SolverParams::default();
+    if let Some(v) = rtol {
+        ode.rtol = v;
+    }
+    if let Some(v) = atol {
+        ode.atol = v;
+    }
+    if let Some(v) = max_step {
+        ode.max_step = v;
+    }
+    if let Some(v) = tol_event {
+        ode.tol_event = v;
+    }
+    if let Some(v) = sub_samples {
+        ode.sub_samples = v;
+    }
+    ode.event_resolution = event_resolution;
+    Ok(ode)
 }
 
 /// Run a Monte-Carlo estimation (M2): `nb_runs` replicas on independent
@@ -441,34 +501,17 @@ fn monte_carlo_json(
     fmu_base_dir: Option<&str>,
     require_parallel: bool,
 ) -> PyResult<String> {
-    if let Some(v) = event_resolution {
-        if !(v.is_finite() && v > 0.0) {
-            return Err(SimulationError::new_err(format!(
-                "event_resolution is the widest spacing accepted between two \
-                 crossing scan points, a finite positive time, got {v}"
-            )));
-        }
-    }
+    let ode = solver_params(
+        rtol,
+        atol,
+        max_step,
+        tol_event,
+        sub_samples,
+        event_resolution,
+    )?;
     let compiled = parse_and_compile(model_json)?;
     let flow = flow_policy(flow);
     py.detach(|| {
-        let mut ode = SolverParams::default();
-        if let Some(v) = rtol {
-            ode.rtol = v;
-        }
-        if let Some(v) = atol {
-            ode.atol = v;
-        }
-        if let Some(v) = max_step {
-            ode.max_step = v;
-        }
-        if let Some(v) = tol_event {
-            ode.tol_event = v;
-        }
-        if let Some(v) = sub_samples {
-            ode.sub_samples = v;
-        }
-        ode.event_resolution = event_resolution;
         let config = McConfig {
             nb_runs,
             seed,

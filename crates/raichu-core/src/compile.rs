@@ -1730,10 +1730,10 @@ impl CompiledModel {
         let mut explicit: Vec<CStep> = Vec::new();
         let mut ode: Vec<(VarIdx, CExpr)> = Vec::new();
         let mut functions = Vec::new();
-        // Observers with a deterministic delay, each with the margin its
-        // guard would have as a watched boundary: pass 3-bis locates those
-        // whose guard moves during continuous evolution.
-        let mut delayed_observers: Vec<(TransIdx, CExpr)> = Vec::new();
+        // Observers with a deterministic delay, each with its declared
+        // guard: pass 3-bis locates those whose guard moves during
+        // continuous evolution, and compiles the margin of those only.
+        let mut delayed_observers: Vec<(TransIdx, &Expr)> = Vec::new();
         for component in &model.components {
             for automaton in &component.automata {
                 let aut_idx = resolver.automata[&(component.name.clone(), automaton.name.clone())];
@@ -1836,8 +1836,7 @@ impl CompiledModel {
                         &transition.guard,
                         targets.len(),
                     ) {
-                        delayed_observers
-                            .push((trans_idx, resolver.compile_watched_margin(guard)?));
+                        delayed_observers.push((trans_idx, guard));
                     }
                     automata[aut_idx].transitions.push(trans_idx);
                     transitions.push(CTransition {
@@ -2048,14 +2047,14 @@ impl CompiledModel {
         // the schedule's, so a zero delay keeps its same-date wave rank.
         // An observer whose condition only moves at discrete events is
         // left as declared.
-        for (trans_idx, margin) in delayed_observers {
+        for (trans_idx, declared) in delayed_observers {
             let transition = &mut transitions[trans_idx];
             if transition
                 .guard
                 .as_ref()
                 .is_some_and(|guard| expr_is_continuous(guard, &continuous_vars))
             {
-                transition.located = Some(margin);
+                transition.located = Some(resolver.compile_watched_margin(declared)?);
             }
         }
         // The monitored population: watched transitions and located

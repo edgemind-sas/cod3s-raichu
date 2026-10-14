@@ -601,6 +601,15 @@ fn replica(
 
 /// A stage: `count` replicas on the streams `stream(i)`, in parallel,
 /// returned in replica order.
+///
+/// A stage with failing replicas is refused with the error of the
+/// **lowest-numbered** one, whatever the thread count: the whole stage
+/// runs before the results are read in replica order, as a plain
+/// campaign does. Collecting straight into a `Result` would stop at
+/// whichever failure a worker reported first. The error stays the
+/// replica's own: a cross-entropy replica runs under biased rates, so
+/// the replay coordinates of [`EngineError::ReplicaFailed`] would not
+/// reproduce it with a plain simulation.
 fn stage(
     model: &CompiledModel,
     s: &CrossEntropySettings,
@@ -618,10 +627,11 @@ fn stage(
     }
     let dense = &dense;
     let compute = || -> Result<Vec<ReplicaOutcome>, EngineError> {
-        (0..count)
+        let results: Vec<Result<ReplicaOutcome, EngineError>> = (0..count)
             .into_par_iter()
             .map(|i| replica(model, s, families, dense, factors, stream(i)))
-            .collect()
+            .collect();
+        results.into_iter().collect()
     };
     Ok(in_pool(s.threads, compute)?)
 }

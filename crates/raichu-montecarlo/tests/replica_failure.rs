@@ -20,7 +20,10 @@
 
 use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError, SolverParams};
 use raichu_model::Model;
-use raichu_montecarlo::{run, run_sequences, McConfig, DEFAULT_CONFIDENCE};
+use raichu_montecarlo::{
+    run, run_cross_entropy, run_sequences, CrossEntropyError, CrossEntropySettings, McConfig,
+    DEFAULT_CONFIDENCE,
+};
 
 /// A supply feeding one consumer whose demand is a constant 1 until a
 /// switch fails, at an exponential date of rate 1, and then **jumps when
@@ -212,4 +215,38 @@ fn a_sequence_campaign_reports_the_same_replica() {
     let expected = first_failing(&model);
     let error = run_sequences(&model, &config(None)).expect_err("refused as well");
     assert_eq!(replica_of(&error).0, expected);
+}
+
+/// A cross-entropy campaign reports its own lowest-numbered failing
+/// replica too, at every thread count. With no fitting and every factor
+/// at 1 its final replicas are the plain campaign's, stream for stream,
+/// so the failure reported is the one the plain campaign names; the
+/// error stays the replica's own, because a biased replica would not
+/// replay as a plain simulation.
+#[test]
+fn a_cross_entropy_campaign_reports_its_lowest_failing_replica() {
+    let model = compiled();
+    let expected = replay(&model, first_failing(&model)).expect_err("fails alone");
+    let settings = |threads| CrossEntropySettings {
+        target: "switched".into(),
+        t_max: T_MAX,
+        seed: SEED,
+        nb_runs: NB_RUNS,
+        fit: false,
+        initial_factor: 1.0,
+        threads,
+        ..CrossEntropySettings::default()
+    };
+    for threads in [Some(1), Some(2), Some(8)] {
+        match run_cross_entropy(&model, &settings(threads)) {
+            Err(CrossEntropyError::Engine(error)) => assert_eq!(
+                error.to_string(),
+                expected.to_string(),
+                "with {threads:?} threads"
+            ),
+            other => {
+                panic!("expected the replica's refusal with {threads:?} threads, got {other:?}")
+            }
+        }
+    }
 }
