@@ -24,22 +24,22 @@ stochastic campaign (2 000 replicas, one worker) at the same setting.
 
 | engine | setting | max \|ΔT\| against exact | wall clock |
 |---|---|---:|---:|
-| PyCATSHOO C++ | `dtCond` 10⁻² | 9.0·10⁻² | 1.49 s |
-| PyCATSHOO C++ | `dtCond` 10⁻³ (its documented default) | 1.3·10⁻² | 1.53 s |
-| PyCATSHOO C++ | `dtCond` 10⁻⁵ | 1.3·10⁻⁴ | 1.55 s |
-| PyCATSHOO C++ | `dtCond` 10⁻⁶ | 7.7·10⁻⁶ | 1.54 s |
-| PyCATSHOO C++ | `dtCond` 10⁻¹⁰ | 8.2·10⁻⁷ † | 1.59 s |
-| RAICHU | `rtol` 10⁻³ | 1.8·10⁻² | 0.12 s |
-| RAICHU | `rtol` 10⁻⁴ | 4.4·10⁻⁴ | 0.15 s |
-| RAICHU | `rtol` 10⁻⁵ | 4.1·10⁻⁶ | 0.23 s |
-| RAICHU | `rtol` 10⁻⁷ | 1.5·10⁻⁷ | 0.60 s |
-| RAICHU | defaults (`rtol` 10⁻⁹, event 10⁻¹⁰) | 5.0·10⁻¹⁰ | 4.09 s |
+| PyCATSHOO C++ | `dtCond` 10⁻² | 9.0·10⁻² | 1.77 s |
+| PyCATSHOO C++ | `dtCond` 10⁻³ (its documented default) | 1.3·10⁻² | 1.82 s |
+| PyCATSHOO C++ | `dtCond` 10⁻⁵ | 1.3·10⁻⁴ | 1.87 s |
+| PyCATSHOO C++ | `dtCond` 10⁻⁶ | 7.7·10⁻⁶ | 1.79 s |
+| PyCATSHOO C++ | `dtCond` 10⁻¹⁰ | 8.2·10⁻⁷ † | 1.72 s |
+| RAICHU | `rtol` 10⁻³ | 1.8·10⁻² | 0.13 s |
+| RAICHU | `rtol` 10⁻⁴ | 4.4·10⁻⁴ | 0.16 s |
+| RAICHU | `rtol` 10⁻⁵ | 4.1·10⁻⁶ | 0.24 s |
+| RAICHU | `rtol` 10⁻⁷ | 1.5·10⁻⁷ | 0.67 s |
+| RAICHU | defaults (`rtol` 10⁻⁹, event 10⁻¹⁰) | 5.0·10⁻¹⁰ | 4.31 s |
 
 † PyCATSHOO's accuracy floors at about 8·10⁻⁷ here because its
 indicators are stored in 32-bit floats; tightening further changes
 nothing. The full grid, each RAICHU setting's `atol`, `tol_event`,
 `max_step` and `sub_samples` included, is in
-`benchmarks/results/jaquet-2026-09-28.json`. The RAICHU curve is not
+`benchmarks/results/jaquet-2026-10-14.json`. The RAICHU curve is not
 monotonic between `rtol` 10⁻⁵ and 10⁻⁶ because those two settings also
 differ in maximum step and scan density: accuracy follows the whole
 setting, not `rtol` alone.
@@ -47,13 +47,13 @@ setting, not `rtol` alone.
 ## Readings
 
 - **PyCATSHOO's cost barely moves with its event tolerance.** Its
-  fixed-step integrator spends about 1.5 s whether it locates events at
+  fixed-step integrator spends about 1.8 s whether it locates events at
   10⁻² or 10⁻¹⁰; `dtCond` only refines where a crossing is placed.
 - **RAICHU's cost follows the accuracy asked for.** Its adaptive
   integrator spends effort where the tolerance requires it: 35 times more
   between its loosest setting and its defaults.
 - **RAICHU's defaults are precise, not slow.** They buy 5·10⁻¹⁰, three
-  orders of magnitude beyond what PyCATSHOO can represent here, for 2.7
+  orders of magnitude beyond what PyCATSHOO can represent here, for 2.4
   times PyCATSHOO's cost at its own default (which is at 10⁻²).
 
 ## The aligned pair
@@ -61,7 +61,7 @@ setting, not `rtol` alone.
 The performance comparison on the hybrid model uses PyCATSHOO at
 `dtCond` 10⁻⁶ (the setting of RAICHU's cross-validation baseline, error
 7.7·10⁻⁶) and the cheapest RAICHU setting at least as accurate: `rtol`
-10⁻⁵, error 4.1·10⁻⁶. At that pair RAICHU is 6.7 times faster, one
+10⁻⁵, error 4.1·10⁻⁶. At that pair RAICHU is about 7 times faster, one
 worker against one, and the ratio holds from 500 to 20 000 replicas (see
 the [performance page](performance.md)).
 

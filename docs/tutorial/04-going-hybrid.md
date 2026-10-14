@@ -173,8 +173,9 @@ transitions. From here:
 
 - the [Model schema reference](../reference/model-schema.md) documents
   every field and operator;
-- the [advanced guides](../guides/reproducibility.md) cover
-  reproducibility, numerical tuning, the causal journal, the muscadet
-  authoring layer and parallelism;
+- the [advanced guides](../guides/reproducibility.md) cover, among
+  others, reproducibility, numerical tuning, the causal journal,
+  sequence analysis and exploration, quantifying a study, importance
+  measures, fault trees, the muscadet authoring layer and parallelism;
 - the [benchmarks](../benchmarks/cross-validation.md) show RAICHU
   measured against an established C++ engine.

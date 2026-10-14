@@ -1,0 +1,459 @@
+{
+ "protocol": {
+  "repeats": 3,
+  "seed": 56000,
+  "t_max": 100.0,
+  "quick": false
+ },
+ "machine": {
+  "host": "jaquet",
+  "cpu": "AMD Ryzen 9 7950X3D 16-Core Processor",
+  "logical_cpus": 32,
+  "kernel": "7.0.0-38-generic",
+  "python": "3.12.8",
+  "raichu": "0.96.0",
+  "pycatshoo": "1.4.1.0",
+  "mpi": "mpirun (Open MPI) 5.0.8",
+  "commit": "0.96.0",
+  "date": "2026-10-14"
+ },
+ "accuracy": {
+  "nb_runs": 2000,
+  "points": {
+   "pycatshoo_cpp": [
+    {
+     "dt": -1.0,
+     "dt_cond": 0.01,
+     "max_temp_err": 0.08970254870972383,
+     "wall_s": 1.771057662
+    },
+    {
+     "dt": -1.0,
+     "dt_cond": 0.001,
+     "max_temp_err": 0.012649448709723288,
+     "wall_s": 1.816404469
+    },
+    {
+     "dt": -1.0,
+     "dt_cond": 0.0001,
+     "max_temp_err": 0.0014304487097227536,
+     "wall_s": 1.83724983
+    },
+    {
+     "dt": -1.0,
+     "dt_cond": 1e-05,
+     "max_temp_err": 0.00013154870972442723,
+     "wall_s": 1.874714064
+    },
+    {
+     "dt": -1.0,
+     "dt_cond": 1e-06,
+     "max_temp_err": 7.65968545834994e-06,
+     "wall_s": 1.788289908
+    },
+    {
+     "dt": -1.0,
+     "dt_cond": 1e-08,
+     "max_temp_err": 8.208975685874975e-07,
+     "wall_s": 1.783137123
+    },
+    {
+     "dt": -1.0,
+     "dt_cond": 1e-10,
+     "max_temp_err": 8.208975685874975e-07,
+     "wall_s": 1.722127514
+    }
+   ],
+   "raichu_1t": [
+    {
+     "label": "r1e-3",
+     "rtol": 0.001,
+     "atol": 1e-06,
+     "tol_event": 0.0001,
+     "max_step": 10.0,
+     "sub_samples": 2,
+     "max_temp_err": 0.01835618815580986,
+     "wall_s": 0.1249274589936249
+    },
+    {
+     "label": "r1e-4",
+     "rtol": 0.0001,
+     "atol": 1e-07,
+     "tol_event": 1e-06,
+     "max_step": 5.0,
+     "sub_samples": 4,
+     "max_temp_err": 0.00044110808901010046,
+     "wall_s": 0.15849376801634207
+    },
+    {
+     "label": "r1e-5",
+     "rtol": 1e-05,
+     "atol": 1e-08,
+     "tol_event": 1e-06,
+     "max_step": 2.0,
+     "sub_samples": 8,
+     "max_temp_err": 4.110772149346076e-06,
+     "wall_s": 0.24334607500350103
+    },
+    {
+     "label": "r1e-6",
+     "rtol": 1e-06,
+     "atol": 1e-09,
+     "tol_event": 1e-06,
+     "max_step": 1.0,
+     "sub_samples": 8,
+     "max_temp_err": 8.847118170507429e-06,
+     "wall_s": 0.3819728829548694
+    },
+    {
+     "label": "r1e-7",
+     "rtol": 1e-07,
+     "atol": 1e-10,
+     "tol_event": 1e-08,
+     "max_step": 0.5,
+     "sub_samples": 8,
+     "max_temp_err": 1.4633797817964478e-07,
+     "wall_s": 0.671034426020924
+    },
+    {
+     "label": "r1e-8",
+     "rtol": 1e-08,
+     "atol": 1e-11,
+     "tol_event": 1e-10,
+     "max_step": 0.2,
+     "sub_samples": 16,
+     "max_temp_err": 8.126690431708994e-10,
+     "wall_s": 2.242971886997111
+    },
+    {
+     "label": "default",
+     "max_temp_err": 4.97525576292901e-10,
+     "wall_s": 4.313912866986357
+    }
+   ]
+  }
+ },
+ "aligned": {
+  "pycatshoo": {
+   "dt": -1.0,
+   "dt_cond": 1e-06,
+   "max_temp_err": 7.65968545834994e-06
+  },
+  "raichu": {
+   "label": "r1e-5",
+   "ode": {
+    "rtol": 1e-05,
+    "atol": 1e-08,
+    "tol_event": 1e-06,
+    "max_step": 2.0,
+    "sub_samples": 8
+   },
+   "max_temp_err": 4.110772149346076e-06
+  }
+ },
+ "replicas": [
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000,
+   "pycatshoo_cpp_s": 0.00748507,
+   "raichu_1t_s": 0.0014718039892613888,
+   "z_worst": 2.64296754645261
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 3000,
+   "pycatshoo_cpp_s": 0.022152239,
+   "raichu_1t_s": 0.003803417959716171,
+   "z_worst": 2.405352372722103
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 10000,
+   "pycatshoo_cpp_s": 0.072671918,
+   "raichu_1t_s": 0.012232964974828064,
+   "z_worst": 2.6543476152727643
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 30000,
+   "pycatshoo_cpp_s": 0.219112194,
+   "raichu_1t_s": 0.038592719996813685,
+   "z_worst": 2.1018942128289506
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 100000,
+   "pycatshoo_cpp_s": 0.71913524,
+   "raichu_1t_s": 0.1242136990185827,
+   "z_worst": 2.5925561483957855
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 300000,
+   "pycatshoo_cpp_s": 2.088873762,
+   "raichu_1t_s": 0.357135213969741,
+   "z_worst": 2.0282241962405863
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "pycatshoo_cpp_s": 6.69008483,
+   "raichu_1t_s": 1.0433301440207288,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "heaters_s1",
+   "nb_runs": 1000,
+   "pycatshoo_cpp_s": 0.007644465,
+   "raichu_1t_s": 0.0016335719847120345,
+   "z_worst": 2.642971390769282
+  },
+  {
+   "model": "heaters_s1",
+   "nb_runs": 3000,
+   "pycatshoo_cpp_s": 0.022581484,
+   "raichu_1t_s": 0.005189923977013677,
+   "z_worst": 2.4053450234273304
+  },
+  {
+   "model": "heaters_s1",
+   "nb_runs": 10000,
+   "pycatshoo_cpp_s": 0.072128583,
+   "raichu_1t_s": 0.015466659038793296,
+   "z_worst": 2.6543511336534724
+  },
+  {
+   "model": "heaters_s1",
+   "nb_runs": 30000,
+   "pycatshoo_cpp_s": 0.209206815,
+   "raichu_1t_s": 0.050101935979910195,
+   "z_worst": 2.1018748289167912
+  },
+  {
+   "model": "heaters_s1",
+   "nb_runs": 100000,
+   "pycatshoo_cpp_s": 0.697305798,
+   "raichu_1t_s": 0.16424999997252598,
+   "z_worst": 2.592577695385477
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 500,
+   "pycatshoo_cpp_s": 0.419664986,
+   "raichu_1t_s": 0.058905695972498506,
+   "z_worst": 1.639840164564951
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 1000,
+   "pycatshoo_cpp_s": 0.815098796,
+   "raichu_1t_s": 0.11444808903615922,
+   "z_worst": 2.2498923319570805
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 2000,
+   "pycatshoo_cpp_s": 1.570794866,
+   "raichu_1t_s": 0.22976688900962472,
+   "z_worst": 1.4867515021463065
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 5000,
+   "pycatshoo_cpp_s": 3.909001681,
+   "raichu_1t_s": 0.5668848140048794,
+   "z_worst": 2.0247230778315966
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 10000,
+   "pycatshoo_cpp_s": 7.613523523,
+   "raichu_1t_s": 1.1411373699666,
+   "z_worst": 1.8589379310266136
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "pycatshoo_cpp_s": 15.78532875,
+   "raichu_1t_s": 2.2744399640359916,
+   "z_worst": 2.237448104814067
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 500,
+   "pycatshoo_python_s": 8.86399766401155
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 1000,
+   "pycatshoo_python_s": 20.41668257501442
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 2000,
+   "pycatshoo_python_s": 36.60521375096869
+  }
+ ],
+ "workers": [
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "workers": 1,
+   "pycatshoo_mpi_s": 6.682898924,
+   "pycatshoo_mpi_process_s": 6.688399590959307,
+   "raichu_threads_s": 0.9440308489720337,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "workers": 2,
+   "pycatshoo_mpi_s": 4.053583196,
+   "pycatshoo_mpi_process_s": 4.109168638009578,
+   "raichu_threads_s": 0.5901542129577138,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "workers": 4,
+   "pycatshoo_mpi_s": 2.053899405,
+   "pycatshoo_mpi_process_s": 2.108092491980642,
+   "raichu_threads_s": 0.3309175840113312,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "workers": 8,
+   "pycatshoo_mpi_s": 2.055615953,
+   "pycatshoo_mpi_process_s": 2.1107504409737885,
+   "raichu_threads_s": 0.2363944230019115,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "workers": 12,
+   "pycatshoo_mpi_s": 1.058115266,
+   "pycatshoo_mpi_process_s": 1.1196488640271127,
+   "raichu_threads_s": 0.21868360100779682,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "workers": 16,
+   "pycatshoo_mpi_s": 1.062286623,
+   "pycatshoo_mpi_process_s": 1.1294796250294894,
+   "raichu_threads_s": 0.2131726749939844,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "workers": 24,
+   "pycatshoo_mpi_s": 1.071180611,
+   "pycatshoo_mpi_process_s": 1.1379166060360149,
+   "raichu_threads_s": 0.19410936103668064,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "pure_exp",
+   "nb_runs": 1000000,
+   "workers": 32,
+   "pycatshoo_mpi_s": 1.109957381,
+   "pycatshoo_mpi_process_s": 1.1658613529871218,
+   "raichu_threads_s": 0.19768309401115403,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 1.0195350341208058
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "workers": 1,
+   "pycatshoo_mpi_s": 15.12725374,
+   "pycatshoo_mpi_process_s": 15.133130634960253,
+   "raichu_threads_s": 2.2880971650010906,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 2.237448104814067
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "workers": 2,
+   "pycatshoo_mpi_s": 8.052114749,
+   "pycatshoo_mpi_process_s": 8.102132738975342,
+   "raichu_threads_s": 1.1766272339737043,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 2.237448104814067
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "workers": 4,
+   "pycatshoo_mpi_s": 5.049482891,
+   "pycatshoo_mpi_process_s": 5.102138430986088,
+   "raichu_threads_s": 0.6036643909756094,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 2.237448104814067
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "workers": 8,
+   "pycatshoo_mpi_s": 3.052905749,
+   "pycatshoo_mpi_process_s": 3.1046250690123998,
+   "raichu_threads_s": 0.3126129739684984,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 2.237448104814067
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "workers": 12,
+   "pycatshoo_mpi_s": 2.055810723,
+   "pycatshoo_mpi_process_s": 2.1220054570003413,
+   "raichu_threads_s": 0.21371596999233589,
+   "mpi_vs_serial_max_diff": 1.900000000887303e-06,
+   "z_worst": 2.237448104814067
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "workers": 16,
+   "pycatshoo_mpi_s": 2.060129284,
+   "pycatshoo_mpi_process_s": 2.1243504760204814,
+   "raichu_threads_s": 0.16500969603657722,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 2.237448104814067
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "workers": 24,
+   "pycatshoo_mpi_s": 2.069654549,
+   "pycatshoo_mpi_process_s": 2.135535912006162,
+   "raichu_threads_s": 0.14801182399969548,
+   "mpi_vs_serial_max_diff": 3.800000001774606e-06,
+   "z_worst": 2.237448104814067
+  },
+  {
+   "model": "heated_room_s3",
+   "nb_runs": 20000,
+   "workers": 32,
+   "pycatshoo_mpi_s": 2.102870991,
+   "pycatshoo_mpi_process_s": 2.1577583519974723,
+   "raichu_threads_s": 0.13507865299470723,
+   "mpi_vs_serial_max_diff": 0.0,
+   "z_worst": 2.237448104814067
+  }
+ ]
+}

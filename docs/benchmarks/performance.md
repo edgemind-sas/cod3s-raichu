@@ -18,12 +18,14 @@ the modelling language and the number of workers differ.
 
 ## The campaign
 
-Measured on 2026-09-28 on an AMD Ryzen 9 7950X3D (16 cores, 32 logical
+Measured on 2026-10-14 on an AMD Ryzen 9 7950X3D (16 cores, 32 logical
 CPUs), Linux 7.0, with PyCATSHOO 1.4.1.0 (models compiled in C++ against
-its API), RAICHU 0.63.4, and Open MPI 5.0.8 for PyCATSHOO's parallel runs.
+its API), RAICHU 0.96.0, and Open MPI 5.0.8 for PyCATSHOO's parallel runs.
 The raw results are committed in
-`benchmarks/results/jaquet-2026-09-28.json`, and the charts are drawn from
-that file by `docs/figures/benchmark_performance.py`.
+`benchmarks/results/jaquet-2026-10-14.json`, and the charts are drawn from
+that file by `docs/figures/benchmark_performance.py`. The previous
+campaign, on RAICHU 0.63.4 (2026-09-28, same machine), stays in
+`benchmarks/results/jaquet-2026-09-28.json` for comparison.
 
 | model | what it exercises |
 |---|---|
@@ -37,6 +39,13 @@ instants is 2.65, under the 2.83 that a 5 % level corrected for 11
 comparisons (Šidák) allows. Under MPI, PyCATSHOO's estimates equal its
 single-process ones to 4·10⁻⁶ or better.
 
+Against the 0.63.4 campaign, RAICHU's single-thread timings moved by
+less than 10 % on every model, within the run-to-run variation of this
+machine: PyCATSHOO's own timings on the accuracy grid moved by up to 17 %
+between the two dates. The z-scores are the same to every digit, since
+the same seed draws the same trajectories. The one real change is the
+thread scaling on `pure_exp` (see [below](#workers-threads-against-mpi-ranks)).
+
 ## Replicas, one worker
 
 ![Wall clock against the number of replicas, one worker, on the three models](../assets/figures/benchmark-replicas-light.svg#only-light){ .figure }
@@ -44,14 +53,14 @@ single-process ones to 4·10⁻⁶ or better.
 
 | model | replicas | PyCATSHOO C++ | PyCATSHOO Python | RAICHU | ratio |
 |---|---:|---:|---:|---:|---:|
-| `pure_exp` | 100 000 | 0.668 s | | 0.109 s | 6.1 |
-| `pure_exp` | 1 000 000 | 6.700 s | | 1.285 s | 5.2 |
-| `heaters_s1` | 100 000 | 0.697 s | | 0.156 s | 4.5 |
-| `heated_room_s3` | 2 000 | 1.537 s | 34.86 s | 0.230 s | 6.7 |
-| `heated_room_s3` | 20 000 | 15.90 s | | 2.232 s | 7.1 |
+| `pure_exp` | 100 000 | 0.719 s | | 0.124 s | 5.8 |
+| `pure_exp` | 1 000 000 | 6.690 s | | 1.043 s | 6.4 |
+| `heaters_s1` | 100 000 | 0.697 s | | 0.164 s | 4.2 |
+| `heated_room_s3` | 2 000 | 1.571 s | 36.61 s | 0.230 s | 6.8 |
+| `heated_room_s3` | 20 000 | 15.79 s | | 2.274 s | 6.9 |
 
 Both engines are linear in the number of replicas, so the ratio hardly
-moves along a sweep: 4 to 9 on the discrete models, 7 on the hybrid one
+moves along a sweep: 4 to 6.5 on the discrete models, 7 on the hybrid one
 at aligned accuracy. The PyCATSHOO model with Python callbacks costs 23
 times its C++ twin on the same engine: the interpreter boundary, not the
 engine, dominates the normal PyCATSHOO modelling style.
@@ -68,25 +77,26 @@ timing is its first rank's, which gathers the others' estimates.
 
 | model | workers | PyCATSHOO MPI | RAICHU threads |
 |---|---:|---:|---:|
-| `pure_exp`, 1 000 000 replicas | 1 | 6.69 s | 1.28 s |
-| | 4 | 2.05 s | 0.73 s |
-| | 16 | 1.06 s | 0.58 s |
-| | 32 | 1.10 s | 0.58 s |
-| `heated_room_s3`, 20 000 replicas | 1 | 15.32 s | 2.23 s |
-| | 4 | 5.05 s | 0.58 s |
+| `pure_exp`, 1 000 000 replicas | 1 | 6.68 s | 0.94 s |
+| | 4 | 2.05 s | 0.33 s |
+| | 16 | 1.06 s | 0.21 s |
+| | 32 | 1.11 s | 0.20 s |
+| `heated_room_s3`, 20 000 replicas | 1 | 15.13 s | 2.29 s |
+| | 4 | 5.05 s | 0.60 s |
 | | 16 | 2.06 s | 0.17 s |
-| | 32 | 2.11 s | 0.14 s |
+| | 32 | 2.10 s | 0.14 s |
 
 What the curves show:
 
-- **On the hybrid model RAICHU's threads scale well**: 13 times faster
-  on 16 threads than on one (the 16 physical cores), and 15.5 times on
+- **On the hybrid model RAICHU's threads scale well**: 14 times faster
+  on 16 threads than on one (the 16 physical cores), and 17 times on
   32.
-- **On `pure_exp` they do not.** A replica there costs about a
+- **On `pure_exp` they scale less.** A replica there costs about a
   microsecond, so the work shared by all the replicas, the reduction of
-  their results, dominates past four threads: 2.2 times faster at best.
-  PyCATSHOO's ranks scale better on this model in relative terms (6.3
-  times), while staying slower in absolute terms.
+  their results, weighs more past eight threads: 4.9 times faster at
+  best. PyCATSHOO's ranks scale more in relative terms (6.3 times) while
+  staying five times slower in absolute terms. On RAICHU 0.63.4 the same
+  sweep stopped at 2.2 times (0.58 s on 32 threads, against 0.20 s now).
 - **PyCATSHOO's parallel timings fall on whole seconds** plus a few
   milliseconds (1.06, 2.05, 3.05, 4.06, 5.05 s), and stop improving at
   about 1 s on `pure_exp` and 2 s on `heated_room_s3`. The pattern

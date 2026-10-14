@@ -31,7 +31,7 @@ deliberate departures.
 | steps (`IStep`), check, pre, in and post methods | *(no equivalent)* | the order of discrete evaluation is the fixpoint's, not a user-defined schedule |
 | PDMP manager (`addEquationMethod`, `addODEVariable`) | `equations: [{target, kind: ode\|explicit, expr}]` | no manager object and a single continuous system per model; a model has continuous semantics wherever it declares equations |
 | equation-method order (alphabetical unless set) | declaration order, or [`evaluation_order`](../reference/model-schema.md#evaluation-order) | a model relying on PyCATSHOO's alphabetical default must state the order explicitly |
-| algebraic variables, Jacobian, stiff solvers, sign constraints (`setVariableConstraint`) | linear algebraic cycles only, solved as blocks; Dormand-Prince or fixed-step Euler | a nonlinear algebraic cycle is refused at build time; no stiff integrator |
+| algebraic variables, Jacobian, stiff solvers, sign constraints (`setVariableConstraint`) | linear algebraic cycles only, solved as blocks; Dormand-Prince 4(5) (a fixed-step Euler backend exists for Rust-level debugging only) | a nonlinear algebraic cycle is refused at build time; no stiff integrator |
 | `ISLEManager` (linear systems) | [linear algebraic cycles](../reference/model-schema.md#linear-algebraic-cycles), detected automatically | no manager to declare |
 | `IMILPManager` | [`programs`](../reference/model-schema.md#program) (HiGHS) | |
 
