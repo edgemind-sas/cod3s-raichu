@@ -54,13 +54,15 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
   probability and a bound on what the cut-offs left out; the fault tree
   of a feared event is generated with its minimal cut sets and written
   as OpenPSA; importance measures (Birnbaum, Fussell-Vesely,
-  criticality) come from one campaign. See
+  criticality, risk-achievement and risk-reduction worths) per failure
+  mode, component or group come from one campaign. See
   [Sequence-tree exploration](guides/sequence-tree-exploration.md),
   [Fault trees](guides/fault-tree.md) and
   [Importance measures](guides/importance-measures.md).
-- **One question, three engines.** A study (feared event, horizon, seed)
-  goes to Monte-Carlo simulation, exact exploration or discretised
-  exploration through one function, and each answers in the same
+- **One question, five engines.** A study (feared event, horizon, seed)
+  goes to Monte-Carlo simulation, exact exploration, discretised
+  exploration, cross-entropy importance sampling or adaptive multilevel
+  splitting through one function, and each answers in the same
   envelope. See [Quantifying a study](guides/quantification.md).
 - **Step through a trajectory by hand.** An interactive session fires
   the transition you choose, forces the branch it takes, and undoes. See
@@ -85,11 +87,13 @@ platform and:
 pip install pyraichu-<version>-cp39-abi3-<platform>.whl
 ```
 
-Intel Macs are not built for: use the source build below there.
+Intel Macs are not built for: use the source build below there. Linux
+wheels require glibc 2.28 or newer.
 
 **From source**: RAICHU is a Rust workspace with a Python binding
 built by [maturin](https://www.maturin.rs). Prerequisites: Rust stable,
-Python ≥ 3.9.
+Python ≥ 3.9, and CMake, a C++ compiler and libclang to compile the
+embedded HiGHS solver.
 
 ```bash
 git clone https://github.com/edgemind-sas/cod3s-raichu raichu && cd raichu
@@ -157,11 +161,13 @@ print("unavailability:", round(failed.mean[-1], 3),
   turbo-pumps are set aside.
 - **[Model schema reference](reference/model-schema.md)**: every field,
   distribution and expression operator.
-- **[Advanced guides](guides/reproducibility.md)**: reproducibility,
-  confidence intervals, numerical tuning, the causal journal, interactive
-  simulation, sequence analysis, sequence-tree exploration, quantifying
-  a study with the three engines, importance measures, fault trees, the muscadet authoring layer, running a muscadet
-  model, platform import, parallelism.
+- **[Advanced guides](guides/reproducibility.md)**: mixed-integer
+  optimisation, reproducibility, confidence intervals, numerical tuning,
+  the causal journal, interactive simulation, FMI co-simulation import,
+  sequence analysis, sequence-tree exploration, quantifying a study with
+  the five engines, importance measures, fault trees, the muscadet
+  authoring layer, running a muscadet model, platform import,
+  parallelism.
 - **[Raw sequence corpus format](reference/sequence-format.md)**: the
   file a sequence campaign writes, for auditing or another tool.
 - **[Benchmarks](benchmarks/cross-validation.md)**: RAICHU measured,

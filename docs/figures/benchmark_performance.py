@@ -16,7 +16,7 @@ from _style import Theme, render
 
 RESULTS = Path(__file__).resolve().parents[2] / "benchmarks" / "results"
 #: The campaign the pages report. Override with RAICHU_BENCH_RESULTS.
-CAMPAIGN = "jaquet-2026-09-28.json"
+CAMPAIGN = "jaquet-2026-10-14.json"
 
 MODELS = {
     "pure_exp": "pure_exp (discrete)",

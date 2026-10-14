@@ -613,6 +613,10 @@ def monte_carlo(
     ``flow`` is a :class:`FlowConfig` overriding the convergence policy
     of the continuous flow resolution for every replica (engine defaults
     when omitted).
+
+    ``require_parallel=True`` refuses a model importing an FMU that
+    allows only one instance per process, instead of running its
+    replicas one at a time.
     """
     raw = json.loads(
         monte_carlo_json(

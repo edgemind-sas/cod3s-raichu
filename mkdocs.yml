@@ -117,9 +117,8 @@ exclude_docs: |
   /figures/
   brainstorms/
   plans/
-  pycatshoo-legacy/
-  /roadmap.md
-  /concepts-mapping.md
-  /reproducibility.md
+  /agents/
+  /coverage/
+  /validation/
   /validation-contract.md
   /2026-*.md

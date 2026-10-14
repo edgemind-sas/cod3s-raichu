@@ -47,13 +47,13 @@ component, the monitored state entered, and the cycle group of the transition
 that fired (`null` when it has none).
 
 ```json
-{"format":"raichu.sequences","version":1,"engine_version":"0.44.0","model":"redundant_pair","seed":42,"nb_runs":2000,"t_max":100.0,"targets":["system_down"],"event_fields":["time","obj","attr","cycle_group"]}
-{"run":0,"end_cause":"system_down","end_time":14.939367483634282,"events":[[8.75883378255026,"fm","occ__cc_1","fm__cc_1"],[11.696235051084663,"fm","rep__cc_1","fm__cc_1"],[14.9316885842181,"fm","occ__cc_1","fm__cc_1"],[14.939367483634282,"fm","occ__cc_2","fm__cc_2"],[14.939367483634282,"system_down","occ","system_down"]]}
+{"format":"raichu.sequences","version":2,"engine_version":"0.96.0","model":"redundant_pair","seed":42,"nb_runs":2000,"t_max":100.0,"targets":["system_down"],"event_fields":["time","obj","attr","cycle_group"],"cycle_groups":[{"component":"fm","cycle_group":"fm__cc_1","automata":["fm.fm__cc_1"],"targets":[{"target":"system_down","cancellable":true,"origin":"analysis"}]},{"component":"fm","cycle_group":"fm__cc_1_2","automata":["fm.fm__cc_1_2"],"targets":[{"target":"system_down","cancellable":true,"origin":"analysis"}]},{"component":"fm","cycle_group":"fm__cc_2","automata":["fm.fm__cc_2"],"targets":[{"target":"system_down","cancellable":true,"origin":"analysis"}]},{"component":"system_down","cycle_group":"system_down","automata":["system_down.ev"],"targets":[{"target":"system_down","cancellable":true,"origin":"analysis"}]}]}
+{"run":0,"end_cause":"system_down","end_time":14.939367483634282,"events":[[8.75883378255026,"fm","occ__cc_1","fm__cc_1"],[11.696235051084663,"fm","rep__cc_1","fm__cc_1"],[14.9316885842181,"fm","occ__cc_1","fm__cc_1"],[14.939367483634282,"fm","occ__cc_2","fm__cc_2"],[14.939367483634282,"system_down","occ","system_down"]],"automata":["fm__cc_1","fm__cc_1","fm__cc_1","fm__cc_2","ev"],"kinds":["failure","repair","failure","failure","observation"]}
 ```
 
 The first two lines of the redundant pair of the
 [sequence-analysis guide](../guides/sequence-analysis.md), 2000 replicas
-(857 kB in all): replica 0 saw `A` fail at 8.76 and be repaired at 11.70, a
+(1.2 MB in all): replica 0 saw `A` fail at 8.76 and be repaired at 11.70, a
 cycle the reduction removes, then fail again at 14.93 and `B` fail at 14.94,
 which reached the feared event.
 
@@ -90,7 +90,7 @@ observations=[Observation(name, component, attribute, time)])`. The header
 then lists them, and every trajectory line carries their values:
 
 ```json
-{"format":"raichu.sequences","version":1,...,"observations":[{"name":"A_flow","time":50.0}]}
+{"format":"raichu.sequences","version":2,...,"observations":[{"name":"A_flow","time":50.0}]}
 {"run":0,"end_cause":null,"end_time":100.0,"events":[...],"observed":[1]}
 ```
 

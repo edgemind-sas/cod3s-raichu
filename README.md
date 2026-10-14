@@ -54,8 +54,9 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
   [Running a muscadet model on RAICHU](docs/guides/muscadet-engine.md).
 - **Native RAMS post-processing**: feared events as targets, **minimal
   cut sequences** reduced from a recorded campaign, and the classical
-  **importance measures** (Birnbaum, Fussell-Vesely, criticality) per
-  component, computed from that one campaign.
+  **importance measures** (Birnbaum, Fussell-Vesely, criticality,
+  risk-achievement and risk-reduction worths) per failure mode, component
+  or group, computed from that one campaign.
 - **Sequence-tree exploration**: the sequences leading to a feared event
   enumerated rather than sampled, each with its probability at the
   horizon, plus a lower and an upper bound on what the declared cut-offs
@@ -63,9 +64,11 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
   exploration with an error estimate for other laws and continuous
   evolution. See
   [Sequence-tree exploration](docs/guides/sequence-tree-exploration.md).
-- **One question, three engines**: `pyraichu.quantify` hands one study
+- **One question, five engines**: `pyraichu.quantify` hands one study
   (feared event, horizon, seed) to Monte-Carlo simulation, exact
-  exploration or discretised exploration, and each answers in the same
+  exploration, discretised exploration, or one of the two rare-event
+  methods (cross-entropy importance sampling and adaptive multilevel
+  splitting), and each answers in the same
   open envelope, the probability of the feared event with its confidence
   interval or its bounds. See
   [Quantifying a study](docs/guides/quantification.md).
@@ -107,12 +110,13 @@ the project documentation.
 
 ## Layout
 
-- `crates/`: the pure-Rust engine (model, expressions, core cycle, I/O,
-  numerics, RNG) under an umbrella crate `raichu`.
+- `crates/`: the pure-Rust engine (model, expressions, core cycle,
+  numerics, RNG, Monte-Carlo and rare-event drivers, exploration, fault
+  trees, quantification, FMI, MILP) under an umbrella crate `raichu`.
 - `bindings/pyraichu/`: PyO3/maturin Python binding (**`pyraichu`**),
   distributed as prebuilt wheels attached to each GitHub release.
-- `python/tests/validation/`: cross-validation harness (differential
-  testing against the reference oracle).
+- `python/tests/`: the Python unit suite and the documentation examples,
+  both run by the CI.
 - `docs/`: the documentation site (`mkdocs`).
 
 ## Install

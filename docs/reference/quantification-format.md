@@ -153,6 +153,7 @@ the reporting instants.
 | `horizon` | number | the study's horizon |
 | `instants` | array of numbers | the reporting instants; **Monte-Carlo only**, absent otherwise |
 | `seed` | integer | the master seed; **Monte-Carlo, cross-entropy and splitting only**, absent otherwise |
+| `fmu_units` | array of objects | the imported co-simulation units (name, FMI version, content hash, generating tool); absent for a native-only study |
 
 The thread count is never recorded, since no result depends on it. The
 exploration methods ignore the seed and the instants and do not record
@@ -280,15 +281,15 @@ An exact exploration of a parallel pair (the detail shortened):
 ```json
 {
   "format": "raichu.quantification",
-  "version": 2,
+  "version": 3,
   "method": {"name": "exact", "settings": {"min_probability": null, "max_length": null,
              "max_failures": null, "max_branches": null, "gap_tolerance": 0.01,
              "rel_precision": 1e-9, "max_terms": 100000}},
-  "provenance": {"engine_version": "0.60.0", "model": "parallel_pair",
-                 "model_hash": "sha256:e600909d44c8e90c5969ffdb4d02e660b175f9438e826e9c030ddca384a04639",
+  "provenance": {"engine_version": "0.96.0", "model": "parallel_pair",
+                 "model_hash": "sha256:f7d317f1b1f735225d8e1e61cd2b0fd53f987daf19da869603fa90ee9178d96c",
                  "target": "both_down", "horizon": 5.0},
-  "probability": {"kind": "bounds", "lower": 0.24872005926435417,
-                  "upper": 0.24872005926435417, "inconclusive": false},
+  "probability": {"kind": "bounds", "lower": 0.24872005926435414,
+                  "upper": 0.24872005926435414, "inconclusive": false},
   "detail": {"exploration": {"format": "raichu.exploration", "version": 1, "...": "..."}}
 }
 ```

@@ -297,7 +297,7 @@ automaton**. `init` must be one of `states`.
 | `cycle_group` | string | optional; failure/repair partners share it so transient cycles cancel in the sequence pipeline (paired per component), when the engine finds the group's effect does not outlive its repair (`pyraichu.cycle_groups`) |
 | `cycle_cancellation` | `"auto"` \| `"never"` \| `"always"` | optional (default `"auto"`: the engine decides); `"never"` keeps the group's cycles in the sequences, `"always"` cancels them whatever the analysis finds. Only on a transition with a `cycle_group`, the same value on every transition of the group. A value other than `"auto"` requires the feature `cycle_cancellation` |
 | `monitored_states` | array of string | optional (default: every target); the targets whose entry a `monitored` transition records, a non-empty subset of `targets`. A draw `rep → [occ, not_occ]` records `["occ"]`: a lost draw only parks the automaton and is not an event. Requires the feature `monitored_states` |
-| `kind` | `"failure"` \| `"repair"` | optional (default absent); the declared reliability role, see [Declared kind](#declared-kind) |
+| `kind` | `"failure"` \| `"repair"` \| `"observation"` | optional (default absent); the declared role, see [Declared kind](#declared-kind); `observation` requires the feature `observer_priority` |
 | `effects` | array of Assignment | optional; written ONCE when the transition fires, see [Edge effects](#edge-effects) |
 | `distrib` + params | - | the occurrence distribution, flattened onto the transition (see [Distributions](#distributions)) |
 
@@ -346,10 +346,13 @@ on-demand failure draw is one instantaneous transition with two targets,
 entering `parked` is neither a failure nor a repair. Declare the failure
 state first.
 
-The kind changes no simulated trajectory. Its reader is the
-failure-count cut-off of a sequence-tree exploration, which counts the
-fired `failure` transitions along a sequence and refuses a model that
-declares none rather than silently counting nothing. Roles are declared
+`failure` and `repair` change no simulated trajectory (`observation`
+does, see below). Their readers are the failure-count cut-off of a
+sequence-tree exploration, which counts the fired `failure` transitions
+along a sequence and refuses a model that declares none rather than
+silently counting nothing, the default basic events of the
+[importance measures](../guides/importance-measures.md), the
+minimal-sequence reduction and the cycle-group analysis. Roles are declared
 rather than inferred from state names, a convention the engine could not
 check.
 
@@ -1099,21 +1102,30 @@ guide:
 | `explore` | the exact sequence tree, with probability bounds | [Sequence-tree exploration](../guides/sequence-tree-exploration.md) |
 | `importance` | importance measures per failure mode, component and group | [Importance measures](../guides/importance-measures.md) |
 | `fault_tree` | the fault tree and its minimal cut sets | [Fault trees](../guides/fault-tree.md) |
+| `quantify` | the probability of a feared event, by any of five methods, in one envelope | [Quantifying a study](../guides/quantification.md) |
 
 The two run entry points take:
 
 `simulate(model, t_max=inf, journal=False, confluence_check=False,
 samples=None, seed=0, rng_stream=0, flow=None,
-max_transition_firings=None, max_flow_restarts=None)`: one trajectory;
+max_transition_firings=None, max_flow_restarts=None, rtol=None,
+atol=None, max_step=None, tol_event=None, sub_samples=None,
+event_resolution=None, stop_at_targets=False)`: one trajectory;
 returns events, indicator series, dense `samples`, optional `journal`,
 and `provenance`. The two `max_*` budgets stop a limit cycle
 ([Numerical tuning](../guides/numerical-tuning.md#when-a-run-never-ends)).
+The solver keywords and `stop_at_targets` are those of `monte_carlo`,
+so one replica of a campaign replays here under the campaign's own
+settings
+([Numerical tuning](../guides/numerical-tuning.md#when-one-replica-of-a-campaign-fails)).
 
 `monte_carlo(model, nb_runs, t_max, samples, seed=0, threads=None,
 quantiles=None, confidence=None, rtol=None, atol=None, max_step=None,
 tol_event=None, sub_samples=None, stop_at_targets=False, flow=None,
-event_resolution=None)`: parallel replicas; returns per-indicator
-estimates. Replica *r* uses RNG substream *r*; the reduction is
+event_resolution=None, require_parallel=False)`: parallel replicas;
+returns per-indicator estimates. `require_parallel=True` refuses a model
+importing an FMU that allows one instance per process, rather than
+running its replicas one at a time. Replica *r* uses RNG substream *r*; the reduction is
 index-ordered, so results are byte-identical for any `threads`.
 Every estimate is a finite number: an indicator that took no finite
 value on some replica (`0 / 0`, `1 / 0`) makes the run raise
