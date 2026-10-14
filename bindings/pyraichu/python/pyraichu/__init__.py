@@ -2154,7 +2154,7 @@ class Fireable:
     index: int
     transition: str
     kind: str  # "delay" | "stochastic" | "inst" | "watched"
-    date: float | None  # firing date; None for an unlocated watched boundary
+    date: float | None  # firing date; None until its boundary or condition is crossed
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         when = "boundary" if self.date is None else f"t={self.date}"

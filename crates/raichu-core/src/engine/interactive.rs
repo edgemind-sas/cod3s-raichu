@@ -203,7 +203,9 @@ impl<'m> Engine<'m> {
     /// paused ones left out), plus the watched transitions armed in
     /// their source state (date = the current instant when their guard
     /// already holds, else `None`: the boundary being located only
-    /// during continuous evolution).
+    /// during continuous evolution). A located observer waiting for its
+    /// condition to start holding is listed with date `None` and the
+    /// kind of its own law ([`FireableKind::Delay`]), never as watched.
     ///
     /// Sorted by date (unlocated watched last), then transition index,
     /// so the first entry is exactly what [`Engine::step`] would fire
@@ -239,9 +241,18 @@ impl<'m> Engine<'m> {
                 continue;
             }
             // An armed located observer is listed with its date among the
-            // scheduled transitions; an idle one, like a watched
-            // transition, waits for a crossing nobody has located yet.
-            if transition.located.is_some() && self.pending[idx].is_some() {
+            // scheduled transitions; an idle one waits, like a watched
+            // transition, for a crossing nobody has located yet, but keeps
+            // the kind of its own law: it fires a delay after the crossing.
+            if transition.located.is_some() {
+                if self.pending[idx].is_none() {
+                    out.push(Fireable {
+                        index: idx,
+                        transition: transition.name.clone(),
+                        kind: fireable_kind(&transition.distrib),
+                        date: None,
+                    });
+                }
                 continue;
             }
             // Guard already true ⇒ fireable at the current instant; else

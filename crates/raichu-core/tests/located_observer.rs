@@ -1,14 +1,17 @@
-//! An observer with no wait fires at the date its condition starts to hold,
-//! including when that condition reads a continuously-evolving quantity.
+//! An observer fires its delay after the date its condition starts to hold
+//! (at that date with no delay), including when that condition reads a
+//! continuously-evolving quantity.
 //!
-//! A feared event is an observer: a `delay` 0 transition of `kind`
-//! `observation` whose guard is the event's condition. Its guard used to be
-//! re-evaluated only when some discrete transition fired, so a room filling
-//! up between two discrete events never raised the event on its threshold:
-//! the event came late (at the next discrete event, whatever it was) or
-//! never, while a threshold indicator on the same predicate, in the same
-//! run, flipped at the crossing (edgemind-sas/cod3s-raichu#162). The
-//! compiler now locates such an observer like a watched transition.
+//! A feared event is an observer: a `delay` transition of `kind`
+//! `observation` whose guard is the event's condition, its tempo being the
+//! delay. Its guard used to be re-evaluated only when some discrete
+//! transition fired, so a room filling up between two discrete events never
+//! raised the event on its threshold: the event came late (at the next
+//! discrete event, whatever it was) or never, while a threshold indicator on
+//! the same predicate, in the same run, flipped at the crossing
+//! (edgemind-sas/cod3s-raichu#162). The engine now locates the crossings of
+//! such an observer's condition, with or without a delay: the countdown is
+//! armed at a located rise and interrupted at a located fall.
 //!
 //! Every expected date is a closed form of the ramp or of the triangle.
 
@@ -16,7 +19,7 @@
 
 use raichu_core::{
     fault_tree_for_targets, CompiledModel, Engine, EngineConfig, EngineError, FaultTreeError,
-    FaultTreeSettings,
+    FaultTreeSettings, FireableKind, StochasticDates,
 };
 use raichu_model::Model;
 use serde_json::{json, Value as Json};
@@ -538,4 +541,70 @@ fn a_refused_firing_leaves_the_engine_where_it_was() {
     // And the run then goes on as if nothing had been asked.
     let rest: Vec<_> = std::iter::from_fn(|| engine.step().unwrap()).collect();
     assert!(rest.is_empty(), "{rest:?}");
+}
+
+#[test]
+fn an_idle_located_observer_is_listed_with_the_kind_of_its_own_law() {
+    // Before x reaches 1 the event waits for a crossing, with no date; it
+    // is a delay after that crossing, not a watched boundary.
+    let compiled = CompiledModel::compile(&ramp_with_event("ge", 1.0, None, 0.5)).unwrap();
+    let engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 3.0,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    let idle = engine
+        .fireable()
+        .into_iter()
+        .find(|f| f.transition == "ev_c.ev.occ")
+        .expect("the event is listed");
+    assert_eq!((idle.kind, idle.date), (FireableKind::Delay, None));
+}
+
+#[test]
+fn a_deferred_firing_past_a_located_countdown_names_the_observer() {
+    // x = t reaches 1 at t = 1 and the event falls due 0.5 later: a
+    // deferred failure asked for at 2.0 is refused at 1.5, and the cause
+    // names the observer as such, not as a watched transition.
+    let cond = json!({"op": "cmp", "cmp": "ge", "lhs": x(),
+                      "rhs": {"op": "const", "value": float(1.0)}});
+    let model: Model = serde_json::from_value(json!({
+        "name": "deferred",
+        "components": [
+            {"name": "c",
+             "attributes": [{"name": "x", "kind": "float", "init": float(0.0)}],
+             "equations": [{"target": "x", "kind": "ode", "expr": ramp_rate(None)}]},
+            {"name": "f",
+             "automata": [{"name": "fail", "states": ["ok", "ko"], "init": "ok",
+                 "transitions": [{"name": "occ", "source": "ok", "targets": ["ko"],
+                                  "distrib": "exp", "rate": 0.1}]}]},
+            event(cond, 0.5)
+        ]
+    }))
+    .expect("model");
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 3.0,
+            stochastic_dates: StochasticDates::Deferred,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    let failure = compiled
+        .transitions
+        .iter()
+        .position(|t| t.name == "f.fail.occ")
+        .unwrap();
+    let err = engine.fire_deferred_at(failure, 2.0, None).unwrap_err();
+    let EngineError::DeferredFiringTooLate { limit, cause, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert!((limit - 1.5).abs() < 1e-6, "{err:?}");
+    assert_eq!(cause, "the located observer `ev_c.ev.occ`");
+    assert_eq!(engine.current_time(), 0.0);
 }

@@ -258,11 +258,7 @@ impl<'m> Engine<'m> {
                     Ok(Some(watched)) => {
                         let at = self.time;
                         self.try_restore(&before)?;
-                        let cause = format!(
-                            "the watched transition `{}`",
-                            self.model.transitions[watched].name
-                        );
-                        return Err(too_late(at, cause));
+                        return Err(too_late(at, self.crossing_cause(watched)));
                     }
                     Err(error) => {
                         self.try_restore(&before)?;
@@ -276,6 +272,18 @@ impl<'m> Engine<'m> {
             self.watched_streak = (t, 0);
         }
         self.fire(trans_idx, forced)
+    }
+
+    /// What the integration towards a deferred firing date stopped on,
+    /// in words: a watched transition whose boundary was crossed, or a
+    /// located observer whose countdown, armed at a crossing, fell due.
+    fn crossing_cause(&self, trans_idx: TransIdx) -> String {
+        let transition = &self.model.transitions[trans_idx];
+        if transition.located.is_some() {
+            format!("the located observer `{}`", transition.name)
+        } else {
+            format!("the watched transition `{}`", transition.name)
+        }
     }
 
     /// Deferred-mode counterpart of the stochastic arms of

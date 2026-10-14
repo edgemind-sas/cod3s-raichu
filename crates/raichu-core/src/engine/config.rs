@@ -1166,7 +1166,8 @@ pub struct Fireable {
     pub kind: FireableKind,
     /// Scheduled firing date; `None` for a watched transition whose
     /// boundary has not been located yet (its guard is not yet true:
-    /// the crossing is found only during continuous evolution).
+    /// the crossing is found only during continuous evolution), and for
+    /// a located observer whose countdown is not armed yet.
     pub date: Option<f64>,
 }
 
