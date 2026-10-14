@@ -139,6 +139,19 @@ impl<'m> Engine<'m> {
         })
     }
 
+    /// Account for a transition [`Engine::advance_continuous`] handed
+    /// back. A watched boundary is a firing of the streak; a located
+    /// observer's countdown falling due is a dated firing, as the
+    /// deferred probe classes it, and its crossing was already counted
+    /// when the advance located it.
+    pub(super) fn note_handed_back(&mut self, trans_idx: TransIdx) -> Result<(), EngineError> {
+        if self.model.transitions[trans_idx].located.is_some() {
+            Ok(())
+        } else {
+            self.note_watched_firing()
+        }
+    }
+
     /// Zeno guard: watched transitions must not keep firing without
     /// time advancing.
     pub(super) fn note_watched_firing(&mut self) -> Result<(), EngineError> {

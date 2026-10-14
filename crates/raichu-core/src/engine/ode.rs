@@ -33,8 +33,6 @@ pub(super) enum MarginSense {
     Rising,
     /// The guard stops holding: its strict complement crosses 0 upward.
     Falling,
-    /// No crossing ends the segment.
-    Inert,
 }
 
 /// Adapter exposing the compiled continuous section to `raichu-numeric`.
@@ -410,10 +408,6 @@ impl OdeSystem for ContinuousSystem<'_> {
                 out[slot] = -1.0;
                 continue;
             };
-            if *sense == MarginSense::Inert {
-                out[slot] = -1.0;
-                continue;
-            }
             match eval_f64(self.model, &self.vars, &self.states, t, margin) {
                 // The complement of `margin >= 0` is the strict
                 // `margin < 0`, tightened as a strict comparison is.

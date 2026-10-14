@@ -44,6 +44,15 @@ def simulate_json(
     flow: FlowConfig | None = None,
     max_transition_firings: int | None = None,
     max_flow_restarts: int | None = None,
+    allow_fmu_import: bool = False,
+    fmu_base_dir: str | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
+    max_step: float | None = None,
+    tol_event: float | None = None,
+    sub_samples: int | None = None,
+    event_resolution: float | None = None,
+    stop_at_targets: bool = False,
 ) -> str: ...
 def monte_carlo_json(
     model_json: str,

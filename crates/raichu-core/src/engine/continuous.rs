@@ -108,6 +108,15 @@ impl<'m> Engine<'m> {
                     if let Some((idx, _)) = due.filter(|(_, date)| *date <= self.time) {
                         return Ok(Some(idx));
                     }
+                    // The crossing may have left nothing that moves
+                    // continuously (a countdown nothing interrupts, on a
+                    // condition read from the clock alone): the caller
+                    // plans the rest from the schedule and jumps to the
+                    // next date, as it does whenever there is nothing to
+                    // integrate.
+                    if !self.needs_integration() {
+                        return Ok(None);
+                    }
                     limit = due.map_or(t_target, |(_, date)| date);
                     segment_target = limit;
                     continue;
@@ -208,7 +217,27 @@ impl<'m> Engine<'m> {
                 .margin_index
                 .watched_by_time
                 .iter()
-                .any(|position| self.watched_active.contains(position))
+                .filter(|position| self.watched_active.contains(*position))
+                .any(|&position| self.margin_sense(self.model.watched[position]).is_some())
+    }
+
+    /// Which crossing of `idx`'s margin ends a segment, or `None` when no
+    /// crossing does. A watched transition and an idle located observer
+    /// wait for their condition to start holding; a located observer
+    /// counting down waits for it to stop holding, which interrupts the
+    /// countdown, unless its `continue` policy means nothing interrupts
+    /// it. Such an observer is not monitored: its countdown comes due
+    /// on the schedule, so a model with nothing else moving jumps to
+    /// that date instead of integrating towards it.
+    fn margin_sense(&self, idx: TransIdx) -> Option<MarginSense> {
+        let transition = &self.model.transitions[idx];
+        if transition.located.is_none() || self.pending[idx].is_none() {
+            Some(MarginSense::Rising)
+        } else if transition.on_interruption == raichu_model::InterruptionPolicy::Continue {
+            None
+        } else {
+            Some(MarginSense::Falling)
+        }
     }
 
     /// `integrate_continuous`: integrate the continuous state to `t_target`, monitoring
@@ -220,27 +249,16 @@ impl<'m> Engine<'m> {
         // crossing changes no automaton state, so the set it monitors is
         // the one the previous segment monitored, and rebuilding it would
         // cost the model's whole watched population per restart.
-        let margins: Vec<TransIdx> = self
+        //
+        // A located observer is read in the sense its schedule calls for
+        // (see [`Engine::margin_sense`]); one that nothing can interrupt
+        // takes no event slot at all.
+        let (margins, senses): (Vec<TransIdx>, Vec<MarginSense>) = self
             .watched_active
             .iter()
             .map(|&position| self.model.watched[position])
-            .collect();
-        // A located observer is read in the sense its schedule calls for:
-        // idle, the start of its condition arms it; counting down, the end
-        // of its condition interrupts it, unless nothing interrupts it.
-        let senses: Vec<MarginSense> = margins
-            .iter()
-            .map(|&idx| {
-                let transition = &self.model.transitions[idx];
-                if transition.located.is_none() || self.pending[idx].is_none() {
-                    MarginSense::Rising
-                } else if transition.on_interruption == raichu_model::InterruptionPolicy::Continue {
-                    MarginSense::Inert
-                } else {
-                    MarginSense::Falling
-                }
-            })
-            .collect();
+            .filter_map(|idx| self.margin_sense(idx).map(|sense| (idx, sense)))
+            .unzip();
 
         // Armed continuously-varying hazards ride along as auxiliary
         // state (`dH/dt = λ`), their firing located as an event.

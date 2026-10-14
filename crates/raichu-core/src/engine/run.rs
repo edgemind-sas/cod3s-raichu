@@ -140,7 +140,7 @@ impl<'m> Engine<'m> {
 
             if self.needs_integration() && t_target > self.time && t_target.is_finite() {
                 if let Some(trans_idx) = self.advance_continuous(t_target)? {
-                    self.note_watched_firing()?;
+                    self.note_handed_back(trans_idx)?;
                     return self.fire(trans_idx, None).map(Some);
                 }
                 // A located crossing may have moved the schedule on the

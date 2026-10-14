@@ -576,12 +576,12 @@ def monte_carlo(
     is often one reaching the feared event. The error raised is the one
     the replica's own run raised (an :class:`UnboundedRateError` stays
     one), names the replica in its message, and carries ``replica``,
-    ``nb_runs`` and ``seed`` as attributes: ``simulate(model, t_max,
-    samples=samples, flow=flow, seed=error.seed, rng_stream=error.replica)``
-    replays it alone, provided the campaign ran the solver at its default
-    settings (``simulate`` does not take ``rtol``, ``atol``, ``max_step``,
-    ``tol_event``, ``sub_samples`` or ``event_resolution``; under other
-    settings the trajectory is another one). The replica reported is the
+    ``nb_runs`` and ``seed`` as attributes: :func:`simulate` with the
+    campaign's own horizon, samples, flow policy, solver keywords and
+    ``stop_at_targets``, at ``seed=error.seed, rng_stream=error.replica``,
+    replays it alone. A refusal raised before any replica runs (an
+    invalid setting, an FMU permission) carries none of these
+    attributes. The replica reported is the
     lowest-numbered one that failed, whatever ``threads`` is, so every
     replica numbered below it completed.
 
@@ -2088,6 +2088,13 @@ def simulate(
     flow: FlowConfig | None = None,
     max_transition_firings: int | None = None,
     max_flow_restarts: int | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
+    max_step: float | None = None,
+    tol_event: float | None = None,
+    sub_samples: int | None = None,
+    event_resolution: float | None = None,
+    stop_at_targets: bool = False,
 ) -> SimulationResult:
     """Run one simulation of ``model`` up to ``t_max``.
 
@@ -2106,10 +2113,19 @@ def simulate(
     little every turn and neither Zeno guard can see it, into a typed
     error rather than a run that never ends: the first catches a mode
     that flips, the second a network whose routing does. ``0`` disables
-    either; omitted, the engine default applies. The GIL is released
-    while the Rust engine runs. Raises :class:`SimulationError` on typed
-    engine failures (instantaneous loop, chattering, non-confluence when
-    ``confluence_check`` is enabled, …).
+    either; omitted, the engine default applies.
+
+    ``rtol``/``atol``/``max_step``/``tol_event``/``sub_samples``/
+    ``event_resolution`` override the ODE-backend parameters, and
+    ``stop_at_targets`` ends the run at the first feared event, exactly
+    as :func:`monte_carlo` takes them: one replica of a campaign replays
+    here with the campaign's own settings and the coordinates its
+    failure carries (``seed=error.seed, rng_stream=error.replica``).
+
+    The GIL is released while the Rust engine runs. Raises
+    :class:`SimulationError` on typed engine failures (instantaneous
+    loop, chattering, non-confluence when ``confluence_check`` is
+    enabled, …).
     """
     raw = json.loads(
         simulate_json(
@@ -2125,6 +2141,13 @@ def simulate(
             max_flow_restarts,
             model.allow_fmu_import,
             str(model.base_dir),
+            rtol=rtol,
+            atol=atol,
+            max_step=max_step,
+            tol_event=tol_event,
+            sub_samples=sub_samples,
+            event_resolution=event_resolution,
+            stop_at_targets=stop_at_targets,
         )
     )
     events = [

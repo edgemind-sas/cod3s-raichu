@@ -141,3 +141,52 @@ def test_the_coordinates_survive_a_pickle_round_trip():
         SEED,
         str(caught.value),
     )
+
+
+# A tank draining at a constant rate, and a valve failing at an exponential
+# date: enough to see both the solver settings and the target early-stop.
+DRAINING = r"""
+{
+  "name": "draining",
+  "components": [
+    {
+      "name": "tank",
+      "attributes": [
+        {"name": "level", "kind": "float", "init": {"kind": "float", "value": 10.0}}
+      ],
+      "equations": [
+        {"target": "level", "kind": "ode",
+         "expr": {"op": "const", "value": {"kind": "float", "value": -1.0}}}
+      ]
+    },
+    {
+      "name": "valve",
+      "ports": [], "attributes": [],
+      "automata": [{"name": "life", "states": ["ok", "ko"], "init": "ok",
+        "transitions": [{"name": "fail", "source": "ok", "targets": ["ko"],
+                         "distrib": "exp", "rate": 1.0}]}]
+    }
+  ],
+  "targets": [{"name": "stuck", "component": "valve", "automaton": "life", "state": "ko"}]
+}
+"""
+
+
+def test_simulate_takes_the_campaign_solver_settings():
+    """A replica replays under the campaign's own settings, not the defaults."""
+    model = pyraichu.load_model(DRAINING)
+    default = pyraichu.simulate(model, 5.0, seed=SEED)
+    capped = pyraichu.simulate(model, 5.0, seed=SEED, max_step=0.01)
+    assert (
+        capped.work["solver_steps_accepted"] > default.work["solver_steps_accepted"]
+    )
+    stopped = pyraichu.simulate(model, 50.0, seed=SEED, stop_at_targets=True)
+    assert [e.transition for e in stopped.events] == ["valve.life.fail"]
+    assert stopped.final_time == stopped.events[0].time < 50.0
+
+
+def test_a_refusal_before_any_replica_carries_no_coordinates():
+    """Nothing ran, so there is nothing to replay: the guide checks for it."""
+    with pytest.raises(pyraichu.SimulationError) as caught:
+        pyraichu.monte_carlo(switched(), NB_RUNS, T_MAX, [T_MAX], confidence=2.0)
+    assert not hasattr(caught.value, "replica")

@@ -608,3 +608,85 @@ fn a_deferred_firing_past_a_located_countdown_names_the_observer() {
     assert_eq!(cause, "the located observer `ev_c.ev.occ`");
     assert_eq!(engine.current_time(), 0.0);
 }
+
+#[test]
+fn a_countdown_nothing_interrupts_is_not_integrated_towards() {
+    // A clock event on `time >= 1` with a long tempo and the `continue`
+    // policy: once armed at 1, no crossing can change its fate, so the
+    // engine jumps to its due date instead of integrating the whole
+    // countdown. The solver work is the same whatever the tempo, which
+    // it was not while the armed observer still held an event slot.
+    let run = |delay: f64| {
+        let cond = json!({"op": "cmp", "cmp": "ge", "lhs": {"op": "time"},
+                          "rhs": {"op": "const", "value": float(1.0)}});
+        let mut event = event(cond, delay);
+        event["automata"][0]["transitions"][0]["on_interruption"] = json!("continue");
+        let model: Model = serde_json::from_value(json!({
+            "name": "clock", "components": [event]
+        }))
+        .expect("model");
+        let compiled = CompiledModel::compile(&model).unwrap();
+        let result = Engine::new(
+            &compiled,
+            EngineConfig {
+                t_max: delay + 2.0,
+                ..EngineConfig::default()
+            },
+        )
+        .unwrap()
+        .run()
+        .unwrap();
+        let fired: Vec<(f64, String)> = result
+            .events
+            .iter()
+            .map(|e| (e.time, e.transition.clone()))
+            .collect();
+        assert_events(&fired, &[(1.0 + delay, "ev_c.ev.occ")]);
+        result.work.solver_steps_accepted
+    };
+    assert_eq!(run(10.0), run(10_000.0));
+}
+
+#[test]
+fn firing_a_chosen_transition_passes_over_a_countdown_armed_on_the_way() {
+    // `x' = 1` from 0, a repair dated 10, and an event on `x > 5` with a
+    // tempo of 2: its countdown is armed at the crossing (5) and due at 7,
+    // on the way to the repair. Asking for the repair fires the repair, at
+    // 10, as asking for any non-earliest transition passes over the dated
+    // ones before it; the countdown is left overdue, and fires next.
+    let cond = json!({"op": "cmp", "cmp": "gt", "lhs": x(),
+                      "rhs": {"op": "const", "value": float(5.0)}});
+    let model: Model = serde_json::from_value(json!({
+        "name": "passed_over",
+        "components": [
+            {"name": "c",
+             "attributes": [{"name": "x", "kind": "float", "init": float(0.0)}],
+             "equations": [{"target": "x", "kind": "ode", "expr": ramp_rate(None)}],
+             "automata": [{"name": "pump", "states": ["off", "on"], "init": "off",
+                 "transitions": [{"name": "repair", "source": "off", "targets": ["on"],
+                                  "distrib": "delay", "time": 10.0}]}]},
+            event(cond, 2.0)
+        ]
+    }))
+    .expect("model");
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 20.0,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    let repair = engine
+        .fireable()
+        .into_iter()
+        .find(|f| f.transition == "c.pump.repair")
+        .expect("the repair is armed");
+    let fired = engine.fire_idx(repair.index).expect("the repair fires");
+    assert_eq!(fired.transition, "c.pump.repair");
+    assert!((fired.time - 10.0).abs() < 1e-9, "{fired:?}");
+    let next = engine.step().unwrap().expect("the overdue event");
+    assert_eq!(next.transition, "ev_c.ev.occ");
+    assert!((next.time - 10.0).abs() < 1e-9, "{next:?}");
+}
