@@ -491,27 +491,107 @@ def test_a_leaf_two_targets_would_read_differently_is_still_refused():
         )
 
 
-def test_drop_inactive_automata_is_read_by_what_it_asks_for():
-    """muscadet writes `False` on every common-cause mode whose orders were
-    all built, which is the ordinary case and says nothing here. It asks for
-    something only where an order has no active law, and there this layer has
-    no automaton that can never fire to build."""
-    ordinary = a_delay_mode(
+def a_common_cause_pair(occ_rates, not_occ_rates, **overrides):
+    """A common-cause mode over two targets, written field for field as the
+    muscadet declaration route writes a platform study's mode: an
+    ``ObjMode2S`` with exponential laws, one rate per common-cause order."""
+    return a_mode_2s(
         name="BX__hw",
-        target_name="BX",
         targets=["B1", "B2"],
-        failure_param=[4, 7],
-        repair_param=[2, 3],
-        drop_inactive_automata=False,
+        target_name="BX",
+        behaviour="external",
+        occ_law={"cls": "exp", "rate": list(occ_rates)},
+        occ_param_name=["lambda"],
+        occ_param=list(occ_rates),
+        not_occ_law={"cls": "exp", "rate": list(not_occ_rates)},
+        not_occ_param_name=["mu"],
+        not_occ_param=list(not_occ_rates),
+        **overrides,
     )
-    assert declare.check_mode_spec(ordinary) == "BX__hw"
 
-    with pytest.raises(declare.ComponentSpecError, match="order 2 inactive"):
-        declare.check_mode_spec(
-            {**ordinary, "cls": "ObjFMExp",
-             "failure_param_name": ["lambda"], "repair_param_name": ["mu"],
-             "failure_param": [0.1, 0.0], "repair_param": [0.5, 0.5]}
+
+def a_common_cause_document(mode):
+    return a_document(
+        a_source(),
+        a_block("B1"),
+        a_block("B2"),
+        mode,
+        connections=[
+            {
+                "source": "S",
+                "source_box": f"{FLOW}_out",
+                "target": target,
+                "target_box": f"{FLOW}_in",
+            }
+            for target in ("B1", "B2")
+        ],
+    )
+
+
+#: The three shapes an order with an inactive law takes, by which direction
+#: is inactive at order 2.
+COMMON_CAUSE_SHAPES = {
+    # The common cause strikes and nothing returns from it.
+    "occurrence-active-return-inactive": ([1e-3, 2e-4], [0.1, 0.0]),
+    "occurrence-inactive-return-active": ([1e-3, 0.0], [0.1, 0.05]),
+    "both-inactive": ([1e-3, 0.0], [0.1, 0.0]),
+}
+
+
+@pytest.mark.parametrize(
+    "occ_rates, not_occ_rates",
+    list(COMMON_CAUSE_SHAPES.values()),
+    ids=list(COMMON_CAUSE_SHAPES),
+)
+def test_drop_inactive_automata_false_builds_what_its_absence_builds(
+    occ_rates, not_occ_rates
+):
+    """``drop_inactive_automata=False`` is muscadet's READ-BACK, not a request.
+
+    The platform's study says ``true``; muscadet's declaration route writes
+    ``False`` on every common-cause mode whose ``2**n - 1`` combinations were
+    all built (``muscadet.declare._drop_inactive_automata_spec``), and cod3s
+    builds every order unless BOTH of its directions are inactive. So the key
+    reaches this reader on the ordinary shape, the one platform studies
+    carry: an order whose common cause strikes and from which nothing
+    returns.
+
+    What each shape means is the same with or without the key. An order whose
+    occurrence is inactive never fires, so the automaton cod3s builds for it is
+    one nothing can observe and building none is the same model. An order
+    whose occurrence is active and whose return is inactive is ABSORBING, which
+    this layer builds already (a zero return rate leaves the combination in
+    `occ`). The key therefore asks for nothing, on any of the three shapes."""
+    without = a_common_cause_pair(occ_rates, not_occ_rates)
+    marked = a_common_cause_pair(
+        occ_rates, not_occ_rates, drop_inactive_automata=False
+    )
+
+    assert declare.check_mode_spec(marked) == "BX__hw"
+    assert declare.build_document(
+        a_common_cause_document(marked)
+    ) == declare.build_document(a_common_cause_document(without))
+
+
+def test_an_order_whose_return_is_inactive_is_absorbing():
+    """The common cause strikes and nothing brings the pair back: the
+    combination and the two targets it mirrors onto move at ONE date, and
+    nothing fires after it over a horizon a thousand times the mean time to
+    the strike."""
+    built = declare.build_document(
+        a_common_cause_document(
+            a_common_cause_pair(
+                [0.0, 1.0], [0.0, 0.0], drop_inactive_automata=False
+            )
         )
+    )
+    model = pyraichu.load_model(json.dumps(built))
+    result = pyraichu.simulate(model, t_max=1000.0)
+    dates = {event.time for event in result.events}
+    fired = [str(event) for event in result.events]
+
+    assert len(dates) == 1, fired
+    assert any("occ__cc_1_2" in event for event in fired), fired
 
 
 # --- the arbitration: a mode that gates nothing ------------------------

@@ -218,6 +218,22 @@ test written on one proves nothing about the reading it got. That is why
 `python/tests/unit/test_prod_cond_inner_mode.py` opposes the two on a
 multi-clause condition, and runs it.
 
+**Empty groups.** `[[]]` is how older platform libraries spell an output
+nobody wrote a condition for: the port editor seeded it on every fresh output.
+muscadet's discrete family evaluates it like any other condition, and the two
+modes part on it:
+
+| Declared | The reference engine | This layer |
+|---|---|---|
+| `[[]]` or `[[], []]` under `"and"` | an empty conjunction holds: the output produces from the start, whatever its inputs and its declared default | the same: built as the output with no condition, starting produced |
+| `[[]]` under `"or"` | an empty clause is false: the output never produces | refused, naming `[]` as the unconditional spelling |
+| `[[], ["a"]]`, either mode | the empty group decides alone and `a` says nothing | refused |
+
+The reference reads it so from muscadet 5.14.0, which evaluates a condition at
+start; before, a condition subscribed to no operand was never evaluated and the
+output kept its declared default. Up to 0.97.0 this layer refused every empty
+group.
+
 **`negate` on an output** is muscadet's `FlowOut.negate`: the output
 publishes `not (production and active and available)`, the inverter of a logic
 chain. It is carried on a plain output and refused by name on a temporised or
