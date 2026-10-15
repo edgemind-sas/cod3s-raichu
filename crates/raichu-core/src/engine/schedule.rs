@@ -78,6 +78,20 @@ impl ExposureTally {
     }
 }
 
+/// Check [`EngineConfig::ode`] against the domain of each field
+/// ([`SolverParams::validate`]), before a run can cost anything: a NaN
+/// step cap or a negative tolerance would otherwise be dropped silently
+/// or surface as a solver failure that reads as model stiffness.
+pub(super) fn validate_solver_params(config: &EngineConfig) -> Result<(), EngineError> {
+    config
+        .ode
+        .validate()
+        .map_err(|error| EngineError::InvalidStudyParameter {
+            parameter: error.parameter.to_owned(),
+            detail: error.detail,
+        })
+}
+
 /// Check [`EngineConfig::rate_factors`] against the compiled model: empty,
 /// or one finite positive factor per transition, other than 1 only on a
 /// constant-rate exponential law, and drawn stochastic dates.

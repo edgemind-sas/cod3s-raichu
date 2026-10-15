@@ -31,6 +31,17 @@ enum Segment {
     Resolved(usize),
 }
 
+/// What an advance does about a located countdown armed and due before
+/// its target date.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Countdowns {
+    /// Stop there and hand it back to fire, as a watched crossing is.
+    HandBack,
+    /// Leave it overdue and go on: an interactive firing of a chosen
+    /// transition passes over the dated firings before its own date.
+    PassOver,
+}
+
 impl<'m> Engine<'m> {
     /// Advance continuous evolution to `t_target`, restarting a segment
     /// at every located active-set crossing until either the date is
@@ -50,6 +61,19 @@ impl<'m> Engine<'m> {
     pub(super) fn advance_continuous(
         &mut self,
         t_target: f64,
+    ) -> Result<Option<TransIdx>, EngineError> {
+        self.advance_continuous_with(t_target, Countdowns::HandBack)
+    }
+
+    /// [`Engine::advance_continuous`], with what to do about a located
+    /// countdown armed and due on the way. [`Countdowns::PassOver`] leaves
+    /// it overdue and integrates on to `t_target`, in the same advance:
+    /// one restart budget covers the whole way, where re-entering the
+    /// advance past each countdown would open a fresh one every time.
+    pub(super) fn advance_continuous_with(
+        &mut self,
+        t_target: f64,
+        countdowns: Countdowns,
     ) -> Result<Option<TransIdx>, EngineError> {
         let mut stuck_at = f64::NEG_INFINITY;
         let mut stuck: Vec<usize> = Vec::new();
@@ -104,7 +128,10 @@ impl<'m> Engine<'m> {
                             self.refresh_transition(idx)?;
                         }
                     }
-                    due = self.located_due(t_target, &armed_before);
+                    due = match countdowns {
+                        Countdowns::HandBack => self.located_due(t_target, &armed_before),
+                        Countdowns::PassOver => None,
+                    };
                     if let Some((idx, _)) = due.filter(|(_, date)| *date <= self.time) {
                         return Ok(Some(idx));
                     }

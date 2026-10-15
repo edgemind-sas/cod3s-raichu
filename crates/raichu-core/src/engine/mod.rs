@@ -109,6 +109,7 @@ pub(crate) use eval::eval_frozen;
 // `use super::*`.
 use config::OperatorDate;
 use config::{attribute_of, state_of};
+use continuous::Countdowns;
 use deferred::DeferredAge;
 use eval::{eval_bool, eval_expr, eval_f64, predicate_holds};
 use extrapolation::Extrapolation;
@@ -117,7 +118,9 @@ use notes::ChangeLog;
 use ode::{ContinuousSystem, FrozenFlow, MarginSense};
 use restart::DrawnClock;
 use sampling::indicator_value;
-use schedule::{fireable_kind, validate_rate_factors, ExposureTally, Hazard};
+use schedule::{
+    fireable_kind, validate_rate_factors, validate_solver_params, ExposureTally, Hazard,
+};
 
 /// A simulation engine over a compiled model.
 ///
@@ -262,6 +265,7 @@ impl<'m> Engine<'m> {
                 }
             });
         }
+        validate_solver_params(&config)?;
         validate_rate_factors(model, &config)?;
         let mut engine = Self::bare(model, config, solver);
         engine.initialize()?;
@@ -295,6 +299,7 @@ impl<'m> Engine<'m> {
                 model: model.name.clone(),
             });
         }
+        validate_solver_params(&config)?;
         validate_rate_factors(model, &config)?;
         let solver = Box::new(DormandPrince45::new(config.ode.clone()));
         let mut engine = Self::bare(model, config, solver);
@@ -332,6 +337,7 @@ impl<'m> Engine<'m> {
                 model: model.name.clone(),
             });
         }
+        validate_solver_params(&config)?;
         let solver = Box::new(DormandPrince45::new(config.ode.clone()));
         let mut engine = Self::bare(model, config, solver);
         engine.host = Some(host);
@@ -366,6 +372,7 @@ impl<'m> Engine<'m> {
                 alternative: "Engine::from_snapshot_with_host",
             });
         }
+        validate_solver_params(&config)?;
         let solver = Box::new(DormandPrince45::new(config.ode.clone()));
         let mut engine = Self::bare(model, config, solver);
         engine.restore(snapshot)?;

@@ -147,7 +147,71 @@ impl Default for SolverParams {
     }
 }
 
+/// A [`SolverParams`] field outside its domain, named as the caller
+/// spells it.
+#[derive(Debug, Clone, PartialEq, Error)]
+#[error("invalid solver parameter `{parameter}`: {detail}")]
+pub struct InvalidSolverParam {
+    /// The offending field.
+    pub parameter: &'static str,
+    /// What was expected, and what arrived.
+    pub detail: String,
+}
+
 impl SolverParams {
+    /// Check every field against its domain, so a value that would make
+    /// the error control or the event location meaningless is refused by
+    /// name instead of surfacing later as a solver failure that reads as
+    /// model stiffness, or being dropped silently (a NaN `max_step` loses
+    /// every `min` it enters).
+    ///
+    /// - `rtol` and `tol_event`: finite and positive;
+    /// - `atol`: finite and nonnegative;
+    /// - `max_step`: positive, `+inf` meaning no cap;
+    /// - `event_resolution`, when set: finite and positive.
+    ///
+    /// `sub_samples` takes any value: 0 scans like 1 (see
+    /// [`Self::scan_points`]).
+    pub fn validate(&self) -> Result<(), InvalidSolverParam> {
+        let refuse = |parameter: &'static str, expected: &str, value: f64| {
+            Err(InvalidSolverParam {
+                parameter,
+                detail: format!("expected {expected}, got {value}"),
+            })
+        };
+        if !(self.rtol.is_finite() && self.rtol > 0.0) {
+            return refuse("rtol", "a finite positive relative tolerance", self.rtol);
+        }
+        if !(self.atol.is_finite() && self.atol >= 0.0) {
+            return refuse("atol", "a finite nonnegative absolute tolerance", self.atol);
+        }
+        if self.max_step.is_nan() || self.max_step <= 0.0 {
+            return refuse(
+                "max_step",
+                "a positive step cap (inf for none)",
+                self.max_step,
+            );
+        }
+        if !(self.tol_event.is_finite() && self.tol_event > 0.0) {
+            return refuse(
+                "tol_event",
+                "a finite positive time tolerance",
+                self.tol_event,
+            );
+        }
+        if let Some(resolution) = self.event_resolution {
+            if !(resolution.is_finite() && resolution > 0.0) {
+                return refuse(
+                    "event_resolution",
+                    "the widest spacing accepted between two crossing scan points, \
+                     a finite positive time",
+                    resolution,
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Scan points for a step of length `h`: [`Self::sub_samples`], raised
     /// just enough that no two points are further apart than
     /// [`Self::event_resolution`] when one is set.
@@ -899,6 +963,52 @@ impl OdeSolver for FixedEuler {
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_solver_params_are_valid() {
+        assert_eq!(SolverParams::default().validate(), Ok(()));
+    }
+
+    #[test]
+    fn solver_params_outside_their_domain_are_refused_by_name() {
+        let with = |edit: fn(&mut SolverParams)| {
+            let mut params = SolverParams::default();
+            edit(&mut params);
+            params.validate().map_err(|e| e.parameter)
+        };
+        assert_eq!(with(|p| p.rtol = 0.0), Err("rtol"));
+        assert_eq!(with(|p| p.rtol = -1e-6), Err("rtol"));
+        assert_eq!(with(|p| p.rtol = f64::NAN), Err("rtol"));
+        assert_eq!(with(|p| p.atol = -1e-12), Err("atol"));
+        assert_eq!(with(|p| p.atol = f64::INFINITY), Err("atol"));
+        assert_eq!(with(|p| p.max_step = f64::NAN), Err("max_step"));
+        assert_eq!(with(|p| p.max_step = 0.0), Err("max_step"));
+        assert_eq!(with(|p| p.max_step = -0.1), Err("max_step"));
+        assert_eq!(with(|p| p.tol_event = 0.0), Err("tol_event"));
+        assert_eq!(with(|p| p.tol_event = f64::INFINITY), Err("tol_event"));
+        assert_eq!(
+            with(|p| p.event_resolution = Some(0.0)),
+            Err("event_resolution")
+        );
+        assert_eq!(
+            with(|p| p.event_resolution = Some(f64::NAN)),
+            Err("event_resolution")
+        );
+    }
+
+    #[test]
+    fn solver_params_at_the_edges_of_their_domain_are_accepted() {
+        let mut params = SolverParams {
+            atol: 0.0,
+            max_step: f64::INFINITY,
+            sub_samples: 0,
+            event_resolution: Some(1e-9),
+            ..SolverParams::default()
+        };
+        assert_eq!(params.validate(), Ok(()));
+        params.event_resolution = None;
+        assert_eq!(params.validate(), Ok(()));
+    }
 
     /// dy/dt = -y, y(0)=1 → y(t) = e^{-t}; no events.
     struct Decay;
