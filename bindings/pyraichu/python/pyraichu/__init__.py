@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 import math
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 from ._pyraichu import (
     DEFAULT_CONFIDENCE,
@@ -1809,12 +1809,32 @@ def _basic_event_name(event: dict) -> str:
     return f"{event['obj']}.{event['automaton']}.{event['attr']}"
 
 
-def _basic_event_wire(name: str, where: str) -> dict:
-    """The wire form of a ``component.automaton.state`` name."""
-    parts = name.rsplit(".", 2)
-    if len(parts) != 3 or not all(parts):
+#: A basic event as a caller may give it: a ``component.automaton.state``
+#: name, or its three parts, as a tuple or as a mapping with the wire keys.
+BasicEvent = Union[str, tuple[str, str, str], Mapping[str, str]]
+
+
+def _basic_event_wire(event: BasicEvent, where: str) -> dict:
+    """The wire form of a basic event.
+
+    A name is split on its last two dots, which is right only when the
+    automaton and the state carry none. A component or mode name may carry
+    dots of its own (an external mode's automaton is named after its
+    carrier), so a caller holding the three parts passes them as a
+    triplet and nothing is split.
+    """
+    if isinstance(event, str):
+        parts = event.rsplit(".", 2)
+    elif isinstance(event, Mapping):
+        parts = [event.get("obj"), event.get("automaton"), event.get("attr")]
+    elif isinstance(event, (tuple, list)):
+        parts = list(event)
+    else:
+        parts = []
+    if len(parts) != 3 or not all(isinstance(part, str) and part for part in parts):
         raise ValueError(
-            f"{where}: `{name}` is not a `component.automaton.state` basic event"
+            f"{where}: `{event!r}` is not a `component.automaton.state` basic event"
+            " (a name, or a (component, automaton, state) triplet)"
         )
     return {"obj": parts[0], "automaton": parts[1], "attr": parts[2]}
 
@@ -1838,8 +1858,8 @@ def importance(
     seed: int = 0,
     threads: int | None = None,
     flow: FlowConfig | None = None,
-    basic_events: str | list[str] = "failures",
-    groups: dict[str, list[str]] | None = None,
+    basic_events: str | list[BasicEvent] = "failures",
+    groups: dict[str, list[BasicEvent]] | None = None,
 ) -> ImportanceAnalysis:
     """Native importance measures: which failure mode, which component
     and which group carries the risk.
@@ -1870,9 +1890,12 @@ def importance(
       event or the park of a lost draw is never a failure;
     - ``"monitored"``: every recorded state other than its automaton's
       initial one, for a model that declares no failure role;
-    - a list of ``component.automaton.state`` names.
+    - a list of basic events, each a ``component.automaton.state`` name or,
+      when a component or mode name carries a dot, its
+      ``(component, automaton, state)`` triplet (a tuple, or a mapping with
+      the keys ``obj``, ``automaton`` and ``attr``).
 
-    ``groups`` maps a group name to its basic events, each group being
+    ``groups`` maps a group name to its basic events, given the same way, each group being
     measured as one unit (a physical component whose modes live on other
     objects, a subsystem). An event may sit in several groups, which is
     how a common cause is attributed to each of its targets.
