@@ -40,10 +40,16 @@ comparisons (Šidák) allows. Under MPI, PyCATSHOO's estimates equal its
 single-process ones to 4·10⁻⁶ or better.
 
 Against the 0.63.4 campaign, RAICHU's single-thread timings moved by
-less than 10 % on every model, within the run-to-run variation of this
-machine: PyCATSHOO's own timings on the accuracy grid moved by up to 17 %
-between the two dates. The z-scores are the same to every digit, since
-the same seed draws the same trajectories. The one real change is the
+less than 10 % on `heaters_s1` and `heated_room_s3`. On `pure_exp` they
+moved further, in both directions: +10 to +14 % between 10 000 and
+100 000 replicas, +32 to +48 % on the shortest runs (1 to 4 ms), but
+−19 % at a million replicas. On the accuracy grid they moved by 5 to
+11 %. We read these moves as the run-to-run variation of this machine
+rather than a regression, since they have no common direction and
+PyCATSHOO moved as much: up to 9 % on the same replica sweep and 8 to
+21 % on the accuracy grid. A campaign repeated on one date would settle
+it. The z-scores are the same to every digit, since the same seed draws
+the same trajectories. The one real change is the
 thread scaling on `pure_exp` (see [below](#workers-threads-against-mpi-ranks)).
 
 ## Replicas, one worker
