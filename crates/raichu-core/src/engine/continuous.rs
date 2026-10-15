@@ -110,12 +110,25 @@ impl<'m> Engine<'m> {
                     }
                     // The crossing may have left nothing that moves
                     // continuously (a countdown nothing interrupts, on a
-                    // condition read from the clock alone): the caller
-                    // plans the rest from the schedule and jumps to the
-                    // next date, as it does whenever there is nothing to
-                    // integrate.
+                    // condition read from the clock alone). The state is
+                    // then constant up to the next date, so the clock
+                    // jumps there instead of integrating: to the countdown
+                    // armed on the way, handed back to fire, or else to
+                    // `t_target`. Either way the contract holds that
+                    // `None` means `t_target` was reached, which callers
+                    // that do not re-plan (a deferred firing, `advance_to`)
+                    // rely on.
                     if !self.needs_integration() {
-                        return Ok(None);
+                        let (date, handed) = match due {
+                            Some((idx, date)) => (date, Some(idx)),
+                            None => (t_target, None),
+                        };
+                        if date > self.time {
+                            self.flush_samples_before(date);
+                            self.time = date;
+                            self.note_time_change();
+                        }
+                        return Ok(handed);
                     }
                     limit = due.map_or(t_target, |(_, date)| date);
                     segment_target = limit;

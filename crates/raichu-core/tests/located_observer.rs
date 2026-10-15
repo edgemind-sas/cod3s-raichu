@@ -690,3 +690,91 @@ fn firing_a_chosen_transition_passes_over_a_countdown_armed_on_the_way() {
     assert_eq!(next.transition, "ev_c.ev.occ");
     assert!((next.time - 10.0).abs() < 1e-9, "{next:?}");
 }
+
+/// A clock event on `time >= 5` with a tempo of 2 that nothing
+/// interrupts, beside a failure whose date is drawn on demand: once the
+/// countdown is armed at 5, nothing moves continuously, and the
+/// countdown is due at 7.
+fn clock_countdown_with_failure(
+    stochastic_dates: StochasticDates,
+) -> (CompiledModel, EngineConfig) {
+    let cond = json!({"op": "cmp", "cmp": "ge", "lhs": {"op": "time"},
+                      "rhs": {"op": "const", "value": float(5.0)}});
+    let mut event = event(cond, 2.0);
+    event["automata"][0]["transitions"][0]["on_interruption"] = json!("continue");
+    let model: Model = serde_json::from_value(json!({
+        "name": "clock_countdown",
+        "components": [
+            {"name": "f",
+             "automata": [{"name": "fail", "states": ["ok", "ko"], "init": "ok",
+                 "transitions": [{"name": "occ", "source": "ok", "targets": ["ko"],
+                                  "distrib": "exp", "rate": 0.1}]}]},
+            event
+        ]
+    }))
+    .expect("model");
+    let config = EngineConfig {
+        t_max: 20.0,
+        stochastic_dates,
+        ..EngineConfig::default()
+    };
+    (CompiledModel::compile(&model).unwrap(), config)
+}
+
+#[test]
+fn a_deferred_firing_past_a_clock_countdown_nothing_interrupts_is_refused() {
+    // The crossing at 5 leaves nothing to integrate; the advance towards
+    // 10 must still report the countdown due at 7 rather than read as
+    // having reached 10, or the failure fires at 10 past an event that
+    // was due first.
+    let (compiled, config) = clock_countdown_with_failure(StochasticDates::Deferred);
+    let mut engine = Engine::new(&compiled, config).unwrap();
+    let failure = compiled
+        .transitions
+        .iter()
+        .position(|t| t.name == "f.fail.occ")
+        .unwrap();
+    let err = engine.fire_deferred_at(failure, 10.0, None).unwrap_err();
+    let EngineError::DeferredFiringTooLate { limit, cause, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert!((limit - 7.0).abs() < 1e-9, "{err:?}");
+    assert_eq!(cause, "the located observer `ev_c.ev.occ`");
+    assert_eq!(engine.current_time(), 0.0);
+    assert!(engine.history().is_empty(), "{:?}", engine.history());
+}
+
+#[test]
+fn a_deferred_firing_before_a_clock_countdown_falls_due_fires() {
+    // Asked for at 6, between the crossing and the due date: the failure
+    // fires at 6 and the countdown still falls due at 7.
+    let (compiled, config) = clock_countdown_with_failure(StochasticDates::Deferred);
+    let mut engine = Engine::new(&compiled, config).unwrap();
+    let failure = compiled
+        .transitions
+        .iter()
+        .position(|t| t.name == "f.fail.occ")
+        .unwrap();
+    let fired = engine.fire_deferred_at(failure, 6.0, None).unwrap();
+    assert_eq!(fired.transition, "f.fail.occ");
+    assert!((fired.time - 6.0).abs() < 1e-9, "{fired:?}");
+    let next = engine.step().unwrap().expect("the countdown");
+    assert_eq!(next.transition, "ev_c.ev.occ");
+    assert!((next.time - 7.0).abs() < 1e-9, "{next:?}");
+}
+
+#[test]
+fn advancing_past_a_clock_countdown_fires_it_at_its_date() {
+    // advance_to(10) must fire the countdown at 7 on the way, not leave
+    // the clock at 10 with the event still pending.
+    let (compiled, config) = clock_countdown_with_failure(StochasticDates::Deferred);
+    let mut engine = Engine::new(&compiled, config).unwrap();
+    engine.advance_to(10.0).unwrap();
+    assert_eq!(engine.current_time(), 10.0);
+    let fired: Vec<(f64, String)> = engine
+        .history()
+        .iter()
+        .map(|e| (e.time, e.transition.clone()))
+        .collect();
+    assert_events(&fired, &[(7.0, "ev_c.ev.occ")]);
+}
