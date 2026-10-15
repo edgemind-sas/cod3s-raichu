@@ -1090,6 +1090,9 @@ pub struct Event {
 
 /// One recorded event of a trajectory's **sequence** (mirrors cod3s
 /// `SeqEvent`): the entry into a monitored state. `name()` is `obj.attr`.
+///
+/// Serialized as `{obj, automaton, attr, time, kind}`, the event of the
+/// reduced sequence levels; the cycle group stays internal.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SeqEvent {
     /// Owning component (cod3s `elt.parent().name()`).
@@ -1097,12 +1100,11 @@ pub struct SeqEvent {
     /// The automaton of `obj` whose state was entered, by its name inside
     /// the component. Two automata of one component can share state names
     /// (two failure modes grafted on one pump both reach `occ`), and this
-    /// is what tells their events apart. Empty when the source names no
-    /// automaton (an exploration result, a raw corpus written before the
-    /// name was recorded). Not part of the serialized sequence: the
-    /// `(obj, attr)` identity of the published sequence levels is kept,
-    /// and the raw corpus carries it in a field of its own.
-    #[serde(skip)]
+    /// is what tells their events apart: the reduction keys an event on
+    /// `(obj, automaton, attr)`. Empty when the source names no automaton
+    /// (an exploration result, a raw corpus written before the name was
+    /// recorded), and serialized as `null` then.
+    #[serde(serialize_with = "serialize_automaton")]
     pub automaton: String,
     /// The monitored state entered (cod3s `elt.basename()`, e.g. `occ__cc_12`).
     pub attr: String,
@@ -1116,11 +1118,22 @@ pub struct SeqEvent {
     /// [`raichu_model::TransitionKind`] when it entered its first declared
     /// target (the only entry the declaration speaks for), `None` when it
     /// entered another branch or declares no kind. The reduction reads it
-    /// to tell a failure from an observation; it is not part of the
-    /// serialized sequence, and the raw corpus carries it in a field of
-    /// its own.
-    #[serde(skip)]
+    /// to tell a failure from an observation, and serializes it (`null`
+    /// for `None`) so a reader of the reduced levels need not guess the
+    /// role from a state name. On a reduced event that merges several
+    /// trajectories, it is the kind they all declare, `None` when they
+    /// differ.
     pub kind: Option<raichu_model::TransitionKind>,
+}
+
+/// [`SeqEvent::automaton`] as the serialized sequence carries it: the name,
+/// or `null` when the source named none.
+fn serialize_automaton<S: serde::Serializer>(name: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    if name.is_empty() {
+        serializer.serialize_none()
+    } else {
+        serializer.serialize_some(name)
+    }
 }
 
 /// One trajectory's recorded sequence: the ordered monitored-transition

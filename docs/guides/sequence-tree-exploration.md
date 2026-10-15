@@ -533,6 +533,11 @@ The 30 retained sequences collapse into the two orderings. Each `weight`
 is a **probability** here, not a replica count: the retained sequences
 are disjoint, so the probabilities that collapse into one minimal
 sequence add up, and the weights total `result.lower`.
+Their events have the shape of the
+[Monte-Carlo levels](sequence-analysis.md#what-an-event-of-a-reduced-sequence-says),
+`{obj, automaton, attr, time, kind}`, with two differences: `time` is 0, and
+`automaton` is `null`, since an exploration names no automaton (its events are
+`{obj, attr, cycle_group, kind}`). `kind` is the declared role, as there.
 
 A retained sequence that cancelling its repaired failures would leave
 without a cause keeps its cycles, as in

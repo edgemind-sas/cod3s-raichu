@@ -4,6 +4,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::collections::BTreeSet;
+
+use serde_json::{json, Value};
+
 use raichu_analysis::{
     analyse, clean, minimal_sequences, read_raw_sequences, write_raw_sequences, RawHeader,
     RawObservation, RawSequencesError, RAW_SEQUENCES_FORMAT, RAW_SEQUENCES_VERSION,
@@ -312,4 +316,93 @@ fn the_header_carries_the_cycle_group_decisions() {
     let (old, _) = read_raw_sequences(v1.as_bytes()).unwrap();
     assert!(old.cycle_groups.is_none());
     assert!(old.reducer().report().cycle_groups.is_none());
+}
+
+/// `(automaton, kind)` of every event of a level serialised as the binding
+/// returns it, after checking each event carries exactly the five fields
+/// of the reduced levels.
+fn event_roles(level: &[raichu_core::Sequence]) -> Vec<(String, String, Value, Value)> {
+    let json = serde_json::to_value(level).unwrap();
+    let mut roles = Vec::new();
+    for sequence in json.as_array().unwrap() {
+        for event in sequence["events"].as_array().unwrap() {
+            let keys: BTreeSet<&str> = event
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(
+                keys,
+                BTreeSet::from(["obj", "automaton", "attr", "time", "kind"]),
+                "{event}"
+            );
+            roles.push((
+                event["obj"].as_str().unwrap().to_owned(),
+                event["attr"].as_str().unwrap().to_owned(),
+                event["automaton"].clone(),
+                event["kind"].clone(),
+            ));
+        }
+    }
+    roles
+}
+
+/// The cleaned and minimal levels carry, on each event, the automaton and
+/// the declared kind the raw corpus records for it. The states are `ok` and
+/// `ko`, not muscadet's `occ` and `rep`: the role comes from the
+/// declaration, never from a state name. The feared event's transition
+/// declares no kind, and reads `null`.
+#[test]
+fn the_reduced_levels_carry_each_event_s_automaton_and_kind() {
+    let raw = run_sequences(&compiled(), &config(None)).unwrap();
+    let cleaned = clean(raw);
+    let minimal = minimal_sequences(cleaned.clone());
+    for level in [&cleaned, &minimal] {
+        let roles = event_roles(level);
+        assert!(roles.iter().any(|(obj, ..)| obj == "A"));
+        assert!(roles.iter().any(|(obj, ..)| obj == "ER"));
+        for (obj, attr, automaton, kind) in roles {
+            let expected = match (obj.as_str(), attr.as_str()) {
+                ("A" | "B", "ko") => json!(["life", "failure"]),
+                ("A" | "B", "ok") => json!(["life", "repair"]),
+                ("ER", "occ") => json!(["ev", null]),
+                other => panic!("unexpected event {other:?}"),
+            };
+            assert_eq!(json!([automaton, kind]), expected, "{obj}.{attr}");
+        }
+    }
+}
+
+/// A corpus written before the `automata` and `kinds` arrays reduces as it
+/// did, its events reading `null` for both: the corpus does not say, and
+/// the levels do not guess.
+#[test]
+fn a_corpus_without_automata_or_kinds_reduces_with_both_null() {
+    let text = String::from_utf8(written(None)).unwrap();
+    let mut lines = text.lines();
+    let mut old = format!("{}\n", lines.next().unwrap());
+    for line in lines {
+        let mut record: Value = serde_json::from_str(line).unwrap();
+        let fields = record.as_object_mut().unwrap();
+        assert!(fields.remove("automata").is_some() || fields["events"] == json!([]));
+        fields.remove("kinds");
+        old.push_str(&format!("{record}\n"));
+    }
+    let (_, read) = read_raw_sequences(old.as_bytes()).unwrap();
+    let cleaned = clean(read);
+    let (_, current) = read_raw_sequences(text.as_bytes()).unwrap();
+    assert_eq!(
+        cleaned.iter().map(|s| s.weight).collect::<Vec<_>>(),
+        clean(current).iter().map(|s| s.weight).collect::<Vec<_>>()
+    );
+    for level in [cleaned.clone(), minimal_sequences(cleaned)] {
+        for (obj, attr, automaton, kind) in event_roles(&level) {
+            assert_eq!(
+                json!([automaton, kind]),
+                json!([null, null]),
+                "{obj}.{attr}"
+            );
+        }
+    }
 }

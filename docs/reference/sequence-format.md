@@ -59,9 +59,9 @@ which reached the feared event.
 
 The `automata` array tells apart two automata of one component that reach
 states of the same name (two failure modes grafted on one pump both reach
-`occ`): the reduction keys on `(obj, attr)` and does not read it, while the
-[importance measures](../guides/importance-measures.md) name a basic event
-`component.automaton.state`. It is a field added to version 1 under the
+`occ`): since 0.99.0 the reduction keys an event on `(obj, attr, automaton)`,
+and the [importance measures](../guides/importance-measures.md) name a basic
+event `component.automaton.state`. It is a field added to version 1 under the
 format's extension rule: a reader that predates it reads the corpus as
 before.
 
@@ -178,3 +178,37 @@ result reports these trajectories under `reduction`:
 Re-reducing a corpus gives the same report. A corpus written before 0.85.0
 carries no `kinds`, so only the first case is recognised on it: a
 trajectory left with nothing at all.
+
+### Events of the reduced levels
+
+Each sequence of the cleaned and minimal levels is `{events, end_cause,
+end_time, weight}`, and each of its events is an object:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `obj` | string | the component |
+| `automaton` | string or `null` | the automaton of the event inside its component, from the corpus's `automata`; `null` when the corpus names none |
+| `attr` | string | the monitored state entered |
+| `time` | number | the firing date, averaged (weighted) over the trajectories merged into the path |
+| `kind` | string or `null` | the declared role, from the corpus's `kinds`: `"failure"`, `"repair"`, `"observation"`, or `null` |
+
+```json
+{"events":[{"obj":"fm","automaton":"fm__cc_1_2","attr":"occ__cc_1_2","time":17.634136057001665,"kind":"failure"},{"obj":"system_down","automaton":"ev","attr":"occ","time":17.634136057001665,"kind":"observation"}],"end_cause":"system_down","end_time":17.634136057001665,"weight":1075.0}
+```
+
+The heaviest minimal sequence of the redundant pair above: the common-cause
+failure of both units, then the feared event's own observation.
+
+The reduction merges trajectories whose events match on `(obj, attr,
+automaton)`, in order. A merged event's `kind` is the one every merged
+trajectory declares for it, and `null` as soon as two of them differ (a
+state entered once through a transition declared a failure and once
+through one declaring nothing): the field never depends on which trajectory
+came first. A minimal sequence keeps its own events; a longer sequence it
+absorbs adds its weight only.
+
+On a corpus without `automata` (written before 0.83.0) every event reads
+`"automaton": null` and the identity is `(obj, attr)`, as it was; on a
+corpus without `kinds` (before 0.85.0) every event reads `"kind": null`.
+Neither field is guessed from a state name. Before 0.99.0 the reduced events
+were `{obj, attr, time}` only, and the reduction keyed on `(obj, attr)`.
