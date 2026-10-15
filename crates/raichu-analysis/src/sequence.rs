@@ -11,7 +11,7 @@
 //!   whole and reported ([`ReductionReport`]): the feared event cannot
 //!   happen without one, so the hypothesis failed for it;
 //! - **group** buckets by end cause (target) and merges sequences with an
-//!   identical ordered `(obj, attr)` signature, summing weights;
+//!   identical ordered signature, summing weights;
 //! - **minimal** greedily keeps the shortest sequences and absorbs every
 //!   longer super-sequence that includes one (order-dependent, matching
 //!   cod3s' `compute_minimal_sequences`).
@@ -23,6 +23,25 @@
 //! grouping is what bounds that memory: on a repairable system nearly
 //! every raw trajectory is distinct (its transient cycles differ), while
 //! the paths left once they are cancelled are few.
+//!
+//! # Event identity
+//!
+//! An event is identified by `(obj, attr, automaton)`: the component, the
+//! state entered, and the automaton of the component it belongs to. Two
+//! automata of one component may reach states of the same name (an
+//! independent and a common-cause mode of one pump both reach `occ`), and
+//! they are different causes, so they are different events. A source that
+//! names no automaton (an exploration, a raw corpus written before 0.83.0)
+//! leaves it empty on every event, and the identity is then `(obj, attr)`,
+//! as it was.
+//!
+//! An event of the cleaned level stands for the matching event of every
+//! trajectory merged into its path: its date is their weighted average,
+//! and its declared [`TransitionKind`] is the one they all declare, `None`
+//! when they differ (one entered the state through a transition declared a
+//! failure, another through one declaring nothing). A minimal sequence
+//! keeps its own events; the longer sequences it absorbs add their weight
+//! only.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -31,17 +50,24 @@ use raichu_core::{CycleGroupDecision, SeqEvent, Sequence};
 use raichu_model::TransitionKind;
 use serde::Serialize;
 
-/// Ordered `(obj, attr)` signature of a sequence: the identity used for
-/// grouping and subsequence inclusion (times and cycle groups excluded).
-fn signature(seq: &Sequence) -> Vec<(&str, &str)> {
+/// Ordered `(obj, attr, automaton)` signature of a sequence: the identity
+/// used for grouping and subsequence inclusion (times, cycle groups and
+/// kinds excluded). The automaton comes last so that, where it is empty or
+/// a function of `(obj, attr)`, signatures order as `(obj, attr)` ones do.
+fn signature(seq: &Sequence) -> Vec<(&str, &str, &str)> {
     seq.events
         .iter()
-        .map(|e| (e.obj.as_str(), e.attr.as_str()))
+        .map(|e| (e.obj.as_str(), e.attr.as_str(), e.automaton.as_str()))
         .collect()
 }
 
+/// Whether two events are the same event of a signature.
+fn same_event(a: &SeqEvent, b: &SeqEvent) -> bool {
+    a.obj == b.obj && a.attr == b.attr && a.automaton == b.automaton
+}
+
 /// Hash of what [`group_sequences`] merges on: the end cause and the
-/// ordered `(obj, attr)` signature. A bucket key only, never an identity:
+/// ordered signature. A bucket key only, never an identity:
 /// what decides a merge is the exact comparison the caller then runs.
 fn signature_hash(seq: &Sequence) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -49,13 +75,15 @@ fn signature_hash(seq: &Sequence) -> u64 {
     for event in &seq.events {
         event.obj.hash(&mut hasher);
         event.attr.hash(&mut hasher);
+        event.automaton.hash(&mut hasher);
     }
     hasher.finish()
 }
 
 /// Group raw trajectory sequences: bucket by end cause, merge sequences with
-/// an identical ordered `(obj, attr)` signature (weights summed, event and
-/// end times averaged), and sort each bucket by descending weight (ties keep
+/// an identical ordered `(obj, attr, automaton)` signature (weights summed,
+/// event and end times averaged, a kind kept where every merged event
+/// declares it), and sort each bucket by descending weight (ties keep
 /// first-seen order). Deterministic.
 #[must_use]
 pub fn group_sequences(raw: Vec<Sequence>) -> Vec<Sequence> {
@@ -102,15 +130,20 @@ impl Grouping {
                 && m.events
                     .iter()
                     .zip(&seq.events)
-                    .all(|(a, b)| a.obj == b.obj && a.attr == b.attr)
+                    .all(|(a, b)| same_event(a, b))
         });
         match pos {
             Some(i) => {
                 let acc_weight = merged[i].weight;
                 let n = acc_weight + seq.weight;
-                // Weight-averaged event and end times.
+                // Weight-averaged event and end times; a kind survives only
+                // where every merged event declares the same one, so the
+                // result does not depend on which trajectory came first.
                 for (acc, ev) in merged[i].events.iter_mut().zip(&seq.events) {
                     acc.time = (acc.time * acc_weight + ev.time * seq.weight) / n;
+                    if acc.kind != ev.kind {
+                        acc.kind = None;
+                    }
                 }
                 merged[i].end_time =
                     (merged[i].end_time * acc_weight + seq.end_time * seq.weight) / n;
@@ -411,14 +444,14 @@ fn kept_groups(decisions: &[CycleGroupDecision], end_cause: Option<&str>) -> Kep
 }
 
 /// `short` is an ordered (non-contiguous) subsequence of `long`.
-fn is_included(short: &[(&str, &str)], long: &[(&str, &str)]) -> bool {
+fn is_included(short: &[(&str, &str, &str)], long: &[(&str, &str, &str)]) -> bool {
     let mut it = long.iter();
     short.iter().all(|s| it.any(|l| l == s))
 }
 
 /// Minimal sequences (greedy, as cod3s' `compute_minimal_sequences`): per end
 /// cause, sort by ascending length, then descending weight, then ascending
-/// `(obj, attr)` signature; keep each sequence unless an already-kept one is
+/// `(obj, attr, automaton)` signature; keep each sequence unless an already-kept one is
 /// included in it, in which case absorb it (add its weight to that minimal).
 /// Then sort by descending weight, ties by end cause and signature.
 ///
@@ -894,6 +927,122 @@ mod tests {
             ],
         ));
         assert_eq!(reducer.report().contradicted, 1);
+    }
+
+    /// Build an ungrouped sequence of weight 1: `events` are `(obj,
+    /// automaton, attr, kind)`, at increasing dates.
+    fn aseq(cause: &str, events: &[(&str, &str, &str, Option<TransitionKind>)]) -> Sequence {
+        Sequence {
+            events: events
+                .iter()
+                .enumerate()
+                .map(|(i, (o, aut, a, k))| SeqEvent {
+                    obj: (*o).into(),
+                    automaton: (*aut).into(),
+                    attr: (*a).into(),
+                    time: i as f64,
+                    cycle_group: None,
+                    kind: *k,
+                })
+                .collect(),
+            end_cause: Some(cause.into()),
+            end_time: events.len() as f64,
+            weight: 1.0,
+        }
+    }
+
+    /// `(automaton, kind)` of each event of a reduced sequence.
+    fn roles(s: &Sequence) -> Vec<(String, Option<TransitionKind>)> {
+        s.events
+            .iter()
+            .map(|e| (e.automaton.clone(), e.kind))
+            .collect()
+    }
+
+    #[test]
+    fn merged_trajectories_keep_the_kind_and_automaton_they_agree_on() {
+        let path = || {
+            aseq(
+                "F",
+                &[("P", "wear", "broken", F), ("ER", "ev", "reached", O)],
+            )
+        };
+        let cleaned = clean(vec![path(), path(), path()]);
+        assert_eq!(cleaned.len(), 1);
+        assert_eq!(cleaned[0].weight, 3.0);
+        let expected = vec![("wear".to_owned(), F), ("ev".to_owned(), O)];
+        assert_eq!(roles(&cleaned[0]), expected);
+        assert_eq!(roles(&minimal_sequences(cleaned)[0]), expected);
+    }
+
+    #[test]
+    fn a_merged_event_whose_trajectories_declare_different_kinds_declares_none() {
+        // The same state of the same automaton, entered once through a
+        // transition declared a failure and once through one declaring
+        // nothing: the merged event cannot speak for both.
+        let declared = aseq(
+            "F",
+            &[("P", "wear", "broken", F), ("ER", "ev", "reached", O)],
+        );
+        let undeclared = aseq(
+            "F",
+            &[("P", "wear", "broken", None), ("ER", "ev", "reached", O)],
+        );
+        for raw in [
+            vec![declared.clone(), undeclared.clone()],
+            vec![undeclared, declared],
+        ] {
+            let cleaned = clean(raw);
+            assert_eq!(cleaned.len(), 1);
+            assert_eq!(cleaned[0].weight, 2.0);
+            assert_eq!(
+                roles(&cleaned[0]),
+                vec![("wear".to_owned(), None), ("ev".to_owned(), O)]
+            );
+        }
+    }
+
+    #[test]
+    fn two_automata_of_one_component_reaching_a_state_of_the_same_name_stay_apart() {
+        // An independent mode and a common-cause mode of one pump both
+        // reach `down`: two different causes, two paths, each naming its
+        // automaton, and neither absorbs the other.
+        let independent = aseq(
+            "F",
+            &[("P", "alone", "down", F), ("ER", "ev", "reached", O)],
+        );
+        let common = aseq("F", &[("P", "ccf", "down", F), ("ER", "ev", "reached", O)]);
+        let cleaned = clean(vec![independent.clone(), common.clone(), common]);
+        assert_eq!(cleaned.len(), 2);
+        assert_eq!(cleaned[0].weight, 2.0);
+        assert_eq!(cleaned[0].events[0].automaton, "ccf");
+        assert_eq!(cleaned[1].events[0].automaton, "alone");
+        let minimal = minimal_sequences(cleaned);
+        assert_eq!(minimal.len(), 2);
+        assert_eq!(
+            minimal
+                .iter()
+                .map(|s| (s.events[0].automaton.as_str(), s.weight))
+                .collect::<Vec<_>>(),
+            vec![("ccf", 2.0), ("alone", 1.0)]
+        );
+    }
+
+    #[test]
+    fn a_reduced_event_serialises_its_automaton_and_kind() -> Result<(), serde_json::Error> {
+        let named = aseq("F", &[("P", "wear", "broken", F)]);
+        let unnamed = aseq("F", &[("P", "", "broken", None)]);
+        let json = serde_json::to_value([&named, &unnamed])?;
+        assert_eq!(
+            json[0]["events"][0],
+            serde_json::json!({"obj": "P", "automaton": "wear", "attr": "broken", "time": 0.0, "kind": "failure"})
+        );
+        // A source that names no automaton, and an event declaring no kind.
+        assert_eq!(
+            json[1]["events"][0],
+            serde_json::json!({"obj": "P", "automaton": null, "attr": "broken", "time": 0.0, "kind": null})
+        );
+        Ok(())
     }
 
     /// The reduction up to 0.81.0: group, filter, group again.

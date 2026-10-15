@@ -254,6 +254,55 @@ it line by line: neither holds the trajectories, so the file is the only
 thing that grows with `nb_runs` (about 1.6 kB per trajectory on a two-component
 repairable model over 200 time units).
 
+### What an event of a reduced sequence says
+
+Every event of `campaign.cleaned` and `campaign.minimal` (and of what
+`analyse_sequences` returns) is `{obj, automaton, attr, time, kind}`:
+
+| Field | Meaning |
+|---|---|
+| `obj` | the component |
+| `automaton` | the automaton of that component whose state was entered, `null` when the source names none |
+| `attr` | the monitored state entered |
+| `time` | the firing date, averaged over the trajectories merged into the path |
+| `kind` | the role the model declares for the transition: `"failure"`, `"repair"`, `"observation"`, or `null` |
+
+`kind` is what the raw corpus records for the event, so a reader tells a
+failure from a repair by what the model declares rather than by the name of
+a state (`occ` and `rep` are muscadet's names; a hand-written model calls
+them what it likes). It is `null` when the transition declares no `kind`,
+when it entered a branch other than its first declared target, and on a
+cleaned event whose merged trajectories do not all declare the same kind:
+the field states what is true of every trajectory behind the event, and
+nothing it would have to choose. A minimal sequence keeps its own events;
+the longer ones it absorbs add their weight and nothing else.
+
+```python
+for cut in campaign.minimal:
+    if cut["end_cause"] == "system_down":
+        failures = [f"{e['obj']}.{e['automaton']}" for e in cut["events"]
+                    if e["kind"] == "failure"]
+        print(f"{cut['weight']:5.0f}  {' + '.join(failures)}")
+```
+
+```text
+ 1075  fm.fm__cc_1_2
+  478  fm.fm__cc_2 + fm.fm__cc_1
+  441  fm.fm__cc_1 + fm.fm__cc_2
+```
+
+The reduction identifies an event by its component, its state **and** its
+automaton: two automata of one component that reach a state of the same
+name (an independent and a common-cause mode of one pump, both reaching
+`down`) are two causes, and give two paths. Before 0.99.0 the automaton was not
+part of that identity, so such events merged into one path; on a model whose
+automata name their states apart, as muscadet's do, nothing changes.
+
+A corpus written before 0.83.0 names no automaton, and one written before
+0.85.0 declares no kind: re-reduced with `analyse_raw_sequences`, its events
+read `null` for what it does not carry, and its paths are the ones it always
+gave.
+
 ### Observing a value, and reducing under a condition
 
 A campaign can also read chosen attributes at chosen instants on every

@@ -117,3 +117,16 @@ def test_the_muscadet_route_records_failures_repairs_and_observations(tmp_path):
     lines = [json.loads(line) for line in campaign.raw_path.read_text().splitlines()[1:]]
     kinds = {kind for line in lines for kind in line.get("kinds", [])}
     assert {"failure", "repair", "observation"} <= kinds
+
+
+def test_the_reduced_levels_carry_the_kinds_the_muscadet_route_declares(tmp_path):
+    campaign = _campaign(tmp_path)
+    for level in (campaign.cleaned, campaign.minimal):
+        events = [event for sequence in level for event in sequence["events"]]
+        roles = {(e["obj"], e["attr"][:3], e["automaton"], e["kind"]) for e in events}
+        assert ("system_down", "occ", "ev", "observation") in roles
+        assert any(obj == "fm" and kind == "failure" for obj, _, _, kind in roles)
+        for obj, prefix, automaton, kind in roles:
+            if obj == "fm":
+                assert automaton.startswith("fm__cc_")
+                assert kind == {"occ": "failure", "rep": "repair"}[prefix]

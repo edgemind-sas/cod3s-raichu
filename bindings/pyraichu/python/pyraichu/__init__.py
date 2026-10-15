@@ -707,9 +707,11 @@ def analyse_sequences(
     first feared-event target), then group → filter transient failure/repair
     cycles → greedily absorb super-sequences, returning the **minimal
     sequences** cod3s produces through its ``SequenceAnalyser``. Each entry is
-    ``{events: [{obj, attr, time}], end_cause, end_time, weight}`` (``weight``
-    = the number of trajectories that collapsed into it). The model must
-    declare at least one target (an ``ObjEvent`` with ``"target": true``).
+    ``{events: [{obj, automaton, attr, time, kind}], end_cause, end_time,
+    weight}`` (``weight`` = the number of trajectories that collapsed into
+    it; ``automaton`` and ``kind`` as :class:`SequenceCampaign` describes
+    them). The model must declare at least one target (an ``ObjEvent`` with
+    ``"target": true``).
 
     ``flow`` is a :class:`FlowConfig` overriding the convergence policy
     of the continuous flow resolution for every replica (engine defaults
@@ -773,7 +775,15 @@ class SequenceCampaign:
     ``cleaned`` is every distinct path to each feared event, transient
     failure/repair cycles removed (cod3s's ``sequences_all.json`` level);
     ``minimal`` is what :func:`analyse_sequences` returns. Both are lists of
-    ``{events: [{obj, attr, time}], end_cause, end_time, weight}``.
+    ``{events: [{obj, automaton, attr, time, kind}], end_cause, end_time,
+    weight}``. An event's ``automaton`` is the automaton of ``obj`` whose
+    state ``attr`` it entered (``None`` when the source names none: a corpus
+    written before 0.83.0); its ``kind`` is the role the model declares for
+    the transition, ``"failure"``, ``"repair"`` or ``"observation"``, as the
+    raw corpus records it. ``kind`` is ``None`` when the transition declares
+    none, on a corpus written before 0.85.0, and on a cleaned event whose
+    merged trajectories do not all declare the same kind. The reduction
+    merges events that match on ``(obj, attr, automaton)``.
 
     ``raw_path`` is the ``raichu.sequences`` corpus, one line per trajectory
     (see the sequence-format reference), or ``None`` when none was asked for.
