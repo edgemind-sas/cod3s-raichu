@@ -845,7 +845,11 @@ def _latch_held_writes_on_persistent_gates(
     over several common-cause combinations, or an on-demand repair's parked
     state; an `external` common cause is fine, since its control is already
     the OR and each target's mirror automaton carries the edges), and a
-    repair effect with no failure counterpart. A persistent gate that NO mode writes needs nothing,
+    repair effect with no failure counterpart. The one exception to the
+    ANY-of-several refusal is a gate held at rest and written once entering
+    the failure (cod3s 1.23.0): the reference holds the rest value once per
+    target over the covering combinations, which the held conditional
+    already says, so it stays a level. A persistent gate that NO mode writes needs nothing,
     and that is the ordinary case: the control travels on every output port of
     a library that declares it, while only a handful of ports are written.
 
@@ -933,9 +937,24 @@ def _latch_held_writes_on_persistent_gates(
                 "hang), so there is nothing to reproduce: keep one writer, or "
                 "declare a reinitialized gate (`fed_available_reset: true`)."
             )
-        for mode, function, effect in entries:
+        for (mode, function, effect), shape in zip(entries, shapes):
             value = effect.get("value") or {}
             cond = value.get("cond") or {}
+            if (
+                shape == "rest"
+                and value.get("op") == "if"
+                and cond.get("op") == "bool"
+                and cond.get("bool_op") == "or"
+            ):
+                # Held at rest and written once entering the failure, over
+                # overlapping common-cause combinations (cod3s 1.23.0,
+                # edgemind-sas/cod3s#10): the reference holds the rest value
+                # once per target, only while ALL covering combinations are
+                # at rest, and the write entering any of them sticks while
+                # one is failed. With this mode the gate's sole writer
+                # (checked above), that is the held conditional itself, the
+                # write on its failure branch: left as it is.
+                continue
             if value.get("op") != "if" or cond.get("op") != "state_active":
                 raise ValueError(
                     f"muscadet plugin: the failure mode `{mode}` holds "
@@ -1671,20 +1690,24 @@ def _check_one_shot_effects(
     * a variable held and written once on the SAME face: the held effect,
       re-applied while the state lasts, overwrites the write entering it;
     * when combinations overlap on a target (``internal``, several built
-      orders, see :func:`_writers_per_target`): a write entering the
-      failure state on a variable held at rest (the combinations at rest
-      overwrite it), and writes on both faces (one combination's repair
-      clears what another still in failure set).
+      orders, see :func:`_writers_per_target`): writes on both faces (one
+      combination's repair clears what another still in failure set).
 
-    A variable held on both faces with different values is accepted, over
-    overlapping combinations too: :func:`_reinit_effects` clamps each
-    target once, to the failure value while any covering combination is
-    failed and to the rest value only while all of them are at rest. The
-    reference refused it at construction in cod3s 1.21.0 (cod3s#4) and
-    applies the same rule since 1.22.0 (cod3s#10); the cross-validation
-    replay of ``repair_effects_ccf`` agrees event for event. The reference
-    lifted the held-at-rest refusal in 1.22.0 as well; it stays here until
-    a replay on a persistent gate measures the parity."""
+    Over overlapping combinations, :func:`_reinit_effects` holds each
+    target once: the failure branch while any covering combination is
+    failed, the rest branch only while all of them are at rest. Two shapes
+    the reference refused at construction in cod3s 1.21.0 follow from it,
+    and both are accepted since cod3s 1.23.0 (cod3s#10), which applies the
+    same rule:
+
+    * a variable held on both faces with different values (cod3s#4); the
+      cross-validation replay of ``repair_effects_ccf`` agrees event for
+      event;
+    * a variable written once entering the failure and held at rest: the
+      write is the failure branch of the held conditional, so it sticks
+      while any covering combination is failed. The cross-validation
+      replays ``pulse_held_rest_ccf`` and ``pulse_held_rest_ccf_exp``, on
+      a persistent availability gate, agree event for event."""
     name = spec["name"]
     held_failure = spec.get("failure_effects") or {}
     held_repair = spec.get("repair_effects") or {}
@@ -1708,14 +1731,6 @@ def _check_one_shot_effects(
         f"{what} `{name}` (behaviour `internal`, {order_max} targets, common-cause "
         f"orders {orders} built): {writers} combination automata write each target"
     )
-    held_rest = sorted(set(failure) & set(held_repair))
-    if held_rest:
-        raise ValueError(
-            f"{context}. {held_rest} are written once entering the failure state "
-            "(failure_effects_trans) and held at rest (repair_effects): the "
-            "combinations at rest covering the same target overwrite the write. "
-            "Use failure_effects for a value held while failed, as cod3s requires"
-        )
     both = sorted(set(failure) & set(repair))
     if both:
         raise ValueError(

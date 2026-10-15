@@ -855,16 +855,21 @@ A variable held on **both** faces with different values (a failure value
 and a rest value) is accepted, where common-cause combinations overlap on
 a target too: each target is clamped once, to the failure value while any
 combination covering it is failed and to the rest value only while all of
-them are at rest. That is the reference's rule since cod3s 1.22.0
+them are at rest. That is the reference's rule since cod3s 1.23.0
 (edgemind-sas/cod3s#10; 1.21.0 refused the shape, #4).
+
+The same rule makes a write entering the failure on a variable held at
+rest well posed over overlapping combinations: the write sticks while any
+combination covering the target is failed, and the rest value comes back
+only when all of them are at rest. Accepted since pyraichu 0.98.1 (cod3s
+1.23.0 accepts it too), including on a persistent availability gate
+(`fed_available_reset: false`), where both engines were replayed event for
+event on it.
 
 Refused, with cod3s's reasons: a variable held and written once on the
 **same** face (the held value overwrites the write); and, where
 common-cause combinations overlap on a target (`internal`, several built
-orders), writes on both faces. A write entering the failure on a variable
-held at rest over overlapping combinations stays refused here, although
-cod3s 1.22.0 accepts it, until a replay measures the two engines on it.
-Refused here because
+orders), writes on both faces. Refused here because
 the reference has no answer for them: two modes handing one variable back
 with different clamp values, and a hand-back beside a mode that clamps
 the same variable without handing it back. A one-shot write on a gate

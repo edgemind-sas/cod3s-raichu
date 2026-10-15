@@ -396,29 +396,76 @@ def test_held_and_written_once_on_the_same_face_is_refused(behaviour, held, puls
     assert "SAME face" in message
 
 
-@pytest.mark.parametrize(
-    "fields, words",
-    [
-        (
-            {"occ_effects_trans": {"gate": True}, "not_occ_effects": {"gate": False}},
-            "held at rest",
-        ),
-        (
-            {
-                "occ_effects_trans": {"gate": True},
-                "not_occ_effects_trans": {"gate": False},
-            },
-            "on both faces",
-        ),
-    ],
-    ids=["write-occ-held-rest", "both-faces-written"],
-)
-def test_ill_posed_shapes_over_overlapping_combinations_are_refused(fields, words):
+def test_written_on_both_faces_over_overlapping_combinations_is_refused():
+    fields = {"occ_effects_trans": {"gate": True}, "not_occ_effects_trans": {"gate": False}}
     message = refused(["A", "B", "C"], [mode("m", ["A", "B", "C"], **E3, **fields)])
-    assert words in message
+    assert "on both faces" in message
     assert (
         "orders [1, 2, 3] built): 4 combination automata write each target" in message
     )
+
+
+#: When a target of the two-target delay timeline (order 1 failing at 2 for 2,
+#: order 2 failing at 3 for 10) is covered by a combination in `occ`, per
+#: `S_CCF` instant. At 2.5 only the order-1 combination covers it; at 4.5,
+#: 8.5 and 12.5 the order-1 one has repaired under the order-2 one.
+IN_OCC_CCF = [False, True, True, True, True, False, True]
+
+
+def test_written_once_entering_the_failure_and_held_at_rest_over_overlapping_combinations():
+    """A one-shot write entering the failure (`occ_effects_trans`) on a
+    variable held at rest (`not_occ_effects`), over two targets and two
+    orders, on a variable that does not reinitialize. The rest value is
+    held only while ALL combinations covering a target are at rest, and the
+    write sticks while ANY of them is failed. cod3s refused the shape at
+    construction up to 1.22.0 and pins this very timeline since 1.23.0
+    (cod3s#10); the cross-validation replays `pulse_held_rest_ccf` and
+    `pulse_held_rest_ccf_exp` agree with it event for event."""
+    modes = [
+        mode(
+            "m",
+            ["A", "B"],
+            occ_law={"cls": "delay", "time": [2.0, 3.0]},
+            not_occ_law={"cls": "delay", "time": [2.0, 10.0]},
+            occ_effects_trans={"gate": True},
+            not_occ_effects={"gate": False},
+        )
+    ]
+    expected = [1.0 if occ else 0.0 for occ in IN_OCC_CCF]
+    got = timeline(["A", "B"], modes, S_CCF, variable="gate")
+    assert got == {"A": expected, "B": expected}
+
+
+def test_held_at_rest_over_three_overlapping_targets_agrees_with_the_failure_clamp():
+    """Three targets, every order built, exponential laws: the one-shot
+    write held at rest reads, on every trajectory, the opposite of a
+    variable held while failed, which is what "held at rest only while no
+    covering combination is failed" means."""
+    modes = [
+        mode(
+            "m",
+            ["A", "B", "C"],
+            **E3,
+            occ_effects={"working": False},
+            occ_effects_trans={"gate": True},
+            not_occ_effects={"gate": False},
+        )
+    ]
+    schedule = [0.0, 0.7, 1.3, 2.2, 3.1, 4.6, 5.9, 7.4, 9.0, 11.3, 14.0]
+    seen_failed = False
+    for seed in range(20):
+        result = pyraichu.simulate(
+            model(["A", "B", "C"], modes, ["gate", "working"]),
+            t_max=schedule[-1],
+            samples=schedule,
+            seed=seed,
+        )
+        for target in "ABC":
+            working = [bool(v) for _, v in result.samples[f"{target}_working"]]
+            gate = [bool(v) for _, v in result.samples[f"{target}_gate"]]
+            assert gate == [not w for w in working], (seed, target)
+            seen_failed = seen_failed or not all(working)
+    assert seen_failed
 
 
 def test_a_value_held_on_both_faces_over_overlapping_combinations_follows_every_one():
@@ -429,7 +476,7 @@ def test_a_value_held_on_both_faces_over_overlapping_combinations_follows_every_
     value only while ALL of them are at rest: the order-1 repairs at 4, 8
     and 12 leave it failed under the order-2 combination, which repairs at
     13. cod3s refused this shape in 1.21.0 (cod3s#4) and applies this rule
-    since 1.22.0 (cod3s#10); the cross-validation replay of
+    since 1.23.0 (cod3s#10); the cross-validation replay of
     `repair_effects_ccf` agrees with it event for event."""
     modes = [
         mode(
@@ -663,3 +710,76 @@ def test_a_blinded_controller_output_is_handed_back(behaviour):
     ]
     got = _declared_timeline([controller, *modes], "CTRL", "fill_signal_available")
     assert got == [1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+
+
+def _ccf_gate_timeline(reset: bool) -> dict[str, list[float]]:
+    """Two sources whose availability gate a common-cause mode writes once
+    entering the failure and holds at rest, both orders built (order 1
+    failing at 2 for 2, order 2 at 3 for 10), sampled on `S_CCF`."""
+    sources = [
+        {
+            "name": name,
+            "cls": "ObjFlow",
+            "flows": [_flow_out(True, reset)],
+            "capacities": [],
+            "failure_modes": [],
+        }
+        for name in ("A", "B")
+    ]
+    mode = {
+        "name": "AB__m",
+        "kind": "two_state_mode",
+        "cls": "ObjMode2S",
+        "mode_name": "m",
+        "targets": ["A", "B"],
+        "target_name": "AB",
+        "occ_law": {"cls": "delay", "time": [2.0, 3.0]},
+        "occ_param_name": ["ttf"],
+        "occ_param": [2.0, 3.0],
+        "not_occ_state": "rep",
+        "not_occ_law": {"cls": "delay", "time": [2.0, 10.0]},
+        "not_occ_param_name": ["ttr"],
+        "not_occ_param": [2.0, 10.0],
+        "occ_effects_trans": {GATE: False},
+        "not_occ_effects": {GATE: True},
+    }
+    document = {
+        "version": "1.0.0",
+        "name": "one_shot",
+        "components": {entry["name"]: entry for entry in [*sources, mode]},
+        "connections": [],
+    }
+    body = declare.build_document(document)
+    body = body.get("model", body)
+    body["indicators"] = [
+        {
+            "name": name,
+            "target": "attribute",
+            "attr": {"component": name, "attribute": GATE},
+        }
+        for name in ("A", "B")
+    ]
+    result = pyraichu.simulate(pyraichu.load_model(body), t_max=S_CCF[-1], samples=S_CCF)
+    return {name: [float(v) for _, v in result.samples[name]] for name in ("A", "B")}
+
+
+def test_a_persistent_gate_written_once_and_held_at_rest_follows_every_combination():
+    """The platform shape of cod3s 1.23.0 (cod3s#10): a gate that memorises
+    (`fed_available_reset: false`), written once entering the failure and
+    held at rest, over overlapping common-cause combinations. Up to 0.98.0
+    it was refused twice, as a held-at-rest write over overlapping
+    combinations and as a persistent gate held while any of several
+    combinations is failed. The gate is down while ANY combination covering
+    its source is failed, and comes back only when all are at rest; the
+    cross-validation replay of the same shape agrees with the reference
+    event for event."""
+    expected = [0.0 if occ else 1.0 for occ in IN_OCC_CCF]
+    assert _ccf_gate_timeline(reset=False) == {"A": expected, "B": expected}
+
+
+def test_a_reinitialized_gate_written_once_and_held_at_rest_stays_refused():
+    """A one-shot write on a gate the reference resets every step is still
+    refused: the reference undoes the pulse, an edge write would keep it."""
+    with pytest.raises(declare.ComponentSpecError) as error:
+        _ccf_gate_timeline(reset=True)
+    assert "reinitializes that gate every step" in str(error.value)
