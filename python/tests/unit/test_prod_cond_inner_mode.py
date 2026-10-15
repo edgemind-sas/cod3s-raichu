@@ -283,26 +283,110 @@ def test_the_expansion_ceiling_does_not_apply_to_a_disjunctive_condition():
     assert "disjunctions" in str(raised.value)
 
 
+# --- empty groups ----------------------------------------------------
+#
+# ``[[]]`` is what the platform's port editor seeded on every fresh output
+# for a long time, and libraries built before still carry it: on sources (an
+# output with no input at all) and on outputs whose author never wrote the
+# condition. muscadet's discrete family reads it as its evaluation says
+# (``muscadet/flow.py``, ``prod_cond_holds``), measured on the reference
+# engine 2026-10-15:
+#
+# - under ``"and"``, ``any(all([]))`` HOLDS: the output produces from the
+#   start, whatever its inputs and whatever its declared default;
+# - under ``"or"``, ``all(any([]))`` never holds: the output never produces.
+
+
+def a_source_declaring(groups, inner_mode, prod_default):
+    """A component whose output declares `groups` and reads no input at all,
+    the shape a library's source class carries."""
+    return {
+        "version": declare.SYSTEM_SPEC_VERSION,
+        "name": "source",
+        "components": {
+            "PCC": _component(
+                "PCC",
+                [
+                    _flow_out(
+                        ALARM,
+                        prod_cond=groups,
+                        inner_mode=inner_mode,
+                        prod_default=prod_default,
+                    )
+                ],
+            )
+        },
+        "connections": [],
+        "indicators": [],
+    }
+
+
+ALL_EMPTY = {"one-empty-group": [[]], "two-empty-groups": [[], []]}
+
+
+@pytest.mark.parametrize("groups", list(ALL_EMPTY.values()), ids=list(ALL_EMPTY))
+def test_all_empty_groups_under_and_compile_what_an_unconditional_output_compiles(
+    groups,
+):
+    """Under ``"and"`` a condition made of empty groups only is an empty
+    conjunction, which holds: the output is unconditional. It compiles to the
+    model of the output that declares no condition and is produced from the
+    start, ``[]`` with ``var_prod_default=True``."""
+    unconditional = declare.build_document(a_source_declaring([], "and", True))
+
+    assert declare.build_document(a_source_declaring(groups, "and", True)) == unconditional
+
+
+@pytest.mark.parametrize("groups", list(ALL_EMPTY.values()), ids=list(ALL_EMPTY))
+def test_all_empty_groups_under_and_produce_whatever_the_declared_default(groups):
+    """The one place the empty conjunction is NOT ``[]``: a condition that
+    holds writes the production, where no condition leaves it on its declared
+    default. The reference engine produces the output with the default at
+    False too (measured 2026-10-15), so this does."""
+    assert declare.build_document(
+        a_source_declaring(groups, "and", False)
+    ) == declare.build_document(a_source_declaring([], "and", True))
+    assert alarm_holds(a_source_declaring(groups, "and", False)) is True
+
+
+@pytest.mark.parametrize("groups", list(ALL_EMPTY.values()), ids=list(ALL_EMPTY))
+def test_all_empty_groups_on_a_relay_ignore_its_unfed_input(groups):
+    """The relay that a library left with ``[[]]``: its output does not wait
+    for its input, exactly as the reference engine runs it."""
+    flows = [_flow_in(name) for name in DETECTIONS] + [
+        _flow_out(ALARM, prod_cond=groups, inner_mode="and")
+    ]
+    spec = a_voter([], "and")
+    spec["components"]["PCC"] = _component("PCC", flows)
+
+    assert alarm_holds(spec) is True
+
+
+@pytest.mark.parametrize("groups", list(ALL_EMPTY.values()), ids=list(ALL_EMPTY))
+def test_all_empty_groups_under_or_are_refused(groups):
+    """Under ``"or"`` an empty clause is false and the output would never
+    produce: a dead port nothing announces, which no author writes on
+    purpose. The platform refuses the mode on an empty condition for the
+    same reason, so this refuses it too, naming the way out."""
+    with pytest.raises(declare.ComponentSpecError) as raised:
+        declare.check_spec(
+            _component("PCC", [_flow_out(ALARM, groups, inner_mode="or")])
+        )
+
+    message = str(raised.value)
+    assert "empty group" in message
+    assert "'or'" in message and "never produce" in message
+
+
 @pytest.mark.parametrize("inner_mode", ["and", "or"])
-def test_an_empty_group_is_refused_on_both_readings(inner_mode):
-    """The one malformed shape that used to run to completion without a word,
-    and it did so DIFFERENTLY on the two readings.
-
-    Under ``"and"`` an empty group reaches the layer underneath as an empty
-    conjunction, which holds. Under ``"or"`` the expansion multiplies it out
-    and a product over an empty clause is EMPTY, so the condition disappears
-    entirely: no writer at all, the production variable left on its declared
-    default. That is the DORMANT function, and the exact opposite of the empty
-    disjunction the group states, which is false.
-
-    **muscadet refuses the same group, for the same reason, on the family it
-    left for later.** ``FlowContinuousOut.check_prod_cond_shape`` says "under
-    inner mode 'or' the output would never produce, under 'and' the condition
-    would never bind: neither is a declaration", and scopes itself to the
-    continuous classes because "the discrete classes are 1.x surface with the
-    same laxity, and tightening them belongs to its own change". So this pins
-    the discrete half of ONE refusal, not a stricture of this reader's own.
-    """
+def test_an_empty_group_beside_a_named_operand_is_refused_on_both_readings(
+    inner_mode,
+):
+    """A MIXED condition is refused on both readings. Under ``"and"`` the
+    empty group would make the whole condition hold and silence the group
+    beside it; under ``"or"`` it would make it never hold. Either way the
+    operand the author did name would say nothing, so the shape is an editing
+    slip rather than a declaration, and a run would hide it."""
     flows = [_flow_in(name) for name in DETECTIONS]
     groups = [[{"name": DETECTIONS[0], "port": "in"}], []]
 
@@ -311,4 +395,5 @@ def test_an_empty_group_is_refused_on_both_readings(inner_mode):
             _component("PCC", flows + [_flow_out(ALARM, groups, inner_mode=inner_mode)])
         )
 
-    assert "empty group" in str(raised.value)
+    message = str(raised.value)
+    assert "empty group" in message and "beside" in message

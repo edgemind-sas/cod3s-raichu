@@ -563,6 +563,60 @@ def _prod_cond_inner_mode(flow: str, inner_mode: str) -> str:
     return inner_mode
 
 
+def prod_cond_unconditional(where: str, declared: Any, inner_mode: str) -> bool:
+    """Whether a production condition made of EMPTY groups is unconditional.
+
+    ``[[]]`` is what the platform's port editor seeded on every fresh output
+    for a long time, and libraries built before still carry it, on sources and
+    on outputs whose author never wrote the condition. muscadet's discrete
+    family evaluates it as it evaluates any other (``muscadet/flow.py``,
+    ``prod_cond_holds``), so its meaning follows `inner_mode`:
+
+    - under ``"and"`` the groups are a disjunction of conjunctions, and an
+      empty conjunction HOLDS: the output produces from the start, whatever
+      its inputs and whatever its declared default (measured on the reference
+      engine 2026-10-15). True is returned, and the caller builds the output
+      that declares no condition and starts produced. No writer is the
+      reference's behaviour too: a sensitive method subscribed to no operand
+      runs at the initial evaluation and never again, so a mode that latches
+      the production later keeps its latch;
+    - under ``"or"`` an empty clause is FALSE and the output would never
+      produce. That is a dead port no author writes on purpose, and the
+      platform refuses the mode on an empty condition for this reason, so it
+      is refused here, naming the way out.
+
+    An empty group BESIDE a group naming an operand is refused on both
+    readings: under ``"and"`` it would make the whole condition hold and the
+    operand the author did name would say nothing, under ``"or"`` it would
+    make it never hold. That is an editing slip, and a run would hide it.
+
+    False is returned for a condition carrying no empty group, which is then
+    read as it always was. A flat list (bare operands) carries no group at all.
+    """
+    if not declared or isinstance(declared, (str, dict)):
+        return False
+    groups = [group for group in declared if isinstance(group, (list, tuple))]
+    empty = [group for group in groups if not group]
+    if not empty:
+        return False
+    if len(empty) != len(declared):
+        raise ValueError(
+            f"{where} carries an empty group beside groups that name operands; "
+            f"under `var_prod_cond_inner_mode`='and' it would make the whole "
+            f"condition hold, under 'or' it would make it never hold, and "
+            f"either way the operands it sits beside would say nothing. Remove "
+            f"the empty group"
+        )
+    if inner_mode != "and":
+        raise ValueError(
+            f"{where} carries only empty groups under "
+            f"`var_prod_cond_inner_mode`={inner_mode!r}; there an empty clause "
+            f"is false and the output would never produce. Declare no condition "
+            f"(`[]`) for an unconditional output, or name what it waits for"
+        )
+    return True
+
+
 def prod_cond_disjunction(
     where: str, clauses: list[list[Any]], inner_mode: str
 ) -> list[list[Any]]:
@@ -4095,11 +4149,11 @@ class ObjFlow:
         else:
             clauses = [list(declared)]
         for clause in clauses:
-            # muscadet refuses this one too, and on the family it had left for
-            # later: `FlowContinuousOut.check_prod_cond_shape` scopes itself to
-            # the continuous classes because "the discrete classes are 1.x
-            # surface with the same laxity, and tightening them belongs to its
-            # own change". This is that change, on this side.
+            # Unreachable from `_build_flows_out`, which reads a condition of
+            # empty groups only through `prod_cond_unconditional` first and
+            # refuses an empty group beside an operand there. Kept for any
+            # other caller: an empty clause multiplied out under "or" would
+            # make the condition vanish rather than fail.
             if not clause:
                 raise ValueError(
                     f"{where} carries an empty group; a group that reads "
@@ -6084,6 +6138,15 @@ class ObjFlow:
         does to the same variable."""
         me = self.name
         for flow in self.flows_out:
+            # Empty groups only, under "and": the output that declares no
+            # condition and starts produced (see `prod_cond_unconditional`).
+            unconditional = prod_cond_unconditional(
+                f"ObjFlow `{me}`: production condition of `{flow.name}`",
+                flow.var_prod_cond,
+                flow.var_prod_cond_inner_mode,
+            )
+            prod_cond = [] if unconditional else flow.var_prod_cond
+            prod_default = True if unconditional else flow.var_prod_default
             fed_out = f"{flow.name}_fed_out"
             # muscadet-aligned name (`FlowOut.var_fed_available_out`): real
             # studies' failure_effects target `{flow}_fed_available_out`.
@@ -6117,7 +6180,7 @@ class ObjFlow:
                 {
                     "name": prod_available,
                     "kind": "bool",
-                    "init": {"kind": "bool", "value": bool(flow.var_prod_default)},
+                    "init": {"kind": "bool", "value": bool(prod_default)},
                 }
             )
             # Service-function dormancy through `var_is_active`: the third
@@ -6195,12 +6258,12 @@ class ObjFlow:
             # `_fed_in`, an out-flow `_fed_out` -- the diagnostic-mirror
             # pattern; the fixpoint handles the intra-component
             # dependency without a topological sort.
-            if flow.var_prod_cond:
+            if prod_cond:
                 where = (
                     f"ObjFlow `{me}`: production condition of `{flow.name}`"
                 )
                 groups = self._parse_prod_cond(
-                    where, flow.var_prod_cond, flow.var_prod_cond_inner_mode
+                    where, prod_cond, flow.var_prod_cond_inner_mode
                 )
                 functions.append(
                     {

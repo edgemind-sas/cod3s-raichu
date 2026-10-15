@@ -1454,6 +1454,14 @@ def _prod_cond(
     because muscadet's own docstring gets it backwards: ``["a", "b"]`` is TWO
     clauses of one operand, hence ``a and b``, and that is what the layer
     underneath reads a flat list as too.
+
+    **Empty groups.** muscadet's discrete family accepts ``[[]]`` and
+    evaluates it like any other condition: under ``"and"`` an empty
+    conjunction holds and the output is unconditional, under ``"or"`` an
+    empty clause is false and the output never produces. The first is read
+    (it is how the platform's libraries spell a source), the second and an
+    empty group beside a named operand are refused, see
+    :func:`pyraichu.muscadet.prod_cond_unconditional`.
     """
     if inner_mode not in PROD_COND_INNER_MODES:
         raise ComponentSpecError(
@@ -1472,35 +1480,30 @@ def _prod_cond(
             f"an operand nor a list: {declared!r}"
         )
 
+    # Empty groups. Under `"and"` a condition made of them only is an empty
+    # conjunction, which holds: muscadet's discrete family produces the output
+    # from the start, whatever its inputs and its declared default (measured
+    # on the reference engine 2026-10-15), and the platform reads `[[]]` as
+    # the unconditional source it seeded on every fresh output.
+    # It crosses as `[[]]` under `"and"`, and the authoring layer builds the
+    # output that declares no condition and starts produced. Under `"or"` the
+    # same groups would never let the output produce, and an empty group
+    # beside a named operand silences that operand on either reading: both
+    # are refused (`authoring.prod_cond_unconditional` says why).
+    #
+    # muscadet's CONTINUOUS family refuses every empty group
+    # (`FlowContinuousOut.check_prod_cond_shape`), and scopes that refusal to
+    # itself; its discrete family, the one this function reads, accepts
+    # `[[]]` under `"and"` and runs it as above.
+    try:
+        if authoring.prod_cond_unconditional(where, declared, inner_mode):
+            return [[]]
+    except ValueError as error:
+        raise ComponentSpecError(str(error)) from None
+
     clauses: list[list[str | dict]] = []
     for group in declared:
         operands = group if isinstance(group, (list, tuple)) else [group]
-        # An empty group is the one malformed shape that runs to completion
-        # without a word, and it does so DIFFERENTLY on the two readings. Under
-        # `"and"` it reaches the layer underneath as an empty conjunction,
-        # which holds; under `"or"` the expansion below multiplies it out and a
-        # product over an empty clause is EMPTY, so the condition disappears
-        # entirely -- no writer, the variable left on its declared default,
-        # which is the dormant function and the exact opposite of the empty
-        # disjunction the group states.
-        #
-        # muscadet refuses it too, with the same reasoning and on the family it
-        # had left for later: `FlowContinuousOut.check_prod_cond_shape` says
-        # "under inner mode 'or' the output would never produce, under 'and'
-        # the condition would never bind: neither is a declaration", and scopes
-        # itself to the continuous classes because "the discrete classes are
-        # 1.x surface with the same laxity, and tightening them belongs to its
-        # own change". This is the discrete half of that one refusal, so
-        # relaxing it here would make the two families answer differently to
-        # one malformed export.
-        if not operands:
-            raise ComponentSpecError(
-                f"{where} carries an empty group in its production condition; "
-                f"a group that reads nothing says nothing about when the "
-                f"output produces, and the two readings of "
-                f"`var_prod_cond_inner_mode` do not even agree on what it "
-                f"would mean"
-            )
         clauses.append(
             [_prod_cond_operand(where, operand, inputs) for operand in operands]
         )
@@ -2870,52 +2873,23 @@ def _mode_param_names(spec: dict, laws: tuple, where: str) -> None:
             )
 
 
-def _mode_drop_inactive(spec: dict, laws: tuple, where: str) -> None:
-    """Refuse ``drop_inactive_automata=False`` where it asks for something.
-
-    muscadet writes the key on every common-cause mode whose orders were all
-    built, which is the ORDINARY case, and writes ``False`` there because
-    ``False`` rebuilds them all. Here an order with no active law builds no
-    automaton and there is no spelling for building one that can never fire --
-    so the value says nothing while every order carries an active law, which is
-    exactly the case muscadet writes it in, and asks for something otherwise.
-    """
-    if spec.get("drop_inactive_automata") is not False:
-        return
-    for key, law in (
-        ("failure_param", laws[0]),
-        ("repair_param", laws[1]),
-        ("occ_law", laws[0]),
-        ("not_occ_law", laws[1]),
-    ):
-        declared = spec.get(key)
-        if declared is None or law is None:
-            continue
-        values = (
-            declared.get(_MODE_LAW_FIELD.get(law))
-            if isinstance(declared, dict)
-            else declared
-        )
-        for order, value in enumerate(values if isinstance(values, list) else [values]):
-            value = value[0] if isinstance(value, (list, tuple)) and value else value
-            if value is None or (law == "exp" and not (value or 0) > 0):
-                raise ComponentSpecError(
-                    f"{where} declares drop_inactive_automata=False while its "
-                    f"`{key}` leaves common-cause order {order + 1} inactive "
-                    f"({value!r}). Here an order with no active law builds no "
-                    f"automaton, and there is no automaton that can never fire "
-                    f"to build instead"
-                )
-
-
 def _mode_wire(spec: dict, mode_class: _ModeClass, where: str) -> dict:
     """The cod3s mode wire a declaration means, classified key by key.
 
     Two keys are dropped HERE rather than by :class:`_Vocabulary`, because
-    what they say depends on the law the declaration draws from and an inert
-    value is one the vocabulary knows in advance: the parameter variable names
-    (:func:`_mode_param_names`) and the drop-inactive gate
-    (:func:`_mode_drop_inactive`), each already checked against that law.
+    what they say depends on the law the declaration draws from: the parameter
+    variable names (:func:`_mode_param_names`), checked against that law, and
+    the drop-inactive gate.
+
+    ``drop_inactive_automata`` asks for nothing this layer would build
+    differently. muscadet writes ``False`` on every common-cause mode whose
+    ``2**n - 1`` combinations were all built, and cod3s builds an order unless
+    BOTH of its directions are inactive, so the key reaches this reader on the
+    ordinary shape: an order whose occurrence is active and whose return is
+    inactive, which is ABSORBING here as there (a zero return rate builds no
+    return edge). An order whose occurrence is inactive never fires, so the
+    automaton cod3s builds for it is one nothing can observe, and building
+    none is the same model.
 
     Neither applies to a SELF-HOSTED event, which has no per-order parameter
     and no common-cause order: there the drop-inactive gate goes back to the
@@ -2939,7 +2913,6 @@ def _mode_wire(spec: dict, mode_class: _ModeClass, where: str) -> dict:
         "not_occ_param_name",
     }
     if not mode_class.self_hosted:
-        _mode_drop_inactive(spec, laws, where)
         dropped.add("drop_inactive_automata")
     return _keywords(
         where,
