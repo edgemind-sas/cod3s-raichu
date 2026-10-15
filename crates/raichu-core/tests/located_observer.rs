@@ -778,3 +778,79 @@ fn advancing_past_a_clock_countdown_fires_it_at_its_date() {
         .collect();
     assert_events(&fired, &[(7.0, "ev_c.ev.occ")]);
 }
+
+#[test]
+fn an_idle_located_observer_is_listed_without_a_date_and_refused_by_fire() {
+    // Listed (it is armed in its source state) with no date: nothing can
+    // fire it before its condition starts to hold, and asking leaves the
+    // engine where it was.
+    let compiled = CompiledModel::compile(&ramp_with_event("ge", 1.0, None, 0.5)).unwrap();
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 3.0,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    let idle = engine
+        .fireable()
+        .into_iter()
+        .find(|f| f.transition == "ev_c.ev.occ")
+        .expect("the event is listed");
+    assert_eq!(idle.date, None);
+    let err = engine.fire_idx(idle.index).unwrap_err();
+    assert!(matches!(err, EngineError::NotFireable { .. }), "{err:?}");
+    assert_eq!(engine.current_time(), 0.0);
+    assert!(engine.history().is_empty());
+}
+
+#[test]
+fn firing_a_chosen_transition_passes_over_every_countdown_armed_on_the_way() {
+    // `x' = 1` from 0, a repair dated 10, and two events with a tempo of
+    // 1: one on `x > 2` (due at 3), one on `x > 4` (due at 5). Asking for
+    // the repair passes over both in one advance; both are left overdue
+    // and fire next, in the order of their dates.
+    let on = |threshold: f64| {
+        json!({"op": "cmp", "cmp": "gt", "lhs": x(),
+               "rhs": {"op": "const", "value": float(threshold)}})
+    };
+    let mut early = event(on(2.0), 1.0);
+    early["name"] = json!("ev_a");
+    let mut late = event(on(4.0), 1.0);
+    late["name"] = json!("ev_b");
+    let model: Model = serde_json::from_value(json!({
+        "name": "passed_over_twice",
+        "components": [
+            {"name": "c",
+             "attributes": [{"name": "x", "kind": "float", "init": float(0.0)}],
+             "equations": [{"target": "x", "kind": "ode", "expr": ramp_rate(None)}],
+             "automata": [{"name": "pump", "states": ["off", "on"], "init": "off",
+                 "transitions": [{"name": "repair", "source": "off", "targets": ["on"],
+                                  "distrib": "delay", "time": 10.0}]}]},
+            late,
+            early
+        ]
+    }))
+    .expect("model");
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 20.0,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    let repair = compiled
+        .transitions
+        .iter()
+        .position(|t| t.name == "c.pump.repair")
+        .unwrap();
+    let fired = engine.fire_idx(repair).expect("the repair fires");
+    assert!((fired.time - 10.0).abs() < 1e-9, "{fired:?}");
+    let next: Vec<String> = (0..2)
+        .map(|_| engine.step().unwrap().expect("an overdue event").transition)
+        .collect();
+    assert_eq!(next, ["ev_a.ev.occ", "ev_b.ev.occ"]);
+}

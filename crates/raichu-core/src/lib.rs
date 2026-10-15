@@ -52,5 +52,5 @@ pub use fault_tree::{
 };
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
 pub use loops::{switching_loops, SwitchingLoop};
-pub use raichu_numeric::{SolverParams, SolverStats};
+pub use raichu_numeric::{InvalidSolverParam, SolverParams, SolverStats};
 pub use triggers::{unfed_triggers, UnfedTrigger};

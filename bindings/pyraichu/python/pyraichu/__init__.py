@@ -2181,10 +2181,21 @@ class Fireable:
     index: int
     transition: str
     kind: str  # "delay" | "stochastic" | "inst" | "watched"
-    date: float | None  # firing date; None until its boundary or condition is crossed
+    # Firing date. None when the transition has none yet: a watched
+    # boundary or a located condition not crossed yet (``fire`` refuses
+    # it), or a deferred stochastic transition (dated by the deferred or
+    # operator interfaces).
+    date: float | None
 
-    def __repr__(self) -> str:  # pragma: no cover - cosmetic
-        when = "boundary" if self.date is None else f"t={self.date}"
+    def __repr__(self) -> str:
+        if self.date is not None:
+            when = f"t={self.date}"
+        elif self.kind == "watched":
+            when = "boundary"
+        elif self.kind == "stochastic":
+            when = "deferred"
+        else:
+            when = "condition"
         return f"Fireable({self.transition} [{self.kind}] @ {when})"
 
 

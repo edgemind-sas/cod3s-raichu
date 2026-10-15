@@ -603,13 +603,11 @@ fn replica(
 /// returned in replica order.
 ///
 /// A stage with failing replicas is refused with the error of the
-/// **lowest-numbered** one, whatever the thread count: the whole stage
-/// runs before the results are read in replica order, as a plain
-/// campaign does. Collecting straight into a `Result` would stop at
-/// whichever failure a worker reported first. The error stays the
-/// replica's own: a cross-entropy replica runs under biased rates, so
-/// the replay coordinates of [`EngineError::ReplicaFailed`] would not
-/// reproduce it with a plain simulation.
+/// **lowest-numbered** one, whatever the thread count, and without
+/// running the replicas above it ([`lowest_failure_first`]). The error
+/// stays the replica's own: a cross-entropy replica runs under biased
+/// rates, so the replay coordinates of [`EngineError::ReplicaFailed`]
+/// would not reproduce it with a plain simulation.
 fn stage(
     model: &CompiledModel,
     s: &CrossEntropySettings,
@@ -618,7 +616,6 @@ fn stage(
     count: u64,
     stream: impl Fn(u64) -> u64 + Sync,
 ) -> Result<Vec<ReplicaOutcome>, CrossEntropyError> {
-    use rayon::prelude::*;
     let mut dense = vec![1.0; model.transitions.len()];
     for (family, &f) in families.iter().zip(factors) {
         for &i in &family.indices {
@@ -626,14 +623,48 @@ fn stage(
         }
     }
     let dense = &dense;
-    let compute = || -> Result<Vec<ReplicaOutcome>, EngineError> {
-        let results: Vec<Result<ReplicaOutcome, EngineError>> = (0..count)
-            .into_par_iter()
-            .map(|i| replica(model, s, families, dense, factors, stream(i)))
-            .collect();
-        results.into_iter().collect()
+    let compute = || {
+        lowest_failure_first(count, |i| {
+            replica(model, s, families, dense, factors, stream(i))
+        })
     };
     Ok(in_pool(s.threads, compute)?)
+}
+
+/// Run `job(0..count)` in parallel and return the results in index
+/// order, or the error of the **lowest** failing index, the same at
+/// every thread count.
+///
+/// Collecting straight into a `Result` would stop at whichever failure a
+/// worker reported first; collecting every result first runs the whole
+/// range, at full cost, after its outcome is already known. Here a
+/// failure lowers a shared floor and every index above the floor is
+/// skipped. An index below the lowest failure is never above the floor
+/// (the floor only takes failing indices), so it always runs, and the
+/// first error in index order is the lowest one.
+fn lowest_failure_first<T, E, F>(count: u64, job: F) -> Result<Vec<T>, E>
+where
+    T: Send,
+    E: Send,
+    F: Fn(u64) -> Result<T, E> + Sync,
+{
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let floor = AtomicU64::new(u64::MAX);
+    let results: Vec<Option<Result<T, E>>> = (0..count)
+        .into_par_iter()
+        .map(|i| {
+            if i > floor.load(Ordering::Relaxed) {
+                return None;
+            }
+            let result = job(i);
+            if result.is_err() {
+                floor.fetch_min(i, Ordering::Relaxed);
+            }
+            Some(result)
+        })
+        .collect();
+    results.into_iter().flatten().collect()
 }
 
 /// The cross-entropy update over the hits of one pilot: per family, the
@@ -795,4 +826,74 @@ pub fn run_cross_entropy(
         estimate_inconclusive,
         ends: outcomes.into_iter().map(|o| o.end).collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::lowest_failure_first;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn in_threads<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(f)
+    }
+
+    #[test]
+    fn the_lowest_failing_index_is_reported_at_every_thread_count() {
+        for threads in [1, 2, 8] {
+            let got = in_threads(threads, || {
+                lowest_failure_first(10_000, |i| {
+                    if i == 4_321 || i == 777 || i == 9_000 {
+                        Err(i)
+                    } else {
+                        Ok(i)
+                    }
+                })
+            });
+            assert_eq!(got, Err(777), "with {threads} threads");
+        }
+    }
+
+    #[test]
+    fn every_result_comes_back_in_index_order_when_none_fails() {
+        let got = in_threads(4, || lowest_failure_first(1_000, Ok::<u64, ()>));
+        assert_eq!(got.unwrap(), (0..1_000).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn indices_above_a_failure_are_not_run() {
+        // Index 0 fails at once: on one thread nothing else runs; on
+        // several, only what was already in flight. Collecting every
+        // result before reading them ran all 100 000.
+        let count = 100_000;
+        for threads in [1, 4] {
+            let calls = AtomicU64::new(0);
+            let got = in_threads(threads, || {
+                lowest_failure_first(count, |i| {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    if i == 0 {
+                        Err(i)
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_micros(10));
+                        Ok(i)
+                    }
+                })
+            });
+            assert_eq!(got, Err(0));
+            let calls = calls.load(Ordering::Relaxed);
+            if threads == 1 {
+                assert_eq!(calls, 1);
+            } else {
+                assert!(
+                    calls < count / 10,
+                    "{calls} of {count} ran with {threads} threads"
+                );
+            }
+        }
+    }
 }

@@ -71,6 +71,9 @@ def monte_carlo_json(
     stop_at_targets: bool = False,
     flow: FlowConfig | None = None,
     event_resolution: float | None = None,
+    allow_fmu_import: bool = False,
+    fmu_base_dir: str | None = None,
+    require_parallel: bool = False,
 ) -> str: ...
 def analyse_sequences_json(
     model_json: str,
@@ -121,6 +124,8 @@ def explore_json(
     threads: int | None = None,
     level: int | None = None,
     refine: bool = True,
+    allow_fmu_import: bool = False,
+    fmu_base_dir: str | None = None,
 ) -> str: ...
 def exploration_domain_json(model_json: str) -> str: ...
 def fault_tree_json(
@@ -171,6 +176,9 @@ def quantify_json(
     study_json: str,
     method: str,
     settings_json: str | None = None,
+    allow_fmu_import: bool = False,
+    fmu_base_dir: str | None = None,
+    require_parallel: bool = False,
 ) -> str: ...
 def validate_quantification(envelope_json: str) -> None: ...
 def exploration_minimal_sequences_json(result_json: str, report: bool = False) -> str: ...

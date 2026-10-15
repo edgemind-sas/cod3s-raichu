@@ -432,14 +432,6 @@ fn solver_params(
     sub_samples: Option<usize>,
     event_resolution: Option<f64>,
 ) -> PyResult<SolverParams> {
-    if let Some(v) = event_resolution {
-        if !(v.is_finite() && v > 0.0) {
-            return Err(SimulationError::new_err(format!(
-                "event_resolution is the widest spacing accepted between two \
-                 crossing scan points, a finite positive time, got {v}"
-            )));
-        }
-    }
     let mut ode = SolverParams::default();
     if let Some(v) = rtol {
         ode.rtol = v;
@@ -457,6 +449,10 @@ fn solver_params(
         ode.sub_samples = v;
     }
     ode.event_resolution = event_resolution;
+    // Refused here, before the model is compiled, rather than per
+    // replica: the engine checks the same domains when it is built.
+    ode.validate()
+        .map_err(|error| SimulationError::new_err(error.to_string()))?;
     Ok(ode)
 }
 

@@ -207,6 +207,14 @@ impl<'m> Engine<'m> {
     /// condition to start holding is listed with date `None` and the
     /// kind of its own law ([`FireableKind::Delay`]), never as watched.
     ///
+    /// The list is what is **armed**, not only what can be fired now. An
+    /// entry with a date is what [`Engine::fire_idx`] fires (advancing to
+    /// that date). An entry without one has no firing date yet: a watched
+    /// boundary or a located condition nobody has crossed yet, which
+    /// `fire_idx` refuses with [`EngineError::NotFireable`] leaving the
+    /// engine unchanged, or a deferred stochastic transition, fired
+    /// through the deferred or operator interfaces that set its date.
+    ///
     /// Sorted by date (unlocated watched last), then transition index,
     /// so the first entry is exactly what [`Engine::step`] would fire
     /// next.
@@ -874,14 +882,12 @@ impl<'m> Engine<'m> {
                 // A countdown armed and due on the way is a dated firing,
                 // passed over like every other one before the date asked
                 // for: it stays overdue and fires at the next step. The
-                // advance resumes past it (it is pending on re-entry, so
-                // it is never handed back twice). A watched boundary is a
-                // forced jump and fires instead.
-                while let Some(stop_idx) = self.advance_continuous(t_new)? {
-                    if self.model.transitions[stop_idx].located.is_none() {
-                        self.note_watched_firing()?;
-                        return self.fire(stop_idx, None);
-                    }
+                // advance goes on past it, in one call and so under one
+                // restart budget. A watched boundary is a forced jump and
+                // fires instead.
+                if let Some(stop_idx) = self.advance_continuous_with(t_new, Countdowns::PassOver)? {
+                    self.note_watched_firing()?;
+                    return self.fire(stop_idx, None);
                 }
                 if let Some(before) = before.filter(|_| self.pending[trans_idx] != Some(date)) {
                     self.try_restore(&before)?;
