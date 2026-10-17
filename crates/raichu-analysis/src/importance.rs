@@ -64,11 +64,16 @@
 //!
 //! # What it costs
 //!
-//! One campaign, plus a reduction in
-//! `O(replicas × instants × units × cuts × cut size)` word operations over
-//! a bitset. The campaign dominates: the measures are a post-processing
-//! pass, never a second run, which is what keeps them usable at the load
-//! levels a study is planned for. What the reduction holds is one compact
+//! One campaign, plus a reduction that replays each recorded state change
+//! once, touching only the units and cuts that hold the changed basic
+//! event, then reads a few counters per unit at each instant. A unit that
+//! meets no cut (a declared group of components outside every cut) costs
+//! one counter per instant; one that meets cuts costs its incidences with
+//! them. Nothing scales with the number of basic events of the model, so
+//! one group per component stays a small share of the reduction at ten
+//! thousand components. The campaign dominates: the measures are a
+//! post-processing pass, never a second run, which is what keeps them
+//! usable at the load levels a study is planned for. What the reduction holds is one compact
 //! record per state change of an automaton that carries a basic event
 //! ([`ImportanceReducer`]), never the trajectories themselves.
 //!
@@ -103,7 +108,7 @@
 //!   transition: one left silently would read as active until the
 //!   automaton records its next entry.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -668,18 +673,6 @@ impl ImportanceReducer {
         let n_instants = self.instants.len();
         let cut_bits = self.cut_sets();
         let n_events = self.events.len();
-        let n_words = n_events.div_ceil(64).max(1);
-        let mask_of = |bits: &mut dyn Iterator<Item = usize>| {
-            let mut mask = vec![0u64; n_words];
-            for bit in bits {
-                set_bit(&mut mask, bit);
-            }
-            mask
-        };
-        let cut_masks: Vec<Vec<u64>> = cut_bits
-            .iter()
-            .map(|(bits, _)| mask_of(&mut bits.iter().map(|&b| b as usize)))
-            .collect();
         let cuts: Vec<Cut> = cut_bits
             .iter()
             .map(|(bits, weight)| Cut {
@@ -692,64 +685,44 @@ impl ImportanceReducer {
             .collect();
 
         // --- The units: every basic event of the cuts, every component of
-        // the cuts, every declared group. One mask each.
+        // the cuts, every declared group. Each is its sorted basic-event
+        // bits; `events` is sorted, so a bit is its event's position.
         let in_cuts: BTreeSet<usize> = cut_bits
             .iter()
             .flat_map(|(bits, _)| bits.iter().map(|&b| b as usize))
             .collect();
-        let components: BTreeSet<&str> = in_cuts
-            .iter()
-            .map(|&b| self.events[b].obj.as_str())
-            .collect();
-        let mut unit_masks: Vec<Vec<u64>> = Vec::new();
+        // Component name → its bits, ascending, in one pass.
+        let mut components: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for &bit in &in_cuts {
-            unit_masks.push(mask_of(&mut std::iter::once(bit)));
+            components
+                .entry(self.events[bit].obj.as_str())
+                .or_default()
+                .push(bit);
         }
-        for name in &components {
-            unit_masks.push(mask_of(
-                &mut in_cuts
-                    .iter()
-                    .copied()
-                    .filter(|&b| self.events[b].obj == *name),
-            ));
+        let mut unit_bits: Vec<Vec<usize>> = Vec::new();
+        for &bit in &in_cuts {
+            unit_bits.push(vec![bit]);
         }
+        unit_bits.extend(components.values().cloned());
         for group in &self.groups {
             // Every group event is a basic event (checked at construction),
-            // and `events` is sorted, so its bit is its position.
-            unit_masks.push(mask_of(
-                &mut group
+            // and the group's events are sorted, so its bits are too.
+            unit_bits.push(
+                group
                     .events
                     .iter()
-                    .filter_map(|e| self.events.binary_search(e).ok()),
-            ));
+                    .filter_map(|e| self.events.binary_search(e).ok())
+                    .collect(),
+            );
         }
-        let n_units = unit_masks.len();
-        // Which units each cut meets, and, per unit, the cuts it meets with
-        // that unit's events removed: `Φ(D ∪ E_u)` is `Φ(D)` unless one of
-        // *those* residuals is covered, so the pivotal scan stays
-        // proportional to the incidences, not to units × cuts.
-        let cut_units: Vec<Vec<usize>> = cut_masks
-            .iter()
-            .map(|cut| {
-                (0..n_units)
-                    .filter(|&u| meets(cut, &unit_masks[u]))
-                    .collect()
-            })
-            .collect();
-        let residuals: Vec<Vec<Vec<u64>>> = (0..n_units)
-            .map(|u| {
-                cut_masks
-                    .iter()
-                    .filter(|cut| meets(cut, &unit_masks[u]))
-                    .map(|cut| {
-                        cut.iter()
-                            .zip(&unit_masks[u])
-                            .map(|(k, m)| *k & !*m)
-                            .collect()
-                    })
-                    .collect()
-            })
-            .collect();
+        let n_units = unit_bits.len();
+        let index = UnitIndex::new(n_events, &cut_bits, &unit_bits);
+        // A unit that meets no cut is never pivotal through a cut of its
+        // own: `Φ(D ∪ E_u)` and `Φ(D \ E_u)` are both `Φ(D)`, and no
+        // realized cut meets it. Only its unavailability is followed per
+        // replica, so declaring one group per component outside the cuts
+        // costs one counter each, not a pass over the cuts.
+        let bound: Vec<usize> = (0..n_units).filter(|&u| index.meets_a_cut(u)).collect();
 
         // --- Accumulators, flat and instant-major so the inner loop over
         // units is contiguous. Every fold runs over the replicas in corpus
@@ -762,20 +735,17 @@ impl ImportanceReducer {
         let mut w_fv = vec![0.0; n_instants * n_units];
 
         // Scratch reused across replicas: the state of each relevant
-        // automaton, the active basic events as a bitset maintained
-        // incrementally, and the verdicts of one instant, recomputed only
-        // when the trajectory moved between two.
+        // automaton, the replay counters, and the verdicts of one instant,
+        // recomputed only when the trajectory moved between two.
         let mut state = vec![NO_BIT; self.n_automata];
-        let mut active = vec![0u64; n_words];
-        let mut touching = vec![0usize; n_units];
+        let mut replay = Replay::new(&index);
         let mut is_plus = vec![false; n_units];
         let mut is_minus = vec![false; n_units];
-        let mut is_down = vec![false; n_units];
         let mut is_fv = vec![false; n_units];
 
         for trajectory in &self.trajectories {
             state.iter_mut().for_each(|s| *s = NO_BIT);
-            active.iter_mut().for_each(|w| *w = 0);
+            replay.reset();
             let mut n_target = 0usize;
             let mut next = 0;
             let mut moved = true;
@@ -789,47 +759,30 @@ impl ImportanceReducer {
                     let slot = change.automaton as usize;
                     let previous = state[slot];
                     // Each basic event belongs to exactly one automaton, so
-                    // leaving a state clears its bit outright.
+                    // leaving a state deactivates its event outright.
                     if previous == TARGET_BIT {
                         n_target -= 1;
                     } else if previous != NO_BIT {
-                        clear_bit(&mut active, previous as usize);
+                        replay.toggle(previous as usize, false);
                     }
                     if change.bit == TARGET_BIT {
                         n_target += 1;
                     } else if change.bit != NO_BIT {
-                        set_bit(&mut active, change.bit as usize);
+                        replay.toggle(change.bit as usize, true);
                     }
                     state[slot] = change.bit;
                     next += 1;
                     moved = true;
                 }
                 if moved {
-                    touching.iter_mut().for_each(|c| *c = 0);
-                    let mut realized = 0usize;
-                    for (cut, units) in cut_masks.iter().zip(&cut_units) {
-                        if covered(cut, &active) {
-                            realized += 1;
-                            for &u in units {
-                                touching[u] += 1;
-                            }
-                        }
-                    }
-                    system_down = realized > 0;
+                    system_down = replay.realized > 0;
                     target_active = n_target > 0;
-                    for u in 0..n_units {
-                        // Φ(D ∪ E_u): already true when the system is down,
-                        // otherwise a cut of `u` that only misses `u`'s
-                        // events.
-                        is_plus[u] = system_down
-                            || residuals[u]
-                                .iter()
-                                .any(|residual| covered(residual, &active));
+                    for &u in &bound {
+                        is_plus[u] = system_down || replay.pivotal_with(u);
                         // Φ(D \ E_u): a realized cut that does not meet `u`
                         // survives the removal, and only those do.
-                        is_minus[u] = realized > touching[u];
-                        is_down[u] = meets(&active, &unit_masks[u]);
-                        is_fv[u] = touching[u] > 0;
+                        is_minus[u] = replay.realized > replay.touching[u] as usize;
+                        is_fv[u] = replay.touching[u] > 0;
                     }
                     moved = false;
                 }
@@ -840,13 +793,34 @@ impl ImportanceReducer {
                 if system_down {
                     w_cuts[k] += weight;
                 }
+                // Only a true verdict adds: `x + 0.0` is `x` for these
+                // non-negative sums, so skipping the false ones leaves every
+                // sum bit-identical.
                 let base = k * n_units;
-                for u in 0..n_units {
-                    w_plus[base + u] += weight * f64::from(u8::from(is_plus[u]));
-                    w_minus[base + u] += weight * f64::from(u8::from(is_minus[u]));
-                    w_down[base + u] += weight * f64::from(u8::from(is_down[u]));
-                    w_fv[base + u] += weight * f64::from(u8::from(is_fv[u]));
+                for &u in &bound {
+                    if is_plus[u] {
+                        w_plus[base + u] += weight;
+                    }
+                    if is_minus[u] {
+                        w_minus[base + u] += weight;
+                    }
+                    if is_fv[u] {
+                        w_fv[base + u] += weight;
+                    }
                 }
+                for (u, &active) in replay.down.iter().enumerate() {
+                    if active > 0 {
+                        w_down[base + u] += weight;
+                    }
+                }
+            }
+        }
+        // The units that meet no cut: both pivotal terms are `Φ(D)`, summed
+        // in the same replica order as `w_cuts`, hence equal to it.
+        for u in (0..n_units).filter(|&u| !index.meets_a_cut(u)) {
+            for (k, &cuts) in w_cuts.iter().enumerate() {
+                w_plus[k * n_units + u] = cuts;
+                w_minus[k * n_units + u] = cuts;
             }
         }
 
@@ -911,11 +885,10 @@ impl ImportanceReducer {
             .collect();
         let mut component_units: Vec<ComponentImportance> = components
             .iter()
-            .map(|&name| {
-                let events: Vec<String> = in_cuts
+            .map(|(&name, bits)| {
+                let events: Vec<String> = bits
                     .iter()
                     .map(|&b| &self.events[b])
-                    .filter(|e| e.obj == name)
                     .map(|e| format!("{}.{}", e.automaton, e.attr))
                     .collect();
                 let found = ComponentImportance {
@@ -976,24 +949,203 @@ impl ImportanceReducer {
     }
 }
 
-/// `needle ⊆ haystack` over two equally sized bitsets.
-fn covered(needle: &[u64], haystack: &[u64]) -> bool {
-    needle.iter().zip(haystack).all(|(n, h)| *n & !*h == 0)
+/// Which units and cuts each basic event belongs to, so that replaying a
+/// trajectory costs, per state change, the units and cuts that contain the
+/// changed event, never a pass over all of them.
+///
+/// An *incidence* is one (unit, cut) pair whose sets meet; the pivotal
+/// test `Φ(D ∪ E_u)` only ever reads the incidences of `u`.
+#[derive(Debug)]
+struct UnitIndex {
+    /// Per basic event, the units holding it.
+    event_units: Vec<Vec<usize>>,
+    /// Per basic event, the cuts holding it.
+    event_cuts: Vec<Vec<usize>>,
+    /// Per basic event, the incidences whose shared part holds it.
+    event_incidences: Vec<Vec<usize>>,
+    /// Per cut, the units it meets.
+    cut_units: Vec<Vec<usize>>,
+    /// Per cut, its size.
+    cut_sizes: Vec<u32>,
+    /// The incidences of unit `u` are `incidence_start[u]..incidence_start[u + 1]`.
+    incidence_start: Vec<usize>,
+    /// Per incidence, its cut.
+    incidence_cut: Vec<usize>,
+    /// Per incidence, how many events its unit and cut share.
+    incidence_shared: Vec<u32>,
 }
 
-/// The two bitsets share at least one bit.
-fn meets(left: &[u64], right: &[u64]) -> bool {
-    left.iter().zip(right).any(|(l, r)| *l & *r != 0)
+impl UnitIndex {
+    /// The index of `cuts` and `units`, both as sorted basic-event bits
+    /// below `n_events`.
+    fn new(n_events: usize, cuts: &[(Vec<u32>, f64)], units: &[Vec<usize>]) -> Self {
+        let mut event_units = vec![Vec::new(); n_events];
+        for (u, bits) in units.iter().enumerate() {
+            for &bit in bits {
+                event_units[bit].push(u);
+            }
+        }
+        let mut event_cuts = vec![Vec::new(); n_events];
+        for (c, (bits, _)) in cuts.iter().enumerate() {
+            for &bit in bits {
+                event_cuts[bit as usize].push(c);
+            }
+        }
+        let cut_units: Vec<Vec<usize>> = cuts
+            .iter()
+            .map(|(bits, _)| {
+                let mut met: Vec<usize> = bits
+                    .iter()
+                    .flat_map(|&bit| event_units[bit as usize].iter().copied())
+                    .collect();
+                met.sort_unstable();
+                met.dedup();
+                met
+            })
+            .collect();
+        let mut unit_cuts = vec![Vec::new(); units.len()];
+        for (c, met) in cut_units.iter().enumerate() {
+            for &u in met {
+                unit_cuts[u].push(c);
+            }
+        }
+        let mut event_incidences = vec![Vec::new(); n_events];
+        let mut incidence_start = Vec::with_capacity(units.len() + 1);
+        let mut incidence_cut = Vec::new();
+        let mut incidence_shared = Vec::new();
+        for (bits, met) in units.iter().zip(&unit_cuts) {
+            incidence_start.push(incidence_cut.len());
+            for &c in met {
+                let incidence = incidence_cut.len();
+                let mut shared = 0u32;
+                for &bit in bits {
+                    if cuts[c].0.binary_search(&(bit as u32)).is_ok() {
+                        event_incidences[bit].push(incidence);
+                        shared += 1;
+                    }
+                }
+                incidence_cut.push(c);
+                incidence_shared.push(shared);
+            }
+        }
+        incidence_start.push(incidence_cut.len());
+        UnitIndex {
+            event_units,
+            event_cuts,
+            event_incidences,
+            cut_units,
+            cut_sizes: cuts
+                .iter()
+                .map(|(bits, _)| u32::try_from(bits.len()).unwrap_or(u32::MAX))
+                .collect(),
+            incidence_start,
+            incidence_cut,
+            incidence_shared,
+        }
+    }
+
+    /// How many units the index covers.
+    fn n_units(&self) -> usize {
+        self.incidence_start.len() - 1
+    }
+
+    /// Unit `u` meets at least one cut.
+    fn meets_a_cut(&self, u: usize) -> bool {
+        self.incidence_start[u + 1] > self.incidence_start[u]
+    }
 }
 
-/// Set bit `bit` of a bitset.
-fn set_bit(mask: &mut [u64], bit: usize) {
-    mask[bit / 64] |= 1u64 << (bit % 64);
+/// The state of one replica as the measures read it, kept up to date one
+/// basic event at a time ([`Replay::toggle`]).
+#[derive(Debug)]
+struct Replay<'a> {
+    index: &'a UnitIndex,
+    /// Per cut, its events not active: the cut is realized at zero.
+    missing: Vec<u32>,
+    /// How many cuts are realized.
+    realized: usize,
+    /// Per unit, the realized cuts it meets.
+    touching: Vec<u32>,
+    /// Per unit, its active events.
+    down: Vec<u32>,
+    /// Per incidence, the shared events not active.
+    open: Vec<u32>,
 }
 
-/// Clear bit `bit` of a bitset.
-fn clear_bit(mask: &mut [u64], bit: usize) {
-    mask[bit / 64] &= !(1u64 << (bit % 64));
+impl<'a> Replay<'a> {
+    fn new(index: &'a UnitIndex) -> Self {
+        let mut replay = Replay {
+            index,
+            missing: Vec::new(),
+            realized: 0,
+            touching: vec![0; index.n_units()],
+            down: vec![0; index.n_units()],
+            open: Vec::new(),
+        };
+        replay.reset();
+        replay
+    }
+
+    /// Back to no active basic event.
+    fn reset(&mut self) {
+        self.missing.clone_from(&self.index.cut_sizes);
+        // An empty cut is realized whatever is active.
+        self.realized = self.missing.iter().filter(|&&m| m == 0).count();
+        self.touching.iter_mut().for_each(|t| *t = 0);
+        self.down.iter_mut().for_each(|d| *d = 0);
+        self.open.clone_from(&self.index.incidence_shared);
+    }
+
+    /// Basic event `bit` becomes active (`on`) or inactive. The caller
+    /// toggles an event only into the other value.
+    fn toggle(&mut self, bit: usize, on: bool) {
+        let index = self.index;
+        for &u in &index.event_units[bit] {
+            if on {
+                self.down[u] += 1;
+            } else {
+                self.down[u] -= 1;
+            }
+        }
+        for &incidence in &index.event_incidences[bit] {
+            if on {
+                self.open[incidence] -= 1;
+            } else {
+                self.open[incidence] += 1;
+            }
+        }
+        for &c in &index.event_cuts[bit] {
+            if on {
+                self.missing[c] -= 1;
+            }
+            if self.missing[c] == 0 {
+                // Realized from now on (`on`), or no longer.
+                if on {
+                    self.realized += 1;
+                } else {
+                    self.realized -= 1;
+                }
+                for &u in &index.cut_units[c] {
+                    if on {
+                        self.touching[u] += 1;
+                    } else {
+                        self.touching[u] -= 1;
+                    }
+                }
+            }
+            if !on {
+                self.missing[c] += 1;
+            }
+        }
+    }
+
+    /// `Φ(D ∪ E_u)` on a system that is up: some cut of `u` misses only
+    /// events of `u`, i.e. all its missing events are shared with `u`.
+    fn pivotal_with(&self, u: usize) -> bool {
+        let index = self.index;
+        (index.incidence_start[u]..index.incidence_start[u + 1])
+            .any(|i| self.missing[index.incidence_cut[i]] == self.open[i])
+    }
 }
 
 /// Compute the importance measures of one feared event over a raw
@@ -1396,5 +1548,240 @@ mod tests {
             refused(vec![named("g", Vec::new())]),
             Some(ImportanceError::EmptyGroup { group: "g".into() })
         );
+    }
+
+    /// The measures straight from their definitions, one replica and one
+    /// instant at a time, over the cut sets the analysis reports: the
+    /// reference the incremental reduction is checked against.
+    fn by_definition(
+        raw: &[Sequence],
+        analysis: &ImportanceAnalysis,
+        unit: &[BasicEvent],
+    ) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+        let n = analysis.instants.len();
+        let (mut plus, mut minus, mut down, mut fv) =
+            (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+        let mut w_cuts = vec![0.0; n];
+        let phi = |set: &BTreeSet<BasicEvent>| {
+            analysis
+                .cuts
+                .iter()
+                .any(|cut| cut.events.iter().all(|e| set.contains(e)))
+        };
+        for sequence in raw {
+            for (k, &instant) in analysis.instants.iter().enumerate() {
+                // The last recorded state of each automaton at `instant`.
+                let mut state: HashMap<(&str, &str), &str> = HashMap::new();
+                for e in sequence.events.iter().filter(|e| e.time <= instant) {
+                    state.insert((e.obj.as_str(), e.automaton.as_str()), e.attr.as_str());
+                }
+                let active: BTreeSet<BasicEvent> = state
+                    .iter()
+                    .map(|((obj, automaton), attr)| BasicEvent::new(*obj, *automaton, *attr))
+                    .filter(|e| {
+                        analysis.basic_events.iter().any(|b| b.event == *e) || unit.contains(e)
+                    })
+                    .collect();
+                let with: BTreeSet<BasicEvent> = active.iter().chain(unit).cloned().collect();
+                let without: BTreeSet<BasicEvent> = active
+                    .iter()
+                    .filter(|e| !unit.contains(e))
+                    .cloned()
+                    .collect();
+                let w = sequence.weight;
+                if phi(&with) {
+                    plus[k] += w;
+                }
+                if phi(&without) {
+                    minus[k] += w;
+                }
+                if unit.iter().any(|e| active.contains(e)) {
+                    down[k] += w;
+                }
+                let realized = analysis
+                    .cuts
+                    .iter()
+                    .filter(|cut| cut.events.iter().all(|e| active.contains(e)));
+                if realized.clone().next().is_some() {
+                    w_cuts[k] += w;
+                }
+                if realized
+                    .into_iter()
+                    .any(|cut| cut.events.iter().any(|e| unit.contains(e)))
+                {
+                    fv[k] += w;
+                }
+            }
+        }
+        let total: f64 = raw.iter().map(|s| s.weight).sum();
+        let share = |v: Vec<f64>| v.into_iter().map(|x| x / total).collect::<Vec<_>>();
+        let fv = fv
+            .iter()
+            .zip(&w_cuts)
+            .map(|(f, c)| if *c > 0.0 { f / c } else { 0.0 })
+            .collect();
+        (share(plus), share(minus), share(down), fv)
+    }
+
+    #[test]
+    fn every_unit_matches_its_definition_on_a_random_corpus() {
+        // Six components with two modes each, `Φ = A1 ∨ (B1 ∧ C1) ∨ (D1 ∧
+        // D2)`, failures and repairs drawn at random, uneven weights. E and
+        // F never enter a cut: their groups meet no cut, which is the case
+        // one group per component makes the common one.
+        let mut seed = 7u64;
+        let mut draw = move || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let objs = ["A", "B", "C", "D", "E", "F"];
+        let raw: Vec<Sequence> = (0..300)
+            .map(|replica| {
+                let mut events: Vec<(String, String, String, f64)> = Vec::new();
+                let mut downs: HashMap<(usize, usize), Vec<(f64, f64)>> = HashMap::new();
+                for (o, obj) in objs.iter().enumerate() {
+                    for m in 1..=2 {
+                        let mut t = 0.0;
+                        loop {
+                            t += 10.0 * draw();
+                            if t > 10.0 {
+                                break;
+                            }
+                            let r = t + 2.0 * draw();
+                            events.push(((*obj).into(), format!("fm{m}"), "occ".into(), t));
+                            downs.entry((o, m)).or_default().push((t, r));
+                            if r > 10.0 {
+                                break;
+                            }
+                            events.push(((*obj).into(), format!("fm{m}"), "rep".into(), r));
+                            t = r;
+                        }
+                    }
+                }
+                let is_down = |o: usize, m: usize, t: f64| {
+                    downs
+                        .get(&(o, m))
+                        .is_some_and(|v| v.iter().any(|(a, b)| *a <= t && t < *b))
+                };
+                let mut dates: Vec<f64> = events.iter().map(|e| e.3).collect();
+                dates.sort_by(f64::total_cmp);
+                let mut was = false;
+                for t in dates {
+                    let now = is_down(0, 1, t)
+                        || (is_down(1, 1, t) && is_down(2, 1, t))
+                        || (is_down(3, 1, t) && is_down(3, 2, t));
+                    if now != was {
+                        let attr = if now { "occ" } else { "ok" };
+                        events.push(("T".into(), "ev".into(), attr.into(), t));
+                        was = now;
+                    }
+                }
+                events.sort_by(|a, b| a.3.total_cmp(&b.3));
+                let refs: Vec<(&str, &str, &str, f64)> = events
+                    .iter()
+                    .map(|(o, a, s, t)| (o.as_str(), a.as_str(), s.as_str(), *t))
+                    .collect();
+                let mut sequence = traj(&refs);
+                sequence.weight = [0.5, 1.0, 1.75][replica % 3];
+                sequence
+            })
+            .collect();
+        let named = |o: &str, m: u8| BasicEvent::new(o, format!("fm{m}"), "occ");
+        let events: Vec<BasicEvent> = objs
+            .iter()
+            .flat_map(|o| [named(o, 1), named(o, 2)])
+            .collect();
+        let declared = |name: &str, events: Vec<BasicEvent>| ImportanceGroup {
+            name: name.into(),
+            events,
+        };
+        let groups = vec![
+            declared("pair", vec![named("B", 1), named("C", 1)]),
+            declared("cross", vec![named("A", 1), named("D", 2), named("E", 1)]),
+            declared("free", vec![named("E", 1), named("F", 2)]),
+            declared("lone", vec![named("F", 1)]),
+            declared("d", vec![named("D", 1), named("D", 2)]),
+        ];
+        let instants: Vec<f64> = (0..=10).map(f64::from).collect();
+        let analysis = match importance(&raw, &target(), events, groups.clone(), &instants) {
+            Ok(found) => found,
+            Err(error) => unreachable!("{error}"),
+        };
+        assert!(analysis.q_cuts.iter().any(|q| *q > 0.0));
+        let check = |label: &str, measures: &Measures, unit: &[BasicEvent]| {
+            let (plus, minus, down, fv) = by_definition(&raw, &analysis, unit);
+            assert_eq!(measures.q_system_failed, plus, "{label}: Φ(D ∪ E)");
+            assert_eq!(measures.q_system_intact, minus, "{label}: Φ(D \\ E)");
+            assert_eq!(measures.unavailability, down, "{label}: unavailability");
+            assert_eq!(measures.fussell_vesely, fv, "{label}: Fussell-Vesely");
+        };
+        for found in &analysis.basic_events {
+            check(
+                &found.event.name(),
+                &found.measures,
+                std::slice::from_ref(&found.event),
+            );
+        }
+        for found in &analysis.components {
+            let unit: Vec<BasicEvent> = found
+                .events
+                .iter()
+                .map(|e| {
+                    let (automaton, attr) = e.split_once('.').unwrap_or((e, ""));
+                    BasicEvent::new(&found.component, automaton, attr)
+                })
+                .collect();
+            check(&found.component, &found.measures, &unit);
+        }
+        assert_eq!(analysis.groups.len(), groups.len());
+        for found in &analysis.groups {
+            check(&found.group, &found.measures, &found.events);
+        }
+    }
+
+    #[test]
+    fn an_empty_cut_holds_the_system_down_for_every_group() {
+        // The feared event reached with no basic event active realizes the
+        // empty cut, which absorbs every other cut: the system is down
+        // throughout, no unit meets a cut, and only the groups remain.
+        let raw = vec![
+            traj(&[feared(0.1)]),
+            traj(&[
+                fail("A", 0.2),
+                fail("B", 0.4),
+                feared(0.4),
+                repair("A", 0.6),
+            ]),
+            traj(&[fail("B", 0.3)]),
+        ];
+        let groups = vec![
+            ImportanceGroup {
+                name: "pair".into(),
+                events: modes(&["A", "B"]),
+            },
+            ImportanceGroup {
+                name: "b".into(),
+                events: vec![mode("B")],
+            },
+        ];
+        let instants = [0.0, 0.25, 0.5, 1.0];
+        let analysis = match importance(&raw, &target(), modes(&["A", "B"]), groups, &instants) {
+            Ok(found) => found,
+            Err(error) => unreachable!("{error}"),
+        };
+        assert_eq!(analysis.cuts.len(), 1);
+        assert!(analysis.cuts[0].events.is_empty());
+        assert!(analysis.basic_events.is_empty());
+        assert_eq!(analysis.q_cuts, vec![1.0; 4]);
+        for found in &analysis.groups {
+            let (plus, minus, down, fv) = by_definition(&raw, &analysis, &found.events);
+            assert_eq!(found.measures.q_system_failed, plus, "{}", found.group);
+            assert_eq!(found.measures.q_system_intact, minus, "{}", found.group);
+            assert_eq!(found.measures.unavailability, down, "{}", found.group);
+            assert_eq!(found.measures.fussell_vesely, fv, "{}", found.group);
+        }
+        assert_eq!(analysis.groups.len(), 2);
     }
 }

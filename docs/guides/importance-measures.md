@@ -282,6 +282,15 @@ post-processing is as visible as it will ever be, 32 000 replicas of a
 8 000, 16 000 and 32 000 replicas take 0.047 s, 0.099 s, 0.198 s and
 0.39 s.
 
+Declared groups add to the reduction in proportion to what they hold: a
+replayed state change updates only the units and cuts that contain the
+changed basic event, and a group that meets no cut costs one counter per
+instant. Declaring one group per component on a model of 10 000
+components with repairs (200 replicas, 50 instants, 3.9 million recorded
+state changes) reduces in 1.8 s against 1.5 s without the groups, a
+fraction of the campaign that produced the trajectories (the previous
+reduction took 54 s and 24 s on the same corpus).
+
 ## Limits worth knowing
 
 - A component or a group is **failed** when any of its basic events is
