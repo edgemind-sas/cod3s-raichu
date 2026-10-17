@@ -85,8 +85,27 @@ pub struct EngineConfig {
     /// Re-run every fixpoint in reverse order and fail on divergence
     /// (non-confluence diagnostic; ~2× fixpoint cost when enabled).
     pub confluence_check: bool,
-    /// Safety cap on fixpoint iterations: beyond it the model is
-    /// declared to have an instantaneous loop (typed error, not a hang).
+    /// Safety cap on the runs of **one** function or program within one
+    /// fixpoint: beyond it the model is declared to have an instantaneous
+    /// loop (typed error, not a hang).
+    ///
+    /// Only the steps that sit on a cycle of functions rewriting each
+    /// other's inputs, or their own, are counted. A step on no cycle
+    /// re-runs only when something upstream of it changed, so it cannot
+    /// keep the fixpoint from converging however often it runs: a model
+    /// of 10 000 components settling once each, or a reader re-run once
+    /// per writer, is never mistaken for a loop, and the cap does not
+    /// grow with the model. An endless fixpoint always has a step on a
+    /// cycle that re-runs endlessly, so no loop escapes the count.
+    ///
+    /// Work without a loop is bounded too: a fixpoint that runs more than
+    /// twice this cap times the number of functions and programs fails with
+    /// [`EngineError::FixpointWorkExceeded`]. Readers declared before the
+    /// functions they read are re-run once per path to them, and through
+    /// a deep reconvergent graph the paths multiply.
+    ///
+    /// Sequence-tree exploration reuses the same value as its cap on
+    /// consecutive instantaneous firings ([`EngineError::InstantaneousCycle`]).
     pub max_fixpoint_iterations: usize,
     /// Safety cap on how many times ONE transition may fire in a single
     /// trajectory. Beyond it the model is declared to be chattering
@@ -406,16 +425,43 @@ pub enum EngineError {
         /// Human-readable detail.
         detail: String,
     },
-    /// The sensitive-function propagation did not reach a fixpoint.
+    /// The sensitive-function propagation did not reach a fixpoint: one
+    /// step on a cycle of functions re-ran more than
+    /// [`EngineConfig::max_fixpoint_iterations`] times.
     #[error(
-        "no fixpoint after {iterations} iterations at t={time}: \
-         probable instantaneous loop (functions keep rewriting state)"
+        "no fixpoint at t={time}: `{function}` re-ran more than {iterations} times; \
+         probable instantaneous loop (functions on a cycle keep rewriting each \
+         other's inputs)"
     )]
     InstantaneousLoop {
         /// Simulation time of the failure.
         time: f64,
-        /// Iteration cap that was hit.
+        /// Per-step cap that was hit.
         iterations: usize,
+        /// The function or program that hit it, qualified name: a step
+        /// on the loop.
+        function: String,
+    },
+    /// The fixpoint ran more than twice
+    /// [`EngineConfig::max_fixpoint_iterations`] times its number of steps
+    /// without converging, with no step on a
+    /// cycle over its cap: not a loop, but a propagation whose re-runs
+    /// multiply, typically readers declared before the functions they
+    /// read across a deep reconvergent graph.
+    #[error(
+        "no fixpoint at t={time} after {runs} function runs, more than \
+         twice `max_fixpoint_iterations` times the model's {steps} functions and programs, \
+         with no loop among them: readers declared before the functions they read \
+         re-run once per path to them. Declare them after, or raise \
+         `max_fixpoint_iterations`"
+    )]
+    FixpointWorkExceeded {
+        /// Simulation time of the failure.
+        time: f64,
+        /// Runs allowed, which is the budget that was hit.
+        runs: usize,
+        /// Functions and programs in the model.
+        steps: usize,
     },
     /// The converged state depends on the function evaluation order.
     #[error(

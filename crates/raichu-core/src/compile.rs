@@ -474,6 +474,58 @@ pub enum CStep {
     Block(CBlock),
 }
 
+/// Which fixpoint steps (functions, then programs) sit on a cycle of the
+/// step graph: `s → t` when `s` writes an attribute that `t` is sensitive
+/// to. A step that writes an attribute it reads is its own cycle.
+///
+/// Within one fixpoint the steps are the only writers (transitions fire
+/// between fixpoints), so a step on no cycle is re-enqueued only by a
+/// change upstream of it, and an endless fixpoint needs at least one step
+/// that re-runs endlessly, which must lie on a cycle.
+fn fixpoint_cycles(
+    functions: &[CFunction],
+    programs: &[CProgram],
+    var_triggers: &[Vec<FnIdx>],
+) -> Vec<bool> {
+    fn successors(var_triggers: &[Vec<FnIdx>], writes: impl Iterator<Item = VarIdx>) -> Vec<FnIdx> {
+        let mut next: Vec<FnIdx> = writes
+            .flat_map(|var| var_triggers[var].iter().copied())
+            .collect();
+        next.sort_unstable();
+        next.dedup();
+        next
+    }
+    let mut edges: Vec<Vec<FnIdx>> = functions
+        .iter()
+        .map(|function| {
+            successors(
+                var_triggers,
+                function.effects.iter().map(|(target, _)| *target),
+            )
+        })
+        .collect();
+    edges.extend(programs.iter().map(|program| {
+        successors(
+            var_triggers,
+            program
+                .variables
+                .iter()
+                .map(|variable| variable.target)
+                .chain(std::iter::once(program.feasible))
+                .chain(program.objective_value),
+        )
+    }));
+    let mut cyclic = vec![false; edges.len()];
+    for members in raichu_model::strongly_connected_components(&edges) {
+        if members.len() > 1 || edges[members[0]].contains(&members[0]) {
+            for member in members {
+                cyclic[member] = true;
+            }
+        }
+    }
+    cyclic
+}
+
 /// A compiled sensitive function.
 #[derive(Debug, Clone)]
 pub struct CFunction {
@@ -623,6 +675,11 @@ pub struct CompiledModel {
     pub var_triggers: Vec<Vec<FnIdx>>,
     /// automaton index → functions to re-evaluate when its state changes.
     pub state_triggers: Vec<Vec<FnIdx>>,
+    /// Per fixpoint step (functions, then programs, as in the worklist):
+    /// whether the step sits on a cycle of the step graph (see
+    /// `fixpoint_cycles`), the only steps the loop guard of `evolA`
+    /// counts ([`crate::EngineConfig::max_fixpoint_iterations`]).
+    pub(crate) on_fixpoint_cycle: Vec<bool>,
     /// Indicators.
     pub indicators: Vec<CIndicator>,
     /// Sequence-analysis targets (feared events), resolved to indices.
@@ -2325,6 +2382,8 @@ impl CompiledModel {
             }
         }
 
+        let on_fixpoint_cycle = fixpoint_cycles(&functions, &programs, &var_triggers);
+
         // Pass 5: indicators.
         let indicators = model
             .indicators
@@ -2398,6 +2457,7 @@ impl CompiledModel {
             programs,
             var_triggers,
             state_triggers,
+            on_fixpoint_cycle,
             indicators,
             targets,
             ode,

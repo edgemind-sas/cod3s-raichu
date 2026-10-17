@@ -870,8 +870,9 @@ impl<'m> Engine<'m> {
     /// default [`FLOW_SWEEP_BUDGET`]). Every sweep is charged to exactly
     /// one of them, so the whole resolution is bounded by their sum, plus
     /// the single regrant described below. Neither is the engine's
-    /// [`EngineConfig::max_fixpoint_iterations`], which counts worklist
-    /// pops of the *discrete* fixpoint and would bound a different thing.
+    /// [`EngineConfig::max_fixpoint_iterations`], which counts the runs
+    /// of each step of the *discrete* fixpoint and would bound a
+    /// different thing.
     ///
     /// **Under-relaxation** ([`FlowConfig::relaxation`], by default
     /// [`FLOW_RELAXATION`]) is latched the first time, and only the first
