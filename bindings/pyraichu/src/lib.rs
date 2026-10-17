@@ -35,8 +35,9 @@ use raichu::raichu_explore::{
 use raichu::raichu_expr::{AttrRef, CmpOp};
 use raichu::raichu_fta::{
     fault_tree_envelope, fault_tree_structure, quantify as quantify_tree, read_fault_tree_envelope,
-    read_fault_tree_structure, read_open_psa, Engine as FtaEngine, EnvelopeTop, QuantifySettings,
-    StructureGeneration, StructureSettings, StructureSource,
+    read_fault_tree_structure, read_open_psa, read_open_psa_measure, Engine as FtaEngine,
+    EnvelopeTop, FaultTreeMeasure, QuantifySettings, StructureGeneration, StructureSettings,
+    StructureSource,
 };
 use raichu::raichu_model::Model;
 use raichu::raichu_model::{Indicator, IndicatorTarget};
@@ -1259,9 +1260,11 @@ fn generate_tree(
 /// Generate the fault tree explaining `top_json`, or the targets named by
 /// `targets_json` (see `generate_tree`). Answers `{"tree": {top,
 /// basic_events, warnings}, "minimal_cut_sets": [[event index, ...]],
-/// "open_psa": "<document>"}`.
+/// "open_psa": "<document>"}`, the document naming `measure`
+/// (`probability_without_repair` or `unavailability`), the one it is
+/// meant to be quantified in.
 #[pyfunction]
-#[pyo3(signature = (model_json, top_json = None, profile_json = None, max_nodes = None, cut_set_limit = 100_000, name = "fault_tree", targets_json = None, cut_sets = true))]
+#[pyo3(signature = (model_json, top_json = None, profile_json = None, max_nodes = None, cut_set_limit = 100_000, name = "fault_tree", targets_json = None, cut_sets = true, measure = "probability_without_repair"))]
 #[allow(clippy::too_many_arguments)]
 fn fault_tree_json(
     model_json: &str,
@@ -1272,7 +1275,9 @@ fn fault_tree_json(
     name: &str,
     targets_json: Option<&str>,
     cut_sets: bool,
+    measure: &str,
 ) -> PyResult<String> {
+    let measure = fta_measure(measure)?;
     let (tree, top, generation) =
         generate_tree(model_json, top_json, targets_json, profile_json, max_nodes)?;
     let source_model =
@@ -1330,7 +1335,7 @@ fn fault_tree_json(
     let answer = serde_json::json!({
         "tree": tree,
         "minimal_cut_sets": cuts,
-        "open_psa": tree.to_open_psa(name),
+        "open_psa": tree.to_open_psa(name, measure),
         "structure": structure,
     });
     serde_json::to_string(&answer).map_err(|e| SimulationError::new_err(e.to_string()))
@@ -1342,6 +1347,15 @@ fn validate_fault_tree_structure(structure_json: &str) -> PyResult<()> {
     read_fault_tree_structure(structure_json)
         .map(|_| ())
         .map_err(|e| SimulationError::new_err(e.to_string()))
+}
+
+fn fta_measure(measure: &str) -> PyResult<FaultTreeMeasure> {
+    FaultTreeMeasure::from_name(measure).ok_or_else(|| {
+        SimulationError::new_err(format!(
+            "fault tree: measure `{measure}` is not one of probability_without_repair, \
+             unavailability"
+        ))
+    })
 }
 
 fn fta_engine(engine: &str) -> PyResult<FtaEngine> {
@@ -1358,11 +1372,11 @@ fn fta_engine(engine: &str) -> PyResult<FtaEngine> {
 /// Generate the fault tree of `top_json` or `targets_json` (see
 /// `generate_tree`) and quantify it at each of `mission_times` (at most
 /// 20, strictly increasing; the last is the horizon, where the minimal
-/// cut sets and the importance measures are computed). Answers the
-/// `raichu.fault_tree` envelope as JSON. The GIL is released while the
-/// tree is quantified.
+/// cut sets and the importance measures are computed), in `measure`.
+/// Answers the `raichu.fault_tree` envelope as JSON. The GIL is released
+/// while the tree is quantified.
 #[pyfunction]
-#[pyo3(signature = (model_json, mission_times, top_json = None, targets_json = None, profile_json = None, max_nodes = None, name = "fault_tree", max_bdd_nodes = 10_000_000, cut_set_limit = 100_000, cut_sets = true, engine = "auto", max_order = None, min_cut_probability = 0.0, max_cut_sets = 1_000_000, max_expansions = 100_000_000))]
+#[pyo3(signature = (model_json, mission_times, top_json = None, targets_json = None, profile_json = None, max_nodes = None, name = "fault_tree", max_bdd_nodes = 10_000_000, cut_set_limit = 100_000, cut_sets = true, engine = "auto", max_order = None, min_cut_probability = 0.0, max_cut_sets = 1_000_000, max_expansions = 100_000_000, measure = "probability_without_repair"))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn fault_tree_envelope_json(
     py: Python<'_>,
@@ -1381,8 +1395,10 @@ fn fault_tree_envelope_json(
     min_cut_probability: f64,
     max_cut_sets: usize,
     max_expansions: u64,
+    measure: &str,
 ) -> PyResult<String> {
     let engine = fta_engine(engine)?;
+    let measure = fta_measure(measure)?;
     if !(0.0..=1.0).contains(&min_cut_probability) {
         return Err(SimulationError::new_err(format!(
             "fault tree: min_cut_probability {min_cut_probability} is outside [0, 1]"
@@ -1400,6 +1416,9 @@ fn fault_tree_envelope_json(
         min_cut_probability,
         max_cut_sets,
         max_expansions,
+        measure,
+        // The envelope values every gate itself.
+        gate_probabilities: true,
     };
     let envelope = py
         .detach(|| fault_tree_envelope(&tree, name, top, &mission_times, &settings))
@@ -1424,11 +1443,13 @@ fn validate_fault_tree_envelope(envelope_json: &str) -> PyResult<()> {
 /// importance, and the minimal cut sets when the tree is coherent and
 /// they number at most `cut_set_limit` (not extracted at all when
 /// `cut_sets` is false). `top` names the top gate when the
-/// document has several unreferenced ones. Answers the quantification
-/// with `"tree"` (the document's name) and `"events"` (the basic-event
-/// names, which the indices of the result refer to).
+/// document has several unreferenced ones. `measure` is what each basic
+/// event's probability measures; without it, the measure the document
+/// names, else the probability without repair. Answers the quantification
+/// with `"tree"` (the document's name), `"events"` (the basic-event
+/// names, which the indices of the result refer to) and `"measure"`.
 #[pyfunction]
-#[pyo3(signature = (open_psa, top = None, mission_time = None, max_bdd_nodes = 10_000_000, cut_set_limit = 100_000, cut_sets = true, engine = "auto", max_order = None, min_cut_probability = 0.0, max_cut_sets = 1_000_000, max_expansions = 100_000_000))]
+#[pyo3(signature = (open_psa, top = None, mission_time = None, max_bdd_nodes = 10_000_000, cut_set_limit = 100_000, cut_sets = true, engine = "auto", max_order = None, min_cut_probability = 0.0, max_cut_sets = 1_000_000, max_expansions = 100_000_000, measure = None))]
 #[allow(clippy::too_many_arguments)]
 fn fault_tree_quantify_json(
     py: Python<'_>,
@@ -1443,6 +1464,7 @@ fn fault_tree_quantify_json(
     min_cut_probability: f64,
     max_cut_sets: usize,
     max_expansions: u64,
+    measure: Option<&str>,
 ) -> PyResult<String> {
     let engine = fta_engine(engine)?;
     if !(0.0..=1.0).contains(&min_cut_probability) {
@@ -1450,6 +1472,12 @@ fn fault_tree_quantify_json(
             "fault tree: min_cut_probability {min_cut_probability} is outside [0, 1]"
         )));
     }
+    let measure = match measure {
+        Some(name) => fta_measure(name)?,
+        None => read_open_psa_measure(open_psa)
+            .map_err(|e| SimulationError::new_err(e.to_string()))?
+            .unwrap_or_default(),
+    };
     let settings = QuantifySettings {
         mission_time,
         max_bdd_nodes,
@@ -1460,6 +1488,8 @@ fn fault_tree_quantify_json(
         min_cut_probability,
         max_cut_sets,
         max_expansions,
+        measure,
+        gate_probabilities: false,
     };
     // The GIL is released while the tree is read and quantified.
     let (tree, result) = py
@@ -1475,9 +1505,11 @@ fn fault_tree_quantify_json(
     struct Answer<'a> {
         tree: &'a str,
         events: Vec<&'a str>,
+        measure: &'static str,
         result: &'a raichu::raichu_fta::Quantification,
     }
     let answer = Answer {
+        measure: measure.as_str(),
         tree: &tree.name,
         events: tree.events.iter().map(|e| e.name.as_str()).collect(),
         result: &result,

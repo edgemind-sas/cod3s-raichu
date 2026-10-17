@@ -209,7 +209,11 @@ def test_a_module_over_the_budget_falls_back_to_its_cut_sets():
     assert approximate.method == "cut_sets"
     assert approximate.upper_bound >= exact.probability
     assert approximate.probability >= exact.probability * (1 - 1e-12)
-    assert any("outgrew max_bdd_nodes" in w for w in approximate.warnings)
+    outgrew = [w for w in approximate.warnings if w["kind"] == "module_outgrew_bdd"]
+    assert outgrew and all(w["max_bdd_nodes"] == 1_000 for w in outgrew)
+    assert all(
+        w["message"].startswith(f"module M{w['module']}: ") for w in approximate.warnings
+    )
     with pytest.raises(pyraichu.SimulationError, match="max_bdd_nodes"):
         pyraichu.quantify(document, engine="exact", max_bdd_nodes=1_000)
 

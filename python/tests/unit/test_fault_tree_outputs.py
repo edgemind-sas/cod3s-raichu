@@ -5,7 +5,7 @@ import math
 
 import pyraichu
 import pytest
-from test_fault_tree import model, nok, unit
+from test_fault_tree import _gates, model, nok, unit
 
 
 def pair():
@@ -24,13 +24,13 @@ def test_omitted_extraction_ignores_too_small_budget():
     assert tree.minimal_cut_sets is None
     structural = tree.structure()
     assert structural["format"] == "raichu.fault_tree.structure"
-    assert structural["version"] == 1
+    assert structural["version"] == 2
     assert structural["minimal_cut_sets"] is None
     assert structural["cut_sets_omitted"] == "not requested"
     assert "instants" not in structural and "horizon" not in structural
     assert pyraichu.read_fault_tree_structure(structural) == structural
     result = tree.envelope([1000.0], cut_sets=False, cut_set_limit=1)
-    assert result["version"] == 1
+    assert result["version"] == 2
     assert result["horizon"]["exact"]
     assert result["horizon"]["minimal_cut_sets"] is None
     assert result["horizon"]["probability"] == pytest.approx(1 - math.exp(-2))
@@ -59,7 +59,7 @@ def test_default_extraction_and_structural_roundtrip(tmp_path):
     "field,value,match",
     [
         ("format", "unknown", "format"),
-        ("version", 2, "version"),
+        ("version", 3, "version"),
         ("tree", {}, "JSON"),
         ("minimal_cut_sets", [["unknown"]], "unknown"),
     ],
@@ -97,7 +97,7 @@ def test_deep_generated_tree_reads_back_without_an_implicit_depth_cap():
     assert pyraichu.read_fault_tree_structure(document) == document
     original_warnings = list(document["tree"]["warnings"])
     document["tree"]["basic_events"][0]["name"] = "changed"
-    document["tree"]["warnings"].append("changed")
+    document["tree"]["warnings"].append({"kind": "changed"})
     assert tree.structure()["tree"]["basic_events"][0]["name"] != "changed"
     assert tree.basic_events[0]["name"] != "changed"
     assert tree.structure()["tree"]["warnings"] == original_warnings
@@ -147,3 +147,74 @@ def test_structural_provenance_identifies_model_generation_and_dependencies():
         changed["provenance"]["source"]["model_hash"]
         != provenance["source"]["model_hash"]
     )
+
+
+def test_unavailability_tree_carries_its_measure_coded_warnings_and_gates():
+    from test_fault_tree_targets import (
+        CLOSED_FORM_RTOL,
+        MISSION,
+        declaration,
+        study_model,
+        unavailable,
+    )
+
+    model = study_model(declaration("parallel", repair=0.1))
+    tree = pyraichu.fault_tree(model, targets=["T_lost"], measure="unavailability")
+    assert tree.measure == "unavailability"
+    times = [100.0, MISSION]
+    envelope = tree.envelope(times)
+    assert envelope["version"] == pyraichu.FAULT_TREE_VERSION == 2
+    assert envelope["measure"] == "unavailability"
+    ids = {gate["id"] for gate in _gates(tree.top)}
+    for instant in [*envelope["instants"], envelope["horizon"]]:
+        gates = {gate["id"]: gate for gate in instant["gates"]}
+        assert set(gates) == ids
+        top = gates["top"]
+        assert top["reason"] is None
+        assert top["probability"] == instant["probability"]
+        exact = unavailable("B1", t=instant["mission_time"]) * unavailable(
+            "B2", t=instant["mission_time"]
+        )
+        assert top["probability"] == pytest.approx(exact, rel=CLOSED_FORM_RTOL)
+        assert all(
+            set(g) == {"id", "probability", "reason"} and g["reason"] is None
+            for g in gates.values()
+        )
+    # The same tree without its repairs warns, once per repaired event, by
+    # a code a reader keys on and a sentence a person reads.
+    without = tree.envelope(times, measure="probability_without_repair")
+    warnings = without["generation"]["warnings"]
+    assert [w["kind"] for w in warnings] == ["repair_ignored", "repair_ignored"]
+    assert {w["event"] for w in warnings} == {"B1.frun.failure", "B2.frun.failure"}
+    assert all("probability without repair" in w["message"] for w in warnings)
+    assert pyraichu.read_fault_tree(without) == without
+
+
+def test_documents_of_the_previous_release_read_with_legacy_warnings():
+    source, top = pair()
+    tree = pyraichu.fault_tree(source, top, cut_sets=False)
+    # As 0.99.0 wrote them: version 1, warnings as plain sentences, no
+    # gate probabilities, no gate identifiers.
+    envelope = tree.envelope([1000.0], cut_sets=False)
+    old = copy.deepcopy(envelope)
+    old["version"] = 1
+    old["generation"]["warnings"] = ["a sentence"]
+    old["horizon"]["warnings"] = ["module M0: another sentence"]
+    for result in [*old["instants"], old["horizon"]]:
+        result.pop("gates")
+    read = pyraichu.read_fault_tree(old)
+    assert read["generation"]["warnings"] == [{"kind": "legacy", "message": "a sentence"}]
+    assert read["horizon"]["warnings"] == [
+        {"kind": "legacy", "message": "module M0: another sentence"}
+    ]
+    assert "gates" not in read["instants"][0]
+    structure = tree.structure()
+    old = copy.deepcopy(structure)
+    old["version"] = 1
+    old["tree"]["warnings"] = ["a sentence"]
+    read = pyraichu.read_fault_tree_structure(old)
+    assert read["tree"]["warnings"] == [{"kind": "legacy", "message": "a sentence"}]
+    # A plain sentence belongs to version 1 only.
+    old["version"] = 2
+    with pytest.raises(pyraichu.SimulationError, match="legacy"):
+        pyraichu.read_fault_tree_structure(old)

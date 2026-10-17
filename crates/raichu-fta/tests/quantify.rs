@@ -12,6 +12,7 @@ fn constant(name: &str, probability: f64) -> BasicEvent {
     BasicEvent {
         name: name.to_owned(),
         law: Law::Constant { probability },
+        repairs: Vec::new(),
     }
 }
 
@@ -173,6 +174,7 @@ fn timed_laws_are_read_at_the_mission_time() {
         BasicEvent {
             name: "pump".to_owned(),
             law: Law::Exponential { rate: 1e-3 },
+            repairs: Vec::new(),
         },
         BasicEvent {
             name: "valve".to_owned(),
@@ -180,6 +182,7 @@ fn timed_laws_are_read_at_the_mission_time() {
                 shape: 2.0,
                 scale: 500.0,
             },
+            repairs: Vec::new(),
         },
     ];
     let t = tree(events, Formula::and(vec![e(0), e(1)]));
@@ -361,6 +364,7 @@ fn a_law_openpsa_cannot_express_round_trips_through_attributes() {
             mu: 4.0,
             sigma: 0.5,
         },
+        repairs: Vec::new(),
     }];
     let original = Tree {
         name: "t".to_owned(),

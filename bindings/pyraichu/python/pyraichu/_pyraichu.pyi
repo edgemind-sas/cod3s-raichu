@@ -137,6 +137,7 @@ def fault_tree_json(
     name: str = "fault_tree",
     targets_json: str | None = None,
     cut_sets: bool = True,
+    measure: str = "probability_without_repair",
 ) -> str: ...
 def fault_tree_envelope_json(
     model_json: str,
@@ -154,9 +155,20 @@ def fault_tree_envelope_json(
     min_cut_probability: float = 0.0,
     max_cut_sets: int = 1_000_000,
     max_expansions: int = 100_000_000,
-) -> str: ...
-def validate_fault_tree_structure(structure_json: str) -> None: ...
-def validate_fault_tree_envelope(envelope_json: str) -> None: ...
+    measure: str = "probability_without_repair",
+) -> str:
+    """The ``raichu.fault_tree`` envelope, version 2: every instant and
+    the horizon carry ``gates``, each ``{"id", "probability", "reason"}``,
+    and every warning is coded (``{"kind", ..., "message"}``)."""
+    ...
+def validate_fault_tree_structure(structure_json: str) -> None:
+    """Validate a ``raichu.fault_tree.structure`` document of version 1
+    or 2; a version-1 plain-sentence warning reads as ``legacy``."""
+    ...
+def validate_fault_tree_envelope(envelope_json: str) -> None:
+    """Validate a ``raichu.fault_tree`` envelope of version 1 or 2; a
+    version-1 plain-sentence warning reads as ``legacy``."""
+    ...
 def fault_tree_quantify_json(
     open_psa: str,
     top: str | None = None,
@@ -169,6 +181,7 @@ def fault_tree_quantify_json(
     min_cut_probability: float = 0.0,
     max_cut_sets: int = 1_000_000,
     max_expansions: int = 100_000_000,
+    measure: str | None = None,
 ) -> str: ...
 def validate_exploration(result_json: str) -> None: ...
 def quantify_json(

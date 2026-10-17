@@ -213,7 +213,7 @@ fn the_tree_exports_to_open_psa() {
     ]);
     let top = json!({"op": "bool", "bool_op": "and", "args": [nok("A"), nok("B")]});
     let tree = fault_tree(&m, &expr(top), &FaultTreeSettings::default()).expect("tree");
-    let xml = tree.to_open_psa("parallel");
+    let xml = tree.to_open_psa("parallel", raichu_core::FaultTreeMeasure::default());
     assert!(xml.contains("<define-fault-tree name=\"parallel\">"));
     assert!(xml.contains(
         "<and><basic-event name=\"A.health.fail\"/><basic-event name=\"B.health.fail\"/></and>"

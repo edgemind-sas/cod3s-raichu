@@ -184,6 +184,88 @@ impl Law {
     }
 }
 
+impl Law {
+    /// The mean time to occurrence, for the event named `event`: the law's
+    /// first moment (`1 / rate`, `scale Γ(1 + 1/shape)`, `exp(mu +
+    /// sigma²/2)`, `shape scale`, `(low + high) / 2`, the delay, and for an
+    /// empirical table the mass of each point and segment at its mean
+    /// time). Infinite for an exponential of rate zero; `None` for a
+    /// constant probability, which has no time.
+    ///
+    /// # Errors
+    /// [`FtaError::BadLaw`] for parameters the law cannot take.
+    pub fn mean(&self, event: &str) -> Result<Option<f64>, FtaError> {
+        let bad = |detail: String| FtaError::BadLaw {
+            event: event.to_owned(),
+            detail,
+        };
+        let finite_positive = |a: f64, b: f64, what: &str| {
+            if a.is_finite() && a > 0.0 && b.is_finite() && b > 0.0 {
+                Ok(())
+            } else {
+                Err(bad(format!("{what} must be finite and positive")))
+            }
+        };
+        let mean = match self {
+            Law::Constant { .. } => return Ok(None),
+            Law::Exponential { rate } => {
+                if !(rate.is_finite() && *rate >= 0.0) {
+                    return Err(bad(format!(
+                        "rate {rate} is not a finite non-negative number"
+                    )));
+                }
+                if *rate == 0.0 {
+                    f64::INFINITY
+                } else {
+                    1.0 / rate
+                }
+            }
+            Law::Weibull { shape, scale } => {
+                finite_positive(*shape, *scale, &format!("shape {shape} and scale {scale}"))?;
+                scale * libm::tgamma(1.0 + 1.0 / shape)
+            }
+            Law::Lognormal { mu, sigma } => {
+                if !(mu.is_finite() && sigma.is_finite() && *sigma > 0.0) {
+                    return Err(bad(format!(
+                        "mu {mu} must be finite and sigma {sigma} finite and positive"
+                    )));
+                }
+                libm::exp(mu + sigma * sigma / 2.0)
+            }
+            Law::Gamma { shape, scale } => {
+                finite_positive(*shape, *scale, &format!("shape {shape} and scale {scale}"))?;
+                shape * scale
+            }
+            Law::Uniform { low, high } => {
+                if !(low.is_finite() && high.is_finite() && low < high) {
+                    return Err(bad(format!("bounds [{low}, {high}) are not an interval")));
+                }
+                (low + high) / 2.0
+            }
+            Law::Delay { time } => {
+                if !(time.is_finite() && *time >= 0.0) {
+                    return Err(bad(format!(
+                        "delay {time} is not a finite non-negative number"
+                    )));
+                }
+                *time
+            }
+            Law::Empirical { points } => {
+                // The same checks as the distribution's, then the mean of
+                // what `empirical_cdf` describes.
+                empirical_cdf(points, 0.0).map_err(bad)?;
+                let mut mean = points.first().map_or(0.0, |&(t, c)| t * c);
+                for window in points.windows(2) {
+                    let ((t0, c0), (t1, c1)) = (window[0], window[1]);
+                    mean += (c1 - c0) * (t0 + t1) / 2.0;
+                }
+                mean
+            }
+        };
+        Ok(Some(mean))
+    }
+}
+
 // The constant law returned early above; this arm only keeps the match
 // exhaustive without a panic on the library path.
 fn unreachable_constant() -> f64 {
@@ -380,6 +462,68 @@ mod tests {
         );
         assert_eq!(at(Law::Delay { time: 5.0 }, 4.999), 0.0);
         assert_eq!(at(Law::Delay { time: 5.0 }, 5.0), 1.0);
+    }
+
+    fn mean(law: Law) -> f64 {
+        law.mean("e").unwrap().unwrap()
+    }
+
+    #[test]
+    fn every_timed_law_has_its_mean() {
+        assert_eq!(mean(Law::Exponential { rate: 0.5 }), 2.0);
+        assert_eq!(mean(Law::Exponential { rate: 0.0 }), f64::INFINITY);
+        let weibull = mean(Law::Weibull {
+            shape: 2.0,
+            scale: 10.0,
+        });
+        assert!(
+            (weibull - 10.0 * core::f64::consts::PI.sqrt() / 2.0).abs() < 1e-13,
+            "{weibull}"
+        );
+        // Shape one is the exponential of rate 1 / scale.
+        let one = mean(Law::Weibull {
+            shape: 1.0,
+            scale: 40.0,
+        });
+        assert!((one - 40.0).abs() < 1e-12, "{one}");
+        let lognormal = mean(Law::Lognormal {
+            mu: 1.0,
+            sigma: 0.5,
+        });
+        assert!((lognormal - 1.125f64.exp()).abs() < 1e-14, "{lognormal}");
+        assert_eq!(
+            mean(Law::Gamma {
+                shape: 3.0,
+                scale: 2.0
+            }),
+            6.0
+        );
+        assert_eq!(
+            mean(Law::Uniform {
+                low: 2.0,
+                high: 6.0
+            }),
+            4.0
+        );
+        assert_eq!(mean(Law::Delay { time: 5.0 }), 5.0);
+        // The first point's mass at its time, then each linear segment's
+        // mass at its midpoint.
+        let empirical = mean(Law::Empirical {
+            points: vec![(1.0, 0.2), (3.0, 0.6), (5.0, 1.0)],
+        });
+        assert!((empirical - 2.6).abs() < 1e-15, "{empirical}");
+        assert_eq!(Law::Constant { probability: 0.1 }.mean("e").unwrap(), None);
+    }
+
+    #[test]
+    fn a_mean_of_bad_parameters_is_refused_by_name() {
+        let err = Law::Uniform {
+            low: 6.0,
+            high: 2.0,
+        }
+        .mean("pump.fail")
+        .unwrap_err();
+        assert!(err.to_string().contains("pump.fail"), "{err}");
     }
 
     #[test]

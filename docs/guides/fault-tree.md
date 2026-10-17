@@ -109,7 +109,7 @@ in the OpenPSA file).
 | `basic_events` | one entry per transition draw: `name`, `component`, `automaton`, `transition`, `target` and its `law` with the law's parameters; `event` in `top` indexes this list |
 | `minimal_cut_sets` | each a sorted list of basic-event names, ordered by size then name; `None` when `cut_sets=False` |
 | `open_psa` | the OpenPSA document (see [The file](#the-file)) |
-| `warnings` | why the tree's probability may exceed the model's own, one sentence per transition concerned; empty when the tree is exact (see [What the number means](#what-the-number-means)) |
+| `warnings` | why the tree's probability may exceed the model's own, one coded warning (`kind`, its parameters, and a readable `message`) per transition and reason concerned; empty when the tree is exact (see [What the number means](#what-the-number-means)) |
 
 ```python
 assert tree.top["gate"] == "or"
@@ -120,7 +120,8 @@ Set `cut_sets=False` to skip structural cut-set extraction. The default
 remains `True`. A skipped collection is `None`, never an empty list; the
 extraction budget cannot block generation when extraction is skipped.
 `tree.structure()` returns the producer-owned `raichu.fault_tree.structure`
-v1 document, containing the gates, basic events, generation warnings and
+version 2 document, containing the gates (with their identifiers and
+origins), basic events, coded generation warnings and
 requested structural cuts without quantifying any probability. Read it with
 `pyraichu.read_fault_tree_structure`.
 
@@ -227,7 +228,12 @@ probability within its confidence interval; the test suite checks it on each
 of the three.
 
 Where one of these does not hold, the tree **over-estimates**, and says where:
-`warnings` holds one sentence per transition concerned.
+`warnings` holds one coded warning per transition and reason concerned: a
+`kind` (`guard_reads_state`, `entered_during_mission`,
+`competing_transition`, `target_left`), its parameters, and the readable
+`message`. A repair is not a generation warning: each basic event carries
+its `repairs`, and the envelope says, once per event, what the measure makes
+of them (`repair_ignored` under the probability without repair).
 
 | Warning | Why the tree is above the model |
 |---|---|
@@ -238,6 +244,19 @@ Where one of these does not hold, the tree **over-estimates**, and says where:
 
 On a coherent top, each of these can only add failures, so the tree remains an
 upper bound. The empty list is the statement that the tree is exact.
+
+### Unavailability
+
+`fault_tree(..., measure="unavailability")` (or `measure=` on `quantify` and
+`envelope`) counts the repairs: a repairable event is the probability of
+being down at the mission time, `λ/(λ+µ) (1 - e^{-(λ+µ)t})` for an
+exponential failure with exponential repairs, the asymptotic
+`MTTR / (MTTF + MTTR)` otherwise, with an `asymptotic_unavailability`
+warning naming the event. A common-cause combination valued with its own
+repair, and a guarded repair counted as available, are warned too; these
+three approximations have no known direction, so the envelope certifies no
+upper bound under them. The format reference details the rules
+([Measures](../reference/fault-tree-format.md#measures)).
 
 ### Forms of a muscadet model
 
@@ -260,20 +279,34 @@ answer different questions.
 
 `lost_tree.envelope(mission_times)` quantifies the tree at each of 1 to 20 strictly
 increasing mission times and returns the `raichu.fault_tree` envelope, a
-versioned document RAICHU produces: the probability at every instant, and at
-the last one (the horizon) the minimal cut sets with their probabilities and
-the importance of each basic event, beside the generation warnings and the
-settings applied. Its schema is the
+versioned document RAICHU produces (version 2): what its probabilities
+measure (`measure`), the probability at every instant, and that of every
+gate, and at the last one (the horizon) the minimal cut sets with their
+probabilities and the importance of each basic event, beside the coded
+warnings and the settings applied. Its schema is the
 [fault-tree envelope format](../reference/fault-tree-format.md);
 `pyraichu.read_fault_tree` checks a document's format and version before
-reading it.
+reading it, and still reads a version-1 envelope, its plain-sentence
+warnings coming back as `{"kind": "legacy", "message": ...}`.
+
+Each instant's `gates` lists every gate by its identifier (the `id` of
+`tree.top`'s gates, whose `origin` says what part of the model it stands
+for), with its probability at that instant in the envelope's measure: the
+top gate's is the instant's own when the quantification is exact. A gate
+in a module quantified from its cut sets, or reading one, has `null` and
+its `reason` (`"cut_sets"`, `"reads_cut_sets"`): a partial result
+announced, the top still quantified.
 
 ```python
 envelope = lost_tree.envelope([100.0, 500.0, 1000.0])
-assert envelope["format"] == "raichu.fault_tree" and envelope["version"] == 1
+assert envelope["format"] == "raichu.fault_tree" and envelope["version"] == 2
+assert envelope["measure"] == "probability_without_repair"
 assert [i["mission_time"] for i in envelope["instants"]] == [100.0, 500.0, 1000.0]
 assert envelope["horizon"]["minimal_cut_sets"][0]["order"] == 2
 assert envelope["generation"]["exact"]
+for instant in envelope["instants"]:
+    top_gate = instant["gates"][0]
+    assert top_gate["id"] == "top" and top_gate["probability"] == instant["probability"]
 ```
 
 ## What is refused
@@ -330,7 +363,7 @@ What the result carries:
 | `probability` | the top-event probability at the mission time |
 | `method`, `exact` | `"bdd"`, `"cut_sets"` or `"bdd+cut_sets"`, and whether the number is exact |
 | `upper_bound` | a guaranteed upper bound on the top probability, equal to it when exact |
-| `warnings` | what deserves attention before trusting the number; empty when exact |
+| `warnings` | what deserves attention before trusting the number, coded per module (`module_outgrew_bdd`, `max_cut_sets_reached`, `max_expansions_exhausted`, `neglected_mass_exceeds_estimate`) with a readable `message`; empty when exact |
 | `coherent` | whether the top is monotone in every basic event |
 | `minimal_cut_sets`, `cut_set_count` | the sets, by size then name, and their number |
 | `cut_sets_complete` | whether they are all of them (no cutoff removed any) |

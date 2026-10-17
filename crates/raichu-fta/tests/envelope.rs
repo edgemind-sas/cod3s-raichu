@@ -4,11 +4,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use raichu_core::{BasicLaw, FaultTree, FtNode, GateOp, TreeEvent};
+use raichu_core::{BasicLaw, FaultTree, FtNode, GateOp, GenerationWarning, TreeEvent};
 use raichu_fta::{
-    fault_tree_envelope, read_fault_tree_envelope, EnvelopeTop, FtaError, QuantifySettings,
-    ReadFaultTreeError, FAULT_TREE_FORMAT, FAULT_TREE_VERSION, MAX_MISSION_TIMES,
-    MEASURE_WITHOUT_REPAIR,
+    fault_tree_envelope, read_fault_tree_envelope, EnvelopeTop, EnvelopeWarning, FtaError,
+    QuantifySettings, QuantifyWarning, ReadFaultTreeError, FAULT_TREE_FORMAT, FAULT_TREE_VERSION,
+    MAX_MISSION_TIMES, MEASURE_WITHOUT_REPAIR,
 };
 
 fn event(component: &str, rate: f64) -> TreeEvent {
@@ -19,14 +19,17 @@ fn event(component: &str, rate: f64) -> TreeEvent {
         transition: "fail".to_owned(),
         target: "nok".to_owned(),
         law: BasicLaw::Exponential { rate },
+        repairs: Vec::new(),
     }
 }
 
 /// Two blocks in parallel: lost when both have failed.
-fn parallel(warnings: Vec<String>) -> FaultTree {
+fn parallel(warnings: Vec<GenerationWarning>) -> FaultTree {
     FaultTree {
         top: FtNode::Gate {
             op: GateOp::And,
+            id: None,
+            origin: None,
             children: vec![FtNode::Basic { event: 0 }, FtNode::Basic { event: 1 }],
         },
         basic_events: vec![event("B1", 1e-3), event("B2", 2e-3)],
@@ -87,7 +90,11 @@ fn every_mission_time_is_quantified_and_the_horizon_carries_the_detail() {
 
 #[test]
 fn the_envelope_reads_back_and_names_its_generation_warnings() {
-    let warning = "`B1.health.nok` is left again by `B1.health.repair`".to_owned();
+    let warning = GenerationWarning::TargetLeft {
+        automaton: "B1.health".to_owned(),
+        state: "nok".to_owned(),
+        transitions: vec!["B1.health.die".to_owned()],
+    };
     let envelope = fault_tree_envelope(
         &parallel(vec![warning.clone()]),
         "rbd",
@@ -97,13 +104,32 @@ fn the_envelope_reads_back_and_names_its_generation_warnings() {
     )
     .expect("envelope");
     assert!(!envelope.generation.exact);
-    assert_eq!(envelope.generation.warnings, vec![warning]);
+    assert_eq!(
+        envelope.generation.warnings,
+        vec![EnvelopeWarning {
+            warning: warning.clone(),
+            message: warning.to_string(),
+        }]
+    );
     let mut envelope = envelope;
     // A value serde_json's default float parser reads one ulp off, and a
     // cut-set count past `u64`.
     envelope.horizon.probability = 0.248_720_059_264_354_14;
     envelope.horizon.cut_set_count = Some(u128::from(u64::MAX) + 1);
     let text = envelope.to_json().expect("json");
+    // The document carries the code, its parameters and the readable
+    // message beside them.
+    let document: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(
+        document["generation"]["warnings"],
+        serde_json::json!([{
+            "kind": "target_left",
+            "automaton": "B1.health",
+            "state": "nok",
+            "transitions": ["B1.health.die"],
+            "message": warning.to_string(),
+        }])
+    );
     let read = read_fault_tree_envelope(&text).expect("read");
     assert_eq!(
         read.horizon.probability.to_bits(),
@@ -159,4 +185,102 @@ fn a_bad_list_of_mission_times_is_refused() {
     }
     let error = fault_tree_envelope(&tree, "rbd", top(), &[f64::NAN], &settings).unwrap_err();
     assert!(matches!(error, FtaError::BadMissionTime(_)), "{error}");
+}
+
+/// An envelope as the previous release wrote it, version 1: warnings are
+/// plain sentences, no gate carries a probability.
+const VERSION_1: &str = r#"{
+  "format": "raichu.fault_tree",
+  "version": 1,
+  "provenance": {"engine_version": "0.99.0", "tree": "rbd"},
+  "top": {"kind": "targets", "targets": ["T_lost"]},
+  "measure": "probability_without_repair",
+  "generation": {
+    "exact": false,
+    "warnings": ["`B1.health.nok` is left for another state by `B1.health.die`; the tree ignores it, so it over-estimates"],
+    "basic_events": [
+      {"name": "B1.health.fail", "component": "B1", "automaton": "B1.health",
+       "transition": "fail", "target": "nok", "law": {"law": "exponential", "rate": 0.001}},
+      {"name": "B2.health.fail", "component": "B2", "automaton": "B2.health",
+       "transition": "fail", "target": "nok", "law": {"law": "exponential", "rate": 0.002}}
+    ]
+  },
+  "settings": {"max_bdd_nodes": 10000000, "cut_set_limit": 100000, "cut_sets": true,
+               "engine": "auto", "max_order": null, "min_cut_probability": 0.0,
+               "max_cut_sets": 1000000, "max_expansions": 100000000},
+  "instants": [
+    {"mission_time": 1000.0, "probability": 0.5465751103, "method": "cut_sets",
+     "exact": false, "upper_bound": 0.55,
+     "warnings": ["module M0: its exact diagram outgrew max_bdd_nodes (2): quantified from its cut sets under cutoffs"]}
+  ],
+  "horizon": {
+    "mission_time": 1000.0, "probability": 0.5465751103, "method": "cut_sets",
+    "exact": false, "upper_bound": 0.55, "coherent": true, "cut_set_count": 1,
+    "cut_sets_complete": true, "cut_sets_omitted": null,
+    "minimal_cut_sets": [{"events": ["B1.health.fail", "B2.health.fail"], "order": 2,
+                          "probability": 0.5465751103}],
+    "importance": [],
+    "warnings": ["module M0: its exact diagram outgrew max_bdd_nodes (2): quantified from its cut sets under cutoffs"],
+    "provenance": {"variable_order": "depth_first_left_most", "modules": []}
+  }
+}"#;
+
+#[test]
+fn an_envelope_of_the_previous_release_reads_with_legacy_warnings() {
+    let read = read_fault_tree_envelope(VERSION_1).expect("a version-1 envelope reads");
+    assert_eq!(read.version, 1);
+    let sentence = "`B1.health.nok` is left for another state by `B1.health.die`; the \
+                    tree ignores it, so it over-estimates";
+    assert_eq!(
+        read.generation.warnings,
+        vec![EnvelopeWarning {
+            warning: GenerationWarning::Legacy {
+                message: sentence.to_owned()
+            },
+            message: sentence.to_owned(),
+        }]
+    );
+    let module = "module M0: its exact diagram outgrew max_bdd_nodes (2): quantified from \
+                  its cut sets under cutoffs";
+    let legacy = vec![QuantifyWarning::Legacy {
+        message: module.to_owned(),
+    }];
+    assert_eq!(read.instants[0].warnings, legacy);
+    assert_eq!(read.horizon.warnings, legacy);
+    assert!(read.instants[0].gates.is_empty());
+    assert!(read.horizon.gates.is_empty());
+    // Written again, a legacy warning is the variant `{kind: legacy,
+    // message}`, which reads back to itself.
+    let text = read.to_json().unwrap();
+    let document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        document["generation"]["warnings"][0],
+        serde_json::json!({"kind": "legacy", "message": sentence})
+    );
+    assert_eq!(
+        document["horizon"]["warnings"][0],
+        serde_json::json!({"kind": "legacy", "message": module})
+    );
+    assert_eq!(read_fault_tree_envelope(&text).unwrap(), read);
+}
+
+#[test]
+fn a_version_2_envelope_carries_no_plain_sentence_and_no_legacy_warning() {
+    let mut document: serde_json::Value = serde_json::from_str(VERSION_1).unwrap();
+    document["version"] = serde_json::json!(2);
+    let error = read_fault_tree_envelope(&document.to_string()).unwrap_err();
+    assert!(
+        matches!(&error, ReadFaultTreeError::Json(why) if why.contains("legacy")),
+        "{error}"
+    );
+}
+
+#[test]
+fn version_3_is_refused_by_name() {
+    let mut document: serde_json::Value = serde_json::from_str(VERSION_1).unwrap();
+    document["version"] = serde_json::json!(3);
+    let error = read_fault_tree_envelope(&document.to_string()).unwrap_err();
+    assert_eq!(error, ReadFaultTreeError::Version(Some(3)));
+    assert!(error.to_string().contains("version Some(3)"), "{error}");
+    assert_eq!(FAULT_TREE_VERSION, 2);
 }

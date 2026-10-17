@@ -38,6 +38,7 @@
 //! let event = |name: &str, probability: f64| BasicEvent {
 //!     name: name.to_owned(),
 //!     law: Law::Constant { probability },
+//!     repairs: Vec::new(),
 //! };
 //! // Two pumps in parallel, behind one valve in series.
 //! let tree = Tree {
@@ -63,22 +64,25 @@ mod from_core;
 mod law;
 mod open_psa;
 mod quantify;
+mod repair;
 mod structure;
 mod tree;
 
 pub use envelope::{
-    fault_tree_envelope, read_fault_tree_envelope, EnvelopeCutSet, EnvelopeEvent,
+    fault_tree_envelope, read_fault_tree_envelope, EnvelopeCutSet, EnvelopeEvent, EnvelopeGate,
     EnvelopeGeneration, EnvelopeImportance, EnvelopeProvenance, EnvelopeSettings, EnvelopeTop,
-    FaultTreeEnvelope, HorizonResult, InstantResult, ReadFaultTreeError, FAULT_TREE_FORMAT,
-    FAULT_TREE_VERSION, MAX_MISSION_TIMES, MEASURE_WITHOUT_REPAIR,
+    EnvelopeWarning, FaultTreeEnvelope, HorizonResult, InstantResult, ReadFaultTreeError,
+    FAULT_TREE_FORMAT, FAULT_TREE_VERSION, MAX_MISSION_TIMES, MEASURE_UNAVAILABILITY,
+    MEASURE_WITHOUT_REPAIR,
 };
 pub use law::Law;
-pub use open_psa::{read_open_psa, write_open_psa};
+pub use open_psa::{read_open_psa, read_open_psa_measure, write_open_psa};
 pub use quantify::{
-    quantify, CutoffRecord, Engine, EventImportance, ModuleRecord, Provenance, Quantification,
-    QuantifySettings,
+    quantify, CutoffRecord, Engine, EventImportance, GateProbability, GateReason, ModuleRecord,
+    Provenance, Quantification, QuantifySettings, QuantifyWarning,
 };
-pub use tree::{BasicEvent, Formula, GateDef, Tree};
+pub use raichu_core::FaultTreeMeasure;
+pub use tree::{BasicEvent, Formula, GateDef, Repair, Tree};
 
 /// The stack given to [`quantify`] and [`read_open_psa`]: reserved
 /// address space, committed only as it is used.
