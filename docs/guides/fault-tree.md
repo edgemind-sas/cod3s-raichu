@@ -245,6 +245,22 @@ of them (`repair_ignored` under the probability without repair).
 On a coherent top, each of these can only add failures, so the tree remains an
 upper bound. The empty list is the statement that the tree is exact.
 
+A guard is warned only where it can hold a draw back. A guard that holds
+whenever the transition's source state is active conditions nothing: the
+generator reads it with the automaton in that state, through the automata
+that follow a condition (two states, two transitions no draw governs, one
+back under the exact negation of the other's guard), and drops the warning
+when it comes out true. The default guards of a muscadet external mode are
+such guards: the mode fails only while its target's mirror is at rest, and is
+repaired only while the mirror is failed, and the mirror follows the mode. A
+second mode on the same target, or a common-cause combination sharing it,
+makes the lock a real condition, and it is warned. The transitions of an
+automaton that follows a condition (the mirror's own) are entered the instant
+the condition holds and left the instant it fails, so neither timing warning
+applies to them. A zero-delay transition into a state that outlives its guard
+(a trip with no reset) keeps both: the tree reads the guard at the mission
+time, the model latches what it held at any earlier time.
+
 ### Unavailability
 
 `fault_tree(..., measure="unavailability")` (or `measure=` on `quantify` and
@@ -253,7 +269,8 @@ being down at the mission time, `λ/(λ+µ) (1 - e^{-(λ+µ)t})` for an
 exponential failure with exponential repairs, the asymptotic
 `MTTR / (MTTF + MTTR)` otherwise, with an `asymptotic_unavailability`
 warning naming the event. A common-cause combination valued with its own
-repair, and a guarded repair counted as available, are warned too; these
+repair, and a guarded repair counted as available (unless its source state
+implies the guard, as above), are warned too; these
 three approximations have no known direction, so the envelope certifies no
 upper bound under them. The format reference details the rules
 ([Measures](../reference/fault-tree-format.md#measures)).
