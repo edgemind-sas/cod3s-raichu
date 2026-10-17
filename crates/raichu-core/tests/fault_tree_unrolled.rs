@@ -8,7 +8,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use raichu_core::{
-    fault_tree, fault_tree_for_targets, CompiledModel, FaultTree, FaultTreeError, FaultTreeSettings,
+    fault_tree, fault_tree_for_targets, BasicLaw, CompiledModel, FaultTree, FaultTreeError,
+    FaultTreeSettings, FtNode, GateOp, GateOrigin, GenerationWarning, OriginKind, TreeRepair,
 };
 use raichu_expr::Expr;
 use raichu_model::Model;
@@ -341,31 +342,377 @@ fn an_unknown_target_is_refused_naming_the_declared_ones() {
 }
 
 #[test]
-fn what_makes_the_tree_an_upper_bound_is_said_per_transition() {
-    // A repair the tree ignores.
+fn a_repair_is_attached_to_its_event_not_warned_at_generation() {
+    // The repair back to the event's source is a fact of structure: the
+    // event carries it with its law; whether it is ignored depends on the
+    // measure the tree is quantified in, so generation says nothing.
     let m = system(
         vec![block("B1", 1e-3, Some(0.1)), block("B2", 2e-3, None)],
         "any",
         0.0,
     );
     let tree = targets(&m).expect("tree");
-    assert_eq!(tree.warnings.len(), 1, "{:?}", tree.warnings);
+    assert!(tree.warnings.is_empty(), "{:?}", tree.warnings);
+    let b1 = tree
+        .basic_events
+        .iter()
+        .find(|e| e.component == "B1")
+        .expect("B1");
+    assert_eq!(
+        b1.repairs,
+        vec![TreeRepair {
+            transition: "B1.health.repair".to_owned(),
+            law: Some(BasicLaw::Exponential { rate: 0.1 }),
+            guarded: false,
+        }]
+    );
+    let b2 = tree
+        .basic_events
+        .iter()
+        .find(|e| e.component == "B2")
+        .expect("B2");
+    assert!(b2.repairs.is_empty());
+    // The structure document carries the repair, with its law nested.
+    let coded = serde_json::to_value(b1).expect("json");
+    assert_eq!(
+        coded["repairs"],
+        json!([{"transition": "B1.health.repair",
+                "law": {"law": "exponential", "rate": 0.1},
+                "guarded": false}])
+    );
+    // A tree written before repairs existed reads back with none.
+    let mut old = coded.clone();
+    old.as_object_mut().unwrap().remove("repairs");
+    let read: raichu_core::TreeEvent = serde_json::from_value(old).expect("read");
+    assert!(read.repairs.is_empty());
+}
+
+#[test]
+fn a_guarded_repair_is_attached_as_guarded() {
+    // The repair waits for B2 to be up: a guard on states (an ObjMode2S
+    // `not_occ_cond`), counted as available and said to be guarded.
+    let mut b1 = block("B1", 1e-3, Some(0.1));
+    b1["automata"][0]["transitions"][1]["guard"] = state("B2", "health", "ok");
+    let m = system(vec![b1, block("B2", 2e-3, None)], "any", 0.0);
+    let tree = targets(&m).expect("tree");
+    let b1 = tree
+        .basic_events
+        .iter()
+        .find(|e| e.component == "B1")
+        .expect("B1");
+    assert_eq!(b1.repairs.len(), 1);
+    assert!(b1.repairs[0].guarded);
+}
+
+#[test]
+fn leaving_the_target_for_a_third_state_is_no_repair() {
+    // nok is left for `dead`, not for `ok`: that exit is not a repair of
+    // the failure; it keeps a generation warning of its own.
+    let mut b1 = block("B1", 1e-3, None);
+    b1["automata"][0]["states"] = json!(["ok", "nok", "dead"]);
+    b1["automata"][0]["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "die", "source": "nok", "targets": ["dead"],
+                     "distrib": "exp", "rate": 0.5}));
+    let m = system(vec![b1, block("B2", 2e-3, None)], "any", 0.0);
+    let tree = targets(&m).expect("tree");
+    let fail = tree
+        .basic_events
+        .iter()
+        .find(|e| e.name == "B1.health.fail")
+        .expect("B1 fail");
+    assert!(fail.repairs.is_empty(), "{:?}", fail.repairs);
     assert!(
-        tree.warnings[0].contains("B1.health.repair"),
+        tree.warnings.contains(&GenerationWarning::TargetLeft {
+            automaton: "B1.health".to_owned(),
+            state: "nok".to_owned(),
+            transitions: vec!["B1.health.die".to_owned()],
+        }),
         "{:?}",
         tree.warnings
     );
+}
 
-    // A failure that can only happen while another block is down.
+#[test]
+fn what_makes_the_tree_an_upper_bound_is_said_per_transition() {
+    // A failure that can only happen while another block is down: coded
+    // with the guarded transition's name.
     let mut b2 = block("B2", 2e-3, None);
     b2["automata"][0]["transitions"][0]["guard"] = state("B1", "health", "nok");
     let m = system(vec![block("B1", 1e-3, None), b2], "any", 0.0);
     let tree = targets(&m).expect("tree");
-    assert!(
-        tree.warnings
-            .iter()
-            .any(|w| w.contains("B2.health.fail") && w.contains("guarded")),
-        "{:?}",
-        tree.warnings
+    let guarded = GenerationWarning::GuardReadsState {
+        transition: "B2.health.fail".to_owned(),
+    };
+    assert!(tree.warnings.contains(&guarded), "{:?}", tree.warnings);
+    assert!(guarded.to_string().contains("guarded"), "{guarded}");
+    let coded = serde_json::to_value(&guarded).expect("json");
+    assert_eq!(
+        coded,
+        json!({"kind": "guard_reads_state", "transition": "B2.health.fail"})
     );
+}
+
+#[test]
+fn a_warning_met_twice_is_listed_once() {
+    // B1's failure state is left for a third state; B1 is explained on
+    // both branches of the top, so that warning is met twice; equal
+    // warnings are one.
+    let mut b1 = block("B1", 1e-3, None);
+    b1["automata"][0]["states"] = json!(["ok", "nok", "dead"]);
+    b1["automata"][0]["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "die", "source": "nok", "targets": ["dead"],
+                     "distrib": "exp", "rate": 0.5}));
+    let m = system(
+        vec![b1, block("B2", 2e-3, None), block("B3", 3e-3, None)],
+        "any",
+        0.0,
+    );
+    let both = |a: &str, b: &str| {
+        json!({"op": "bool", "bool_op": "and",
+               "args": [state(a, "health", "nok"), state(b, "health", "nok")]})
+    };
+    let top: Expr = serde_json::from_value(
+        json!({"op": "bool", "bool_op": "or", "args": [both("B1", "B2"), both("B1", "B3")]}),
+    )
+    .unwrap();
+    let tree = fault_tree(&m, &top, &FaultTreeSettings::default()).expect("tree");
+    let left: Vec<&GenerationWarning> = tree
+        .warnings
+        .iter()
+        .filter(|w| matches!(w, GenerationWarning::TargetLeft { .. }))
+        .collect();
+    assert_eq!(left.len(), 1, "{:?}", tree.warnings);
+}
+
+// --- gate identity and origin -------------------------------------------
+
+/// Every gate of `node`, in preorder.
+fn gates(node: &FtNode) -> Vec<&FtNode> {
+    let mut out = Vec::new();
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        if let FtNode::Gate { children, .. } = node {
+            out.push(node);
+            pending.extend(children.iter().rev());
+        }
+    }
+    out
+}
+
+fn origin_of(node: &FtNode) -> Option<&GateOrigin> {
+    match node {
+        FtNode::Gate { origin, .. } => origin.as_ref(),
+        _ => None,
+    }
+}
+
+fn attribute_origin(component: &str, name: &str, negated: bool) -> GateOrigin {
+    GateOrigin {
+        kind: OriginKind::Attribute,
+        component: component.to_owned(),
+        name: name.to_owned(),
+        negated,
+    }
+}
+
+/// A battery of two cells whose `out_elec` a function computes as
+/// `value`, over the cells' states.
+fn batterie(value: Json) -> CompiledModel {
+    let cell = |name: &str| {
+        json!({"name": name, "states": ["ok", "nok"], "init": "ok",
+               "transitions": [{"name": "fail", "source": "ok", "targets": ["nok"],
+                                "distrib": "exp", "rate": 1e-3}]})
+    };
+    compile(json!({"name": "m", "components": [{
+        "name": "Batterie",
+        "attributes": [{"name": "out_elec", "kind": "bool", "init": boolean(true)}],
+        "automata": [cell("cell1"), cell("cell2")],
+        "sensitive_functions": [{"name": "update", "effects": [
+            {"target": {"component": "Batterie", "attribute": "out_elec"}, "value": value}
+        ]}]
+    }]}))
+}
+
+#[test]
+fn an_unrolled_attribute_labels_the_gate_it_becomes() {
+    // An attribute true on a cell's failure, read positively by the top.
+    let m = batterie(json!({"op": "bool", "bool_op": "or", "args": [
+        state("Batterie", "cell1", "nok"), state("Batterie", "cell2", "nok")]}));
+    let top: Expr = serde_json::from_value(attr("Batterie", "out_elec")).unwrap();
+    let tree = fault_tree(&m, &top, &FaultTreeSettings::default()).expect("tree");
+    assert_eq!(
+        origin_of(&tree.top),
+        Some(&attribute_origin("Batterie", "out_elec", false)),
+        "{:?}",
+        tree.top
+    );
+    let coded = serde_json::to_value(&tree.top).expect("json");
+    assert_eq!(
+        coded["origin"],
+        json!({"kind": "attribute", "component": "Batterie", "name": "out_elec",
+               "negated": false})
+    );
+    assert!(coded["id"].is_string(), "{coded}");
+}
+
+#[test]
+fn a_negation_carried_across_a_label_marks_it_negated() {
+    let m = batterie(json!({"op": "bool", "bool_op": "and", "args": [
+        state("Batterie", "cell1", "ok"), state("Batterie", "cell2", "ok")]}));
+    let top: Expr = serde_json::from_value(
+        json!({"op": "bool", "bool_op": "not", "args": [attr("Batterie", "out_elec")]}),
+    )
+    .unwrap();
+    let tree = fault_tree(&m, &top, &FaultTreeSettings::default()).expect("tree");
+    assert_eq!(
+        origin_of(&tree.top),
+        Some(&attribute_origin("Batterie", "out_elec", true))
+    );
+    assert!(matches!(&tree.top, FtNode::Gate { op: GateOp::Or, .. }));
+}
+
+#[test]
+fn a_two_state_mode_sits_directly_under_its_attribute_gate() {
+    // The state and transition gates over each failure reduce to its
+    // basic event: the attribute gate holds the events directly.
+    let m = system(
+        vec![block("B1", 1e-3, None), block("B2", 2e-3, None)],
+        "any",
+        0.0,
+    );
+    let tree = targets(&m).expect("tree");
+    let FtNode::Gate {
+        op,
+        origin,
+        children,
+        ..
+    } = &tree.top
+    else {
+        panic!("a gate: {:?}", tree.top)
+    };
+    assert_eq!(*op, GateOp::And);
+    assert_eq!(origin.as_ref(), Some(&attribute_origin("T", "fed", true)));
+    assert!(
+        children.iter().all(|c| matches!(c, FtNode::Basic { .. })),
+        "{children:?}"
+    );
+}
+
+/// A block whose `up` needs two automata in `ok`.
+fn twin_block(name: &str) -> Json {
+    let health = |automaton: &str| {
+        json!({"name": automaton, "states": ["ok", "nok"], "init": "ok",
+               "transitions": [{"name": "fail", "source": "ok", "targets": ["nok"],
+                                "distrib": "exp", "rate": 1e-3}]})
+    };
+    json!({
+        "name": name,
+        "attributes": [{"name": "up", "kind": "bool", "init": boolean(false)}],
+        "automata": [health("h1"), health("h2")],
+        "sensitive_functions": [{"name": "update_up", "effects": [
+            {"target": {"component": name, "attribute": "up"},
+             "value": {"op": "bool", "bool_op": "and",
+                       "args": [state(name, "h1", "ok"), state(name, "h2", "ok")]}}
+        ]}]
+    })
+}
+
+#[test]
+fn a_labelled_gate_is_not_merged_into_a_parent_of_its_connective() {
+    // Series: lost when either block is down, each down when either of
+    // its automata failed. Unlabelled, the two disjunctions would flatten
+    // into the top's.
+    let m = system(vec![twin_block("B1"), twin_block("B2")], "all", 0.0);
+    let tree = targets(&m).expect("tree");
+    let FtNode::Gate {
+        op,
+        origin,
+        children,
+        ..
+    } = &tree.top
+    else {
+        panic!("a gate: {:?}", tree.top)
+    };
+    assert_eq!(*op, GateOp::Or);
+    assert_eq!(origin.as_ref(), Some(&attribute_origin("T", "fed", true)));
+    let inner: Vec<Option<&GateOrigin>> = children.iter().map(origin_of).collect();
+    assert_eq!(
+        inner,
+        vec![
+            Some(&attribute_origin("B1", "up", true)),
+            Some(&attribute_origin("B2", "up", true)),
+        ]
+    );
+    for child in children {
+        assert!(matches!(child, FtNode::Gate { op: GateOp::Or, .. }));
+    }
+    // The Boolean function is the flattened one's.
+    assert_eq!(
+        cut_names(&tree),
+        names(&[
+            &["B1.h1.fail"],
+            &["B1.h2.fail"],
+            &["B2.h1.fail"],
+            &["B2.h2.fail"]
+        ])
+    );
+}
+
+#[test]
+fn every_gate_has_an_identifier_unique_and_stable_across_generations() {
+    let m = system(vec![twin_block("B1"), twin_block("B2")], "all", 0.0);
+    let first = targets(&m).expect("tree");
+    let second = targets(&m).expect("tree");
+    let ids: Vec<String> = gates(&first.top)
+        .into_iter()
+        .map(|g| match g {
+            FtNode::Gate { id, .. } => id.clone().expect("an identifier"),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(ids.len(), 3);
+    let unique: std::collections::HashSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&second).unwrap()
+    );
+    // A tree written before gates carried them reads back without.
+    let mut old = serde_json::to_value(&first.top).unwrap();
+    old.as_object_mut().unwrap().remove("id");
+    old.as_object_mut().unwrap().remove("origin");
+    let read: FtNode = serde_json::from_value(old).expect("read");
+    assert!(matches!(
+        read,
+        FtNode::Gate {
+            id: None,
+            origin: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn the_open_psa_gates_are_named_by_their_identifiers() {
+    let m = system(vec![twin_block("B1"), twin_block("B2")], "all", 0.0);
+    let tree = targets(&m).expect("tree");
+    let xml = tree.to_open_psa("t", raichu_core::FaultTreeMeasure::default());
+    // The top is the gate named `top`; the others are referenced by name.
+    for (position, gate) in gates(&tree.top).into_iter().enumerate() {
+        let FtNode::Gate { id: Some(id), .. } = gate else {
+            panic!("an identifier")
+        };
+        assert_eq!(position == 0, id == "top", "{id}");
+        assert!(
+            xml.contains(&format!("<define-gate name=\"{id}\">")),
+            "{id}: {xml}"
+        );
+        if position > 0 {
+            assert!(xml.contains(&format!("<gate name=\"{id}\"/>")), "{id}");
+        }
+    }
 }

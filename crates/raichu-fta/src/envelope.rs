@@ -1,46 +1,66 @@
 //! The result envelope of a generated fault tree, `raichu.fault_tree`
-//! version 1: what was explained, how the tree was generated, its
-//! probability at each mission time asked for, and at the last of them
-//! (the horizon) its minimal cut sets and the importance of each basic
-//! event.
+//! version 2: what was explained, how the tree was generated, what its
+//! probabilities measure, its probability and that of every gate at each
+//! mission time asked for, and at the last of them (the horizon) its
+//! minimal cut sets and the importance of each basic event. Version 1
+//! documents still read.
 //!
 //! The format is RAICHU's own and is versioned here, by its producer, so a
 //! reader can refuse a document it does not know rather than show an empty
 //! field. Its schema is documented in `docs/reference/fault-tree-format.md`.
 
-use raichu_core::FaultTree;
+use std::collections::HashSet;
+
+use raichu_core::{
+    FaultTree, FaultTreeMeasure, FtNode, GenerationWarning, LegacyWarning, TreeEvent, TreeRepair,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::{quantify, FtaError, Quantification, QuantifySettings, Tree};
+use crate::repair::{treatment, Treatment};
+use crate::{
+    quantify, FtaError, GateReason, Provenance, Quantification, QuantifySettings, QuantifyWarning,
+    Tree,
+};
 
 /// The `format` of a fault-tree envelope.
 pub const FAULT_TREE_FORMAT: &str = "raichu.fault_tree";
 
-/// The format version this crate writes and the highest it reads.
-pub const FAULT_TREE_VERSION: u32 = 1;
+/// The format version this crate writes and the highest it reads. It
+/// reads version 1 too: there, each warning is a plain sentence, read as
+/// the variant `{kind: "legacy", message}`, and no gate has a
+/// probability.
+pub const FAULT_TREE_VERSION: u32 = 2;
 
 /// The most mission times one envelope quantifies.
 pub const MAX_MISSION_TIMES: usize = 20;
 
-/// What the probabilities of an envelope measure.
+/// The probabilities of an envelope measure the probability without
+/// repair ([`FaultTreeMeasure::ProbabilityWithoutRepair`]).
 pub const MEASURE_WITHOUT_REPAIR: &str = "probability_without_repair";
 
-/// A generated fault tree, quantified: `raichu.fault_tree` version 1.
+/// The probabilities of an envelope measure the unavailability
+/// ([`FaultTreeMeasure::Unavailability`]).
+pub const MEASURE_UNAVAILABILITY: &str = "unavailability";
+
+/// A generated fault tree, quantified: `raichu.fault_tree` version 2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FaultTreeEnvelope {
     /// Always [`FAULT_TREE_FORMAT`].
     pub format: String,
-    /// The format version, [`FAULT_TREE_VERSION`] when written here.
+    /// The format version, [`FAULT_TREE_VERSION`] when written here; the
+    /// one it was written in when read.
     pub version: u32,
     /// Where the result comes from.
     pub provenance: EnvelopeProvenance,
     /// What the tree explains.
     pub top: EnvelopeTop,
-    /// What every probability of the envelope measures: always
+    /// What every probability of the envelope measures:
     /// [`MEASURE_WITHOUT_REPAIR`], the probability that the top holds at
     /// the mission time when no repair is made, which bounds from above
     /// the probability that it has occurred once on the model with its
-    /// repairs (on a coherent tree).
+    /// repairs (on a coherent tree); or [`MEASURE_UNAVAILABILITY`], the
+    /// probability that it holds at the mission time counting the
+    /// repairs ([`FaultTreeMeasure`]).
     pub measure: String,
     /// How the tree was generated.
     pub generation: EnvelopeGeneration,
@@ -89,17 +109,72 @@ pub enum EnvelopeTop {
     },
 }
 
-/// How a tree was generated.
+/// How a tree was generated, and what its measure makes of it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopeGeneration {
-    /// Whether the tree is the model's exact structure: no generation
-    /// warning, so its probability without repair is the model's own.
+    /// Whether the numbers are the model's own in the envelope's measure:
+    /// no warning below.
     pub exact: bool,
-    /// Why the tree may over-estimate, one sentence per transition
-    /// concerned ([`raichu_core::FaultTree::warnings`]).
-    pub warnings: Vec<String>,
+    /// Why the numbers may differ from the model's own: the generation's
+    /// coded warnings ([`raichu_core::FaultTree::warnings`]), then those
+    /// of the measure, once per basic event concerned (`repair_ignored`,
+    /// `asymptotic_unavailability`, `common_cause_repair_approximation`,
+    /// `guarded_repair_assumed_available`), each with its `message` under
+    /// the envelope's measure.
+    pub warnings: Vec<EnvelopeWarning>,
     /// The basic events, each a transition's draw, in the tree's order.
     pub basic_events: Vec<EnvelopeEvent>,
+}
+
+/// A coded warning and its English sentence under the envelope's measure,
+/// written as one object: the code's members and `message`. A plain
+/// sentence of a version-1 document reads as
+/// [`GenerationWarning::Legacy`], whose own member is that `message`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvelopeWarning {
+    /// The code (`kind`) and its parameters.
+    pub warning: GenerationWarning,
+    /// [`GenerationWarning::message`] under the envelope's measure.
+    pub message: String,
+}
+
+impl Serialize for EnvelopeWarning {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error;
+        let mut entry = serde_json::to_value(&self.warning).map_err(S::Error::custom)?;
+        let Some(fields) = entry.as_object_mut() else {
+            return Err(S::Error::custom("a coded warning serialises to an object"));
+        };
+        // One `message` member, a legacy warning's own included.
+        fields.insert(
+            "message".to_owned(),
+            serde_json::Value::String(self.message.clone()),
+        );
+        entry.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvelopeWarning {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::String(message) => Ok(EnvelopeWarning {
+                warning: GenerationWarning::legacy(message.clone()),
+                message,
+            }),
+            entry => {
+                let message = entry
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| D::Error::custom("a warning without its `message`"))?
+                    .to_owned();
+                // The code reads `message` as its own member only when it
+                // is the legacy one; any other ignores it.
+                let warning = serde_json::from_value(entry).map_err(D::Error::custom)?;
+                Ok(EnvelopeWarning { warning, message })
+            }
+        }
+    }
 }
 
 /// One basic event of the tree.
@@ -117,6 +192,10 @@ pub struct EnvelopeEvent {
     pub target: String,
     /// Its law: `{"law": <name>, <parameters>}`.
     pub law: serde_json::Value,
+    /// Its repairs ([`TreeEvent::repairs`]); none in a document written
+    /// before repairs were carried.
+    #[serde(default)]
+    pub repairs: Vec<TreeRepair>,
 }
 
 /// The quantification settings an envelope was produced with.
@@ -152,10 +231,38 @@ pub struct InstantResult {
     /// Whether the quantification is exact (no cutoff, no bound).
     pub exact: bool,
     /// A guaranteed upper bound, equal to the probability when exact;
-    /// `None` when none can be certified.
+    /// `None` when none can be certified, which includes the
+    /// unavailability of a tree an approximation of unknown direction
+    /// touches (see [`fault_tree_envelope`]).
     pub upper_bound: Option<f64>,
-    /// The quantifier's warnings at that time.
-    pub warnings: Vec<String>,
+    /// The quantifier's coded warnings at that time, each with its
+    /// `message`.
+    #[serde(
+        serialize_with = "raichu_core::serialize_coded",
+        deserialize_with = "raichu_core::deserialize_coded"
+    )]
+    pub warnings: Vec<QuantifyWarning>,
+    /// Every gate's probability at that time: the top's first, then the
+    /// others in preorder. Empty in a version-1 document.
+    #[serde(default)]
+    pub gates: Vec<EnvelopeGate>,
+}
+
+/// The probability of one gate at one mission time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnvelopeGate {
+    /// The gate's occurrence identifier in the tree (`top`, `G1`, ...),
+    /// the name its OpenPSA document gives it.
+    pub id: String,
+    /// Its exact probability in the envelope's measure; `None` when it has
+    /// none, for the reason given.
+    pub probability: Option<f64>,
+    /// Why there is no exact probability: the gate lies in a module
+    /// quantified from its cut sets (`cut_sets`), reads one
+    /// (`reads_cut_sets`), outgrew its module's diagram budget
+    /// (`outgrew_bdd`), or does not count in the simplified top
+    /// (`not_reached`). `None` when there is a probability.
+    pub reason: Option<GateReason>,
 }
 
 /// The quantification at the horizon.
@@ -169,7 +276,8 @@ pub struct HorizonResult {
     pub method: String,
     /// Whether the quantification is exact.
     pub exact: bool,
-    /// A guaranteed upper bound; `None` when none can be certified.
+    /// A guaranteed upper bound; `None` when none can be certified (see
+    /// [`InstantResult::upper_bound`]).
     pub upper_bound: Option<f64>,
     /// Whether the top is monotone in every basic event.
     pub coherent: bool,
@@ -183,11 +291,20 @@ pub struct HorizonResult {
     pub minimal_cut_sets: Option<Vec<EnvelopeCutSet>>,
     /// Every basic event's importance, in the tree's event order.
     pub importance: Vec<EnvelopeImportance>,
-    /// The quantifier's warnings at the horizon.
-    pub warnings: Vec<String>,
+    /// The quantifier's coded warnings at the horizon, each with its
+    /// `message`.
+    #[serde(
+        serialize_with = "raichu_core::serialize_coded",
+        deserialize_with = "raichu_core::deserialize_coded"
+    )]
+    pub warnings: Vec<QuantifyWarning>,
     /// How the numbers were produced: the quantifier's own provenance
     /// (variable order, modules, diagram sizes), carried as it is.
     pub provenance: serde_json::Value,
+    /// Every gate's probability at the horizon, as for an instant. Empty
+    /// in a version-1 document.
+    #[serde(default)]
+    pub gates: Vec<EnvelopeGate>,
 }
 
 /// One minimal cut set.
@@ -230,7 +347,19 @@ pub struct EnvelopeImportance {
 /// strictly increasing instants; the last is the horizon, the only one
 /// whose minimal cut sets and importance measures are computed (each
 /// other instant is quantified without its cut sets). `settings` applies
-/// to every instant, its own `mission_time` ignored.
+/// to every instant, its own `mission_time` ignored; its `measure` is the
+/// envelope's.
+///
+/// The warnings that depend on the measure are emitted here, once per
+/// basic event, into the generation block: under the probability without
+/// repair, `repair_ignored` for every event with repairs; under the
+/// unavailability, `repair_ignored` for an event whose repairs cannot be
+/// counted, `asymptotic_unavailability` for a pair valued asymptotically,
+/// `common_cause_repair_approximation` for a repairable common-cause
+/// combination, and `guarded_repair_assumed_available` for each guarded
+/// repair counted. The last three are approximations of unknown
+/// direction: under them no upper bound is certified, for the top at
+/// every instant and for every module that reads such an event.
 ///
 /// # Errors
 /// [`FtaError::Invalid`] for a bad list of mission times,
@@ -245,6 +374,11 @@ pub fn fault_tree_envelope(
 ) -> Result<FaultTreeEnvelope, FtaError> {
     check_mission_times(mission_times)?;
     let tree = Tree::from_generated(generated, name);
+    let settings = &QuantifySettings {
+        gate_probabilities: true,
+        ..settings.clone()
+    };
+    let ids = gate_ids(generated, &tree);
     let mut instants = Vec::with_capacity(mission_times.len());
     let (&horizon, before) = mission_times
         .split_last()
@@ -258,7 +392,7 @@ pub fn fault_tree_envelope(
                 ..settings.clone()
             },
         )?;
-        instants.push(instant(time, &result));
+        instants.push(instant(time, &result, &ids));
     }
     let result = quantify(
         &tree,
@@ -267,7 +401,7 @@ pub fn fault_tree_envelope(
             ..settings.clone()
         },
     )?;
-    instants.push(instant(horizon, &result));
+    instants.push(instant(horizon, &result, &ids));
     let names: Vec<&str> = tree.events.iter().map(|e| e.name.as_str()).collect();
     let probability_of = |event: usize| result.importance.get(event).and_then(|i| i.probability);
     let minimal_cut_sets = result.minimal_cut_sets.as_ref().map(|sets| {
@@ -304,8 +438,29 @@ pub fn fault_tree_envelope(
             risk_reduction_worth: i.risk_reduction_worth,
         })
         .collect();
-    let provenance = serde_json::to_value(&result.provenance)
+    let measure_warnings = measure_warnings(generated, &tree, settings.measure)?;
+    let unbounded: HashSet<&str> = measure_warnings
+        .iter()
+        .filter_map(unknown_direction)
+        .collect();
+    if !unbounded.is_empty() {
+        for instant in &mut instants {
+            instant.upper_bound = None;
+        }
+    }
+    let mut provenance = result.provenance.clone();
+    unbound_modules(&mut provenance, &unbounded);
+    let provenance = serde_json::to_value(&provenance)
         .map_err(|e| FtaError::Invalid(format!("the quantifier's provenance: {e}")))?;
+    let warnings: Vec<EnvelopeWarning> = generated
+        .warnings
+        .iter()
+        .chain(&measure_warnings)
+        .map(|warning| EnvelopeWarning {
+            warning: warning.clone(),
+            message: warning.message(settings.measure),
+        })
+        .collect();
     let basic_events = generated
         .basic_events
         .iter()
@@ -318,6 +473,7 @@ pub fn fault_tree_envelope(
                 target: e.target.clone(),
                 law: serde_json::to_value(&e.law)
                     .map_err(|err| FtaError::Invalid(format!("the law of `{}`: {err}", e.name)))?,
+                repairs: e.repairs.clone(),
             })
         })
         .collect::<Result<Vec<_>, FtaError>>()?;
@@ -329,10 +485,10 @@ pub fn fault_tree_envelope(
             tree: name.to_owned(),
         },
         top,
-        measure: MEASURE_WITHOUT_REPAIR.to_owned(),
+        measure: settings.measure.as_str().to_owned(),
         generation: EnvelopeGeneration {
-            exact: generated.warnings.is_empty(),
-            warnings: generated.warnings.clone(),
+            exact: warnings.is_empty(),
+            warnings,
             basic_events,
         },
         settings: EnvelopeSettings {
@@ -351,7 +507,11 @@ pub fn fault_tree_envelope(
             probability: result.probability,
             method: result.method.to_owned(),
             exact: result.exact,
-            upper_bound: result.upper_bound,
+            upper_bound: if unbounded.is_empty() {
+                result.upper_bound
+            } else {
+                None
+            },
             coherent: result.coherent,
             cut_set_count: result.cut_set_count,
             cut_sets_complete: result.cut_sets_complete,
@@ -360,8 +520,141 @@ pub fn fault_tree_envelope(
             importance,
             warnings: result.warnings.clone(),
             provenance,
+            gates: gates(&result, &ids),
         },
     })
+}
+
+/// The identifier of each value [`Quantification::gates`] lists: the
+/// top's own (`top` when the tree was written before gates carried
+/// identifiers), then each gate's name, which is its identifier.
+fn gate_ids(generated: &FaultTree, tree: &Tree) -> Vec<Option<String>> {
+    let top = match &generated.top {
+        FtNode::Gate { id, .. } => Some(id.clone().unwrap_or_else(|| "top".to_owned())),
+        // A top that is a single event is no gate.
+        FtNode::Basic { .. } | FtNode::Constant { .. } => None,
+    };
+    std::iter::once(top)
+        .chain(tree.gates.iter().map(|g| Some(g.name.clone())))
+        .collect()
+}
+
+fn gates(result: &Quantification, ids: &[Option<String>]) -> Vec<EnvelopeGate> {
+    result
+        .gates
+        .iter()
+        .zip(ids)
+        .filter_map(|(gate, id)| {
+            id.as_ref().map(|id| EnvelopeGate {
+                id: id.clone(),
+                probability: gate.probability,
+                reason: gate.reason,
+            })
+        })
+        .collect()
+}
+
+/// The warnings `measure` makes of the events of `generated` (quantified
+/// as `tree`, the same events in the same order), once per event.
+fn measure_warnings(
+    generated: &FaultTree,
+    tree: &Tree,
+    measure: FaultTreeMeasure,
+) -> Result<Vec<GenerationWarning>, FtaError> {
+    let mut warnings = Vec::new();
+    for (event, quantified) in generated.basic_events.iter().zip(&tree.events) {
+        if event.repairs.is_empty() {
+            continue;
+        }
+        let ignored = || GenerationWarning::RepairIgnored {
+            event: event.name.clone(),
+            automaton: event.automaton.clone(),
+            state: event.target.clone(),
+            transitions: event.repairs.iter().map(|r| r.transition.clone()).collect(),
+        };
+        if measure == FaultTreeMeasure::ProbabilityWithoutRepair {
+            warnings.push(ignored());
+            continue;
+        }
+        match treatment(quantified)? {
+            Treatment::Unrepaired => continue,
+            Treatment::Ignored => {
+                warnings.push(ignored());
+                continue;
+            }
+            Treatment::Asymptotic { .. } => {
+                warnings.push(GenerationWarning::AsymptoticUnavailability {
+                    event: event.name.clone(),
+                })
+            }
+            Treatment::ClosedForm { .. } => {}
+        }
+        if is_common_cause(event) {
+            warnings.push(GenerationWarning::CommonCauseRepairApproximation {
+                event: event.name.clone(),
+            });
+        }
+        for repair in event.repairs.iter().filter(|r| r.guarded) {
+            warnings.push(GenerationWarning::GuardedRepairAssumedAvailable {
+                event: event.name.clone(),
+                transition: repair.transition.clone(),
+            });
+        }
+    }
+    Ok(warnings)
+}
+
+/// Whether `event` is one combination of a common-cause mode: the
+/// combination automata a mode of several targets expands into carry a
+/// `__cc_` suffix (`fm__cc_1_2`, entering `occ__cc_1_2`).
+fn is_common_cause(event: &TreeEvent) -> bool {
+    let automaton = event
+        .automaton
+        .rsplit('.')
+        .next()
+        .unwrap_or(&event.automaton);
+    automaton.contains("__cc_") || event.target.contains("__cc_")
+}
+
+/// The event an approximation of unknown direction concerns, if the
+/// warning is one.
+fn unknown_direction(warning: &GenerationWarning) -> Option<&str> {
+    match warning {
+        GenerationWarning::AsymptoticUnavailability { event }
+        | GenerationWarning::CommonCauseRepairApproximation { event }
+        | GenerationWarning::GuardedRepairAssumedAvailable { event, .. } => Some(event),
+        _ => None,
+    }
+}
+
+/// Withdraw the upper bound of every module that reads one of `events`,
+/// directly or through a submodule.
+fn unbound_modules(provenance: &mut Provenance, events: &HashSet<&str>) {
+    if events.is_empty() {
+        return;
+    }
+    let mut touched: HashSet<String> = HashSet::new();
+    loop {
+        let before = touched.len();
+        for module in &provenance.modules {
+            if !touched.contains(&module.name)
+                && module
+                    .variables
+                    .iter()
+                    .any(|v| events.contains(v.as_str()) || touched.contains(v))
+            {
+                touched.insert(module.name.clone());
+            }
+        }
+        if touched.len() == before {
+            break;
+        }
+    }
+    for module in &mut provenance.modules {
+        if touched.contains(&module.name) {
+            module.upper_bound = None;
+        }
+    }
 }
 
 fn engine_name(engine: crate::Engine) -> &'static str {
@@ -372,7 +665,7 @@ fn engine_name(engine: crate::Engine) -> &'static str {
     }
 }
 
-fn instant(time: f64, result: &Quantification) -> InstantResult {
+fn instant(time: f64, result: &Quantification, ids: &[Option<String>]) -> InstantResult {
     InstantResult {
         mission_time: time,
         probability: result.probability,
@@ -380,6 +673,7 @@ fn instant(time: f64, result: &Quantification) -> InstantResult {
         exact: result.exact,
         upper_bound: result.upper_bound,
         warnings: result.warnings.clone(),
+        gates: gates(result, ids),
     }
 }
 
@@ -431,6 +725,11 @@ pub enum ReadFaultTreeError {
 /// version are read first, so a document of another format is refused by
 /// name rather than by the first member it happens to lack.
 ///
+/// The document is read by its version. In version 1 a warning is a plain
+/// sentence, read as the variant `{kind: "legacy", message}`, and no gate
+/// has a probability. From version 2 a warning is coded: a plain sentence
+/// or a legacy warning is refused.
+///
 /// Numbers are read correctly rounded ([`raichu_core::exact_json`]), so
 /// a written envelope reads back to the same bits, a cut-set count past
 /// `u64` included.
@@ -462,5 +761,27 @@ pub fn read_fault_tree_envelope(json: &str) -> Result<FaultTreeEnvelope, ReadFau
         Some(version) if (1..=FAULT_TREE_VERSION).contains(&version) => {}
         other => return Err(ReadFaultTreeError::Version(other)),
     }
-    raichu_core::exact_json::from_str(json).map_err(|e| ReadFaultTreeError::Json(e.to_string()))
+    let envelope: FaultTreeEnvelope = raichu_core::exact_json::from_str(json)
+        .map_err(|e| ReadFaultTreeError::Json(e.to_string()))?;
+    if envelope.version >= 2 {
+        let legacy = envelope
+            .generation
+            .warnings
+            .iter()
+            .any(|w| w.warning.is_legacy())
+            || envelope
+                .instants
+                .iter()
+                .flat_map(|i| &i.warnings)
+                .chain(&envelope.horizon.warnings)
+                .any(LegacyWarning::is_legacy);
+        if legacy {
+            return Err(ReadFaultTreeError::Json(format!(
+                "a version-{} envelope carries a legacy warning (a plain sentence): \
+                 only version 1 has them",
+                envelope.version
+            )));
+        }
+    }
+    Ok(envelope)
 }

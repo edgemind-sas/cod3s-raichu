@@ -117,3 +117,84 @@ def test_a_state_required_to_persist_is_refused_by_name():
             model(unit("A"), unit("B")),
             {"op": "bool", "bool_op": "and", "args": [ok("A"), nok("B")]},
         )
+
+
+def _gates(node):
+    if node["node"] != "gate":
+        return []
+    found = [node]
+    for child in node["children"]:
+        found.extend(_gates(child))
+    return found
+
+
+def test_gates_carry_their_identifier_and_origin():
+    # `up` needs both automata of each block in `ok`: lost when either
+    # block is down, each a gate of the attribute it stands for.
+    def block(name):
+        def health(automaton):
+            return {
+                "name": automaton,
+                "states": ["ok", "nok"],
+                "init": "ok",
+                "transitions": [
+                    {
+                        "name": "fail",
+                        "source": "ok",
+                        "targets": ["nok"],
+                        "distrib": "exp",
+                        "rate": 1e-3,
+                    }
+                ],
+            }
+
+        def ok(automaton):
+            return {
+                "op": "state_active",
+                "state": {"component": name, "automaton": automaton, "state": "ok"},
+            }
+
+        return {
+            "name": name,
+            "attributes": [
+                {"name": "up", "kind": "bool", "init": {"kind": "bool", "value": True}}
+            ],
+            "automata": [health("h1"), health("h2")],
+            "sensitive_functions": [
+                {
+                    "name": "update",
+                    "effects": [
+                        {
+                            "target": {"component": name, "attribute": "up"},
+                            "value": {
+                                "op": "bool",
+                                "bool_op": "and",
+                                "args": [ok("h1"), ok("h2")],
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+
+    def down(name):
+        return {
+            "op": "bool",
+            "bool_op": "not",
+            "args": [{"op": "attr", "attr": {"component": name, "attribute": "up"}}],
+        }
+
+    tree = pyraichu.fault_tree(
+        model(block("A"), block("B")),
+        {"op": "bool", "bool_op": "or", "args": [down("A"), down("B")]},
+    )
+    gates = _gates(tree.top)
+    assert [g["id"] for g in gates] == ["top", "G1", "G2"]
+    assert gates[0].get("origin") is None
+    assert [g["origin"] for g in gates[1:]] == [
+        {"kind": "attribute", "component": "A", "name": "up", "negated": True},
+        {"kind": "attribute", "component": "B", "name": "up", "negated": True},
+    ]
+    assert _gates(tree.structure()["tree"]["top"]) == gates
+    for gate in gates[1:]:
+        assert f'<define-gate name="{gate["id"]}">' in tree.open_psa

@@ -4,13 +4,15 @@
 
 use proptest::prelude::*;
 use raichu_fta::{
-    quantify, BasicEvent, Engine, Formula, FtaError, GateDef, Law, QuantifySettings, Tree,
+    quantify, BasicEvent, Engine, Formula, FtaError, GateDef, Law, QuantifySettings,
+    QuantifyWarning, Tree,
 };
 
 fn constant(name: &str, probability: f64) -> BasicEvent {
     BasicEvent {
         name: name.to_owned(),
         law: Law::Constant { probability },
+        repairs: Vec::new(),
     }
 }
 
@@ -136,14 +138,42 @@ fn a_module_over_the_budget_falls_back_and_says_so() {
         methods.contains(&"bdd") && methods.contains(&"cut_sets"),
         "{methods:?}"
     );
+    let fallen_names: Vec<&str> = result
+        .provenance
+        .modules
+        .iter()
+        .filter(|m| m.method == "cut_sets")
+        .map(|m| m.name.as_str())
+        .collect();
+    // One coded warning per fallen-back module, naming it by its index in
+    // the provenance (`M{module}`) and the budget it outgrew.
+    let outgrew: Vec<String> = result
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            QuantifyWarning::ModuleOutgrewBdd {
+                module,
+                max_bdd_nodes: 2_000,
+            } => Some(format!("M{module}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outgrew, fallen_names, "{:?}", result.warnings);
+    let first = result
+        .warnings
+        .iter()
+        .find(|w| matches!(w, QuantifyWarning::ModuleOutgrewBdd { .. }))
+        .unwrap();
     assert!(
-        result
-            .warnings
-            .iter()
-            .any(|w| w.contains("outgrew max_bdd_nodes")),
-        "{:?}",
-        result.warnings
+        first
+            .to_string()
+            .starts_with(&format!("module {}: ", fallen_names[0]))
+            && first.to_string().contains("outgrew max_bdd_nodes (2000)"),
+        "{first}"
     );
+    let coded = serde_json::to_value(first).unwrap();
+    assert_eq!(coded["kind"], "module_outgrew_bdd");
+    assert_eq!(coded["max_bdd_nodes"], 2_000);
     assert!(result.upper_bound.unwrap() >= exact_value * (1.0 - 1e-12));
     // The fallen-back module's value is its pivotal upper bound: on the
     // pessimistic side, within a percent here (40 cut sets sharing their
@@ -189,7 +219,17 @@ fn an_exhausted_expansion_budget_keeps_the_bound_valid() {
     let result = quantify(&t, &settings).unwrap();
     assert!(!result.cut_sets_complete);
     assert!(result.upper_bound.unwrap() >= exact_value * (1.0 - 1e-12));
-    assert!(result.warnings.iter().any(|w| w.contains("max_expansions")));
+    assert!(
+        result.warnings.iter().any(|w| matches!(
+            w,
+            QuantifyWarning::MaxExpansionsExhausted {
+                max_expansions: 50,
+                ..
+            }
+        )),
+        "{:?}",
+        result.warnings
+    );
 }
 
 #[test]
@@ -211,7 +251,17 @@ fn the_count_cutoff_keeps_the_most_probable_sets() {
     assert!(!result.cut_sets_complete);
     let neglected = result.provenance.modules[0].neglected.unwrap();
     assert!((neglected - (0.1 + 0.2 + 0.3)).abs() < 1e-12, "{neglected}");
-    assert!(result.warnings.iter().any(|w| w.contains("max_cut_sets")));
+    assert!(
+        result.warnings.iter().any(|w| matches!(
+            w,
+            QuantifyWarning::MaxCutSetsReached {
+                module: 0,
+                max_cut_sets: 3
+            }
+        )),
+        "{:?}",
+        result.warnings
+    );
 }
 
 fn random_dnf(n_events: usize, n_cuts: usize, order: usize, seed: u64) -> Tree {

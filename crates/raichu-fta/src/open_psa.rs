@@ -17,12 +17,17 @@
 //! law OpenPSA has no expression for (log-normal, gamma, uniform, delay,
 //! empirical) gets that law back. Anything else is refused by name rather
 //! than read approximately.
+//!
+//! The engine's writers also carry what OpenPSA has no element for: a
+//! basic event's repairs as a `repairs` attribute (their JSON list), and
+//! the measure the tree is meant to be quantified in as a `measure`
+//! attribute of the `define-fault-tree` ([`read_open_psa_measure`]).
 
 use std::collections::HashMap;
 
 use roxmltree::{Document, Node};
 
-use crate::{BasicEvent, Formula, FtaError, GateDef, Law, Tree};
+use crate::{BasicEvent, FaultTreeMeasure, Formula, FtaError, GateDef, Law, Repair, Tree};
 
 /// Read a fault tree. `top` names the gate to quantify; without it the
 /// tree must have exactly one gate no other gate references.
@@ -101,7 +106,8 @@ fn read_here(text: &str, top: Option<&str>) -> Result<Tree, FtaError> {
     for node in &reader.event_nodes {
         let name = node.attribute("name").unwrap_or_default().to_owned();
         let law = reader.law(*node, &name)?;
-        events.push(BasicEvent { name, law });
+        let repairs = repairs(*node, &name)?;
+        events.push(BasicEvent { name, law, repairs });
     }
     let mut gates = Vec::with_capacity(reader.gate_nodes.len());
     let mut referenced = vec![false; reader.gate_nodes.len()];
@@ -143,6 +149,78 @@ fn read_here(text: &str, top: Option<&str>) -> Result<Tree, FtaError> {
     };
     tree.validate()?;
     Ok(tree)
+}
+
+/// The measure an OpenPSA document says its tree is meant to be
+/// quantified in: the `measure` attribute of its first
+/// `define-fault-tree`, written by the engine's own writer; `None` when
+/// the document names none.
+///
+/// # Errors
+/// [`FtaError::OpenPsa`] for a document that does not parse or names an
+/// unknown measure.
+pub fn read_open_psa_measure(text: &str) -> Result<Option<FaultTreeMeasure>, FtaError> {
+    let doc = Document::parse(text).map_err(|e| FtaError::OpenPsa(e.to_string()))?;
+    let Some(tree) = doc
+        .root_element()
+        .descendants()
+        .find(|n| n.has_tag_name("define-fault-tree"))
+    else {
+        return Ok(None);
+    };
+    let value = tree
+        .children()
+        .filter(|c| c.has_tag_name("attributes"))
+        .flat_map(|a| a.children().filter(|c| c.has_tag_name("attribute")))
+        .find(|a| a.attribute("name") == Some("measure"))
+        .and_then(|a| a.attribute("value"));
+    match value {
+        None => Ok(None),
+        Some(name) => FaultTreeMeasure::from_name(name).map(Some).ok_or_else(|| {
+            FtaError::OpenPsa(format!(
+                "the fault tree names the measure `{name}`, not one of \
+                 probability_without_repair, unavailability"
+            ))
+        }),
+    }
+}
+
+/// The repairs a basic event's `repairs` attribute carries; none without
+/// it.
+fn repairs(node: Node, event: &str) -> Result<Vec<Repair>, FtaError> {
+    #[derive(serde::Deserialize)]
+    struct JsonRepair {
+        transition: String,
+        law: Option<serde_json::Value>,
+        #[serde(default)]
+        guarded: bool,
+    }
+    let bad = |detail: String| FtaError::OpenPsa(format!("basic event `{event}`: {detail}"));
+    let Some(text) = node
+        .children()
+        .filter(|c| c.has_tag_name("attributes"))
+        .flat_map(|a| a.children().filter(|c| c.has_tag_name("attribute")))
+        .find(|a| a.attribute("name") == Some("repairs"))
+        .and_then(|a| a.attribute("value"))
+    else {
+        return Ok(Vec::new());
+    };
+    let list: Vec<JsonRepair> =
+        serde_json::from_str(text).map_err(|e| bad(format!("its repairs: {e}")))?;
+    list.into_iter()
+        .map(|r| {
+            let law = r
+                .law
+                .map(law_from_json)
+                .transpose()
+                .map_err(|e| bad(format!("repair `{}`: {e}", r.transition)))?;
+            Ok(Repair {
+                transition: r.transition,
+                law,
+                guarded: r.guarded,
+            })
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -439,13 +517,37 @@ impl Reader<'_, '_> {
 #[derive(serde::Deserialize)]
 #[serde(tag = "law", rename_all = "snake_case")]
 enum JsonLaw {
-    Lognormal { mu: f64, sigma: f64 },
-    Gamma { shape: f64, scale: f64 },
-    Uniform { low: f64, high: f64 },
-    Delay { time: f64 },
-    Empirical { points: Vec<(f64, f64)> },
-    Exponential { rate: f64 },
-    Weibull { shape: f64, scale: f64 },
+    Lognormal {
+        mu: f64,
+        sigma: f64,
+    },
+    Gamma {
+        shape: f64,
+        scale: f64,
+    },
+    Uniform {
+        low: f64,
+        high: f64,
+    },
+    Delay {
+        time: f64,
+    },
+    Empirical {
+        points: Vec<(f64, f64)>,
+    },
+    Exponential {
+        rate: f64,
+    },
+    Weibull {
+        shape: f64,
+        scale: f64,
+    },
+    // An on-demand repair's branch probability, in either spelling: the
+    // generator's (`probability`) and the quantifier's (`constant`).
+    #[serde(alias = "constant")]
+    Probability {
+        probability: f64,
+    },
 }
 
 fn law_from_json(value: serde_json::Value) -> Result<Law, String> {
@@ -458,6 +560,7 @@ fn law_from_json(value: serde_json::Value) -> Result<Law, String> {
         JsonLaw::Empirical { points } => Law::Empirical { points },
         JsonLaw::Exponential { rate } => Law::Exponential { rate },
         JsonLaw::Weibull { shape, scale } => Law::Weibull { shape, scale },
+        JsonLaw::Probability { probability } => Law::Constant { probability },
     })
 }
 
@@ -492,7 +595,7 @@ pub fn write_open_psa(tree: &Tree) -> String {
         out.push_str(&format!(
             "    <define-basic-event name=\"{}\">\n{}    </define-basic-event>\n",
             xml(&event.name),
-            law_xml(&event.law)
+            event_xml(event)
         ));
     }
     out.push_str("  </model-data>\n</opsa-mef>\n");
@@ -526,9 +629,13 @@ fn formula_xml(formula: &Formula, tree: &Tree) -> String {
     }
 }
 
-fn law_xml(law: &Law) -> String {
+/// A basic event's body: its law as an expression when OpenPSA has one,
+/// as `law` attributes otherwise, and its repairs as a `repairs`
+/// attribute holding their JSON list.
+fn event_xml(event: &BasicEvent) -> String {
     let float = |v: f64| format!("<float value=\"{v}\"/>");
-    match law {
+    let mut attributes = Vec::new();
+    let mut out = match &event.law {
         Law::Constant { probability } => format!("      {}\n", float(*probability)),
         Law::Exponential { rate } => format!(
             "      <exponential>{}<system-mission-time/></exponential>\n",
@@ -542,22 +649,32 @@ fn law_xml(law: &Law) -> String {
         ),
         other => {
             let json = serde_json::to_value(other).unwrap_or_default();
-            let mut attributes = String::from("      <attributes>\n");
             if let Some(map) = json.as_object() {
                 for (key, value) in map {
                     let text = match value {
                         serde_json::Value::String(s) => s.clone(),
                         v => v.to_string(),
                     };
-                    attributes.push_str(&format!(
-                        "        <attribute name=\"{}\" value=\"{}\"/>\n",
-                        xml(key),
-                        xml(&text)
-                    ));
+                    attributes.push((key.clone(), text));
                 }
             }
-            attributes.push_str("      </attributes>\n");
-            attributes
+            String::new()
         }
+    };
+    if !event.repairs.is_empty() {
+        let json = serde_json::to_string(&event.repairs).unwrap_or_default();
+        attributes.push(("repairs".to_owned(), json));
     }
+    if !attributes.is_empty() {
+        out.push_str("      <attributes>\n");
+        for (key, value) in attributes {
+            out.push_str(&format!(
+                "        <attribute name=\"{}\" value=\"{}\"/>\n",
+                xml(&key),
+                xml(&value)
+            ));
+        }
+        out.push_str("      </attributes>\n");
+    }
+    out
 }

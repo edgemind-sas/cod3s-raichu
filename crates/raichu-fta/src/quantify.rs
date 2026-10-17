@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::dd::{Bdd, ZERO};
-use crate::{Formula, FtaError, Tree};
+use crate::{FaultTreeMeasure, Formula, FtaError, Tree};
 
 /// What a quantification may be given beside the tree.
 #[derive(Debug, Clone)]
@@ -70,6 +70,18 @@ pub struct QuantifySettings {
     /// Cut-set engine: the most partial cut sets expanded per module;
     /// past it, what remains open is neglected (and counted in the bound).
     pub max_expansions: u64,
+    /// What a basic event's probability measures: its distribution
+    /// without repair (the default), or its unavailability counting its
+    /// [`crate::BasicEvent::repairs`].
+    pub measure: FaultTreeMeasure,
+    /// Whether to value every gate as well as the top
+    /// ([`Quantification::gates`]). Off by default: it reads each gate off
+    /// the literal the normalisation made of it, which costs the nodes of
+    /// the gates the coalescing dissolved into their parents. Those nodes
+    /// are bounded by their module's diagram budget but are not counted
+    /// against [`QuantifySettings::max_bdd_nodes`] for the next modules,
+    /// so asking for the gates changes no other number.
+    pub gate_probabilities: bool,
 }
 
 /// Which engine quantifies a module.
@@ -98,8 +110,41 @@ impl Default for QuantifySettings {
             min_cut_probability: 0.0,
             max_cut_sets: 1_000_000,
             max_expansions: 100_000_000,
+            measure: FaultTreeMeasure::ProbabilityWithoutRepair,
+            gate_probabilities: false,
         }
     }
+}
+
+/// The probability of one gate at the mission time.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GateProbability {
+    /// The gate, by index into [`Tree::gates`]; `None` for the top
+    /// formula itself.
+    pub gate: Option<usize>,
+    /// Its exact probability, in the quantification's measure; `None`
+    /// when it has none, for the [`GateProbability::reason`] given.
+    pub probability: Option<f64>,
+    /// Why there is no exact probability; `None` when there is one.
+    pub reason: Option<GateReason>,
+}
+
+/// Why a gate has no exact probability. The top is still quantified: a
+/// gate without a value is a partial result announced, not a refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateReason {
+    /// The gate lies in a module quantified from its cut sets under
+    /// cutoffs: there is no diagram to read it off, and the module's own
+    /// value is an estimate.
+    CutSets,
+    /// The gate reads a module quantified from its cut sets: its value
+    /// would be an estimate.
+    ReadsCutSets,
+    /// The diagram of the gate outgrew its module's node budget.
+    OutgrewBdd,
+    /// The top, once simplified, does not depend on the gate.
+    NotReached,
 }
 
 /// The importance measures of one basic event.
@@ -249,10 +294,156 @@ pub struct Quantification {
     pub cut_sets_omitted: Option<String>,
     /// What deserves attention before trusting the number: a module that
     /// fell back to its cut sets, a cutoff that bit, a neglected mass
-    /// larger than the estimate. Empty for an exact result.
-    pub warnings: Vec<String>,
+    /// larger than the estimate, each coded with its module. Empty for an
+    /// exact result. Serialised with each warning's `message`
+    /// ([`raichu_core::serialize_coded`]).
+    #[serde(serialize_with = "raichu_core::serialize_coded")]
+    pub warnings: Vec<QuantifyWarning>,
     /// How the numbers were produced.
     pub provenance: Provenance,
+    /// When [`QuantifySettings::gate_probabilities`] asks for them: the
+    /// top first (`gate: None`), then every gate in [`Tree::gates`]
+    /// order. Empty otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<GateProbability>,
+}
+
+/// What deserves attention in a quantification, module by module: a code
+/// (`kind`) with its parameters, the English sentence being its
+/// `Display`. `module` is the module's index in
+/// [`Provenance::modules`], named `M{module}` there. Consumers key on
+/// `kind`, never on the text.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum QuantifyWarning {
+    /// The module's exact diagram outgrew the node budget: it was
+    /// quantified from its cut sets under cutoffs.
+    ModuleOutgrewBdd {
+        /// The module's index in the provenance.
+        module: usize,
+        /// The budget it outgrew ([`QuantifySettings::max_bdd_nodes`]).
+        max_bdd_nodes: usize,
+    },
+    /// The count cutoff was reached: the least probable cut sets were
+    /// dropped and the probability cutoff raised.
+    MaxCutSetsReached {
+        /// The module's index in the provenance.
+        module: usize,
+        /// The cutoff ([`QuantifySettings::max_cut_sets`]).
+        max_cut_sets: usize,
+    },
+    /// The expansion budget ran out: what remained open is only bounded.
+    MaxExpansionsExhausted {
+        /// The module's index in the provenance.
+        module: usize,
+        /// The budget ([`QuantifySettings::max_expansions`]).
+        max_expansions: u64,
+    },
+    /// The probability mass the cutoffs neglected exceeds the retained
+    /// estimate: the estimate may be far too optimistic.
+    NeglectedMassExceedsEstimate {
+        /// The module's index in the provenance.
+        module: usize,
+        /// The neglected mass.
+        neglected: f64,
+        /// The retained estimate (the pivotal upper bound).
+        estimate: f64,
+    },
+    /// A warning read from a document of version 1, which carried a plain
+    /// English sentence and no code. Never produced.
+    Legacy {
+        /// The sentence, as the document carried it.
+        message: String,
+    },
+}
+
+impl raichu_core::LegacyWarning for QuantifyWarning {
+    fn legacy(message: String) -> Self {
+        QuantifyWarning::Legacy { message }
+    }
+
+    fn is_legacy(&self) -> bool {
+        matches!(self, QuantifyWarning::Legacy { .. })
+    }
+}
+
+impl std::fmt::Display for QuantifyWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QuantifyWarning::ModuleOutgrewBdd {
+                module,
+                max_bdd_nodes,
+            } => write!(
+                f,
+                "module M{module}: its exact diagram outgrew max_bdd_nodes \
+                 ({max_bdd_nodes}): quantified from its cut sets under cutoffs"
+            ),
+            QuantifyWarning::MaxCutSetsReached {
+                module,
+                max_cut_sets,
+            } => write!(
+                f,
+                "module M{module}: max_cut_sets ({max_cut_sets}) was reached: the \
+                 least probable cut sets were dropped and the probability cutoff \
+                 raised"
+            ),
+            QuantifyWarning::MaxExpansionsExhausted {
+                module,
+                max_expansions,
+            } => write!(
+                f,
+                "module M{module}: max_expansions ({max_expansions}) ran out: what \
+                 remained open is only bounded"
+            ),
+            QuantifyWarning::NeglectedMassExceedsEstimate {
+                module,
+                neglected,
+                estimate,
+            } => write!(
+                f,
+                "module M{module}: the neglected mass ({neglected:.3e}) exceeds the \
+                 retained estimate ({estimate:.3e}): the estimate may be far too \
+                 optimistic; lower the cutoffs or raise max_cut_sets"
+            ),
+            QuantifyWarning::Legacy { message } => f.write_str(message),
+        }
+    }
+}
+
+/// A warning of one module, before the module's index is known.
+#[derive(Debug, Clone, Copy)]
+enum ModuleNote {
+    OutgrewBdd,
+    CutSetsReached,
+    ExpansionsExhausted,
+    NeglectedExceeds { neglected: f64, estimate: f64 },
+}
+
+impl ModuleNote {
+    fn at(self, module: usize, settings: &QuantifySettings) -> QuantifyWarning {
+        match self {
+            ModuleNote::OutgrewBdd => QuantifyWarning::ModuleOutgrewBdd {
+                module,
+                max_bdd_nodes: settings.max_bdd_nodes,
+            },
+            ModuleNote::CutSetsReached => QuantifyWarning::MaxCutSetsReached {
+                module,
+                max_cut_sets: settings.max_cut_sets,
+            },
+            ModuleNote::ExpansionsExhausted => QuantifyWarning::MaxExpansionsExhausted {
+                module,
+                max_expansions: settings.max_expansions,
+            },
+            ModuleNote::NeglectedExceeds {
+                neglected,
+                estimate,
+            } => QuantifyWarning::NeglectedMassExceedsEstimate {
+                module,
+                neglected,
+                estimate,
+            },
+        }
+    }
 }
 
 /// Quantify `tree`: exactly, or, for a module too large for its diagram,
@@ -277,8 +468,44 @@ fn quantify_here(tree: &Tree, settings: &QuantifySettings) -> Result<Quantificat
     }
     let mut graph = Graph::default();
     let mut memo = HashMap::new();
-    let root = graph.build(tree, &tree.top, true, &mut memo);
-    let (graph, root) = graph.coalesce(root);
+    let top = graph.build(tree, &tree.top, true, &mut memo);
+    let track = settings.gate_probabilities;
+    // Each gate's literal before coalescing, and whether the literal is
+    // its negation: a gate reached under a negation only is built
+    // negated.
+    let gate_lits: Vec<Option<(Lit, bool)>> = if track {
+        (0..tree.gates.len())
+            .map(|g| {
+                memo.get(&(g, true))
+                    .map(|&lit| (lit, false))
+                    .or_else(|| memo.get(&(g, false)).map(|&lit| (lit, true)))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let (graph, root, remap) = graph.coalesce(top, track);
+    let targets: Vec<Target> = if track {
+        let after = |(lit, negated): (Lit, bool)| match lit {
+            Lit::Node(n) => remap.get(&n).map(|&lit| (lit, negated)),
+            other => Some((other, negated)),
+        };
+        let top = match root {
+            Root::Node(n) => Lit::Node(n),
+            Root::Constant(v) => Lit::Const(v),
+        };
+        std::iter::once(Target {
+            gate: None,
+            lit: Some((top, false)),
+        })
+        .chain(gate_lits.into_iter().enumerate().map(|(g, lit)| Target {
+            gate: Some(g),
+            lit: lit.and_then(after),
+        }))
+        .collect()
+    } else {
+        Vec::new()
+    };
 
     let n_events = tree.events.len();
     // Only the events the top reaches must have a readable law.
@@ -288,7 +515,7 @@ fn quantify_here(tree: &Tree, settings: &QuantifySettings) -> Result<Quantificat
     }
     let mut probability = Vec::with_capacity(n_events);
     for (index, event) in tree.events.iter().enumerate() {
-        match event.law.probability(&event.name, settings.mission_time) {
+        match crate::repair::event_probability(event, settings.measure, settings.mission_time) {
             Ok(p) => probability.push(Some(p)),
             Err(e) if reached[index] => return Err(e),
             Err(_) => probability.push(None),
@@ -296,15 +523,72 @@ fn quantify_here(tree: &Tree, settings: &QuantifySettings) -> Result<Quantificat
     }
 
     match root {
-        Root::Node(n) => Quantifier::new(&graph, tree, settings, probability).run(n),
-        Root::Constant(value) => Ok(constant_result(settings, value, probability)),
+        Root::Node(n) => Quantifier::new(&graph, tree, settings, probability).run(n, &targets),
+        Root::Constant(value) => {
+            let mut result = constant_result(settings, value, &probability);
+            result.gates = targets
+                .iter()
+                .map(|t| {
+                    t.lit
+                        .and_then(|(lit, negated)| {
+                            direct(lit, &probability).map(|p| t.with(p, negated))
+                        })
+                        .unwrap_or_else(|| t.without(GateReason::NotReached))
+                })
+                .collect();
+            Ok(result)
+        }
+    }
+}
+
+/// A gate to value: its index (`None` for the top) and its literal in the
+/// coalesced graph, negated or not; `None` when the simplified top does
+/// not reach it.
+struct Target {
+    gate: Option<usize>,
+    lit: Option<(Lit, bool)>,
+}
+
+impl Target {
+    fn with(&self, probability: f64, negated: bool) -> GateProbability {
+        GateProbability {
+            gate: self.gate,
+            probability: Some(if negated {
+                1.0 - probability
+            } else {
+                probability
+            }),
+            reason: None,
+        }
+    }
+
+    fn without(&self, reason: GateReason) -> GateProbability {
+        GateProbability {
+            gate: self.gate,
+            probability: None,
+            reason: Some(reason),
+        }
+    }
+}
+
+/// The probability of a literal that needs no diagram: a constant, or an
+/// event whose probability could be read; `None` for a gate node or an
+/// event without a probability.
+fn direct(lit: Lit, probability: &[Option<f64>]) -> Option<f64> {
+    match lit {
+        Lit::Const(v) => Some(f64::from(u8::from(v))),
+        Lit::Var(e, positive) => {
+            let p = probability.get(e as usize).copied().flatten()?;
+            Some(if positive { p } else { 1.0 - p })
+        }
+        Lit::Node(_) => None,
     }
 }
 
 fn constant_result(
     settings: &QuantifySettings,
     value: bool,
-    probability: Vec<Option<f64>>,
+    probability: &[Option<f64>],
 ) -> Quantification {
     let p = if value { 1.0 } else { 0.0 };
     let importance = probability
@@ -341,6 +625,7 @@ fn constant_result(
             zbdd_nodes: 0,
             nodes_created: 0,
         },
+        gates: Vec::new(),
     }
 }
 
@@ -392,6 +677,40 @@ enum GOp {
 enum Root {
     Node(u32),
     Constant(bool),
+}
+
+/// A conjunction or a disjunction of `args`, simplified: constants
+/// propagated, duplicates dropped, a literal beside its own negation
+/// recognised. A single literal or a constant when it reduces to one,
+/// otherwise the arguments to keep, sorted.
+fn simplify(op: GOp, args: Vec<Lit>) -> Result<Lit, Vec<Lit>> {
+    let (absorbing, neutral) = match op {
+        GOp::And => (false, true),
+        GOp::Or => (true, false),
+        GOp::AtLeast(_) => return Err(args),
+    };
+    let mut kept = Vec::with_capacity(args.len());
+    for arg in args {
+        match arg {
+            Lit::Const(v) if v == neutral => {}
+            Lit::Const(_) => return Ok(Lit::Const(absorbing)),
+            other => kept.push(other),
+        }
+    }
+    kept.sort();
+    kept.dedup();
+    for pair in kept.windows(2) {
+        if let (Lit::Var(a, pa), Lit::Var(b, pb)) = (pair[0], pair[1]) {
+            if a == b && pa != pb {
+                return Ok(Lit::Const(absorbing));
+            }
+        }
+    }
+    match kept.len() {
+        0 => Ok(Lit::Const(neutral)),
+        1 => Ok(kept[0]),
+        _ => Err(kept),
+    }
 }
 
 #[derive(Default)]
@@ -471,32 +790,30 @@ impl Graph {
     }
 
     fn make(&mut self, op: GOp, args: Vec<Lit>) -> Lit {
-        let (absorbing, neutral) = match op {
-            GOp::And => (false, true),
-            GOp::Or => (true, false),
-            GOp::AtLeast(k) => return self.make_vote(k as isize, args),
-        };
-        let mut kept = Vec::with_capacity(args.len());
-        for arg in args {
-            match arg {
-                Lit::Const(v) if v == neutral => {}
-                Lit::Const(_) => return Lit::Const(absorbing),
-                other => kept.push(other),
-            }
+        if let GOp::AtLeast(k) = op {
+            return self.make_vote(k as isize, args);
         }
-        kept.sort();
-        kept.dedup();
-        for pair in kept.windows(2) {
-            if let (Lit::Var(a, pa), Lit::Var(b, pb)) = (pair[0], pair[1]) {
-                if a == b && pa != pb {
-                    return Lit::Const(absorbing);
+        match simplify(op, args) {
+            Ok(lit) => lit,
+            Err(kept) => self.intern(op, kept),
+        }
+    }
+
+    /// A conjunction or a disjunction simplified as [`Graph::make`] does,
+    /// as a node no later [`Graph::make`] shares: the literal of a gate
+    /// the coalescing dissolved into its parent, kept for its probability
+    /// alone. Detached nodes are never reached from the root, so the graph
+    /// the top is quantified on is the one it would be without them.
+    fn make_detached(&mut self, op: GOp, args: Vec<Lit>) -> Lit {
+        match simplify(op, args) {
+            Ok(lit) => lit,
+            Err(kept) => match self.shared.get(&(op, kept.clone())) {
+                Some(&id) => Lit::Node(id),
+                None => {
+                    self.nodes.push((op, kept));
+                    Lit::Node(self.nodes.len() as u32 - 1)
                 }
-            }
-        }
-        match kept.len() {
-            0 => Lit::Const(neutral),
-            1 => kept[0],
-            _ => self.intern(op, kept),
+            },
         }
     }
 
@@ -514,7 +831,12 @@ impl Graph {
     /// parent of the same connective when that parent is its only
     /// referrer. A top that simplifies to a single literal is wrapped in
     /// a one-argument gate, so the root is a node unless constant.
-    fn coalesce(self, root: Lit) -> (Graph, Root) {
+    ///
+    /// Answers also the literal each node of this graph became. With
+    /// `track`, a merged node becomes a detached one
+    /// ([`Graph::make_detached`]) computing what it computed; without, it
+    /// has no literal.
+    fn coalesce(self, root: Lit, track: bool) -> (Graph, Root, HashMap<u32, Lit>) {
         let mut refs = vec![0usize; self.nodes.len()];
         let mut seen = vec![false; self.nodes.len()];
         let mut stack = Vec::new();
@@ -536,7 +858,7 @@ impl Graph {
         let mut out = Graph::default();
         let mut memo: HashMap<u32, Lit> = HashMap::new();
         let copied = match root {
-            Lit::Node(n) => self.copy(n, &refs, &mut out, &mut memo),
+            Lit::Node(n) => self.copy(n, &refs, &mut out, &mut memo, track),
             other => other,
         };
         let root = match copied {
@@ -548,21 +870,37 @@ impl Graph {
                 Root::Node(id)
             }
         };
-        (out, root)
+        (out, root, memo)
     }
 
-    fn copy(&self, n: u32, refs: &[usize], out: &mut Graph, memo: &mut HashMap<u32, Lit>) -> Lit {
+    fn copy(
+        &self,
+        n: u32,
+        refs: &[usize],
+        out: &mut Graph,
+        memo: &mut HashMap<u32, Lit>,
+        track: bool,
+    ) -> Lit {
         if let Some(&lit) = memo.get(&n) {
             return lit;
         }
         let (op, args) = &self.nodes[n as usize];
         let mut flat = Vec::with_capacity(args.len());
-        self.flatten(*op, args, refs, out, memo, &mut flat);
+        self.flatten(*op, args, refs, out, memo, &mut flat, track);
         let lit = out.make(*op, flat);
         memo.insert(n, lit);
         lit
     }
 
+    /// Whether `child`, an argument of a gate of connective `op`, is merged
+    /// into it.
+    fn dissolves(&self, op: GOp, child: u32, refs: &[usize]) -> bool {
+        refs[child as usize] == 1
+            && matches!(op, GOp::And | GOp::Or)
+            && self.nodes[child as usize].0 == op
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn flatten(
         &self,
         op: GOp,
@@ -571,20 +909,44 @@ impl Graph {
         out: &mut Graph,
         memo: &mut HashMap<u32, Lit>,
         flat: &mut Vec<Lit>,
+        track: bool,
     ) {
         for arg in args {
             match arg {
-                Lit::Node(c)
-                    if refs[*c as usize] == 1
-                        && matches!(op, GOp::And | GOp::Or)
-                        && self.nodes[*c as usize].0 == op =>
-                {
-                    self.flatten(op, &self.nodes[*c as usize].1, refs, out, memo, flat)
+                Lit::Node(c) if self.dissolves(op, *c, refs) => {
+                    let (_, inner) = &self.nodes[*c as usize];
+                    self.flatten(op, inner, refs, out, memo, flat, track);
+                    if track {
+                        self.detach(*c, refs, out, memo);
+                    }
                 }
-                Lit::Node(c) => flat.push(self.copy(*c, refs, out, memo)),
+                Lit::Node(c) => flat.push(self.copy(*c, refs, out, memo, track)),
                 other => flat.push(*other),
             }
         }
+    }
+
+    /// Give the merged node `n` the literal of a detached node over its
+    /// own arguments: their literals, a merged argument's being its
+    /// detached node, so nested merged gates share their diagrams.
+    /// Called once its arguments are copied or detached.
+    fn detach(&self, n: u32, refs: &[usize], out: &mut Graph, memo: &mut HashMap<u32, Lit>) {
+        if memo.contains_key(&n) {
+            return;
+        }
+        let (op, args) = &self.nodes[n as usize];
+        let mut mapped = Vec::with_capacity(args.len());
+        for arg in args {
+            mapped.push(match arg {
+                Lit::Node(c) => match memo.get(c) {
+                    Some(&lit) => lit,
+                    None => self.copy(*c, refs, out, memo, true),
+                },
+                other => *other,
+            });
+        }
+        let lit = out.make_detached(*op, mapped);
+        memo.insert(n, lit);
     }
 
     fn mark_events(&self, root: Lit, reached: &mut [bool]) {
@@ -679,6 +1041,68 @@ impl Graph {
 }
 
 // ---------------------------------------------------------------------
+// Where each gate is valued.
+// ---------------------------------------------------------------------
+
+/// The module whose diagram holds each node: a module holds itself and
+/// every node below it short of a submodule; an event and a submodule are
+/// variables of exactly one module. A detached node (a gate the
+/// coalescing dissolved, [`Graph::make_detached`]) is held by the module
+/// of its arguments.
+#[derive(Default)]
+struct Homes {
+    node: HashMap<u32, u32>,
+    event: HashMap<u32, u32>,
+    submodule: HashMap<u32, u32>,
+}
+
+impl Homes {
+    fn of(graph: &Graph, modules: &[u32], is_module: &[bool]) -> Self {
+        let mut homes = Homes::default();
+        for &m in modules {
+            homes.node.insert(m, m);
+            let mut stack = vec![m];
+            while let Some(n) = stack.pop() {
+                for arg in &graph.nodes[n as usize].1 {
+                    match *arg {
+                        Lit::Var(e, _) => {
+                            homes.event.insert(e, m);
+                        }
+                        Lit::Node(c) if is_module[c as usize] => {
+                            homes.submodule.insert(c, m);
+                        }
+                        Lit::Node(c) => {
+                            if homes.node.insert(c, m).is_none() {
+                                stack.push(c);
+                            }
+                        }
+                        Lit::Const(_) => {}
+                    }
+                }
+            }
+        }
+        homes
+    }
+
+    /// The module holding `n`; `None` for a detached node whose
+    /// arguments the top no longer reaches.
+    fn of_node(&self, graph: &Graph, n: u32) -> Option<u32> {
+        if let Some(&m) = self.node.get(&n) {
+            return Some(m);
+        }
+        graph.nodes[n as usize].1.iter().find_map(|arg| match *arg {
+            Lit::Var(e, _) => self.event.get(&e).copied(),
+            Lit::Node(c) => self
+                .submodule
+                .get(&c)
+                .copied()
+                .or_else(|| self.of_node(graph, c)),
+            Lit::Const(_) => None,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------
 // Per-module results.
 // ---------------------------------------------------------------------
 
@@ -715,9 +1139,13 @@ struct ModuleResult {
     estimators: Option<(f64, f64, f64)>,
     expansions: Option<u64>,
     /// Why this module's number deserves attention, if it does.
-    warnings: Vec<String>,
+    warnings: Vec<ModuleNote>,
     bdd_nodes: usize,
     nodes_created: usize,
+    /// The probability of each gate node asked of this module, read off
+    /// its diagram; `None` for one whose diagram outgrew the budget, and
+    /// for every one in a module quantified from its cut sets.
+    gates: HashMap<u32, Option<f64>>,
 }
 
 struct Quantifier<'a> {
@@ -742,13 +1170,28 @@ impl<'a> Quantifier<'a> {
         }
     }
 
-    fn run(self, root: u32) -> Result<Quantification, FtaError> {
+    fn run(self, root: u32, targets: &[Target]) -> Result<Quantification, FtaError> {
         let n_events = self.tree.events.len();
         let is_module = self.graph.modules(root, n_events);
         // Bottom-up: ascending node ids put every submodule before its
         // parent. An unreachable node is never a module: its dates stay
         // at zero.
         let module_nodes: Vec<u32> = (0..=root).filter(|&g| is_module[g as usize]).collect();
+        let homes = if targets.is_empty() {
+            Homes::default()
+        } else {
+            Homes::of(self.graph, &module_nodes, &is_module)
+        };
+        // The gate nodes each module values, by the module whose diagram
+        // holds them.
+        let mut wanted: HashMap<u32, Vec<u32>> = HashMap::new();
+        for target in targets {
+            if let Some((Lit::Node(n), _)) = target.lit {
+                if let Some(m) = homes.of_node(self.graph, n) {
+                    wanted.entry(m).or_default().push(n);
+                }
+            }
+        }
         // A module that reduced to a terminal is that constant in its
         // parent, never a variable: a variable standing for a tautology
         // would make its parent's cut sets carry the empty set beside real
@@ -758,7 +1201,8 @@ impl<'a> Quantifier<'a> {
         let mut order: Vec<u32> = Vec::new();
         let mut used = 0usize;
         for &m in &module_nodes {
-            let result = self.module(m, &is_module, &constant, &done, &mut used)?;
+            let asked = wanted.get(&m).map_or(&[][..], Vec::as_slice);
+            let result = self.module(m, &is_module, &constant, &done, &mut used, asked)?;
             // A function of no variable is a constant, whatever its inputs'
             // methods; a truncated family is not (what was cut may hold).
             if !result.truncated
@@ -770,6 +1214,7 @@ impl<'a> Quantifier<'a> {
             done.insert(m, result);
             order.push(m);
         }
+        let gates = self.gates(targets, &homes, &is_module, &constant, &done);
 
         // The live modules: the root, and every module its live parent's
         // function still depends on. A module its parent absorbed takes
@@ -844,20 +1289,24 @@ impl<'a> Quantifier<'a> {
         } else {
             "bdd+cut_sets"
         };
-        let names: HashMap<u32, String> = results
+        let indices: HashMap<u32, usize> = results
             .iter()
             .rev()
             .enumerate()
-            .map(|(i, r)| (r.node, format!("M{i}")))
+            .map(|(i, r)| (r.node, i))
             .collect();
-        let warnings: Vec<String> = results
+        let names: HashMap<u32, String> = indices
+            .iter()
+            .map(|(&node, i)| (node, format!("M{i}")))
+            .collect();
+        let warnings: Vec<QuantifyWarning> = results
             .iter()
             .rev()
-            .flat_map(|r| {
-                let name = names.get(&r.node).cloned().unwrap_or_default();
+            .enumerate()
+            .flat_map(|(module, r)| {
                 r.warnings
                     .iter()
-                    .map(move |w| format!("module {name}: {w}"))
+                    .map(move |note| note.at(module, self.settings))
             })
             .collect();
         let mut zbdd_nodes = 0usize;
@@ -942,7 +1391,90 @@ impl<'a> Quantifier<'a> {
                 zbdd_nodes,
                 nodes_created: used + zbdd_created,
             },
+            gates,
         })
+    }
+
+    /// Value every target off the module that holds it: exact when the
+    /// module is exact for it, `None` with the reason otherwise.
+    fn gates(
+        &self,
+        targets: &[Target],
+        homes: &Homes,
+        is_module: &[bool],
+        constant: &HashMap<u32, bool>,
+        done: &HashMap<u32, ModuleResult>,
+    ) -> Vec<GateProbability> {
+        // Whether a node, valued in module `m`, reads a submodule that is
+        // not exact (memoised per node; a node is valued in one module).
+        let mut inexact: HashMap<u32, bool> = HashMap::new();
+        targets
+            .iter()
+            .map(|target| {
+                let Some((lit, negated)) = target.lit else {
+                    return target.without(GateReason::NotReached);
+                };
+                let Lit::Node(n) = lit else {
+                    return direct(lit, &self.probability).map_or_else(
+                        || target.without(GateReason::NotReached),
+                        |p| target.with(p, negated),
+                    );
+                };
+                let Some(m) = homes.of_node(self.graph, n) else {
+                    return target.without(GateReason::NotReached);
+                };
+                let Some(module) = done.get(&m) else {
+                    return target.without(GateReason::NotReached);
+                };
+                if module.method == "cut_sets" {
+                    return target.without(GateReason::CutSets);
+                }
+                let Some(&value) = module.gates.get(&n) else {
+                    return target.without(GateReason::NotReached);
+                };
+                let Some(value) = value else {
+                    return target.without(GateReason::OutgrewBdd);
+                };
+                let reads_estimate = !module.exact
+                    && (n == m
+                        || self.reads_inexact(n, m, is_module, constant, done, &mut inexact));
+                if reads_estimate {
+                    return target.without(GateReason::ReadsCutSets);
+                }
+                target.with(value, negated)
+            })
+            .collect()
+    }
+
+    /// Whether node `n`, in module `m`'s diagram, depends on a submodule
+    /// whose value is not exact.
+    fn reads_inexact(
+        &self,
+        n: u32,
+        m: u32,
+        is_module: &[bool],
+        constant: &HashMap<u32, bool>,
+        done: &HashMap<u32, ModuleResult>,
+        memo: &mut HashMap<u32, bool>,
+    ) -> bool {
+        if let Some(&known) = memo.get(&n) {
+            return known;
+        }
+        let mut reads = false;
+        for arg in &self.graph.nodes[n as usize].1 {
+            reads = match *arg {
+                Lit::Node(c) if c != m && is_module[c as usize] => {
+                    !constant.contains_key(&c) && !done.get(&c).is_some_and(|r| r.exact)
+                }
+                Lit::Node(c) => self.reads_inexact(c, m, is_module, constant, done, memo),
+                _ => false,
+            };
+            if reads {
+                break;
+            }
+        }
+        memo.insert(n, reads);
+        reads
     }
 
     /// Quantify module `m`, its submodules already done.
@@ -953,6 +1485,7 @@ impl<'a> Quantifier<'a> {
         constant: &HashMap<u32, bool>,
         done: &HashMap<u32, ModuleResult>,
         used: &mut usize,
+        asked: &[u32],
     ) -> Result<ModuleResult, FtaError> {
         // Variable order: depth-first left-most, first encounter.
         let mut keys: Vec<Key> = Vec::new();
@@ -996,15 +1529,38 @@ impl<'a> Quantifier<'a> {
                 let mut bdd = Bdd::new(budget);
                 let mut memo: HashMap<u32, u32> = HashMap::new();
                 match self.build(m, m, is_module, constant, &level_of, &mut bdd, &mut memo) {
-                    Ok(root) => Some((bdd, root)),
+                    Ok(root) => Some((bdd, root, memo)),
                     Err(FtaError::TooLarge(_)) if self.settings.engine == Engine::Auto => None,
                     Err(e) => return Err(e),
                 }
             }
         };
-        if let Some((bdd, root)) = exact_attempt {
-            *used += bdd.len();
+        if let Some((mut bdd, root, mut memo)) = exact_attempt {
+            // The top's own work: what the budget of the next modules and
+            // the provenance count, whether gates are asked for or not.
+            let built = bdd.len();
+            // A gate the coalescing dissolved is built over the nodes
+            // already there; the others are in the diagram already.
+            let mut gate_ids = Vec::with_capacity(asked.len());
+            for &node in asked {
+                let id = match memo.get(&node) {
+                    Some(&id) => Some(id),
+                    None => match self
+                        .build(node, m, is_module, constant, &level_of, &mut bdd, &mut memo)
+                    {
+                        Ok(id) => Some(id),
+                        Err(FtaError::TooLarge(_)) => None,
+                        Err(e) => return Err(e),
+                    },
+                };
+                gate_ids.push((node, id));
+            }
+            *used += built;
             let prob = bdd.probabilities(&level_p);
+            let gates = gate_ids
+                .into_iter()
+                .map(|(node, id)| (node, id.map(|id| prob[id as usize])))
+                .collect();
             let value = prob[root as usize];
             let gradient = bdd.birnbaum(root, &level_p, &prob);
             let monotone = bdd.is_monotone(root);
@@ -1028,7 +1584,8 @@ impl<'a> Quantifier<'a> {
                 monotone,
                 gradient,
                 bdd_nodes: bdd.size(root),
-                nodes_created: bdd.len(),
+                nodes_created: built,
+                gates,
                 diagram: Some((bdd, root)),
                 retained: None,
                 truncated: false,
@@ -1076,32 +1633,19 @@ impl<'a> Quantifier<'a> {
         });
         let mut warnings = Vec::new();
         if self.settings.engine == Engine::Auto {
-            warnings.push(format!(
-                "its exact diagram outgrew max_bdd_nodes ({}): quantified from its \
-                 cut sets under cutoffs",
-                self.settings.max_bdd_nodes
-            ));
+            warnings.push(ModuleNote::OutgrewBdd);
         }
         if extracted.count_reached {
-            warnings.push(format!(
-                "max_cut_sets ({}) was reached: the least probable cut sets were \
-                 dropped and the probability cutoff raised",
-                self.settings.max_cut_sets
-            ));
+            warnings.push(ModuleNote::CutSetsReached);
         }
         if extracted.expansions_exhausted {
-            warnings.push(format!(
-                "max_expansions ({}) ran out: what remained open is only bounded",
-                self.settings.max_expansions
-            ));
+            warnings.push(ModuleNote::ExpansionsExhausted);
         }
         if extracted.neglected > pivotal {
-            warnings.push(format!(
-                "the neglected mass ({:.3e}) exceeds the retained estimate \
-                 ({pivotal:.3e}): the estimate may be far too optimistic; lower the \
-                 cutoffs or raise max_cut_sets",
-                extracted.neglected
-            ));
+            warnings.push(ModuleNote::NeglectedExceeds {
+                neglected: extracted.neglected,
+                estimate: pivotal,
+            });
         }
         Ok(ModuleResult {
             warnings,
@@ -1122,6 +1666,7 @@ impl<'a> Quantifier<'a> {
             estimators: Some((rare_event, mcub, pivotal)),
             expansions: Some(extracted.expansions),
             retained: Some(zbdd),
+            gates: asked.iter().map(|&node| (node, None)).collect(),
         })
     }
 
@@ -1251,14 +1796,19 @@ impl<'a> Quantifier<'a> {
             return Ok(id);
         }
         let (op, args) = &self.graph.nodes[g as usize];
+        let level = |key: Key| {
+            level_of.get(&key).copied().ok_or_else(|| {
+                FtaError::Invalid(format!("internal: {key:?} is not a variable of its module"))
+            })
+        };
         let mut ids = Vec::with_capacity(args.len());
         for arg in args {
             let id = match *arg {
-                Lit::Var(e, positive) => bdd.literal(level_of[&Key::Event(e)], positive)?,
+                Lit::Var(e, positive) => bdd.literal(level(Key::Event(e))?, positive)?,
                 Lit::Node(c) if c != m && is_module[c as usize] => match constant.get(&c) {
                     Some(true) => crate::dd::ONE,
                     Some(false) => ZERO,
-                    None => bdd.literal(level_of[&Key::Module(c)], true)?,
+                    None => bdd.literal(level(Key::Module(c))?, true)?,
                 },
                 Lit::Node(c) => self.build(c, m, is_module, constant, level_of, bdd, memo)?,
                 Lit::Const(true) => crate::dd::ONE,

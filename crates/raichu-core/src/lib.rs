@@ -47,8 +47,10 @@ pub use engine::{
     TransitionExposure, WorkCounters,
 };
 pub use fault_tree::{
-    explain, fault_tree, fault_tree_for_targets, BasicLaw, Explanation, FaultTree, FaultTreeError,
-    FaultTreeSettings, FtNode, GateOp, TreeEvent, DEFAULT_MAX_NODES,
+    deserialize_coded, explain, fault_tree, fault_tree_for_targets, serialize_coded, BasicLaw,
+    Explanation, FaultTree, FaultTreeError, FaultTreeMeasure, FaultTreeSettings, FtNode, GateOp,
+    GateOrigin, GenerationWarning, LegacyWarning, OriginKind, TreeEvent, TreeRepair,
+    DEFAULT_MAX_NODES,
 };
 pub use flow::{CPolicy, EdgeClass, FLOW_TOLERANCE};
 pub use loops::{switching_loops, SwitchingLoop};

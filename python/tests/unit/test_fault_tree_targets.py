@@ -218,10 +218,66 @@ def test_the_two_block_parallel_target_is_its_closed_form():
     assert result.probability == pytest.approx(exact, rel=CLOSED_FORM_RTOL)
     assert round(result.probability, 4) == 0.5466
     assert result.method == "bdd" and result.exact
-    # Repaired blocks: the tree reads the probability without repair, and
-    # says so per automaton.
-    assert len(tree.warnings) == 2
-    assert all("without repair" in w for w in tree.warnings)
+    assert result.measure == "probability_without_repair"
+    # Repaired blocks: the repair is a fact of structure, carried by each
+    # event; generation warns of nothing.
+    assert tree.warnings == []
+    assert [len(e["repairs"]) for e in tree.basic_events] == [1, 1]
+    assert tree.basic_events[0]["repairs"][0]["law"] == {"law": "exponential", "rate": 0.1}
+    # The measure decides: without repair, the envelope says per event
+    # that the repair is ignored, as a code beside the readable message.
+    generation = tree.envelope([MISSION])["generation"]
+    assert [(w["kind"], w["event"], w["state"]) for w in generation["warnings"]] == [
+        ("repair_ignored", "B1.frun.failure", "nok"),
+        ("repair_ignored", "B2.frun.failure", "nok"),
+    ]
+    assert all(len(w["transitions"]) == 1 for w in generation["warnings"])
+    assert all("without repair" in w["message"] for w in generation["warnings"])
+
+
+def unavailable(name, mu=0.1, t=MISSION):
+    """The two-state chain started up: λ/(λ+µ) (1 - e^{-(λ+µ)t})."""
+    lam = RATES[name]
+    return lam / (lam + mu) * (1.0 - math.exp(-(lam + mu) * t))
+
+
+def test_the_unavailability_of_repaired_blocks_is_their_closed_form():
+    model = study_model(declaration("parallel", repair=0.1))
+    tree = pyraichu.fault_tree(model, targets=["T_lost"], measure="unavailability")
+    assert tree.measure == "unavailability"
+    exact = unavailable("B1") * unavailable("B2")
+    # The OpenPSA document names the measure: quantify() reads it.
+    result = tree.quantify(mission_time=MISSION)
+    assert result.measure == "unavailability"
+    assert result.probability == pytest.approx(exact, rel=CLOSED_FORM_RTOL)
+    envelope = tree.envelope([100.0, MISSION])
+    assert envelope["measure"] == "unavailability"
+    assert envelope["generation"]["warnings"] == []
+    assert envelope["generation"]["exact"] is True
+    assert envelope["horizon"]["probability"] == result.probability
+    # The measure asked for wins over the document's.
+    without = tree.quantify(mission_time=MISSION, measure="probability_without_repair")
+    assert without.probability == pytest.approx(
+        failed("B1") * failed("B2"), rel=CLOSED_FORM_RTOL
+    )
+    assert (
+        tree.envelope([MISSION], measure="probability_without_repair")["measure"]
+        == "probability_without_repair"
+    )
+    assert pyraichu.quantify(tree.open_psa, mission_time=MISSION).probability == (
+        result.probability
+    )
+
+
+def test_an_unknown_measure_is_refused_by_name():
+    model = study_model(declaration("parallel", repair=0.1))
+    with pytest.raises(pyraichu.SimulationError, match="availability"):
+        pyraichu.fault_tree(model, targets=["T_lost"], measure="availability")
+    tree = pyraichu.fault_tree(model, targets=["T_lost"])
+    with pytest.raises(pyraichu.SimulationError, match="availability"):
+        tree.envelope([MISSION], measure="availability")
+    with pytest.raises(pyraichu.SimulationError, match="availability"):
+        tree.quantify(mission_time=MISSION, measure="availability")
 
 
 @pytest.mark.parametrize("shape", sorted(CLOSED_FORMS))
@@ -411,6 +467,7 @@ HORIZON_KEYS = {
     "importance",
     "warnings",
     "provenance",
+    "gates",
 }
 IMPORTANCE_KEYS = {
     "event",
@@ -430,7 +487,7 @@ def test_the_envelope_has_the_documented_shape():
     envelope = tree.envelope(times)
     assert set(envelope) == ENVELOPE_KEYS
     assert envelope["format"] == pyraichu.FAULT_TREE_FORMAT == "raichu.fault_tree"
-    assert envelope["version"] == pyraichu.FAULT_TREE_VERSION == 1
+    assert envelope["version"] == pyraichu.FAULT_TREE_VERSION == 2
     assert envelope["provenance"]["engine_version"] == pyraichu.__version__
     assert envelope["top"] == {"kind": "targets", "targets": ["T_lost"]}
     assert envelope["measure"] == "probability_without_repair"

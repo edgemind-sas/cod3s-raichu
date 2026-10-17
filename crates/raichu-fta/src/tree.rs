@@ -86,6 +86,25 @@ pub struct BasicEvent {
     /// How it occurs.
     #[serde(flatten)]
     pub law: Law,
+    /// What brings it back: the transitions from the state it enters to
+    /// the state it leaves. Counted only under
+    /// [`crate::FaultTreeMeasure::Unavailability`]; empty for an event
+    /// nothing repairs.
+    pub repairs: Vec<Repair>,
+}
+
+/// One repair of a basic event.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Repair {
+    /// The repair's name (a qualified transition name for a generated
+    /// tree).
+    pub transition: String,
+    /// Its law: a [`Law::Constant`] is an immediate, on-demand repair;
+    /// `None` when no single law stands for it, and the repair cannot be
+    /// counted.
+    pub law: Option<Law>,
+    /// Whether a guard conditions it; counting it assumes the guard holds.
+    pub guarded: bool,
 }
 
 /// A named intermediate gate.

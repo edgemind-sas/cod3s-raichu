@@ -8,15 +8,19 @@ use sha2::{Digest, Sha256};
 
 /// The format of a generated structural result.
 pub const FAULT_TREE_STRUCTURE_FORMAT: &str = "raichu.fault_tree.structure";
-/// The structural format version written and read by this crate.
-pub const FAULT_TREE_STRUCTURE_VERSION: u32 = 1;
+/// The structural format version written by this crate, and the highest
+/// it reads. It reads version 1 too: there, each generation warning is a
+/// plain sentence, read as the variant `{kind: "legacy", message}`, and
+/// gates carry no identifier nor origin.
+pub const FAULT_TREE_STRUCTURE_VERSION: u32 = 2;
 
 /// A generated tree and optionally its structural minimal cut sets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FaultTreeStructure {
     /// Always [`FAULT_TREE_STRUCTURE_FORMAT`].
     pub format: String,
-    /// Always [`FAULT_TREE_STRUCTURE_VERSION`] when written here.
+    /// [`FAULT_TREE_STRUCTURE_VERSION`] when written here; the one it was
+    /// written in when read.
     pub version: u32,
     /// Engine version and tree name.
     pub provenance: StructureProvenance,
@@ -162,11 +166,20 @@ pub enum ReadFaultTreeStructureError {
     #[error("fault-tree structure format {0:?}, expected `raichu.fault_tree.structure`")]
     Format(Option<String>),
     /// An unsupported version.
-    #[error("fault-tree structure version {0:?} is not readable (reads version 1)")]
+    #[error(
+        "fault-tree structure version {0:?} is not readable (reads versions 1 to {max})",
+        max = FAULT_TREE_STRUCTURE_VERSION
+    )]
     Version(Option<u32>),
 }
 
 /// Read the producer's structural output, checking format, version and references.
+///
+/// The document is read by its version, as the envelope is
+/// ([`crate::read_fault_tree_envelope`]): in version 1 a generation
+/// warning is a plain sentence, read as the variant `{kind: "legacy",
+/// message}`; from version 2 a plain sentence or a legacy warning is
+/// refused.
 ///
 /// # Errors
 /// [`ReadFaultTreeStructureError`] for unknown or malformed documents.
@@ -203,8 +216,9 @@ fn read_structure(json: &str) -> Result<FaultTreeStructure, ReadFaultTreeStructu
         .as_ref()
         .and_then(|v| v.as_u64())
         .and_then(|v| u32::try_from(v).ok());
-    if version != Some(FAULT_TREE_STRUCTURE_VERSION) {
-        return Err(ReadFaultTreeStructureError::Version(version));
+    match version {
+        Some(version) if (1..=FAULT_TREE_STRUCTURE_VERSION).contains(&version) => {}
+        other => return Err(ReadFaultTreeStructureError::Version(other)),
     }
     let mut decoder = serde_json::Deserializer::from_str(json);
     decoder.disable_recursion_limit();
@@ -214,6 +228,18 @@ fn read_structure(json: &str) -> Result<FaultTreeStructure, ReadFaultTreeStructu
         .end()
         .map_err(|e| ReadFaultTreeStructureError::Json(e.to_string()))?;
     let invalid = |message: &str| ReadFaultTreeStructureError::Json(message.to_owned());
+    if result.version >= 2
+        && result
+            .tree
+            .warnings
+            .iter()
+            .any(raichu_core::LegacyWarning::is_legacy)
+    {
+        return Err(invalid(
+            "a version-2 structure carries a legacy warning (a plain sentence): only \
+             version 1 has them",
+        ));
+    }
     validate_tree(&result.tree).map_err(invalid)?;
     let names: std::collections::HashSet<&str> = result
         .tree
@@ -247,6 +273,7 @@ fn validate_tree(tree: &FaultTree) -> Result<(), &'static str> {
     if names.len() != tree.basic_events.len() {
         return Err("duplicate basic-event names");
     }
+    let mut ids = std::collections::HashSet::new();
     let mut pending = vec![&tree.top];
     while let Some(node) = pending.pop() {
         match node {
@@ -254,7 +281,15 @@ fn validate_tree(tree: &FaultTree) -> Result<(), &'static str> {
                 return Err("unknown basic-event index")
             }
             FtNode::Constant { .. } => return Err("degenerate constant tree"),
-            FtNode::Gate { children, .. } => pending.extend(children),
+            FtNode::Gate { id, children, .. } => {
+                // The identifier is the key a gate is found by.
+                if let Some(id) = id {
+                    if !ids.insert(id.as_str()) {
+                        return Err("duplicate gate identifiers");
+                    }
+                }
+                pending.extend(children)
+            }
             _ => {}
         }
     }

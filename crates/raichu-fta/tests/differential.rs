@@ -148,6 +148,7 @@ fn every_engine_and_cutoff_agrees_with_the_truth_table() {
                 .map(|(i, q)| BasicEvent {
                     name: format!("E{i}"),
                     law: Law::Constant { probability: *q },
+                    repairs: Vec::new(),
                 })
                 .collect(),
             gates,

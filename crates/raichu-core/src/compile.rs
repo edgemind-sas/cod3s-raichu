@@ -602,6 +602,11 @@ pub struct CompiledModel {
     pub fmu_units: Vec<raichu_model::FmuUnit>,
     /// Qualified attribute names `component.attribute` (journal, results).
     pub var_names: Vec<String>,
+    /// The component owning each attribute, by [`VarIdx`]: a name with a
+    /// dot in it cannot be split back out of [`Self::var_names`].
+    pub(crate) var_components: Vec<String>,
+    /// The component owning each automaton, by [`AutIdx`].
+    pub(crate) automaton_components: Vec<String>,
     /// Initial attribute values.
     pub var_init: Vec<Value>,
     /// Automata.
@@ -1614,8 +1619,10 @@ impl CompiledModel {
             port_channel_sources: HashMap::new(),
         };
         let mut var_names = Vec::new();
+        let mut var_components = Vec::new();
         let mut var_init = Vec::new();
         let mut automata = Vec::new();
+        let mut automaton_components = Vec::new();
         // (connection index, channel) → materialised attribute index.
         let mut channel_vars: HashMap<(usize, &str), VarIdx> = HashMap::new();
         for component in &model.components {
@@ -1625,6 +1632,7 @@ impl CompiledModel {
                     var_names.len(),
                 );
                 var_names.push(format!("{}.{}", component.name, attribute.name));
+                var_components.push(component.name.clone());
                 var_init.push(attribute.init);
             }
             // Materialised channel attributes sit right after the
@@ -1640,6 +1648,7 @@ impl CompiledModel {
                     .vars
                     .insert((component.name.clone(), entry.attribute.clone()), idx);
                 var_names.push(format!("{}.{}", component.name, entry.attribute));
+                var_components.push(component.name.clone());
                 var_init.push(Value::Float(entry.init));
                 channel_vars.insert((entry.connection, entry.channel.as_str()), idx);
             }
@@ -1662,6 +1671,7 @@ impl CompiledModel {
                         init = state_idx;
                     }
                 }
+                automaton_components.push(component.name.clone());
                 automata.push(CAutomaton {
                     name: format!("{}.{}", component.name, automaton.name),
                     states: automaton.states.clone(),
@@ -2379,8 +2389,10 @@ impl CompiledModel {
             name: model.name.clone(),
             fmu_units: model.fmu_units.clone(),
             var_names,
+            var_components,
             var_init,
             automata,
+            automaton_components,
             transitions,
             functions,
             programs,
