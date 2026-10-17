@@ -994,17 +994,39 @@ impl<'m> Engine<'m> {
         Ok(())
     }
 
+    /// Qualified name of a fixpoint step: a function, or a program past
+    /// the functions.
+    fn step_name(&self, step: FnIdx) -> &str {
+        match self.model.functions.get(step) {
+            Some(function) => &function.name,
+            None => &self.model.programs[step - self.model.functions.len()].name,
+        }
+    }
+
     /// Converge the current worklist, ascending or descending order.
     fn converge(&mut self, reverse: bool) -> Result<(), EngineError> {
         let outcome = self.converge_counted(reverse);
         self.fixpoint_iteration = 0;
+        for step in self.cycle_runs_touched.drain(..) {
+            self.cycle_runs[step] = 0;
+        }
         outcome
     }
 
     /// The loop of [`Self::converge`]: one iteration pops one pending
     /// function or program, and its index is kept in
     /// `fixpoint_iteration` for the journal while it runs.
+    ///
+    /// Loop guard: see [`crate::EngineConfig::max_fixpoint_iterations`].
     fn converge_counted(&mut self, reverse: bool) -> Result<(), EngineError> {
+        let steps = self.cycle_runs.len();
+        // Twice the per-step cap for every step: the margin lets a loop
+        // dragging acyclic readers along reach its own diagnosis first.
+        let work_budget = self
+            .config
+            .max_fixpoint_iterations
+            .saturating_mul(2)
+            .saturating_mul(steps.max(1));
         let mut iterations = 0usize;
         loop {
             let next = if reverse {
@@ -1015,11 +1037,29 @@ impl<'m> Engine<'m> {
             let Some(fn_idx) = next else { break };
             iterations += 1;
             self.fixpoint_iteration = iterations;
-            if iterations > self.config.max_fixpoint_iterations {
+            if self.model.on_fixpoint_cycle[fn_idx] {
+                let runs = &mut self.cycle_runs[fn_idx];
+                if *runs == 0 {
+                    self.cycle_runs_touched.push(fn_idx);
+                }
+                *runs += 1;
+                if *runs > self.config.max_fixpoint_iterations {
+                    self.worklist.clear();
+                    return Err(EngineError::InstantaneousLoop {
+                        time: self.time,
+                        iterations: self.config.max_fixpoint_iterations,
+                        function: self.step_name(fn_idx).to_owned(),
+                    });
+                }
+            }
+            // Checked after the loop guard, which names the cause when a
+            // loop is what exhausted the budget.
+            if iterations > work_budget {
                 self.worklist.clear();
-                return Err(EngineError::InstantaneousLoop {
+                return Err(EngineError::FixpointWorkExceeded {
                     time: self.time,
-                    iterations: self.config.max_fixpoint_iterations,
+                    runs: work_budget,
+                    steps,
                 });
             }
             if fn_idx < self.model.functions.len() {

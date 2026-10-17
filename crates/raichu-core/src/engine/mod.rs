@@ -197,6 +197,13 @@ pub struct Engine<'m> {
     /// Pop index of the fixpoint iteration in progress (`evolA`), `0`
     /// outside a fixpoint: stamped on the journal's writes.
     fixpoint_iteration: usize,
+    /// Runs of each fixpoint step in the fixpoint in progress, counted
+    /// only for the steps on a cycle (`CompiledModel::on_fixpoint_cycle`):
+    /// the loop guard of `evolA`. All zero outside a fixpoint.
+    cycle_runs: Vec<usize>,
+    /// The steps whose `cycle_runs` entry is non-zero, so a fixpoint
+    /// resets what it counted and not the whole table.
+    cycle_runs_touched: Vec<FnIdx>,
     /// Counted work (see [`WorkCounters`]): cumulative instrumentation
     /// over this engine's life, deliberately outside the snapshot.
     work: WorkCounters,
@@ -464,6 +471,8 @@ impl<'m> Engine<'m> {
             stochastic,
             worklist: BTreeSet::new(),
             fixpoint_iteration: 0,
+            cycle_runs: vec![0; model.functions.len() + model.programs.len()],
+            cycle_runs_touched: Vec::new(),
             work: WorkCounters::default(),
             flow_scratch: FlowScratch::default(),
             active_set_budget: config

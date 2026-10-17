@@ -2226,7 +2226,11 @@ impl std::fmt::Display for SingularReason {
 /// any component that reaches it), each as its nodes in unspecified
 /// order; a singleton without a self-edge is a node of its own and is
 /// still emitted, letting the caller decide what a component means.
-fn tarjan_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
+///
+/// Shared with the engine, which reads the cycles of its sensitive
+/// functions with it: one implementation of the graph pass for the two
+/// layers that need one.
+pub fn strongly_connected_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
     #[derive(Clone, Copy)]
     struct Frame {
         node: usize,
@@ -4662,7 +4666,7 @@ impl Model {
         // components in a fixed order for a fixed declaration order, and
         // the first refused one is always the same.
         let mut blocks = Vec::new();
-        for members in tarjan_components(&edges) {
+        for members in strongly_connected_components(&edges) {
             let self_loop = members.len() == 1 && edges[members[0]].contains(&members[0]);
             if members.len() == 1 && !self_loop {
                 continue;
