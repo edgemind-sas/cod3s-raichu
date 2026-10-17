@@ -138,14 +138,14 @@ and its parameters, never on `message`; a reader ignores `message`.
 
 | `kind` | Parameters | Meaning |
 |---|---|---|
-| `guard_reads_state` | `transition` | generation: the transition is guarded by a condition on states; its draw is timed from the start of the mission |
-| `entered_during_mission` | `transition`, `source` | generation: the transition leaves a state entered during the mission; its draw is timed from the start of the mission |
+| `guard_reads_state` | `transition` | generation: the transition is guarded by a condition on states; its draw is timed from the start of the mission. Not emitted for a guard its source state implies (the default lock of a muscadet external mode), nor for the transitions of an automaton that follows a condition |
+| `entered_during_mission` | `transition`, `source` | generation: the transition leaves a state entered during the mission; its draw is timed from the start of the mission. Not emitted for the transitions of an automaton that follows a condition |
 | `competing_transition` | `transition`, `source`, `competitors` | generation: other transitions leave the same source; the draw is counted as if none could fire first |
 | `target_left` | `automaton`, `state`, `transitions` | generation: the state a basic event enters is left for another state than the one the event leaves (not a repair); the tree ignores it |
 | `repair_ignored` | `event`, `automaton`, `state`, `transitions` | measure: the event's repairs are not counted (always under the probability without repair; under the unavailability, a repair whose law cannot be read or a failure with no time); the event keeps its probability without repair |
 | `asymptotic_unavailability` | `event` | measure: under the unavailability, a failure or repair law is not exponential and the event is its asymptotic `MTTR / (MTTF + MTTR)` |
 | `common_cause_repair_approximation` | `event` | measure: under the unavailability, a common-cause combination (`__cc_`) is valued with its own repair, as if independent of the mode's other combinations |
-| `guarded_repair_assumed_available` | `event`, `transition` | measure: under the unavailability, a guarded repair is counted as if its guard always held |
+| `guarded_repair_assumed_available` | `event`, `transition` | measure: under the unavailability, a guarded repair is counted as if its guard always held. Not emitted for a guard the repair's source state implies |
 | `module_outgrew_bdd` | `module`, `max_bdd_nodes` | quantification: the module's exact diagram outgrew the budget, it was quantified from its cut sets |
 | `max_cut_sets_reached` | `module`, `max_cut_sets` | quantification: the count cutoff dropped the least probable cut sets |
 | `max_expansions_exhausted` | `module`, `max_expansions` | quantification: the expansion budget ran out, what remained open is only bounded |

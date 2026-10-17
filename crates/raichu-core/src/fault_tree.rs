@@ -253,6 +253,8 @@ pub struct TreeRepair {
     pub law: Option<BasicLaw>,
     /// Whether a guard reading the model conditions it (an ObjMode2S
     /// `not_occ_cond`): a measure that counts it assumes the guard holds.
+    /// A guard that holds whenever the repair's source state is active
+    /// (the default lock of a muscadet external mode) does not.
     pub guarded: bool,
 }
 
@@ -437,7 +439,8 @@ pub struct FaultTree {
 pub enum GenerationWarning {
     /// The transition is guarded by a condition on states: its draw is
     /// timed from the start of the mission, not from when the condition
-    /// holds.
+    /// holds. Not emitted for a guard its source state implies, nor for the
+    /// transitions of an automaton that follows a condition.
     GuardReadsState {
         /// Qualified transition name.
         transition: String,
@@ -501,7 +504,8 @@ pub enum GenerationWarning {
         event: String,
     },
     /// Under the unavailability, a guarded repair is counted as if its
-    /// guard always held.
+    /// guard always held. A guard the repair's source state implies is no
+    /// guard here.
     GuardedRepairAssumedAvailable {
         /// The basic event.
         event: String,
@@ -822,6 +826,7 @@ fn generate(
         warnings: Vec::new(),
         warned: HashSet::new(),
         constant_conditions: Vec::new(),
+        followers: HashMap::new(),
     };
     let unrolled = builder.unroll(top)?;
     let normal = builder.nnf(&unrolled, false)?;
@@ -1095,7 +1100,25 @@ struct Builder<'a> {
     /// Conditions crossed that read no state once unrolled, for the cause
     /// of a degenerate tree.
     constant_conditions: Vec<String>,
+    /// Which automata follow a condition, found once each.
+    followers: HashMap<AutIdx, Option<Follower>>,
 }
+
+/// An automaton whose state is a condition of the others: two states, and
+/// two transitions no draw governs, one into `raised` under a guard and one
+/// back under its exact negation. Outside the instant it moves, it is in
+/// `raised` exactly when `condition` holds (the mirror a muscadet external
+/// mode grafts into its target, an observer).
+#[derive(Debug, Clone)]
+struct Follower {
+    raised: StateIdx,
+    /// The guard into `raised`, unrolled, in negation normal form.
+    condition: TExpr,
+}
+
+/// How many followers deep a guard is read through before the reading
+/// gives up and the guard is taken as conditioning its transition.
+const MAX_FOLLOWER_DEPTH: usize = 8;
 
 impl Builder<'_> {
     fn count(&mut self) -> Result<(), FaultTreeError> {
@@ -1870,7 +1893,19 @@ impl Builder<'_> {
                 continue;
             }
             if !observer {
-                self.note_approximations(t_idx, position, guard_reads_state);
+                // A guard the source state already implies conditions
+                // nothing: the draw starts when the source is entered, as
+                // if unguarded.
+                let conditioning = guard_reads_state && !self.implied_by_source(t_idx);
+                // No draw to time only where the target is also left the
+                // instant the guard fails: a follower. A zero-delay latch
+                // (a trip with no reset) stays in its target after the
+                // guard reverts, which the tree, reading the guard at the
+                // mission time, does not say.
+                let automaton = self.model.transitions[t_idx].automaton;
+                let draws =
+                    !matches!(event, FtNode::Constant { .. }) || self.follower(automaton).is_none();
+                self.note_approximations(t_idx, position, conditioning, draws);
             }
             conjuncts.insert(0, event);
             ways.push(gate(
@@ -1940,8 +1975,18 @@ impl Builder<'_> {
     }
 
     /// Record why the draw of transition `t_idx` into its `position`-th
-    /// target may make the tree exceed the model's probability.
-    fn note_approximations(&mut self, t_idx: usize, position: usize, guard_reads_state: bool) {
+    /// target may make the tree exceed the model's probability. A
+    /// follower's transition, which no draw governs (`draws` false), fires
+    /// the instant its source and its guard hold and is undone the instant
+    /// the guard fails, which the tree says exactly: the two warnings
+    /// about when a draw starts do not apply to it.
+    fn note_approximations(
+        &mut self,
+        t_idx: usize,
+        position: usize,
+        guard_reads_state: bool,
+        draws: bool,
+    ) {
         let transition = &self.model.transitions[t_idx];
         let automaton = &self.model.automata[transition.automaton];
         let name = transition.name.clone();
@@ -1949,12 +1994,12 @@ impl Builder<'_> {
         let target_state = transition.targets[position];
         let target = automaton.states[target_state].clone();
         let mut notes = Vec::new();
-        if guard_reads_state {
+        if guard_reads_state && draws {
             notes.push(GenerationWarning::GuardReadsState {
                 transition: name.clone(),
             });
         }
-        if automaton.init != transition.source {
+        if draws && automaton.init != transition.source {
             notes.push(GenerationWarning::EnteredDuringMission {
                 transition: name.clone(),
                 source: source.clone(),
@@ -2009,6 +2054,154 @@ impl Builder<'_> {
         for note in notes {
             self.warn(note);
         }
+    }
+
+    /// Whether the guard of transition `t_idx` holds whenever its source
+    /// state is active, so it never holds the transition back: read with
+    /// the automaton in that state, through the automata that follow a
+    /// condition, it is true whatever the other states. A muscadet external
+    /// mode locks its draw on its target's mirror being at rest, and the
+    /// mirror is at rest exactly when the mode is: the lock is implied.
+    ///
+    /// A probe: it neither spends the generation's budgets nor leaves a
+    /// failed unrolling behind; whatever it cannot read is a guard that
+    /// conditions.
+    fn implied_by_source(&mut self, t_idx: usize) -> bool {
+        let transition = &self.model.transitions[t_idx];
+        let Some(guard) = transition.guard.clone() else {
+            return true;
+        };
+        let given = (transition.automaton, transition.source);
+        self.probe(|this| {
+            let (normal, _) = this.condition(&guard)?;
+            Ok(this.holds_given(&normal, given, 0) == Some(true))
+        })
+        .unwrap_or(false)
+    }
+
+    /// Run `read` without charging the generation's budgets, and undo the
+    /// unrolling it leaves half done when it fails (an attribute left
+    /// `Visiting` would read as a ring to the next unrolling).
+    fn probe<T>(
+        &mut self,
+        read: impl FnOnce(&mut Self) -> Result<T, FaultTreeError>,
+    ) -> Result<T, FaultTreeError> {
+        let (nodes, unrolled_nodes) = (self.nodes, self.unrolled_nodes);
+        let depth = self.var_stack.len();
+        let result = read(self);
+        self.nodes = nodes;
+        self.unrolled_nodes = unrolled_nodes;
+        if result.is_err() {
+            self.var_stack.truncate(depth);
+            for resolution in &mut self.resolution {
+                if matches!(resolution, Resolution::Visiting) {
+                    *resolution = Resolution::Pending;
+                }
+            }
+        }
+        result
+    }
+
+    /// The value of `expr` (in negation normal form) with `automaton` in
+    /// `state`, or `None` when it depends on the other states. A state of a
+    /// [`Follower`] is read as its condition.
+    fn holds_given(
+        &mut self,
+        expr: &TExpr,
+        given: (AutIdx, StateIdx),
+        depth: usize,
+    ) -> Option<bool> {
+        match expr {
+            TExpr::Labelled { inner, .. } => self.holds_given(inner, given, depth),
+            TExpr::Plain(CExpr::Const(Value::Bool(value))) => Some(*value),
+            TExpr::Plain(CExpr::StateActive { automaton, state }) => {
+                if *automaton == given.0 {
+                    return Some(*state == given.1);
+                }
+                if depth >= MAX_FOLLOWER_DEPTH {
+                    return None;
+                }
+                let follower = self.follower(*automaton)?;
+                let raised = self.holds_given(&follower.condition, given, depth + 1)?;
+                Some(raised == (*state == follower.raised))
+            }
+            TExpr::Bool { op, args } => match op {
+                BoolOp::Not => match args.as_slice() {
+                    [arg] => self.holds_given(arg, given, depth).map(|v| !v),
+                    _ => None,
+                },
+                BoolOp::And | BoolOp::Or => {
+                    // And: false as soon as one is, true when all are; Or
+                    // the dual.
+                    let absorbing = *op == BoolOp::Or;
+                    let mut known = true;
+                    for arg in args {
+                        match self.holds_given(arg, given, depth) {
+                            Some(value) if value == absorbing => return Some(absorbing),
+                            Some(_) => {}
+                            None => known = false,
+                        }
+                    }
+                    known.then_some(!absorbing)
+                }
+            },
+            _ => None,
+        }
+    }
+
+    /// `automaton` as a [`Follower`], when it is one; found once.
+    fn follower(&mut self, automaton: AutIdx) -> Option<Follower> {
+        if let Some(found) = self.followers.get(&automaton) {
+            return found.clone();
+        }
+        let found = self
+            .probe(|this| this.find_follower(automaton))
+            .ok()
+            .flatten();
+        self.followers.insert(automaton, found.clone());
+        found
+    }
+
+    /// The [`Follower`] `automaton` is, `None` when its shape is not one,
+    /// and an error when a guard does not unroll (the probe then undoes
+    /// the unrolling it left half done).
+    fn find_follower(&mut self, automaton: AutIdx) -> Result<Option<Follower>, FaultTreeError> {
+        let aut = &self.model.automata[automaton];
+        let [first, second] = aut.transitions.as_slice() else {
+            return Ok(None);
+        };
+        if aut.states.len() != 2 {
+            return Ok(None);
+        }
+        let instant = |t: usize| {
+            let transition = &self.model.transitions[t];
+            matches!(transition.distrib, CLaw::Delay(time) if time == 0.0)
+                && transition.targets.len() == 1
+                && transition.targets[0] != transition.source
+                && transition.guard.is_some()
+        };
+        let (first, second) = (*first, *second);
+        if !instant(first) || !instant(second) {
+            return Ok(None);
+        }
+        let (rise, fall) = (
+            &self.model.transitions[first],
+            &self.model.transitions[second],
+        );
+        if rise.source == fall.source {
+            return Ok(None);
+        }
+        let raised = rise.targets[0];
+        let (Some(rise_guard), Some(fall_guard)) = (rise.guard.clone(), fall.guard.clone()) else {
+            return Ok(None);
+        };
+        let unrolled = self.unroll(&rise_guard)?;
+        let condition = self.nnf(&unrolled, false)?;
+        let negation = self.nnf(&unrolled, true)?;
+        let (back, _) = self.condition(&fall_guard)?;
+        // Back exactly when the condition fails: compared as values, the
+        // labels of the attributes crossed aside.
+        Ok((back.plain() == negation.plain()).then_some(Follower { raised, condition }))
     }
 
     /// The law of transition `t_idx` into its `position`-th target, the one
@@ -2159,12 +2352,16 @@ impl Builder<'_> {
                 // the measure cannot read.
                 Err(_) => None,
             };
+            // A guard the repair's source state implies (the default lock
+            // of a muscadet external mode) never holds the repair back.
             let guarded = match self.model.transitions[t].guard.clone() {
                 None => false,
-                Some(guard) => !matches!(
-                    self.condition(&guard),
-                    Ok((normal, _)) if normal.is_constant(true)
-                ),
+                Some(guard) => {
+                    !matches!(
+                        self.condition(&guard),
+                        Ok((normal, _)) if normal.is_constant(true)
+                    ) && !self.implied_by_source(t)
+                }
             };
             repairs.push(TreeRepair {
                 transition: self.model.transitions[t].name.clone(),

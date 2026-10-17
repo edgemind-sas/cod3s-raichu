@@ -404,6 +404,252 @@ fn a_guarded_repair_is_attached_as_guarded() {
     assert!(b1.repairs[0].guarded);
 }
 
+/// A block failed by an external mode, in the shape the muscadet layer
+/// emits: the mode automaton `fm` locks its failure on the target's mirror
+/// being at rest and its repair on the mirror being failed; the mirror
+/// follows the control attribute `ctrl` (true while any impacting mode is
+/// in `occ`) through two transitions no draw governs; `up` reads the
+/// mirror. `others` are further modes impacting the same target, each an
+/// automaton of its own whose `occ` also raises the control.
+fn external_block(name: &str, rate: f64, repair: f64, others: &[&str]) -> Json {
+    let mode = |automaton: &str| {
+        json!({"name": automaton, "states": ["rep", "occ"], "init": "rep",
+        "transitions": [
+            {"name": "fail", "source": "rep", "targets": ["occ"],
+             "guard": state(name, "mirror", "rep"), "distrib": "exp", "rate": rate},
+            {"name": "repair", "source": "occ", "targets": ["rep"],
+             "guard": state(name, "mirror", "occ"), "distrib": "exp", "rate": repair}
+        ]})
+    };
+    let ctrl_is = |value: bool| {
+        json!({"op": "cmp", "cmp": "eq", "lhs": attr(name, "ctrl"),
+               "rhs": {"op": "const", "value": boolean(value)}})
+    };
+    let mut automata = vec![mode("fm")];
+    let mut raised = vec![state(name, "fm", "occ")];
+    for other in others {
+        automata.push(mode(other));
+        raised.push(state(name, other, "occ"));
+    }
+    automata.push(
+        json!({"name": "mirror", "states": ["rep", "occ"], "init": "rep",
+        "transitions": [
+            {"name": "occ", "source": "rep", "targets": ["occ"], "guard": ctrl_is(true),
+             "distrib": "delay", "time": 0.0},
+            {"name": "rep", "source": "occ", "targets": ["rep"], "guard": ctrl_is(false),
+             "distrib": "delay", "time": 0.0}
+        ]}),
+    );
+    json!({
+        "name": name,
+        "attributes": [{"name": "up", "kind": "bool", "init": boolean(true)},
+                       {"name": "ctrl", "kind": "bool", "init": boolean(false)}],
+        "automata": automata,
+        "sensitive_functions": [
+            {"name": "update_ctrl", "effects": [
+                {"target": {"component": name, "attribute": "ctrl"},
+                 "value": {"op": "bool", "bool_op": "or", "args": raised}}]},
+            {"name": "update_up", "effects": [
+                {"target": {"component": name, "attribute": "up"},
+                 "value": state(name, "mirror", "rep")}]}
+        ]
+    })
+}
+
+#[test]
+fn a_lock_the_source_state_implies_is_no_approximation() {
+    // The default guards of a muscadet external mode: the failure waits for
+    // the mirror at rest, the repair for the mirror failed, and the mirror
+    // is at rest exactly when the mode is. Neither guard holds a draw back,
+    // and the mirror's own transitions draw nothing.
+    let m = system(
+        vec![
+            external_block("A", 1e-3, 0.1, &[]),
+            external_block("B", 2e-3, 0.1, &[]),
+        ],
+        "any",
+        0.0,
+    );
+    let tree = targets(&m).expect("tree");
+    assert_eq!(
+        tree.minimal_cut_sets(10).expect("cuts").len(),
+        1,
+        "{:?}",
+        tree.basic_events
+    );
+    assert_eq!(
+        tree.basic_events
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect::<Vec<_>>(),
+        ["A.fm.fail", "B.fm.fail"]
+    );
+    assert!(tree.warnings.is_empty(), "{:?}", tree.warnings);
+    for event in &tree.basic_events {
+        assert_eq!(event.repairs.len(), 1, "{event:?}");
+        assert!(!event.repairs[0].guarded, "{event:?}");
+    }
+}
+
+#[test]
+fn a_lock_shared_with_another_mode_still_conditions_the_draw() {
+    // Two modes on one target: `fm` failing waits for the mirror at rest,
+    // which `other` failing first prevents. That lock is a real condition
+    // and keeps its warning; `fm`'s repair still waits for nothing, since
+    // the mirror is failed whenever `fm` is.
+    let m = system(
+        vec![
+            external_block("A", 1e-3, 0.1, &["other"]),
+            external_block("B", 2e-3, 0.1, &[]),
+        ],
+        "any",
+        0.0,
+    );
+    let tree = targets(&m).expect("tree");
+    for transition in ["A.fm.fail", "A.other.fail"] {
+        assert!(
+            tree.warnings.contains(&GenerationWarning::GuardReadsState {
+                transition: transition.to_owned(),
+            }),
+            "{transition}: {:?}",
+            tree.warnings
+        );
+    }
+    assert!(
+        !tree.warnings.iter().any(
+            |w| matches!(w, GenerationWarning::GuardReadsState { transition }
+                              if transition.starts_with("B.") || transition.contains("mirror"))
+        ),
+        "{:?}",
+        tree.warnings
+    );
+    let fail = tree
+        .basic_events
+        .iter()
+        .find(|e| e.name == "A.fm.fail")
+        .expect("A fail");
+    assert!(!fail.repairs[0].guarded, "{fail:?}");
+}
+
+#[test]
+fn a_mirror_that_does_not_follow_its_condition_keeps_the_lock_warned() {
+    // The same block, its mirror no longer a function of the mode: back
+    // to rest under a guard that is not the negation of the one raising
+    // it, or raised after a delay. The lock then reads a state that can
+    // lag the mode, and stays warned.
+    let ctrl_is = |value: bool| {
+        json!({"op": "cmp", "cmp": "eq", "lhs": attr("A", "ctrl"),
+               "rhs": {"op": "const", "value": boolean(value)}})
+    };
+    let hysteresis = |mut a: Json| {
+        a["automata"][1]["transitions"][1]["guard"] = json!({"op": "bool", "bool_op": "and",
+            "args": [ctrl_is(false), state("B", "fm", "rep")]});
+        a
+    };
+    let delayed = |mut a: Json| {
+        a["automata"][1]["transitions"][0]["time"] = json!(1.0);
+        a
+    };
+    let variants: [&dyn Fn(Json) -> Json; 2] = [&hysteresis, &delayed];
+    for variant in variants {
+        let m = system(
+            vec![
+                variant(external_block("A", 1e-3, 0.1, &[])),
+                external_block("B", 2e-3, 0.1, &[]),
+            ],
+            "any",
+            0.0,
+        );
+        let tree = targets(&m).expect("tree");
+        assert!(
+            tree.warnings.contains(&GenerationWarning::GuardReadsState {
+                transition: "A.fm.fail".to_owned(),
+            }),
+            "{:?}",
+            tree.warnings
+        );
+        let fail = tree
+            .basic_events
+            .iter()
+            .find(|e| e.name == "A.fm.fail")
+            .expect("A fail");
+        assert!(fail.repairs[0].guarded, "{fail:?}");
+    }
+}
+
+#[test]
+fn a_zero_delay_latch_keeps_its_guard_warned() {
+    // A trip that fires the instant B is down and never resets: tripped
+    // outlives the guard once B is repaired, so the tree, reading the
+    // guard at the mission time, is not exact, and says so.
+    let m = compile(json!({
+        "name": "latch",
+        "components": [
+            block("B", 1e-3, Some(0.1)),
+            {"name": "P", "automata": [{"name": "prot", "states": ["armed", "tripped"],
+                "init": "armed", "transitions": [
+                    {"name": "trip", "source": "armed", "targets": ["tripped"],
+                     "guard": state("B", "health", "nok"), "distrib": "delay", "time": 0.0}
+                ]}]}
+        ]
+    }));
+    let top: Expr = serde_json::from_value(state("P", "prot", "tripped")).unwrap();
+    let tree = fault_tree(&m, &top, &FaultTreeSettings::default()).expect("tree");
+    assert!(
+        tree.warnings.contains(&GenerationWarning::GuardReadsState {
+            transition: "P.prot.trip".to_owned(),
+        }),
+        "{:?}",
+        tree.warnings
+    );
+}
+
+#[test]
+fn a_follower_probe_that_cannot_unroll_leaves_no_false_ring() {
+    // Z's repair waits for M's mirror, whose guards read `A = B`, and B is
+    // written by a transition's effect, which no tree unrolls. Reading the
+    // repair's guard probes M and fails half way through `A`; the next
+    // unrolling of `A` (W's guard) must name B's writer, not a ring.
+    let a_is = |value: bool| {
+        json!({"op": "cmp", "cmp": "eq", "lhs": attr("M", "a"),
+               "rhs": {"op": "const", "value": boolean(value)}})
+    };
+    let mut z = block("Z", 1e-3, Some(0.1));
+    z["automata"][0]["transitions"][1]["guard"] = state("M", "mirror", "occ");
+    let mut w = block("W", 2e-3, None);
+    w["automata"][0]["transitions"][0]["guard"] = a_is(true);
+    let m = compile(json!({
+        "name": "probe",
+        "components": [
+            z,
+            w,
+            {"name": "M",
+             "attributes": [{"name": "a", "kind": "bool", "init": boolean(false)},
+                            {"name": "b", "kind": "bool", "init": boolean(false)}],
+             "automata": [
+                 {"name": "mirror", "states": ["rep", "occ"], "init": "rep", "transitions": [
+                     {"name": "occ", "source": "rep", "targets": ["occ"], "guard": a_is(true),
+                      "distrib": "delay", "time": 0.0},
+                     {"name": "rep", "source": "occ", "targets": ["rep"], "guard": a_is(false),
+                      "distrib": "delay", "time": 0.0}]},
+                 {"name": "k", "states": ["x", "y"], "init": "x", "transitions": [
+                     {"name": "set", "source": "x", "targets": ["y"], "distrib": "exp", "rate": 1e-3,
+                      "effects": [{"target": {"component": "M", "attribute": "b"},
+                                   "value": {"op": "const", "value": boolean(true)}}]}]}
+             ],
+             "sensitive_functions": [{"name": "update_a", "effects": [
+                 {"target": {"component": "M", "attribute": "a"}, "value": attr("M", "b")}]}]}
+        ]
+    }));
+    let top: Expr = serde_json::from_value(json!({"op": "bool", "bool_op": "or",
+        "args": [state("Z", "health", "nok"), state("W", "health", "nok")]}))
+    .unwrap();
+    let error = fault_tree(&m, &top, &FaultTreeSettings::default()).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("effect of transition"), "{message}");
+    assert!(!message.contains("ring"), "{message}");
+}
+
 #[test]
 fn leaving_the_target_for_a_third_state_is_no_repair() {
     // nok is left for `dead`, not for `ok`: that exit is not a repair of
