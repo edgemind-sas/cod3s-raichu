@@ -11,9 +11,9 @@
 //! - initialisation (the axiom): `Engine::initialize`, called by
 //!   [`Engine::new`];
 //! - scheduling of deterministic transitions, `schedule_deterministic`
-//!   (the paper's `schDT`): `Engine::refresh_schedule`;
+//!   (the paper's `schDT`): `Engine::refresh_transition`;
 //! - scheduling of stochastic transitions, `schedule_stochastic`
-//!   (`schST`): `Engine::refresh_schedule`, which draws a firing date
+//!   (`schST`): `Engine::refresh_transition`, which draws a firing date
 //!   from the transition's law (an exponential hazard threshold for a
 //!   state-dependent rate; no date in deferred-draw mode, where
 //!   `Engine::refresh_deferred` arms the transition without a draw);
@@ -31,11 +31,11 @@
 //!   `reschedule_modifiable` (`updateMT`): through the cumulative-hazard
 //!   realisation of state-dependent rates (`CLaw::ExpVar`), a
 //!   piecewise-constant rate is rescheduled at each discrete change
-//!   (`Engine::refresh_schedule`) and a continuously-varying rate is
+//!   (`Engine::refresh_transition`) and a continuously-varying rate is
 //!   integrated alongside the ODE state, its firing located like a
 //!   boundary crossing (`Engine::integrate_to`);
 //! - dropping interruptible transitions whose guard turned false,
-//!   `drop_disabled` (`updateIT`): `Engine::refresh_schedule`.
+//!   `drop_disabled` (`updateIT`): `Engine::refresh_transition`.
 //!
 //! The functions written without a link are internal to this module.
 //!
@@ -207,6 +207,12 @@ pub struct Engine<'m> {
     /// Counted work (see [`WorkCounters`]): cumulative instrumentation
     /// over this engine's life, deliberately outside the snapshot.
     work: WorkCounters,
+    /// Calls of [`Engine::refresh_transition`] on a non-watched
+    /// transition: the cost of `schedule_deterministic` / `drop_disabled`,
+    /// which the refresh index keeps proportional to what a step changed.
+    /// Instrumentation like `work`, kept crate-internal: only the engine's
+    /// own tests read it.
+    pub(crate) schedule_refreshes: u64,
     /// Scratch of the explicit sweep's distribution operators (see
     /// [`FlowScratch`]): reused, never part of the trajectory.
     flow_scratch: FlowScratch,
@@ -240,6 +246,15 @@ pub struct Engine<'m> {
     /// [`crate::MarginIndex`] whenever an attribute, an automaton state or the
     /// clock a guard reads moves; cleared when the guard is re-evaluated.
     watched_stale: Vec<bool>,
+    /// **Indexed schedule refresh**: whether each transition waits in
+    /// `refresh_queue` for its next refresh. Set through
+    /// [`crate::compile::RefreshIndex`] when an attribute or an automaton state it
+    /// reads moves; cleared once the refresh returns. Derived state, never
+    /// part of the snapshot.
+    refresh_dirty: Vec<bool>,
+    /// **Indexed schedule refresh**: the transitions marked in
+    /// `refresh_dirty`, in marking order (sorted when refreshed).
+    refresh_queue: Vec<TransIdx>,
     /// Per-transition firing counts and nominal exposure, present exactly
     /// when [`EngineConfig::rate_factors`] is non-empty (see
     /// [`TransitionExposure`]). Trajectory state: part of the snapshot.
@@ -474,6 +489,7 @@ impl<'m> Engine<'m> {
             cycle_runs: vec![0; model.functions.len() + model.programs.len()],
             cycle_runs_touched: Vec::new(),
             work: WorkCounters::default(),
+            schedule_refreshes: 0,
             flow_scratch: FlowScratch::default(),
             active_set_budget: config
                 .flow
@@ -489,6 +505,8 @@ impl<'m> Engine<'m> {
             watched_active: Vec::new(),
             watched_guard: vec![false; model.watched.len()],
             watched_stale: vec![true; model.watched.len()],
+            refresh_dirty: vec![false; model.transitions.len()],
+            refresh_queue: Vec::new(),
             exposure: (!config.rate_factors.is_empty()).then(|| ExposureTally::new(model)),
             solver,
             model,

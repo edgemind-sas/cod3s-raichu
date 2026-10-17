@@ -716,6 +716,11 @@ impl<'m> Engine<'m> {
         // the state rewinds the arming and discards every cached verdict,
         // which is what keeps a replay from a restored snapshot exact.
         self.rebuild_watched_index();
+        // So is the refresh queue: cleared, never walked. The snapshot sits
+        // at the fixed point of its last refresh, and what moved since
+        // (clock, ODE state) is read by `RefreshIndex::always` at the
+        // next step, as on the persistent engine.
+        self.clear_refresh_queue();
     }
 
     /// **Interactive control**: the events fired so far, in

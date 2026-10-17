@@ -363,6 +363,91 @@ pub struct CFlowMargins {
     pub deps: Vec<VarIdx>,
 }
 
+/// **Dependency index of the schedule refresh**: which ordinary
+/// transitions a change can re-arm, drop, pause or re-date.
+///
+/// After a discrete step the engine re-evaluates `schedule_deterministic`
+/// and `drop_disabled` (`updateIT`) and `reschedule_modifiable`
+/// (`updateMT`) only on the transitions listed here under what the step
+/// changed, plus [`Self::always`]. A transition whose inputs did not move
+/// is at the fixed point of its refresh: refreshing it again neither
+/// draws nor moves a date, so skipping it changes nothing, and refreshing
+/// the others in ascending index order keeps the full walk's draw order.
+///
+/// Watched transitions are absent: the refresh skips them, and
+/// [`MarginIndex`] carries their dependencies. Located observers are
+/// present, since the refresh schedules them like any delay.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RefreshIndex {
+    /// attribute index → transitions whose guard or state-dependent rate
+    /// reads it, ascending.
+    pub(crate) by_var: Vec<Vec<TransIdx>>,
+    /// automaton index → transitions whose guard or rate reads its state,
+    /// and the transitions it owns (whose source test moves with it),
+    /// ascending.
+    pub(crate) by_state: Vec<Vec<TransIdx>>,
+    /// Transitions refreshed after every step: their guard or rate reads
+    /// the clock, or an attribute no change note reports exactly. Those
+    /// are the targets of the explicit sweep, whose change log ignores
+    /// moves inside the flow tolerance, and the ODE attributes, which the
+    /// integrator writes without a note. Ascending.
+    pub(crate) always: Vec<TransIdx>,
+}
+
+impl RefreshIndex {
+    fn build(
+        transitions: &[CTransition],
+        explicit: &[CStep],
+        ode: &[(VarIdx, CExpr)],
+        vars: usize,
+        automata: usize,
+    ) -> Self {
+        let mut volatile = vec![false; vars];
+        for &target in explicit.iter().flat_map(CStep::written) {
+            volatile[target] = true;
+        }
+        for &(target, _) in ode {
+            volatile[target] = true;
+        }
+        let mut index = RefreshIndex {
+            by_var: vec![Vec::new(); vars],
+            by_state: vec![Vec::new(); automata],
+            always: Vec::new(),
+        };
+        for (trans_idx, transition) in transitions.iter().enumerate() {
+            if matches!(transition.distrib, CLaw::Watched { .. }) {
+                continue;
+            }
+            let rate = match &transition.distrib {
+                CLaw::ExpVar { rate, .. } => Some(rate),
+                _ => None,
+            };
+            let mut read_vars = Vec::new();
+            let mut read_auts = vec![transition.automaton];
+            let mut reads_time = false;
+            for expr in transition.guard.iter().chain(rate) {
+                expr.collect_sensitivity(&mut read_vars, &mut read_auts);
+                reads_time |= expr.reads_time();
+            }
+            if reads_time || read_vars.iter().any(|&var| volatile[var]) {
+                index.always.push(trans_idx);
+                continue;
+            }
+            read_vars.sort_unstable();
+            read_vars.dedup();
+            read_auts.sort_unstable();
+            read_auts.dedup();
+            for var in read_vars {
+                index.by_var[var].push(trans_idx);
+            }
+            for aut in read_auts {
+                index.by_state[aut].push(trans_idx);
+            }
+        }
+        index
+    }
+}
+
 /// The **inverted dependency index of the margins**: which of them a
 /// change to a given attribute, automaton state or to the clock can move.
 ///
@@ -472,6 +557,19 @@ pub enum CStep {
     Allocate(CAllocation),
     /// A linear algebraic block, solved simultaneously (see [`CBlock`]).
     Block(CBlock),
+}
+
+impl CStep {
+    /// The attributes this step writes: an equation's target, an
+    /// operator's consumers, or every member of a block (one step writing
+    /// all of them).
+    pub(crate) fn written(&self) -> &[VarIdx] {
+        match self {
+            CStep::Equation { target, .. } => std::slice::from_ref(target),
+            CStep::Allocate(allocation) => &allocation.allocated,
+            CStep::Block(block) => &block.targets,
+        }
+    }
 }
 
 /// Which fixpoint steps (functions, then programs) sit on a cycle of the
@@ -760,6 +858,9 @@ pub struct CompiledModel {
     /// Inverted dependency index of the margins: which of them a change
     /// reaches. See [`MarginIndex`].
     pub margin_index: MarginIndex,
+    /// Inverted dependency index of the schedule refresh: which ordinary
+    /// transitions a change reaches. See [`RefreshIndex`].
+    pub(crate) refresh_index: RefreshIndex,
     /// Lookup: qualified attribute name → index (API convenience).
     pub var_index: HashMap<String, VarIdx>,
     /// Lookup: qualified automaton name → index (API convenience).
@@ -1023,21 +1124,8 @@ fn torn_reads(explicit: &[CStep]) -> Vec<VarIdx> {
     // when that writer sits at or after the reading step.
     let mut last_writer: HashMap<VarIdx, usize> = HashMap::new();
     for (index, step) in explicit.iter().enumerate() {
-        match step {
-            CStep::Equation { target, .. } => {
-                last_writer.insert(*target, index);
-            }
-            CStep::Allocate(allocation) => {
-                for &var in &allocation.allocated {
-                    last_writer.insert(var, index);
-                }
-            }
-            // The block is one step writing all of its members.
-            CStep::Block(block) => {
-                for &var in &block.targets {
-                    last_writer.insert(var, index);
-                }
-            }
+        for &var in step.written() {
+            last_writer.insert(var, index);
         }
     }
     let (mut vars, mut auts) = (Vec::new(), Vec::new());
@@ -2216,6 +2304,13 @@ impl CompiledModel {
                 margin_index.flow_by_var[var].push(operator);
             }
         }
+        let refresh_index = RefreshIndex::build(
+            &transitions,
+            &explicit,
+            &ode,
+            var_names.len(),
+            automata.len(),
+        );
 
         let programs = model
             .programs
@@ -2485,6 +2580,7 @@ impl CompiledModel {
             watched,
             flow_margins,
             margin_index,
+            refresh_index,
             var_index,
             automaton_index,
             switching_loops: Vec::new(),
@@ -2516,5 +2612,229 @@ impl CompiledModel {
             }
         }
         Ok(compiled)
+    }
+}
+
+#[cfg(test)]
+mod refresh_index_tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use raichu_expr::StateRef;
+    use raichu_model::{
+        AttrKind, Attribute, Automaton, Component, Distrib, Equation, EquationKind, Model,
+        Transition,
+    };
+
+    fn transition(name: &str, guard: Option<Expr>, distrib: Distrib) -> Transition {
+        Transition {
+            name: name.into(),
+            source: "off".into(),
+            guard,
+            targets: vec!["on".into()],
+            on_interruption: Default::default(),
+            monitored: false,
+            monitored_states: None,
+            cycle_group: None,
+            cycle_cancellation: Default::default(),
+            kind: None,
+            effects: vec![],
+            distrib,
+        }
+    }
+
+    fn compare(lhs: Expr, cmp: CmpOp, rhs: Value) -> Expr {
+        Expr::Cmp {
+            cmp,
+            lhs: Box::new(lhs),
+            rhs: Box::new(Expr::Const { value: rhs }),
+        }
+    }
+
+    fn delay() -> Distrib {
+        Distrib::Delay { time: 1.0 }
+    }
+
+    /// One automaton per transition, so each one's owner is its own:
+    /// `C.ok` is discrete, `C.level` is an explicit equation's target,
+    /// `C.heat` an ODE attribute.
+    fn model() -> Model {
+        let ok = Expr::attr("C", "ok");
+        let level = Expr::attr("C", "level");
+        let heat = Expr::attr("C", "heat");
+        let transitions = vec![
+            transition(
+                "by_attr",
+                Some(compare(ok.clone(), CmpOp::Eq, Value::Bool(false))),
+                delay(),
+            ),
+            transition(
+                "by_state",
+                Some(Expr::StateActive {
+                    state: StateRef {
+                        component: "C".into(),
+                        automaton: "a0".into(),
+                        state: "on".into(),
+                    },
+                }),
+                delay(),
+            ),
+            transition(
+                "by_rate",
+                None,
+                Distrib::Exp {
+                    rate: None,
+                    rate_expr: Some(Expr::If {
+                        cond: Box::new(ok),
+                        then: Box::new(Expr::Const {
+                            value: Value::Float(1.0),
+                        }),
+                        otherwise: Box::new(Expr::Const {
+                            value: Value::Float(2.0),
+                        }),
+                    }),
+                },
+            ),
+            transition(
+                "by_time",
+                Some(compare(Expr::Time, CmpOp::Gt, Value::Float(5.0))),
+                delay(),
+            ),
+            transition(
+                "by_level",
+                Some(compare(level.clone(), CmpOp::Gt, Value::Float(1.0))),
+                delay(),
+            ),
+            transition(
+                "by_heat",
+                Some(compare(heat, CmpOp::Gt, Value::Float(1.0))),
+                delay(),
+            ),
+            transition(
+                "watched",
+                Some(compare(level, CmpOp::Ge, Value::Float(3.0))),
+                Distrib::Watched,
+            ),
+        ];
+        let automata = transitions
+            .into_iter()
+            .enumerate()
+            .map(|(index, transition)| Automaton {
+                name: format!("a{index}"),
+                states: vec!["off".into(), "on".into()],
+                init: "off".into(),
+                transitions: vec![transition],
+            })
+            .collect();
+        Model {
+            programs: vec![],
+            name: "refresh_index".into(),
+            components: vec![Component {
+                name: "C".into(),
+                attributes: vec![
+                    Attribute {
+                        name: "ok".into(),
+                        kind: AttrKind::Bool,
+                        init: Value::Bool(true),
+                    },
+                    Attribute {
+                        name: "level".into(),
+                        kind: AttrKind::Float,
+                        init: Value::Float(0.0),
+                    },
+                    Attribute {
+                        name: "heat".into(),
+                        kind: AttrKind::Float,
+                        init: Value::Float(0.0),
+                    },
+                ],
+                ports: vec![],
+                interfaces: vec![],
+                automata,
+                allocations: vec![],
+                equations: vec![
+                    Equation {
+                        target: "level".into(),
+                        kind: EquationKind::Explicit,
+                        expr: Expr::Time,
+                    },
+                    Equation {
+                        target: "heat".into(),
+                        kind: EquationKind::Ode,
+                        expr: Expr::Const {
+                            value: Value::Float(1.0),
+                        },
+                    },
+                ],
+                sensitive_functions: vec![],
+            }],
+            connections: vec![],
+            indicators: vec![],
+            targets: vec![],
+            evaluation_order: None,
+            unbounded_rate: None,
+            fmu_units: vec![],
+            interface_connections: vec![],
+        }
+    }
+
+    fn names(compiled: &CompiledModel, list: &[TransIdx]) -> Vec<String> {
+        list.iter()
+            .map(|&idx| compiled.transitions[idx].name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_change_reaches_the_transitions_that_read_it() {
+        let compiled = CompiledModel::compile(&model()).expect("the model compiles");
+        let index = &compiled.refresh_index;
+        let ok = compiled.var_index["C.ok"];
+        let a0 = compiled.automaton_index["C.a0"];
+        let a2 = compiled.automaton_index["C.a2"];
+        // A guard and a state-dependent rate both register what they read.
+        assert_eq!(
+            names(&compiled, &index.by_var[ok]),
+            ["C.a0.by_attr", "C.a2.by_rate"]
+        );
+        // An automaton reaches what reads its state and what it owns.
+        assert_eq!(
+            names(&compiled, &index.by_state[a0]),
+            ["C.a0.by_attr", "C.a1.by_state"]
+        );
+        assert_eq!(names(&compiled, &index.by_state[a2]), ["C.a2.by_rate"]);
+    }
+
+    #[test]
+    fn what_no_note_reports_is_refreshed_after_every_step() {
+        let compiled = CompiledModel::compile(&model()).expect("the model compiles");
+        let index = &compiled.refresh_index;
+        // The clock, an explicit equation's target (the sweep's change log
+        // reports it only beyond the flow tolerance) and an ODE attribute
+        // (the integrator writes it without a note).
+        assert_eq!(
+            names(&compiled, &index.always),
+            ["C.a3.by_time", "C.a4.by_level", "C.a5.by_heat"]
+        );
+        for attribute in ["C.level", "C.heat"] {
+            assert!(index.by_var[compiled.var_index[attribute]].is_empty());
+        }
+    }
+
+    #[test]
+    fn a_watched_transition_is_left_to_the_margin_index() {
+        let compiled = CompiledModel::compile(&model()).expect("the model compiles");
+        let index = &compiled.refresh_index;
+        let watched = compiled.transitions.len() - 1;
+        assert!(matches!(
+            compiled.transitions[watched].distrib,
+            CLaw::Watched { .. }
+        ));
+        let listed = index
+            .by_var
+            .iter()
+            .chain(&index.by_state)
+            .chain(std::iter::once(&index.always))
+            .any(|list| list.contains(&watched));
+        assert!(!listed);
     }
 }
