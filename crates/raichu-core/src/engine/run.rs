@@ -206,7 +206,7 @@ impl<'m> Engine<'m> {
             self.apply_fmu_outputs(outputs);
             self.run_fixpoint()?;
             self.resolve_flows()?;
-            self.refresh_schedule()?;
+            self.refresh_affected()?;
             if let (Some(host), Some(before)) = (self.host.as_deref_mut(), before_fmu) {
                 let held = host.mark_input_changes(&before, &self.vars, self.time);
                 if self.config.journal {
@@ -498,7 +498,7 @@ impl<'m> Engine<'m> {
         );
         self.run_fixpoint()?;
         self.resolve_flows()?;
-        self.refresh_schedule()?;
+        self.refresh_affected()?;
         self.record_indicators();
         // Sequence analysis: the first target (feared event) whose state is
         // now active labels the trajectory's end cause (and ends it: see

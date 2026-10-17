@@ -198,12 +198,34 @@ impl<'m> Engine<'m> {
         }
     }
 
-    /// An attribute moved: invalidate the guards that read it.
+    /// An attribute moved: invalidate the guards that read it, and queue
+    /// the ordinary transitions whose schedule it can move.
     #[inline]
     pub(super) fn note_var_change(&mut self, var: VarIdx) {
         let model = self.model;
         for &position in &model.margin_index.watched_by_var[var] {
             self.watched_stale[position] = true;
+        }
+        for &trans_idx in &model.refresh_index.by_var[var] {
+            self.mark_for_refresh(trans_idx);
+        }
+    }
+
+    /// Queue one transition for the next [`Engine::refresh_affected`].
+    #[inline]
+    pub(super) fn mark_for_refresh(&mut self, trans_idx: TransIdx) {
+        if !self.refresh_dirty[trans_idx] {
+            self.refresh_dirty[trans_idx] = true;
+            self.refresh_queue.push(trans_idx);
+        }
+    }
+
+    /// Forget every queued refresh: after a full walk, which refreshed
+    /// them all, or after a snapshot restore, whose state sits at the
+    /// fixed point of its last refresh.
+    pub(super) fn clear_refresh_queue(&mut self) {
+        for trans_idx in self.refresh_queue.drain(..) {
+            self.refresh_dirty[trans_idx] = false;
         }
     }
 
@@ -218,7 +240,8 @@ impl<'m> Engine<'m> {
     }
 
     /// An automaton changed state: invalidate the guards that read that
-    /// state, and re-arm the transitions the automaton owns.
+    /// state, re-arm the transitions the automaton owns, and queue the
+    /// ordinary transitions whose schedule the state can move.
     ///
     /// The arming update keeps `watched_active` **ascending**, inserting
     /// and removing by binary search rather than re-deriving the list, so
@@ -228,6 +251,9 @@ impl<'m> Engine<'m> {
         let model = self.model;
         for &position in &model.margin_index.watched_by_state[automaton] {
             self.watched_stale[position] = true;
+        }
+        for &trans_idx in &model.refresh_index.by_state[automaton] {
+            self.mark_for_refresh(trans_idx);
         }
         let state = self.states[automaton];
         for &position in &model.margin_index.watched_by_owner[automaton] {

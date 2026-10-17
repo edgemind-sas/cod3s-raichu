@@ -1,6 +1,8 @@
 //! Scheduling: `schedule_deterministic`, `schedule_stochastic`,
 //! `reschedule_modifiable` (cumulative hazards of state-dependent rates)
-//! and `drop_disabled`, all carried out by [`Engine::refresh_schedule`],
+//! and `drop_disabled`, all carried out by [`Engine::refresh_transition`]
+//! (run after a discrete step by [`Engine::refresh_affected`] on what the
+//! step reached, over the whole model by [`Engine::refresh_schedule`]),
 //! plus the law classification and sampling helpers they rely on.
 
 use super::*;
@@ -204,24 +206,90 @@ impl<'m> Engine<'m> {
         Ok(lambda)
     }
 
+    /// The full walk: refresh every transition. Kept for the wholesale
+    /// changes (the initialization axiom, an interactive attribute write),
+    /// where nothing narrower is known; it leaves no refresh queued.
     pub(super) fn refresh_schedule(&mut self) -> Result<(), EngineError> {
         for trans_idx in 0..self.model.transitions.len() {
             self.refresh_transition(trans_idx)?;
         }
+        self.clear_refresh_queue();
+        Ok(())
+    }
+
+    /// The refresh after a discrete step: only the transitions the step's
+    /// changes reached ([`crate::compile::RefreshIndex`]), plus those refreshed
+    /// after every step, in ascending index order.
+    ///
+    /// A transition left out is at the fixed point of its refresh, so
+    /// refreshing it would change nothing; ascending order keeps the
+    /// random draws in the order of the full walk. On an error, the
+    /// transition that failed and those after it stay queued, so a caller
+    /// that survives the error loses no pending refresh.
+    pub(super) fn refresh_affected(&mut self) -> Result<(), EngineError> {
+        let always = &self.model.refresh_index.always;
+        let mut queue = std::mem::take(&mut self.refresh_queue);
+        queue.sort_unstable();
+        // Merge the two ascending lists; an index in both is refreshed
+        // once.
+        let (mut next_queued, mut next_always) = (0, 0);
+        loop {
+            let queued = queue.get(next_queued).copied();
+            let every_step = always.get(next_always).copied();
+            let trans_idx = match (queued, every_step) {
+                (None, None) => break,
+                (Some(q), Some(a)) if q == a => {
+                    next_queued += 1;
+                    next_always += 1;
+                    q
+                }
+                (Some(q), Some(a)) if q < a => {
+                    next_queued += 1;
+                    q
+                }
+                (Some(q), None) => {
+                    next_queued += 1;
+                    q
+                }
+                (_, Some(a)) => {
+                    next_always += 1;
+                    a
+                }
+            };
+            if let Err(error) = self.refresh_transition(trans_idx) {
+                // Keep what is left queued: the failed transition, the
+                // rest of the queue, and the `always` ones not reached
+                // (re-merged at the next refresh anyway).
+                self.refresh_dirty[trans_idx] = true;
+                self.refresh_queue.push(trans_idx);
+                self.refresh_queue.extend_from_slice(&queue[next_queued..]);
+                self.refresh_queue.sort_unstable();
+                self.refresh_queue.dedup();
+                return Err(error);
+            }
+            self.refresh_dirty[trans_idx] = false;
+        }
+        // A refresh writes no attribute and no state, so nothing was
+        // marked while the queue was out.
+        debug_assert!(self.refresh_queue.is_empty());
+        queue.clear();
+        self.refresh_queue = queue;
         Ok(())
     }
 
     /// `schedule_deterministic` + `drop_disabled` for one transition:
     /// arm it when it sits in its source with its guard holding, drop or
     /// pause it when either stops holding, reschedule a modifiable rate.
-    /// [`Engine::refresh_schedule`] runs it over every transition after a
-    /// discrete step; a located crossing runs it over the one transition
-    /// whose condition crossed, so no other guard is read at that instant.
+    /// [`Engine::refresh_affected`] runs it after a discrete step over the
+    /// transitions the step's changes reached; a located crossing runs it
+    /// over the located observers, so no other guard is read at that
+    /// instant.
     pub(super) fn refresh_transition(&mut self, trans_idx: TransIdx) -> Result<(), EngineError> {
         let transition = &self.model.transitions[trans_idx];
         if matches!(transition.distrib, CLaw::Watched { .. }) {
             return Ok(());
         }
+        self.schedule_refreshes += 1;
         let in_source = self.states[transition.automaton] == transition.source;
         if !in_source {
             // Leaving the source cancels any paused countdown and
@@ -458,5 +526,127 @@ impl<'m> Engine<'m> {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod refresh_cost_tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
+    use crate::{CompiledModel, Engine, EngineConfig};
+    use raichu_expr::{Assignment, AttrRef, BoolOp, Expr, StateRef, Value};
+    use raichu_model::{
+        AttrKind, Attribute, Automaton, Component, Distrib, Model, SensitiveFunction, Transition,
+    };
+
+    fn exp(name: &str, source: &str, target: &str, rate: f64) -> Transition {
+        Transition {
+            name: name.into(),
+            source: source.into(),
+            guard: None,
+            targets: vec![target.into()],
+            on_interruption: Default::default(),
+            monitored: false,
+            monitored_states: None,
+            cycle_group: None,
+            cycle_cancellation: Default::default(),
+            kind: None,
+            effects: vec![],
+            distrib: Distrib::Exp {
+                rate: Some(rate),
+                rate_expr: None,
+            },
+        }
+    }
+
+    /// `n` independent repairable pumps: nothing any transition reads is
+    /// written by another pump.
+    fn pumps(n: usize) -> Model {
+        let components = (0..n)
+            .map(|index| {
+                let name = format!("P{index}");
+                Component {
+                    name: name.clone(),
+                    attributes: vec![Attribute {
+                        name: "ok".into(),
+                        kind: AttrKind::Bool,
+                        init: Value::Bool(true),
+                    }],
+                    ports: vec![],
+                    interfaces: vec![],
+                    automata: vec![Automaton {
+                        name: "fm".into(),
+                        states: vec!["ok".into(), "ko".into()],
+                        init: "ok".into(),
+                        transitions: vec![
+                            exp("fail", "ok", "ko", 0.01 + 0.001 * index as f64),
+                            exp("repair", "ko", "ok", 0.1),
+                        ],
+                    }],
+                    allocations: vec![],
+                    equations: vec![],
+                    sensitive_functions: vec![SensitiveFunction {
+                        name: "apply".into(),
+                        effects: vec![Assignment {
+                            target: AttrRef {
+                                component: name.clone(),
+                                attribute: "ok".into(),
+                            },
+                            value: Expr::Bool {
+                                bool_op: BoolOp::Not,
+                                args: vec![Expr::StateActive {
+                                    state: StateRef {
+                                        component: name.clone(),
+                                        automaton: "fm".into(),
+                                        state: "ko".into(),
+                                    },
+                                }],
+                            },
+                        }],
+                    }],
+                }
+            })
+            .collect();
+        Model {
+            programs: vec![],
+            name: "refresh_cost".into(),
+            components,
+            connections: vec![],
+            indicators: vec![],
+            targets: vec![],
+            evaluation_order: None,
+            unbounded_rate: None,
+            fmu_units: vec![],
+            interface_connections: vec![],
+        }
+    }
+
+    /// **The cost claim of the refresh index.** The initialization axiom
+    /// refreshes every transition once; each firing then refreshes the
+    /// two transitions of the automaton that fired, whatever the model's
+    /// size. The full walk refreshed all `2n` after every firing.
+    #[test]
+    fn a_firing_refreshes_the_transitions_that_read_what_it_changed() {
+        for n in [10, 100] {
+            let model = pumps(n);
+            let compiled = CompiledModel::compile(&model).expect("the model compiles");
+            let config = EngineConfig {
+                t_max: 200.0,
+                seed: 7,
+                ..EngineConfig::default()
+            };
+            let mut engine = Engine::new(&compiled, config).expect("the engine builds");
+            let mut firings = 0u64;
+            while engine.step().expect("the step completes").is_some() {
+                firings += 1;
+            }
+            assert!(firings > n as u64, "the trajectory exercises the pumps");
+            let transitions = 2 * n as u64;
+            assert_eq!(
+                engine.schedule_refreshes,
+                transitions + 2 * firings,
+                "{n} pumps, {firings} firings"
+            );
+        }
     }
 }
