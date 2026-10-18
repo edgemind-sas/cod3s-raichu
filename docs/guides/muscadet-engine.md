@@ -819,9 +819,9 @@ it hold, and the second is the one a shortcut misses.
   the one capacity of the one producer its flows arrive from, and each of its
   inputs asks `R . m_f / S`, read off that volume's integrated contents and
   declared weights (`S` is the weighted occupied volume). A group whose flows
-  arrive from two producers, or two capacities, or from a producer serving the
-  same outputs to somebody else, is refused by the group's name, as muscadet
-  refuses it; so is a flow a rule of the consumer also consumes.
+  arrive from two producers, or two capacities, is refused by the group's
+  name, as muscadet refuses it; so is a flow a rule of the consumer also
+  consumes, and a drawn flow the machine also carries as an output.
 - **What the volume serves.** A volume drawn by a group serves each constituent
   exactly the composed request, what merely transits entering the composition
   first (muscadet's `draw_from_capacity`, the branch serving a mixture). The
@@ -837,6 +837,54 @@ at `Q` and hydrogen at `q` under one extractor at `R = Q`: the share follows
 `q/(Q+q) . [1 - (V/(V+qt))^((Q+q)/q)]` with the supply open and
 `x0 . exp(-R t / M0)` with it cut, and the extracted volume is `R` at a
 hydrogen weight of 2.
+
+### A machine commanded, failed and shared, and a room open to the atmosphere
+
+muscadet 5.17.0 made the machine an actuator like the others (R52) and gave
+the volume a way to breathe (R53). The four keys arrive in the document only
+where a model uses them, and each is carried.
+
+- **The rate is a variable.** A group publishes `{group}_flow_rate`, declared
+  at `flow_rate` with no equation, so a failure mode written against muscadet
+  clamps it by that name and a held effect releases back to the declared
+  value. muscadet restores only what the mode declares on its repair; a
+  document from the platform always declares it, and the two engines then
+  agree.
+- **`run_cond` commands the machine**, in the vocabulary and with the two
+  matrices and the inner mode of a capacity's `serve_cond`, compiled to a gate
+  automaton `{group}_run` (`running`, `stopped`) the demand branches on. A
+  command comparing the rate its own group draws is refused as a loop of rate
+  comparisons. An operand naming a measurement channel is read under the
+  channel this engine materialises (`{channel}_level`), not under muscadet's
+  bare channel name: a document thresholding a level that way is refused,
+  for a group as for a capacity.
+- **Several groups may draw one volume.** Each asks its own rate at the
+  composition and the draws add up. The producer's split weighs each machine
+  at its composed share scaled to what the volume delivers, so a volume that
+  cannot serve the sum serves each pro rata: the truncation of a claim at the
+  available quantity would otherwise bend it. A group leaving out a
+  constituent of its volume, a consumer of any held flow that is not one of
+  its groups, and several groups behind an allocation other than proportional
+  are refused, as muscadet refuses them.
+- **`makeup_flow` opens a volume.** With `D` the volume the transit adds per
+  unit of time, the make-up constituent gains `max(-D, 0) / w` and every
+  constituent vents `max(D, 0) . m_f / sum_g m_g w_g`: the occupied volume does
+  not move. An open volume is never full, so what arrives beyond what leaves
+  is vented rather than refused; what it asks upstream follows `fill_rate` as
+  for any volume, a room fed by leaks declaring it unbounded. Both terms are
+  published, `{c}_makeup` and `{c}_vent_{f}`. The content muscadet
+  completed with the make-up arrives in `content_init`; the bounds automaton
+  stays, enters full once and is read by nothing on an open volume.
+
+One difference is inherited from R51 and stays: a group asks each input its
+composed share, where muscadet publishes the group's whole rate on every
+input. A room taking whatever arrives does not see it, which is the room the
+bench compares; a room claiming nothing (`fill_rate=0`) asks its supplies
+differently on the two engines.
+
+The parity bench runs the platform showcase's room (100 m^3, a fan of
+100 m^3/h, a draft of 1 m^3/h) failed and repaired, ordered off, overflowing,
+and a closed room starved pro rata, against muscadet to `1e-6`.
 
 ## What replaces `cod3s.ComponentInstance.to_bkd_raichu`
 

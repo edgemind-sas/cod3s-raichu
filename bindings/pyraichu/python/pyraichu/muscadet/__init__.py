@@ -530,6 +530,10 @@ _NO_CAPACITY = SimpleNamespace(transmits=False)
 #: capability that branches on it cannot come to disagree.
 SERVE_GATE_STATES = ("serving", "withheld")
 
+#: The two locations of a mixture machine's run gate (muscadet's R52): the
+#: machine draws in the first and nothing at all in the second.
+RUN_GATE_STATES = ("running", "stopped")
+
 #: How a discharge command combines its two levels, and muscadet's own
 #: default (`Capacity.serve_cond_inner_mode`). The same convention a
 #: production condition carries: ``"or"`` is a conjunction of
@@ -1567,6 +1571,11 @@ class _Capacity:
     #: way round.
     serve_cond_inner_mode: str = SERVE_COND_INNER_MODE_DEFAULT
     hysteresis: float = DEFAULT_HYSTERESIS
+    #: The held constituent the atmosphere supplies when the volume is OPEN
+    #: (muscadet's R53), or ``None`` for a closed volume. An open volume
+    #: stays full: the make-up enters at the rate it runs short and the
+    #: excess vents at the composition, so no arrival is refused.
+    makeup_flow: str | None = None
     #: Whether a mixture group draws this volume (muscadet's R51): set by
     #: :meth:`System._resolve_mixture_groups` when the model is generated,
     #: never declared. A volume drawn as a mixture serves each held flow
@@ -1582,6 +1591,33 @@ class _Capacity:
     def commanded(self) -> bool:
         """Whether a discharge command gates what this volume releases."""
         return bool(self.serve_cond)
+
+    @property
+    def is_open(self) -> bool:
+        """Whether the volume is open to the atmosphere (R53)."""
+        return self.makeup_flow is not None
+
+    # The command protocol, shared with `_MixtureIn`: one compiler for the
+    # two places the operand vocabulary commands something (R49, R52).
+
+    @property
+    def command(self) -> list[list[_RuleOperand]]:
+        return self.serve_cond
+
+    @property
+    def command_inner_mode(self) -> str:
+        return self.serve_cond_inner_mode
+
+    @property
+    def gate_states(self) -> tuple[str, str]:
+        return SERVE_GATE_STATES
+
+    @property
+    def command_owner(self) -> str:
+        return f"capacity `{self.name}`"
+
+    #: What the command decides, in the refusals that name it.
+    command_noun = "discharge"
 
     @property
     def gate(self) -> str:
@@ -1803,11 +1839,58 @@ class _FailureMode:
 class _MixtureIn:
     """Continuous inputs a component draws together, at ONE volumetric rate
     (muscadet's ``add_mixture_in``, R51). What each flow then carries is
-    fixed by the composition of the volume drawn from, not declared."""
+    fixed by the composition of the volume drawn from, not declared.
+
+    The rate is published as a variable a failure mode clamps by name, and
+    the machine may be commanded on and off (muscadet's R52), in the
+    vocabulary and through the compiler a capacity's discharge command
+    uses."""
 
     name: str
     flows: list[str]
     flow_rate: float
+    #: The on/off command, as groups of guard operands. Empty -- the
+    #: default -- runs the machine whenever its rate allows.
+    run_cond: list[list[_RuleOperand]] = field(default_factory=list)
+    #: How the two levels of :attr:`run_cond` combine, as muscadet's
+    #: ``run_cond_inner_mode``.
+    run_cond_inner_mode: str = SERVE_COND_INNER_MODE_DEFAULT
+
+    @property
+    def rate_attribute(self) -> str:
+        """Name of the variable holding the group's rate: muscadet's
+        ``{group}_flow_rate``, so a mode written against muscadet clamps
+        it by that name."""
+        return f"{self.name}_flow_rate"
+
+    @property
+    def commanded(self) -> bool:
+        return bool(self.run_cond)
+
+    @property
+    def gate(self) -> str:
+        """Name of the automaton carrying the command, tagged ``_run`` as
+        muscadet tags the group's threshold automata, so it cannot collide
+        with a flow's gate or a capacity's ``_serve``."""
+        return f"{self.name}_run"
+
+    @property
+    def command(self) -> list[list[_RuleOperand]]:
+        return self.run_cond
+
+    @property
+    def command_inner_mode(self) -> str:
+        return self.run_cond_inner_mode
+
+    @property
+    def gate_states(self) -> tuple[str, str]:
+        return RUN_GATE_STATES
+
+    @property
+    def command_owner(self) -> str:
+        return f"mixture group `{self.name}`"
+
+    command_noun = "machine"
 
 
 class _MixtureSource(NamedTuple):
@@ -2422,9 +2505,18 @@ class ObjFlow:
         serve_cond_compare: list | None = None,
         serve_cond_inner_mode: str | None = None,
         hysteresis: float | None = None,
+        makeup_flow: str | None = None,
     ) -> None:
         """Declare a volume this component holds over one or more of its
         continuous flows (muscadet `add_capacity`).
+
+        `makeup_flow` opens the volume to the atmosphere (muscadet's R53)
+        and names the held constituent the outside supplies: the volume
+        stays full, the make-up entering at the rate it runs short and the
+        excess venting at the composition. What `content_init` leaves of the
+        volume is the make-up at t=0. What it asks upstream follows
+        `fill_rate` as for any volume: a room fed by leaks declares it
+        unbounded.
 
         A capacity is declared **independently of the flows it holds**, so
         a buffer can be added to an existing component without touching
@@ -2647,7 +2739,7 @@ class ObjFlow:
                 f"other, so it is "
                 f"{' or '.join(repr(mode) for mode in SERVE_COND_INNER_MODES)}"
             )
-        command = self._parse_serve_cond(
+        command = self._parse_command(
             f"ObjFlow `{self.name}`: capacity `{name}`",
             serve_cond,
             serve_cond_negate,
@@ -2747,20 +2839,41 @@ class ObjFlow:
                 )
             resolved = preferred.pop()
 
+        content = {key: float(value) for key, value in (content_init or {}).items()}
+        if makeup_flow is not None:
+            where = f"ObjFlow `{self.name}`: capacity `{name}`"
+            held = [entry.name for entry in entries]
+            if makeup_flow not in held:
+                raise ValueError(
+                    f"{where}: makeup_flow `{makeup_flow}` names a constituent "
+                    f"the volume does not hold ({held}). The outside supplies "
+                    "one of the constituents already in the volume"
+                )
+            weights = {entry.name: entry.weight for entry in entries}
+            room = float(capacity) - sum(
+                quantity * weights[flow] for flow, quantity in content.items()
+            )
+            # Written into the content rather than kept aside, exactly as
+            # muscadet writes it: the declaration then states what the
+            # volume holds, and a document read back carries it.
+            if room > 0.0:
+                content[makeup_flow] = (
+                    content.get(makeup_flow, 0.0) + room / weights[makeup_flow]
+                )
+
         declaration = _Capacity(
             name=name,
             flows=entries,
             volume=float(capacity),
             side=resolved,
-            content_init={
-                key: float(value) for key, value in (content_init or {}).items()
-            },
+            content_init=content,
             fill_rate=rate,
             transmits=transmits,
             serve_rate=ceiling,
             serve_cond=command,
             serve_cond_inner_mode=inner_mode,
             hysteresis=width,
+            makeup_flow=makeup_flow,
         )
         self._record(self.capacities, declaration)
         # The command is resolved once the volume is RECORDED, and the
@@ -2769,21 +2882,25 @@ class ObjFlow:
         # declaration is what creates. A refused command takes the whole
         # declaration back out, as `_record` does with its own refusal.
         try:
-            self._resolve_serve_cond(declaration)
+            self._resolve_command(declaration)
         except ValueError:
             self.capacities.remove(declaration)
             raise
 
     # --- the discharge command ------------------------------------------
 
-    def _parse_serve_cond(
+    def _parse_command(
         self,
         where: str,
         declared: Any,
         negates: list | None,
         compares: list | None,
+        what: str = "discharge command",
+        key: str = "serve_cond",
     ) -> list[list[_RuleOperand]]:
-        """A discharge command, as groups of parsed guard operands.
+        """A discharge command, as groups of parsed guard operands; a
+        machine's run command too (R52), which is the same vocabulary
+        under `key` = ``run_cond``.
 
         The shape follows muscadet's: a list of groups, each group a list
         of operands, and a bare name or mapping is the one-operand
@@ -2805,7 +2922,7 @@ class ObjFlow:
             declared = [declared]
         if not isinstance(declared, (list, tuple)):
             raise ValueError(
-                f"{where} carries a discharge command that is neither a name, "
+                f"{where} carries a {what} that is neither a name, "
                 f"an operand nor a list: {declared!r}"
             )
 
@@ -2814,17 +2931,17 @@ class ObjFlow:
             specs = group if isinstance(group, (list, tuple)) else [group]
             if not specs:
                 raise ValueError(
-                    f"{where} carries an empty group in its discharge command; "
-                    "a group that reads nothing says nothing about when the "
-                    "volume serves"
+                    f"{where} carries an empty group in its {what}; "
+                    "a group that reads nothing says nothing about when it "
+                    "holds"
                 )
             operands = []
             for column, spec in enumerate(specs):
                 operands.append(
                     self._parse_operand(
-                        f"{where}, discharge command",
-                        self._serve_cond_operand_spec(
-                            where, spec, row, column, negates, compares
+                        f"{where}, {what}",
+                        self._command_operand_spec(
+                            where, spec, row, column, negates, compares, what, key
                         ),
                     )
                 )
@@ -2832,13 +2949,15 @@ class ObjFlow:
         return groups
 
     @staticmethod
-    def _serve_cond_operand_spec(
+    def _command_operand_spec(
         where: str,
         spec: Any,
         row: int,
         column: int,
         negates: list | None,
         compares: list | None,
+        what: str = "discharge command",
+        key: str = "serve_cond",
     ) -> Any:
         """One operand's declaration, with its cells of the two parallel
         matrices folded in, refusing a cell that contradicts it.
@@ -2873,7 +2992,7 @@ class ObjFlow:
         merged = {"name": spec} if isinstance(spec, str) else spec
         if not isinstance(merged, dict):
             raise ValueError(
-                f"{where} carries a discharge-command operand that is neither "
+                f"{where} carries a {what} operand that is neither "
                 f"a name nor a mapping: {spec!r}"
             )
         merged = dict(merged)
@@ -2882,9 +3001,9 @@ class ObjFlow:
         if compare is not None:
             if not isinstance(compare, dict) or "op" not in compare:
                 raise ValueError(
-                    f"{where} carries the discharge-command comparison "
+                    f"{where} carries the {what} comparison "
                     f"{compare!r} at [{row}][{column}]; a cell of "
-                    "`serve_cond_compare` carries `op` and `value`"
+                    f"`{key}_compare` carries `op` and `value`"
                 )
             declared = merged.get("op")
             if declared is not None and (
@@ -2894,7 +3013,7 @@ class ObjFlow:
                 raise ValueError(
                     f"{where} compares `{merged.get('name')}` inline as "
                     f"`{declared} {merged.get('value')}` and in "
-                    f"`serve_cond_compare` as `{compare['op']} "
+                    f"`{key}_compare` as `{compare['op']} "
                     f"{compare.get('value')}`; one condition has one "
                     "comparison, so the two spellings state the same one or "
                     "only one of them is written"
@@ -2903,10 +3022,11 @@ class ObjFlow:
             merged["value"] = compare.get("value")
         return merged
 
-    def _resolve_serve_cond(self, capacity: _Capacity) -> None:
-        """Resolve a recorded capacity's discharge command against what
-        this component declares, refusing a misspelling here rather than
-        letting it reach the engine as a dangling read.
+    def _resolve_command(self, carrier: Any) -> None:
+        """Resolve a recorded command -- a capacity's discharge command, a
+        mixture machine's run command -- against what this component
+        declares, refusing a misspelling here rather than letting it reach
+        the engine as a dangling read.
 
         The same two diagnostics a rule guard gets, for the same reasons:
         an operand naming nothing is refused, and an EQUALITY on a
@@ -2914,8 +3034,8 @@ class ObjFlow:
         carrying it is watched and a crossing is located on an ordering
         comparison.
         """
-        where = f"ObjFlow `{self.name}`: capacity `{capacity.name}`"
-        for group in capacity.serve_cond:
+        where = f"ObjFlow `{self.name}`: {carrier.command_owner}"
+        for group in carrier.command:
             for operand in group:
                 continuous = self._operand_reads_continuously(where, operand)
                 if (
@@ -2924,29 +3044,30 @@ class ObjFlow:
                     and operand.op not in _ORDERING_OPS
                 ):
                     raise ValueError(
-                        f"{where} commands its discharge on the continuous "
-                        f"quantity `{operand.name}` with `{operand.op}`; the "
-                        "gate transition carrying it is watched, and a "
-                        "crossing is located on an ordering comparison "
-                        f"({', '.join(_ORDERING_OPS)})"
+                        f"{where} commands its {carrier.command_noun} on the "
+                        f"continuous quantity `{operand.name}` with "
+                        f"`{operand.op}`; the gate transition carrying it is "
+                        "watched, and a crossing is located on an ordering "
+                        f"comparison ({', '.join(_ORDERING_OPS)})"
                     )
 
-    def _serve_cond_reads_continuously(self, capacity: _Capacity) -> bool:
-        """Whether the discharge command compares a continuously-evolving
-        quantity, which is what makes its gate a located crossing rather
-        than a discrete decision."""
-        where = f"ObjFlow `{self.name}`: capacity `{capacity.name}`"
+    def _command_reads_continuously(self, carrier: Any) -> bool:
+        """Whether the command compares a continuously-evolving quantity,
+        which is what makes its gate a located crossing rather than a
+        discrete decision."""
+        where = f"ObjFlow `{self.name}`: {carrier.command_owner}"
         return any(
             operand.op is not None
             and self._operand_reads_continuously(where, operand)
-            for group in capacity.serve_cond
+            for group in carrier.command
             for operand in group
         )
 
-    def _serve_cond_expr(self, capacity: _Capacity) -> dict[str, Any]:
-        """The discharge command as a boolean expression.
+    def _command_expr(self, carrier: Any) -> dict[str, Any]:
+        """A command -- a capacity's discharge, a machine's run -- as a
+        boolean expression.
 
-        The two levels are combined as `serve_cond_inner_mode` says, and
+        The two levels are combined as the carrier's inner mode says, and
         the nesting is written as it stands rather than normalised: the
         gate is an automaton guard, which carries an `and` of `or`s
         directly, where a discrete production condition has to be
@@ -2955,18 +3076,18 @@ class ObjFlow:
         """
         outer, inner = (
             ("and", "or")
-            if capacity.serve_cond_inner_mode == "or"
+            if carrier.command_inner_mode == "or"
             else ("or", "and")
         )
         return _bool(
             outer,
             [
                 _bool(inner, [self._rule_operand_expr(operand) for operand in group])
-                for group in capacity.serve_cond
+                for group in carrier.command
             ],
         )
 
-    def _serve_cond_negation(self, capacity: _Capacity) -> dict[str, Any]:
+    def _command_negation(self, carrier: Any) -> dict[str, Any]:
         """The command denied, by De Morgan over both levels and with
         every comparison **complemented** rather than wrapped in a `not`,
         for the reason :data:`_NEGATED_OPS` states.
@@ -2978,7 +3099,7 @@ class ObjFlow:
         """
         outer, inner = (
             ("or", "and")
-            if capacity.serve_cond_inner_mode == "or"
+            if carrier.command_inner_mode == "or"
             else ("and", "or")
         )
         return _bool(
@@ -2991,13 +3112,13 @@ class ObjFlow:
                         for operand in group
                     ],
                 )
-                for group in capacity.serve_cond
+                for group in carrier.command
             ],
         )
 
-    def _serve_gate_automaton(self, capacity: _Capacity) -> dict[str, Any]:
-        """The two-state automaton carrying a capacity's discharge
-        command.
+    def _command_gate_automaton(self, carrier: Any) -> dict[str, Any]:
+        """The two-state automaton carrying a command: a capacity's
+        discharge (``{capacity}_serve``) or a machine's run (``{group}_run``).
 
         An automaton rather than a branch inside the served quantity, and
         for the two reasons a rule set's mode is one: the decision is
@@ -3007,13 +3128,13 @@ class ObjFlow:
         compiles the same condition the same way, under the same
         ``{capacity}_serve`` tag (`Capacity.add_serve_cond_automata`).
 
-        It starts **withheld**, which is not a guess about the command:
+        It starts in its closed state, which is not a guess about the command:
         the guards read quantities the initial fixpoint resolves, so the
         location that holds at t = 0 is entered there, exactly as a rule
         set's mode enters its own.
         """
-        serving, withheld = SERVE_GATE_STATES
-        located = self._serve_cond_reads_continuously(capacity)
+        on, off = carrier.gate_states
+        located = self._command_reads_continuously(carrier)
 
         def transition(name: str, source: str, target: str, guard: dict) -> dict:
             entry: dict[str, Any] = {
@@ -3030,21 +3151,21 @@ class ObjFlow:
             return entry
 
         return {
-            "name": capacity.gate,
-            "states": [serving, withheld],
-            "init": withheld,
+            "name": carrier.gate,
+            "states": [on, off],
+            "init": off,
             "transitions": [
                 transition(
-                    f"{capacity.gate}_opens",
-                    withheld,
-                    serving,
-                    self._serve_cond_expr(capacity),
+                    f"{carrier.gate}_opens",
+                    off,
+                    on,
+                    self._command_expr(carrier),
                 ),
                 transition(
-                    f"{capacity.gate}_shuts",
-                    serving,
-                    withheld,
-                    self._serve_cond_negation(capacity),
+                    f"{carrier.gate}_shuts",
+                    on,
+                    off,
+                    self._command_negation(carrier),
                 ),
             ],
         }
@@ -3622,6 +3743,13 @@ class ObjFlow:
             if self._beside_rules(flow, "in") is not None
             else {"op": "min", "args": [base, outflow]}
         )
+        # An OPEN volume is never full (muscadet's R53): what exceeds what
+        # leaves is vented, so its claim is the ordinary one, `fill_rate`
+        # included, and the throttling of a full volume never applies. A
+        # forced unbounded claim drained a stocked tank feeding the room at
+        # its whole content per unit of time, measured in muscadet.
+        if capacity.is_open:
+            return claiming
         return {
             "op": "if",
             "cond": _state_active(me, f"{capacity.name}_bounds", "full"),
@@ -3648,6 +3776,9 @@ class ObjFlow:
             [_var(self.name, f"{flow}_demand_out"), self._capacity_ceiling(capacity, flow)]
         )
         claiming = _fill_claim(capacity, asked, capability)
+        # Never full when open (R53): the ordinary claim, never the throttle.
+        if capacity.is_open:
+            return claiming
         return {
             "op": "if",
             "cond": _state_active(self.name, f"{capacity.name}_bounds", "full"),
@@ -3807,7 +3938,16 @@ class ObjFlow:
             )
         )
 
-    def add_mixture_in(self, name: str, flows: list[str], flow_rate: float) -> None:
+    def add_mixture_in(
+        self,
+        name: str,
+        flows: list[str],
+        flow_rate: float,
+        run_cond: Any = None,
+        run_cond_negate: list | None = None,
+        run_cond_compare: list | None = None,
+        run_cond_inner_mode: str | None = None,
+    ) -> None:
         """Declare continuous inputs drawn TOGETHER at one volumetric rate
         (muscadet `add_mixture_in`, R51): a ventilation extractor, a pump on
         a line carrying a mixture.
@@ -3820,7 +3960,14 @@ class ObjFlow:
         inputs; which volume composes for the group is settled when the
         model is generated, from the connections, and refused by name when
         the group's flows do not all arrive from one capacity of one
-        producer serving nobody else."""
+        producer serving nobody else.
+
+        The rate is published as ``{name}_flow_rate`` (muscadet's R52), a
+        variable a failure mode clamps by name and a repair releases back to
+        `flow_rate`. `run_cond` commands the machine on and off in the
+        vocabulary of a capacity's `serve_cond`, with the same two parallel
+        matrices and inner mode; empty, the machine runs whenever its rate
+        allows."""
         where = f"ObjFlow `{self.name}`: mixture group `{name}`"
         if any(existing.name == name for existing in self.mixtures):
             raise ValueError(f"{where} is already declared")
@@ -3833,6 +3980,16 @@ class ObjFlow:
             raise ValueError(
                 f"{where} draws {missing}, which this component declares as no "
                 "continuous input (declare the inputs first)"
+            )
+        outputs = {out.name for out in self.flows_continuous_out}
+        carried = sorted(flow for flow in flows if flow in outputs)
+        if carried:
+            raise ValueError(
+                f"{where} draws {carried}, also a continuous OUTPUT of this "
+                "component. A machine drawing a mixture and carrying it onward "
+                "destroys matter as soon as its outlet asks for less than it "
+                "draws, which muscadet refuses by the same reason; declare a "
+                "terminal extractor"
             )
         grouped = {flow for group in self.mixtures for flow in group.flows}
         twice = [flow for flow in flows if flow in grouped]
@@ -3851,7 +4008,38 @@ class ObjFlow:
                 f"{where} declares `flow_rate`={flow_rate!r}; it is one finite, "
                 "non-negative volume per unit of time for the whole group"
             )
-        self.mixtures.append(_MixtureIn(name=name, flows=flows, flow_rate=float(flow_rate)))
+        inner_mode = (
+            SERVE_COND_INNER_MODE_DEFAULT
+            if run_cond_inner_mode is None
+            else run_cond_inner_mode
+        )
+        if inner_mode not in SERVE_COND_INNER_MODES:
+            raise ValueError(
+                f"{where} declares `run_cond_inner_mode`={run_cond_inner_mode!r}; "
+                "a run command combines its two levels one way or the other, so "
+                f"it is {' or '.join(repr(mode) for mode in SERVE_COND_INNER_MODES)}"
+            )
+        command = self._parse_command(
+            where,
+            run_cond,
+            run_cond_negate,
+            run_cond_compare,
+            what="run command",
+            key="run_cond",
+        )
+        group = _MixtureIn(
+            name=name,
+            flows=flows,
+            flow_rate=float(flow_rate),
+            run_cond=command,
+            run_cond_inner_mode=inner_mode,
+        )
+        self.mixtures.append(group)
+        try:
+            self._resolve_command(group)
+        except ValueError:
+            self.mixtures.remove(group)
+            raise
 
     # --- transformation rules -------------------------------------------
 
@@ -4507,6 +4695,9 @@ class ObjFlow:
             automata[f"{capacity.name}_bounds"] = ["empty", "partial", "full"]
             if capacity.commanded:
                 automata[capacity.gate] = list(SERVE_GATE_STATES)
+        for group in self.mixtures:
+            if group.commanded:
+                automata[group.gate] = list(RUN_GATE_STATES)
         for flow in self.flows_out:
             if flow.tempo is not None:
                 automata[f"{flow.name}_tempo"] = ["disabled", "enabled"]
@@ -5939,6 +6130,7 @@ class ObjFlow:
         )
         self._build_transfers(variables, equations)
         self._build_capacities(variables, ports, equations, automata)
+        self._build_mixtures(variables, automata)
         self._build_measurements(variables, ports, equations)
         self._build_measurements_out(variables, ports, equations)
 
@@ -7378,6 +7570,92 @@ class ObjFlow:
                 {"target": f"{pair.name}_moved", "kind": "explicit", "expr": moved}
             )
 
+    def _capacity_transit(
+        self, flow: str, continuous_in: set[str], continuous_out: set[str]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """What arrives at and what leaves a held flow's content, over the
+        U7 channels. Beside the rules, the rules play the far end: upstream
+        their draw is the outflow, downstream their production is the
+        inflow."""
+        me = self.name
+        if self._beside_rules(flow, "out") is not None:
+            arriving = _var(me, f"{flow}_made_out")
+        elif flow in continuous_in:
+            arriving = _var(me, f"{flow}_fed_in")
+        else:
+            arriving = _float(0.0)
+        if self._beside_rules(flow, "in") is not None:
+            leaving = self._rule_draw(flow)
+        elif flow in continuous_out:
+            leaving = _var(me, f"{flow}_fed_out")
+        else:
+            leaving = _float(0.0)
+        return arriving, leaving
+
+    def _capacity_surplus(
+        self, capacity: _Capacity, continuous_in: set[str], continuous_out: set[str]
+    ) -> dict[str, Any]:
+        """``D = sum_f w_f (in_f - out_f)``, the volume the transit adds to
+        `capacity` per unit of time (muscadet's `Capacity.breathe`, R53).
+
+        Read off the deliveries, which the sweep settles before anything
+        reads this, and never fed back into a demand or a capability: that
+        would close the demand band on the production band."""
+        terms = []
+        for entry in capacity.flows:
+            arriving, leaving = self._capacity_transit(
+                entry.name, continuous_in, continuous_out
+            )
+            terms.append(
+                {
+                    "op": "mul",
+                    "args": [
+                        {"op": "sub", "lhs": arriving, "rhs": leaving},
+                        _float(entry.weight),
+                    ],
+                }
+            )
+        return _sum(terms)
+
+    def _capacity_vent(
+        self,
+        capacity: _Capacity,
+        entry: Any,
+        continuous_in: set[str],
+        continuous_out: set[str],
+    ) -> dict[str, Any]:
+        """What an OPEN volume vents of one constituent: the excess of what
+        arrives over what leaves, ``max(D, 0)``, at the composition
+        ``m_f / sum_g m_g w_g`` (R53). The make-up and the vent together
+        cancel ``D`` exactly, so the occupied volume never moves."""
+        me = self.name
+        occupied = _sum(
+            [
+                {
+                    "op": "mul",
+                    "args": [
+                        _var(me, _content_attribute(capacity.name, held.name)),
+                        _float(held.weight),
+                    ],
+                }
+                for held in capacity.flows
+            ]
+        )
+        content = _clamped_at_zero(_var(me, _content_attribute(capacity.name, entry.name)))
+        excess = _clamped_at_zero(
+            self._capacity_surplus(capacity, continuous_in, continuous_out)
+        )
+        return {
+            "op": "if",
+            "cond": {"op": "cmp", "cmp": "gt", "lhs": occupied, "rhs": _float(0.0)},
+            "then": {
+                "op": "div",
+                "lhs": {"op": "mul", "args": [excess, content]},
+                "rhs": occupied,
+            },
+            "otherwise": _float(0.0),
+        }
+
     def _build_capacities(
         self,
         variables: list[dict],
@@ -7429,29 +7707,31 @@ class ObjFlow:
                 contents.append(_var(me, content))
                 fills.append(_var(me, fill))
 
-                # What arrives minus what leaves, over the U7 channels.
-                # Beside the rules, the rules play the far end: upstream
-                # their draw is the outflow, downstream their production
-                # is the inflow.
-                if self._beside_rules(entry.name, "out") is not None:
-                    arriving = _var(me, f"{entry.name}_made_out")
-                elif entry.name in continuous_in_names:
-                    arriving = _var(me, f"{entry.name}_fed_in")
-                else:
-                    arriving = _float(0.0)
-                if self._beside_rules(entry.name, "in") is not None:
-                    leaving = self._rule_draw(entry.name)
-                elif entry.name in continuous_out_names:
-                    leaving = _var(me, f"{entry.name}_fed_out")
-                else:
-                    leaving = _float(0.0)
-                equations.append(
-                    {
-                        "target": content,
-                        "kind": "ode",
-                        "expr": {"op": "sub", "lhs": arriving, "rhs": leaving},
-                    }
+                # What arrives minus what leaves, over the U7 channels,
+                # plus what the atmosphere adds to an OPEN volume (R53).
+                arriving, leaving = self._capacity_transit(
+                    entry.name, continuous_in_names, continuous_out_names
                 )
+                rate: dict[str, Any] = {"op": "sub", "lhs": arriving, "rhs": leaving}
+                if capacity.is_open:
+                    vent = f"{capacity.name}_vent_{entry.name}"
+                    variables.append(_float_attribute(vent, 0.0))
+                    equations.append(
+                        {
+                            "target": vent,
+                            "kind": "explicit",
+                            "expr": self._capacity_vent(
+                                capacity, entry, continuous_in_names, continuous_out_names
+                            ),
+                        }
+                    )
+                    rate = {"op": "sub", "lhs": rate, "rhs": _var(me, vent)}
+                    if entry.name == capacity.makeup_flow:
+                        rate = {
+                            "op": "add",
+                            "args": [rate, _var(me, f"{capacity.name}_makeup")],
+                        }
+                equations.append({"target": content, "kind": "ode", "expr": rate})
                 equations.append(
                     {
                         "target": fill,
@@ -7465,6 +7745,30 @@ class ObjFlow:
                         _float_attribute(ratio, capacity.initial_ratio(entry.name))
                     )
                     ratios.append((ratio, content))
+
+            if capacity.is_open:
+                makeup = f"{capacity.name}_makeup"
+                variables.append(_float_attribute(makeup, 0.0))
+                weight = next(
+                    e.weight for e in capacity.flows if e.name == capacity.makeup_flow
+                )
+                equations.append(
+                    {
+                        "target": makeup,
+                        "kind": "explicit",
+                        "expr": {
+                            "op": "div",
+                            "lhs": _clamped_at_zero(
+                                _negated(
+                                    self._capacity_surplus(
+                                        capacity, continuous_in_names, continuous_out_names
+                                    )
+                                )
+                            ),
+                            "rhs": _float(weight),
+                        },
+                    }
+                )
 
             initial_fill = capacity.initial_fill()
             variables.append(
@@ -7665,13 +7969,30 @@ class ObjFlow:
             # inlined in a quantity closes a cycle among variables alone,
             # which is read as an algebraic loop and reported by nobody.
             if capacity.commanded:
-                automata.append(self._serve_gate_automaton(capacity))
+                automata.append(self._command_gate_automaton(capacity))
 
             # The level, published read-only (R7): an out port carrying no
             # channel, so a reader exchanges no quantity and enters no
             # allocation operator.
             for alias, attribute in capacity.published():
                 ports.append({"name": f"{alias}_out", "dir": "out", "attr": attribute})
+
+    def _build_mixtures(self, variables: list[dict], automata: list[dict]) -> None:
+        """Mixture groups (muscadet's R52): the published rate of each, and
+        the run gate of a commanded one.
+
+        The rate is a variable with NO equation: a failure mode is its only
+        writer, and its initial value is the declared `flow_rate`, which is
+        what a held effect releases back to. The gate is posted as an
+        automaton, beside the rate rather than inside the demand, for the
+        reason a capacity's discharge gate is: a threshold inlined in a
+        quantity closes a cycle among variables alone, which nobody reports.
+        What the group asks of the volume is written by
+        :meth:`System._resolve_mixture_groups`, which knows the volume."""
+        for group in self.mixtures:
+            variables.append(_float_attribute(group.rate_attribute, group.flow_rate))
+            if group.commanded:
+                automata.append(self._command_gate_automaton(group))
 
     def _build_measurements(
         self, variables: list[dict], ports: list[dict], equations: list[dict]
@@ -8288,17 +8609,42 @@ class System:
                     if declared["name"] == port
                 )
                 declared_port["channels"].append({"name": "claim"})
+                # A volume drawn as a MIXTURE hands each machine its composed
+                # share scaled to what it delivers (R52), muscadet's
+                # `allocate_output`: the truncation above would bend the
+                # pro-rata of several machines the moment one of them asks
+                # for more than the volume delivers (measured in muscadet,
+                # 100 and 1 behind a ceiling of 50.5 served 49.52 and 0.98).
+                # The total demand is a demand-band quantity and the
+                # delivery reads it, so no band reads a later one.
+                drawn = flow.name in mixed and mixed[flow.name].serves_mixture
+                total = _var(name, f"{flow.name}_demand_out")
                 for edge in served:
+                    asked = _var(name, _channel_attr(port, "demand", edge.name))
+                    claim = (
+                        {
+                            "op": "if",
+                            "cond": {
+                                "op": "cmp",
+                                "cmp": "gt",
+                                "lhs": total,
+                                "rhs": _float(0.0),
+                            },
+                            "then": {
+                                "op": "div",
+                                "lhs": {"op": "mul", "args": [asked, available]},
+                                "rhs": total,
+                            },
+                            "otherwise": _float(0.0),
+                        }
+                        if drawn
+                        else _min([asked, available])
+                    )
                     component["equations"].append(
                         {
                             "target": _channel_attr(port, "claim", edge.name),
                             "kind": "explicit",
-                            "expr": _min(
-                                [
-                                    _var(name, _channel_attr(port, "demand", edge.name)),
-                                    available,
-                                ]
-                            ),
+                            "expr": claim,
                         }
                     )
                 allocation: dict[str, Any] = {
@@ -8884,6 +9230,17 @@ class System:
                     publish_fed(edge.consumer, edge.flow_in)
         unconnected_inputs("fed_in")
 
+        # What the atmosphere adds to an OPEN volume reads the deliveries,
+        # every one of them now swept (R53), and is read by nothing but the
+        # contents' derivatives.
+        for name, obj in self.comp.items():
+            for capacity in obj.capacities:
+                if not capacity.is_open:
+                    continue
+                for entry in capacity.flows:
+                    step(name, f"{capacity.name}_vent_{entry.name}")
+                step(name, f"{capacity.name}_makeup")
+
         # The order must cover the declared steps exactly, and the
         # engine refuses an omission rather than completing it: close it
         # over what the components actually declare, so a step this
@@ -9021,6 +9378,8 @@ class System:
             capacity.commanded
             for obj in self.comp.values()
             for capacity in obj.capacities
+        ) or any(
+            group.commanded for obj in self.comp.values() for group in obj.mixtures
         )
         rules = any(obj.rule_sets for obj in self.comp.values())
         if not rules and not commanded:
@@ -9187,6 +9546,31 @@ class System:
                     obj,
                     name,
                 )
+            # A commanded MACHINE drives what the volume it draws delivers
+            # (R52): the producer's outputs feeding the group, and the
+            # group's own inputs they arrive on. Written out rather than
+            # through `declare`, whose driven rates are the component's own
+            # outputs; a machine has none.
+            for group in obj.mixtures:
+                if not group.commanded:
+                    continue
+                key = (name, "mixture group", group.name)
+                feeding = [
+                    edge
+                    for edge in edges
+                    if edge.consumer == name and edge.flow_in in group.flows
+                ]
+                influence[key] = {
+                    (edge.producer, edge.flow_out, "out") for edge in feeding
+                } | {(name, edge.flow_in, "in") for edge in feeding}
+                compared = []
+                for operand in (op for row in group.run_cond for op in row):
+                    if operand.op is None:
+                        continue
+                    _, rate = obj._operand_read(f"ObjFlow `{name}`", operand)
+                    if rate is not None:
+                        compared.append((name, rate[0], rate[1]))
+                reads[key] = compared
 
         arcs: dict[tuple[str, str, str], list[tuple[tuple[str, str, str], tuple]]] = {}
         for driver, driven_nodes in influence.items():
@@ -9454,16 +9838,40 @@ class System:
         asks on each of its inputs: ``R . m_f / S``, ``S`` being the volume's
         weighted occupied volume, read off its integrated contents.
 
+        Several groups may draw one volume (muscadet's R52): each asks its own
+        rate at the composition, and the producer's split serves them.
+
         Refused by name, as muscadet refuses them: a group whose flows do not
-        all arrive from ONE capacity of ONE producer, a producer serving the
-        group's flows to anybody else, and a flow a rule of the consumer also
-        consumes. Recomputed from scratch at every generation, so a model
-        generated twice binds the same way."""
+        all arrive from ONE capacity of ONE producer, a group leaving out a
+        constituent of that volume, a producer serving any held flow of it
+        to a consumer that is not one of its groups, a volume drawn by
+        several groups whose outputs allocate other than proportionally, and
+        a flow a rule of the consumer also consumes. Recomputed from scratch
+        at every generation, so a model generated twice binds the same
+        way."""
         for obj in self.comp.values():
             for capacity in obj.capacities:
                 capacity.serves_mixture = False
             for flow in obj.flows_continuous_in:
                 flow.mixture_demand = None
+        # (producer, capacity name) -> the INPUTS drawing it as a mixture,
+        # `(consumer, flow_in)` pairs, which is what the exclusivity rule
+        # exempts, and the groups, which the allocation rule counts. Keyed on
+        # the input and not on the consumer: a connection here joins ports,
+        # so a machine may wire an UNGROUPED input to a held output too, and
+        # that one is a per-flow request like any other.
+        drawers: dict[tuple[str, str], set[tuple[str, str]]] = {}
+        bound: dict[tuple[str, str], list[str]] = {}
+        for consumer, obj in self.comp.items():
+            for group in obj.mixtures:
+                for edge in edges:
+                    if edge.consumer == consumer and edge.flow_in in group.flows:
+                        supplier = self.comp[edge.producer]
+                        held = supplier._capacity_of(edge.flow_out)
+                        if held is not None:
+                            drawers.setdefault((edge.producer, held.name), set()).add(
+                                (consumer, edge.flow_in)
+                            )
         for consumer, obj in self.comp.items():
             for group in obj.mixtures:
                 where = f"System `{self.name}`: mixture group `{consumer}.{group.name}`"
@@ -9490,19 +9898,36 @@ class System:
                         f"{sorted(n or 'no capacity' for n in names)}"
                     )
                 capacity = held[0]
+                left_out = [
+                    flow
+                    for flow in capacity.flow_names
+                    if flow not in outputs.values()
+                ]
+                if left_out:
+                    raise ValueError(
+                        f"{where}: capacity `{capacity.name}` of `{producer}` also "
+                        f"holds {left_out}, which the group does not draw. A "
+                        "machine moves a volume of whatever the room holds, so a "
+                        "group names every constituent of the volume it draws"
+                    )
+                mixtures = drawers.get((producer, capacity.name), set())
                 others = [
                     e for e in edges
                     if e.producer == producer
-                    and e.flow_out in outputs.values()
-                    and e.consumer != consumer
+                    and e.flow_out in capacity.flow_names
+                    and (e.consumer, e.flow_in) not in mixtures
                 ]
                 if others:
                     raise ValueError(
                         f"{where}: `{producer}` also serves "
-                        f"{sorted({e.consumer for e in others})} out of the outputs "
-                        "the group draws, and a volume drawn as a mixture composes "
-                        "for one group"
+                        f"{sorted({e.consumer for e in others})} out of the volume "
+                        "the group draws, and a volume drawn as a mixture serves "
+                        "mixture groups alone: a composed share against a per-flow "
+                        "request is not arbitrated"
                     )
+                bound.setdefault((producer, capacity.name), []).append(
+                    f"{consumer}.{group.name}"
+                )
                 consumed = {
                     flow for rule_set in obj.rule_sets for flow in rule_set.consumed()
                 }
@@ -9525,6 +9950,20 @@ class System:
                         for entry in capacity.flows
                     ]
                 )
+                # The rate is READ, never written in: a failure mode may have
+                # clamped it (R52), and a mode writing below zero states a
+                # direction, which is the connection's and not the rate's.
+                # The command BRANCHES on it, never multiplies.
+                rate: dict[str, Any] = _clamped_at_zero(
+                    _var(consumer, group.rate_attribute)
+                )
+                if group.commanded:
+                    rate = {
+                        "op": "if",
+                        "cond": _state_active(consumer, group.gate, RUN_GATE_STATES[0]),
+                        "then": rate,
+                        "otherwise": _float(0.0),
+                    }
                 for flow, out in outputs.items():
                     share = {
                         "op": "div",
@@ -9534,11 +9973,29 @@ class System:
                     demand = {
                         "op": "if",
                         "cond": {"op": "cmp", "cmp": "gt", "lhs": occupied, "rhs": _float(0.0)},
-                        "then": {"op": "mul", "args": [_float(group.flow_rate), share]},
+                        "then": {"op": "mul", "args": [rate, share]},
                         "otherwise": _float(0.0),
                     }
                     target = next(f for f in obj.flows_continuous_in if f.name == flow)
                     target.mixture_demand = demand
+        for (producer, capacity_name), groups in bound.items():
+            if len(groups) < 2:
+                continue
+            supplier = self.comp[producer]
+            capacity = next(c for c in supplier.capacities if c.name == capacity_name)
+            for out in supplier.flows_continuous_out:
+                if out.name not in capacity.flow_names:
+                    continue
+                if out.allocation != "proportional":
+                    raise ValueError(
+                        f"System `{self.name}`: capacity `{capacity_name}` of "
+                        f"`{producer}` is drawn by several mixture groups "
+                        f"({', '.join(groups)}), and its output `{out.name}` "
+                        f"declares allocation={out.allocation!r}. Machines on one "
+                        "volume are served pro rata of their composed shares, "
+                        "which is the proportional allocation: declare none on "
+                        "that output"
+                    )
 
     def generate(
         self, foreign: list[dict[str, Any]] | None = None
@@ -9639,6 +10096,10 @@ class System:
                     observable.add(f"{capacity.name}_fill_{entry.name}")
                     if capacity.publishes_ratios:
                         observable.add(f"{capacity.name}_ratio_{entry.name}")
+                    if capacity.is_open:
+                        observable.add(f"{capacity.name}_vent_{entry.name}")
+                if capacity.is_open:
+                    observable.add(f"{capacity.name}_makeup")
             for measurement in obj.measurements_in:
                 observable.update(measurement.channels())
             for flow in obj.flows_continuous_in:
