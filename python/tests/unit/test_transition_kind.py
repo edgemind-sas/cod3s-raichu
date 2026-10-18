@@ -334,8 +334,8 @@ def test_an_external_mode_declares_its_target_mirror_only(behaviour):
     )
     for target in ("A", "B"):
         mirror = _automaton(expanded, target, "fm")
-        failure = next(t for t in mirror["transitions"] if t["targets"] == ["occ"])
-        repair = next(t for t in mirror["transitions"] if t["targets"] == ["rep"])
+        failure = next(t for t in mirror["transitions"] if t["targets"] == ["fm__occ"])
+        repair = next(t for t in mirror["transitions"] if t["targets"] == ["fm__rep"])
         assert failure["kind"] == "failure"
         assert repair["kind"] == "repair"
     # The mode's own automata drive the mirrors: declaring them too would

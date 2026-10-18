@@ -344,6 +344,6 @@ def test_the_merge_survives_the_continuous_rebuild():
         for effect in function["effects"]
     )
     assert _gated_states(written["value"]["cond"]) == {
-        ("B1", "mode_a", "occ"),
-        ("B1", "mode_b", "occ"),
+        ("B1", "mode_a", "mode_a__occ"),
+        ("B1", "mode_b", "mode_b__occ"),
     }

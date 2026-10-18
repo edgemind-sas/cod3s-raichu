@@ -2,12 +2,13 @@
 against **closed forms**.
 
 A component routinely carries several failure modes, and in the
-``external`` behaviour each mode is an automaton grafted on the component
-that reaches a state named like every other mode's. A basic event is
-therefore named by its automaton too (``component.automaton.state``): the
-modes of one pump stay distinct in the cuts, and the pump is measured as
-the unit that gathers them. Birnbaum and criticality do not add up over
-the modes, so the component level is computed, not summed.
+``external`` behaviour each mode is an automaton grafted on the component,
+whose states are named after the mode as cod3s names them (``fm1__occ``).
+A basic event is named by its automaton too
+(``component.automaton.state``): the modes of one pump stay distinct in
+the cuts, and the pump is measured as the unit that gathers them.
+Birnbaum and criticality do not add up over the modes, so the component
+level is computed, not summed.
 
 Three properties of the basic events are checked besides:
 
@@ -115,18 +116,18 @@ def two_modes():
         t_max=40.0,
         instants=INSTANTS,
         seed=42,
-        groups={"pair": ["B.fm_B.occ", "C.fm_C.occ"], "pump": ["A.fm1.occ", "A.fm2.occ"]},
+        groups={"pair": ["B.fm_B.fm_B__occ", "C.fm_C.fm_C__occ"], "pump": ["A.fm1.fm1__occ", "A.fm2.fm2__occ"]},
     )
 
 
 def test_two_modes_of_one_component_are_two_basic_events(two_modes):
     found = {frozenset(cut.events) for cut in two_modes.cuts}
     assert found == {
-        frozenset({"A.fm1.occ"}),
-        frozenset({"A.fm2.occ"}),
-        frozenset({"B.fm_B.occ", "C.fm_C.occ"}),
+        frozenset({"A.fm1.fm1__occ"}),
+        frozenset({"A.fm2.fm2__occ"}),
+        frozenset({"B.fm_B.fm_B__occ", "C.fm_C.fm_C__occ"}),
     }
-    assert two_modes.components["A"].events == ["fm1.occ", "fm2.occ"]
+    assert two_modes.components["A"].events == ["fm1.fm1__occ", "fm2.fm2__occ"]
     assert two_modes.q_cuts == pytest.approx(two_modes.q_target, abs=1e-12)
 
 
@@ -136,10 +137,10 @@ def test_each_mode_matches_its_closed_form(two_modes):
         pair = q["B"] * q["C"]
         top = 1.0 - (1.0 - q["A1"]) * (1.0 - q["A2"]) * (1.0 - pair)
         for mode, other in (("A1", "A2"), ("A2", "A1")):
-            measured = two_modes.basic_events[f"A.fm{mode[-1]}.occ"]
+            measured = two_modes.basic_events[f"A.fm{mode[-1]}.fm{mode[-1]}__occ"]
             assert measured.component == "A"
             assert measured.automaton == f"fm{mode[-1]}"
-            assert measured.state == "occ"
+            assert measured.state == f"fm{mode[-1]}__occ"
             # Critical for one mode: the other mode and the pair both hold.
             birnbaum = (1.0 - q[other]) * (1.0 - pair)
             assert measured.birnbaum[k] == pytest.approx(birnbaum, abs=TOL)
@@ -168,7 +169,7 @@ def test_the_component_is_measured_as_one_unit(two_modes):
         assert pump.q_system_failed[k] == pytest.approx(1.0, abs=TOL)
         assert pump.q_system_intact[k] == pytest.approx(pair, abs=TOL)
     # At t = 10 the sum of the modes is 1.38: not even a probability.
-    modes = sum(two_modes.basic_events[f"A.fm{i}.occ"].birnbaum[0] for i in (1, 2))
+    modes = sum(two_modes.basic_events[f"A.fm{i}.fm{i}__occ"].birnbaum[0] for i in (1, 2))
     assert modes > 1.0 > two_modes.components["A"].birnbaum[0]
 
 
@@ -180,7 +181,7 @@ def test_a_declared_group_is_measured_as_one_unit(two_modes):
     assert pump.birnbaum == component.birnbaum
     assert pump.fussell_vesely == component.fussell_vesely
     pair = two_modes.groups["pair"]
-    assert pair.events == ["B.fm_B.occ", "C.fm_C.occ"]
+    assert pair.events == ["B.fm_B.fm_B__occ", "C.fm_C.fm_C__occ"]
     for k, instant in enumerate(INSTANTS):
         q = _q(instant)
         holds = (1.0 - q["A1"]) * (1.0 - q["A2"])
@@ -262,10 +263,10 @@ def common_cause():
 
 def test_a_common_cause_counts_for_each_of_its_targets(common_cause):
     found = {frozenset(cut.events) for cut in common_cause.cuts}
-    assert frozenset({"B.ccf.occ", "C.ccf.occ"}) in found
-    assert frozenset({"B.fm_B.occ", "C.fm_C.occ"}) in found
-    assert "ccf.occ" in common_cause.components["B"].events
-    assert "ccf.occ" in common_cause.components["C"].events
+    assert frozenset({"B.ccf.ccf__occ", "C.ccf.ccf__occ"}) in found
+    assert frozenset({"B.fm_B.fm_B__occ", "C.fm_C.fm_C__occ"}) in found
+    assert "ccf.ccf__occ" in common_cause.components["B"].events
+    assert "ccf.ccf__occ" in common_cause.components["C"].events
     for k, instant in enumerate(INSTANTS):
         q = {k_: 1.0 - math.exp(-rate * instant) for k_, rate in CCF.items()}
         # B with both its events failed: the system is down iff C is.

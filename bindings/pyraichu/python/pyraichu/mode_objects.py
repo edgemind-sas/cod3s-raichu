@@ -258,6 +258,9 @@ def _translate_legacy_fm(fm: dict, cls: str) -> dict:
     spec = {
         "type": "ObjFM",
         "name": _require(fm, "fm_name", where=where),
+        # Kept apart from `name`, which a document may overwrite with the
+        # component name: an external mirror is named after the MODE.
+        "mode_name": _require(fm, "fm_name", where=where),
         "targets": list(_require(fm, "targets", where=where)),
         "behaviour": fm.get("behaviour", "internal"),
         "failure": [order_law(p) for p in _require(fm, "failure_param", where=where)],
@@ -301,6 +304,9 @@ def _translate_objmode2s(fm: dict) -> dict:
     spec: dict[str, Any] = {
         "type": _on_demand_expander(on_demand, behaviour),
         "name": _require(fm, "fm_name", where=where),
+        # Kept apart from `name`, which a document may overwrite with the
+        # component name: an external mirror is named after the MODE.
+        "mode_name": _require(fm, "fm_name", where=where),
         "targets": targets,
         "behaviour": behaviour,
         "failure": failure,
@@ -431,6 +437,9 @@ def _translate_objfminst(fm: dict) -> dict:
     spec: dict[str, Any] = {
         "type": expander,
         "name": _require(fm, "fm_name", where=where),
+        # Kept apart from `name`, which a document may overwrite with the
+        # component name: an external mirror is named after the MODE.
+        "mode_name": _require(fm, "fm_name", where=where),
         "targets": list(_require(fm, "targets", where=where)),
         "behaviour": behaviour,
         "failure": failure,

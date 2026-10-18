@@ -92,4 +92,7 @@ def test_the_cleaned_sequences_drop_every_repaired_failure():
     assert hits, "the campaign never reached the feared event"
     for sequence in hits:
         states = [event["attr"] for event in sequence["events"]]
-        assert not any(state.startswith("rep") for state in states), sequence
+        # The mirrors name their states after the mode (`wear_A__occ`), so a
+        # check on the bare `rep` prefix would hold whatever the reduction did.
+        assert any(state.endswith("__occ") for state in states), sequence
+        assert not any(state.endswith("__rep") for state in states), sequence
