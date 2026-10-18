@@ -669,7 +669,19 @@ _MEASUREMENT_OUT = _Vocabulary(
 #: together at ONE volumetric rate, the split per constituent fixed by the
 #: composition of the volume drawn from. Every key muscadet writes is carried.
 _MIXTURE_IN = _Vocabulary(
-    carried={"name": "name", "flows": "flows", "flow_rate": "flow_rate"},
+    carried={
+        "name": "name",
+        "flows": "flows",
+        "flow_rate": "flow_rate",
+        # The machine's ON/OFF COMMAND (muscadet 5.17.0, R52), in the
+        # vocabulary and with the two parallel matrices of a capacity's
+        # `serve_cond`, folded back onto their operands the same way.
+        # muscadet writes them only when a command is declared.
+        "run_cond": "run_cond",
+        "run_cond_negate": "run_cond_negate",
+        "run_cond_compare": "run_cond_compare",
+        "run_cond_inner_mode": "run_cond_inner_mode",
+    },
     inert={},
     uncarried={},
 )
@@ -742,6 +754,10 @@ _CAPACITY = _Vocabulary(
         # must move back from a bound before the capacity leaves it, which
         # this engine locates rather than steps over.
         "hysteresis": "hysteresis",
+        # The volume OPEN to the atmosphere (muscadet 5.17.0, R53) and the
+        # constituent the outside supplies. Written only on an open volume;
+        # its `content_init` already carries the make-up muscadet completed.
+        "makeup_flow": "makeup_flow",
     },
 )
 
