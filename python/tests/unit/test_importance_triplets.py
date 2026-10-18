@@ -2,7 +2,7 @@
 
 A basic event's name joins three names with dots, and component and mode
 names may carry dots of their own (`RE.XY` is an ordinary label): the
-name ``P.A.fm.1.occ`` cannot be split back into its three parts. A caller
+name ``P.A.fm.1.fm.1__occ`` cannot be split back into its three parts. A caller
 that already holds the parts passes them as a triplet, a tuple or a
 mapping with the wire keys, and nothing is ever split.
 """
@@ -39,18 +39,18 @@ def _importance(**kwargs):
 def test_a_group_of_dotted_triplets_is_measured_as_its_component():
     analysis = _importance(
         groups={
-            "pump": [("P.A", "fm.1", "occ")],
-            "pair": [{"obj": "P.B", "automaton": "fm.B", "attr": "occ"}, ("P.C", "fm.C", "occ")],
+            "pump": [("P.A", "fm.1", "fm.1__occ")],
+            "pair": [{"obj": "P.B", "automaton": "fm.B", "attr": "fm.B__occ"}, ("P.C", "fm.C", "fm.C__occ")],
         }
     )
     assert analysis.groups["pump"].birnbaum == analysis.components["P.A"].birnbaum
-    assert analysis.groups["pump"].events == ["P.A.fm.1.occ"]
-    assert analysis.groups["pair"].events == ["P.B.fm.B.occ", "P.C.fm.C.occ"]
+    assert analysis.groups["pump"].events == ["P.A.fm.1.fm.1__occ"]
+    assert analysis.groups["pair"].events == ["P.B.fm.B.fm.B__occ", "P.C.fm.C.fm.C__occ"]
 
 
 def test_dotted_basic_events_are_selected_by_triplet():
-    analysis = _importance(basic_events=[("P.A", "fm.1", "occ"), ("P.B", "fm.B", "occ"), ("P.C", "fm.C", "occ")])
-    assert set(analysis.basic_events) == {"P.A.fm.1.occ", "P.B.fm.B.occ", "P.C.fm.C.occ"}
+    analysis = _importance(basic_events=[("P.A", "fm.1", "fm.1__occ"), ("P.B", "fm.B", "fm.B__occ"), ("P.C", "fm.C", "fm.C__occ")])
+    assert set(analysis.basic_events) == {"P.A.fm.1.fm.1__occ", "P.B.fm.B.fm.B__occ", "P.C.fm.C.fm.C__occ"}
 
 
 @pytest.mark.parametrize(

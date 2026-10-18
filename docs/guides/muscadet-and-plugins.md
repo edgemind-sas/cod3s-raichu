@@ -824,6 +824,17 @@ absorbing. Three behaviours:
 - `external_rep_indep`: a trigger model: the mode resets instantly and
   each target latches the failure until it repairs on its own law.
 
+Under both external behaviours the mirror carries the mode's sequence
+events, and it names its states and transitions after the mode, as cod3s
+does: a mode `frun` on target `C1` is recorded as `C1` / `frun__occ` and
+`C1` / `frun__rep`, so a target hosting several modes says which one
+failed it. The prefix is the mode's own name (`fm_name`, `mode_name`),
+not the name of the component a document files it under; a plugin object
+that declares none is named by its `name`. The mirror automaton itself
+keeps the object's `name`, so as a basic event of an importance analysis
+the failure of plugin object `frun` is `C1.frun.frun__occ`. Before 0.102.0
+the states were plainly `occ` / `rep`.
+
 **One-shot effects** (`failure_effects_trans` / `repair_effects_trans`,
 the platform's `occ_effects_trans` / `not_occ_effects_trans`) are written
 once, when the failure or the repair happens (a transition's `effects`),

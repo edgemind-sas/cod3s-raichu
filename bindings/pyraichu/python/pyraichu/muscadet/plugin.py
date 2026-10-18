@@ -1783,6 +1783,15 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
     order_max = len(targets)
     failure_state = spec.get("failure_state", "occ")
     repair_state = spec.get("repair_state", "rep")
+    # The mirror an external behaviour grafts on each target names its states
+    # and transitions after the MODE, as cod3s' `_build_target_automaton`
+    # does: the target's sequence events then say which mode failed it
+    # (`C1.frun__occ`, not `C1.occ`), and several modes on one target do not
+    # share a namespace. The mode's own name, not the component it is filed
+    # under: a cod3s document files `frun` as `<targets>__frun`.
+    mode_name = spec.get("mode_name") or name
+    mirror_rest = f"{mode_name}__{repair_state}"
+    mirror_failed = f"{mode_name}__{failure_state}"
     # Where a lost occurrence draw parks (on-demand occurrence only). cod3s
     # pins the name per study (`occ_parked_state`); left unsaid it is the
     # ObjFMInst grammar's `not_<failure_state>`, which is also what the
@@ -1875,7 +1884,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 fail_guard = _bool_expr(
                     "and",
                     [fail_guard]
-                    + [_state_active(targets[i], name, repair_state) for i in comb],
+                    + [_state_active(targets[i], name, mirror_rest) for i in comb],
                 )
             # Occurrence edge: an inst law takes the draw + parked + re-arm
             # machinery, parking beside the resting state (`absorb_state`
@@ -1909,7 +1918,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                     repair_guard = _bool_expr(
                         "and",
                         [repair_guard]
-                        + [_state_active(targets[i], name, failure_state) for i in comb],
+                        + [_state_active(targets[i], name, mirror_failed) for i in comb],
                     )
             repair_parked = f"{failure_state}_star{suffix}" if inst_repair else None
             transitions: list[dict] = []
@@ -2059,7 +2068,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         # the arithmetic every other mode was written against.
         occ_gates = [_state_active(name, aut, st) for aut, st in impacting[target]]
         if rep_indep:
-            occ_gates = occ_gates + [_state_active(target, name, failure_state)]
+            occ_gates = occ_gates + [_state_active(target, name, mirror_failed)]
         ctrl_functions.append(
             {
                 "name": f"update_{ctrl}",
@@ -2129,9 +2138,9 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                     "on: declare a timed return law"
                 )
             repair_transition = {
-                "name": repair_state,
-                "source": failure_state,
-                "targets": [repair_state],
+                "name": mirror_rest,
+                "source": mirror_failed,
+                "targets": [mirror_rest],
                 # This edge belongs to ONE target, so that is the carrier a
                 # leaf with no `obj` reads (cod3s hands `get_repair_cond`
                 # the single `[target_comp]` here).
@@ -2155,9 +2164,9 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
             # Demanding it refused the whole model over a mode that does
             # nothing, the same hard stop the control above removes.
             repair_transition = {
-                "name": repair_state,
-                "source": failure_state,
-                "targets": [repair_state],
+                "name": mirror_rest,
+                "source": mirror_failed,
+                "targets": [mirror_rest],
                 "guard": _attr_is(name, ctrl, False),
                 "monitored": True,
                 "cycle_group": name,
@@ -2172,9 +2181,9 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         # also carries the declared failure / repair kinds, for the same
         # reason: one occurrence counts once per target.
         failure_transition = {
-            "name": failure_state,
-            "source": repair_state,
-            "targets": [failure_state],
+            "name": mirror_failed,
+            "source": mirror_rest,
+            "targets": [mirror_failed],
             "guard": _attr_is(name, ctrl, True),
             "monitored": True,
             "cycle_group": name,
@@ -2195,15 +2204,15 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         comp.setdefault("automata", []).append(
             {
                 "name": name,
-                "states": [repair_state, failure_state],
-                "init": repair_state,
+                "states": [mirror_rest, mirror_failed],
+                "init": mirror_rest,
                 "transitions": [failure_transition, repair_transition],
             }
         )
         effects = _reinit_effect(
             name,
             target,
-            _state_active(target, name, failure_state),
+            _state_active(target, name, mirror_failed),
             failure_effects,
             repair_effects,
             model,

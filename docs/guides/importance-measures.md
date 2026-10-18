@@ -101,8 +101,9 @@ that 90 % of the losses of supply pass through it.
 
 A component often carries several failure modes. In the `external`
 behaviour each mode is an automaton grafted on the component, named after
-the mode, and every one of them reaches a state named `occ`: the automaton
-in the name is what keeps them apart. The analysis then reports each mode
+the mode, whose states carry the mode's name too (`seal_leak__occ`), as
+cod3s names them. A basic event is `component.automaton.state`, so the
+modes of one component stay apart. The analysis then reports each mode
 on its own, the component as the unit that gathers its modes, and any
 **group** the study declares:
 
@@ -141,25 +142,25 @@ station = pyraichu.load_model({
 
 modes = pyraichu.importance(
     station, nb_runs=20000, t_max=40.0, instants=[10.0], seed=42,
-    groups={"redundant_pair": ["pump_B.wear_B.occ", "pump_C.wear_C.occ"]},
+    groups={"redundant_pair": ["pump_B.wear_B.wear_B__occ", "pump_C.wear_C.wear_C__occ"]},
 )
 for name, m in modes.basic_events.items():
-    print(f"mode      {name:24s} Birnbaum={m.birnbaum[0]:.3f} FV={m.fussell_vesely[0]:.3f}")
+    print(f"mode      {name:32s} Birnbaum={m.birnbaum[0]:.3f} FV={m.fussell_vesely[0]:.3f}")
 for name, c in modes.components.items():
-    print(f"component {name:24s} Birnbaum={c.birnbaum[0]:.3f} FV={c.fussell_vesely[0]:.3f}")
+    print(f"component {name:32s} Birnbaum={c.birnbaum[0]:.3f} FV={c.fussell_vesely[0]:.3f}")
 for name, g in modes.groups.items():
-    print(f"group     {name:24s} Birnbaum={g.birnbaum[0]:.3f} FV={g.fussell_vesely[0]:.3f}")
+    print(f"group     {name:32s} Birnbaum={g.birnbaum[0]:.3f} FV={g.fussell_vesely[0]:.3f}")
 ```
 
 ```text
-mode      pump_B.wear_B.occ        Birnbaum=0.430 FV=0.553
-mode      pump_C.wear_C.occ        Birnbaum=0.306 FV=0.553
-mode      pump_A.bearing.occ       Birnbaum=0.711 FV=0.353
-mode      pump_A.seal_leak.occ     Birnbaum=0.677 FV=0.243
-component pump_A                   Birnbaum=0.785 FV=0.566
-component pump_B                   Birnbaum=0.430 FV=0.553
-component pump_C                   Birnbaum=0.306 FV=0.553
-group     redundant_pair           Birnbaum=0.780 FV=0.553
+mode      pump_B.wear_B.wear_B__occ        Birnbaum=0.430 FV=0.553
+mode      pump_C.wear_C.wear_C__occ        Birnbaum=0.306 FV=0.553
+mode      pump_A.bearing.bearing__occ      Birnbaum=0.711 FV=0.353
+mode      pump_A.seal_leak.seal_leak__occ  Birnbaum=0.677 FV=0.243
+component pump_A                           Birnbaum=0.785 FV=0.566
+component pump_B                           Birnbaum=0.430 FV=0.553
+component pump_C                           Birnbaum=0.306 FV=0.553
+group     redundant_pair                   Birnbaum=0.780 FV=0.553
 ```
 
 The component level is **computed**, not summed: the Birnbaum of `pump_A`
