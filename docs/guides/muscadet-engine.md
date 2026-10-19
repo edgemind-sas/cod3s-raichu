@@ -876,11 +876,11 @@ where a model uses them, and each is carried.
   completed with the make-up arrives in `content_init`; the bounds automaton
   stays, enters full once and is read by nothing on an open volume.
 
-One difference is inherited from R51 and stays: a group asks each input its
-composed share, where muscadet publishes the group's whole rate on every
-input. A room taking whatever arrives does not see it, which is the room the
-bench compares; a room claiming nothing (`fill_rate=0`) asks its supplies
-differently on the two engines.
+A group asks each input its composed share, on top of what the volume claims
+for itself; muscadet asks the same since 5.18.0 (it published the group's
+whole rate on every input before). A FED volume drawn as a mixture at
+`fill_rate=0` is refused on both engines: asking only its composed share, it
+would never admit a constituent it does not hold, nor start when empty.
 
 The parity bench runs the platform showcase's room (100 m^3, a fan of
 100 m^3/h, a draft of 1 m^3/h) failed and repaired, ordered off, overflowing,
