@@ -9845,8 +9845,11 @@ class System:
         all arrive from ONE capacity of ONE producer, a group leaving out a
         constituent of that volume, a producer serving any held flow of it
         to a consumer that is not one of its groups, a volume drawn by
-        several groups whose outputs allocate other than proportionally, and
-        a flow a rule of the consumer also consumes. Recomputed from scratch
+        several groups whose outputs allocate other than proportionally, a
+        flow a rule of the consumer also consumes, and a FED volume drawn as a
+        mixture at ``fill_rate=0`` (muscadet 5.18.0: asking only its composed
+        share, it would never admit a constituent it does not hold, nor start
+        when empty). Recomputed from scratch
         at every generation, so a model generated twice binds the same
         way."""
         for obj in self.comp.values():
@@ -9979,10 +9982,27 @@ class System:
                     target = next(f for f in obj.flows_continuous_in if f.name == flow)
                     target.mixture_demand = demand
         for (producer, capacity_name), groups in bound.items():
-            if len(groups) < 2:
-                continue
             supplier = self.comp[producer]
             capacity = next(c for c in supplier.capacities if c.name == capacity_name)
+            fed = sorted(
+                {
+                    e.flow_in
+                    for e in edges
+                    if e.consumer == producer and e.flow_in in capacity.flow_names
+                }
+            )
+            if fed and not capacity.fill_rate:
+                raise ValueError(
+                    f"System `{self.name}`: capacity `{capacity_name}` of "
+                    f"`{producer}` is drawn as a mixture ({', '.join(groups)}) "
+                    f"and fed on {', '.join(fed)}, with fill_rate=0. At that "
+                    "rate it asks upstream only what the machines take at its "
+                    "composition, so a constituent it does not hold would never "
+                    "enter and an empty volume would never fill. Declare a "
+                    "fill_rate: math.inf takes whatever the producers deliver"
+                )
+            if len(groups) < 2:
+                continue
             for out in supplier.flows_continuous_out:
                 if out.name not in capacity.flow_names:
                     continue

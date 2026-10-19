@@ -193,18 +193,13 @@ class Tank(mu.ObjFlow):
         )
 
 
-def test_an_open_room_does_not_empty_a_tank_feeding_it():
-    """At the default fill_rate the open room makes the ordinary claim, so the
-    tank is not drained at its content per unit of time, which is what a
-    forced unbounded claim did (100 to 36.8 in one time unit, measured in
-    muscadet).
-
-    The figure is not pinned against muscadet, and that is a difference both
-    engines inherit from R51 rather than one this volume introduces: a group
-    here asks each input its COMPOSED share, nothing of a constituent the room
-    does not hold yet, where muscadet publishes the group's whole rate on each
-    input. A room taking whatever arrives (`fill_rate=inf`, the showcase's)
-    is where the two engines are compared."""
+def test_an_open_room_fed_by_a_tank_must_say_what_it_takes():
+    """An open volume's claim follows ``fill_rate`` as for any volume, so the
+    tank is never drained by a forced unbounded claim (100 to 36.8 in one
+    time unit, measured in muscadet). At the default ``fill_rate=0`` a FED
+    volume drawn as a mixture would ask only its composed share, none of a
+    hydrogen it does not hold, so it is refused, as muscadet 5.18.0 refuses
+    it: the model says what the room takes from the tank."""
     system = mu.System("open_tank")
     system.add_component(Tank, "TANK")
     system.add_component(open_room(fill_rate=0.0), "ROOM")
@@ -212,10 +207,8 @@ def test_an_open_room_does_not_empty_a_tank_feeding_it():
     system.connect("TANK", "H2", "ROOM", "H2")
     for flow in ("AIR", "H2"):
         system.connect("ROOM", flow, "DRAFT", flow)
-    result = system.simulate(t_max=10.0, samples=[10.0])
-
-    held = sampled(result, "TANK_tank_content_H2", 10.0)
-    assert held >= 100.0 - 10.0 * DRAFT - 1e-6
+    with pytest.raises(ValueError, match="fed on H2, with fill_rate=0"):
+        system.simulate(t_max=10.0, samples=[10.0])
 
 
 def test_weights_keep_the_occupied_volume_whatever_breathes():
