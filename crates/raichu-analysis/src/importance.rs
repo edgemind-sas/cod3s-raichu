@@ -64,18 +64,21 @@
 //!
 //! # What it costs
 //!
-//! One campaign, plus a reduction that replays each recorded state change
-//! once, touching only the units and cuts that hold the changed basic
-//! event, then reads a few counters per unit at each instant. A unit that
-//! meets no cut (a declared group of components outside every cut) costs
-//! one counter per instant; one that meets cuts costs its incidences with
-//! them. Nothing scales with the number of basic events of the model, so
-//! one group per component stays a small share of the reduction at ten
+//! One campaign, plus a reduction that folds each trajectory, as it
+//! arrives, into a histogram of the configurations `D` reached at each
+//! instant, then applies the cut structure once per distinct
+//! configuration: the replay touches only the units and cuts that hold
+//! the basic events it switches, and reads a few counters per unit. A unit
+//! that meets no cut (a declared group of components outside every cut)
+//! costs one counter per instant; one that meets cuts costs its incidences
+//! with them. Nothing scales with the number of basic events of the model,
+//! so one group per component stays a small share of the reduction at ten
 //! thousand components. The campaign dominates: the measures are a
 //! post-processing pass, never a second run, which is what keeps them
-//! usable at the load levels a study is planned for. What the reduction holds is one compact
-//! record per state change of an automaton that carries a basic event
-//! ([`ImportanceReducer`]), never the trajectories themselves.
+//! usable at the load levels a study is planned for. What the reduction
+//! holds is one entry per distinct (instant, configuration) pair reached
+//! ([`ImportanceReducer`]), never the trajectories, so its memory follows
+//! the diversity of the states the system visits, not `nb_runs`.
 //!
 //! # What it assumes
 //!
@@ -108,6 +111,7 @@
 //!   transition: one left silently would read as active until the
 //!   automaton records its next entry.
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
@@ -452,9 +456,9 @@ const NO_BIT: u32 = u32::MAX;
 /// "The feared event" in a compact record.
 const TARGET_BIT: u32 = u32::MAX - 1;
 
-/// One recorded state change, as the reduction keeps it: the date, the
-/// automaton (an index into [`ImportanceReducer`]'s table) and what its
-/// new state is (a basic-event bit, [`TARGET_BIT`] or [`NO_BIT`]).
+/// One recorded state change, as a pushed trajectory is read: the date,
+/// the automaton (an index into [`ImportanceReducer`]'s table) and what
+/// its new state is (a basic-event bit, [`TARGET_BIT`] or [`NO_BIT`]).
 #[derive(Debug, Clone, Copy)]
 struct Change {
     time: f64,
@@ -462,11 +466,14 @@ struct Change {
     bit: u32,
 }
 
-/// One trajectory, as the reduction keeps it.
-#[derive(Debug, Clone)]
-struct Trajectory {
+/// One histogram entry: the weight of the replicas in configuration
+/// `config` (an id into [`ImportanceReducer`]'s table) at the instant of
+/// index `instant`.
+#[derive(Debug, Clone, Copy)]
+struct Bin {
+    instant: usize,
+    config: usize,
     weight: f64,
-    changes: Vec<Change>,
 }
 
 /// One automaton the reduction follows: its index, and what each of its
@@ -480,14 +487,25 @@ struct Slot {
 
 /// The importance reduction, built one trajectory at a time.
 ///
-/// Each pushed trajectory is cut down to the state changes of the automata
-/// that carry a basic event or the feared event, and its realized cut (the
-/// basic events active at its first feared event) is tallied at once. What
-/// it holds is therefore a few words per relevant state change, never the
-/// trajectory's names, so a campaign of any size reduces in memory
-/// proportional to what the measures actually read. Pushing the
-/// trajectories in replica order makes the result a pure function of the
-/// corpus.
+/// Every measure at an instant is an expectation over the set `D` of basic
+/// events active then, so a pushed trajectory is reduced at once to what
+/// the measures read of it: its realized cut (the basic events active at
+/// its first feared event), whether the feared event is active at each
+/// instant, and the configuration `D` it is in at each instant, added to a
+/// histogram of the configurations reached. The trajectory itself is then
+/// dropped. What the reduction holds is one entry per distinct
+/// (instant, configuration) pair the campaign reached: a further replica
+/// adds only the configurations no earlier one reached, so the holding
+/// follows the diversity of the states the system visits rather than
+/// `nb_runs`, and never exceeds `nb_runs × instants`. The cut structure, only known once the campaign
+/// is over, is applied to each distinct configuration once
+/// ([`Self::finish`]).
+///
+/// Pushing the trajectories in replica order makes the result a pure
+/// function of the corpus. The weights of the replicas that share a
+/// configuration are summed before the measures are, so with unit or
+/// dyadic weights (a plain Monte-Carlo campaign) every sum is exact and
+/// independent of that order.
 #[derive(Debug)]
 pub struct ImportanceReducer {
     target: BasicEvent,
@@ -497,12 +515,26 @@ pub struct ImportanceReducer {
     /// The automata that matter, `obj` → automaton name → slot. Nested so
     /// a recorded event resolves on its borrowed names, with no allocation.
     automata: HashMap<String, HashMap<String, Slot>>,
-    n_automata: usize,
-    trajectories: Vec<Trajectory>,
     /// Realized cuts, as sorted bit lists, in first-seen order.
     realized: Vec<(Vec<u32>, f64)>,
     realized_index: HashMap<Vec<u32>, usize>,
     nb_runs: f64,
+    w_target: Vec<f64>,
+    /// The distinct configurations reached, as sorted bit lists, each to
+    /// its id (ids in first-seen order). Held once: [`Self::finish`] lays
+    /// them out by id.
+    configs: HashMap<Box<[u32]>, usize>,
+    /// The histogram, in first-seen order.
+    bins: Vec<Bin>,
+    bin_index: HashMap<(usize, usize), usize>,
+    /// Scratch of one push: the state of each relevant automaton (all
+    /// [`NO_BIT`] between two pushes), the automata the replica moved
+    /// (listed in `touched`, flagged in `marked`), and the configuration
+    /// being looked up.
+    state: Vec<u32>,
+    touched: Vec<usize>,
+    marked: Vec<bool>,
+    active: Vec<u32>,
 }
 
 impl ImportanceReducer {
@@ -572,15 +604,21 @@ impl ImportanceReducer {
         instants.sort_by(f64::total_cmp);
         Ok(ImportanceReducer {
             target,
+            w_target: vec![0.0; instants.len()],
             instants,
             events,
             groups: checked,
             automata,
-            n_automata,
-            trajectories: Vec::new(),
             realized: Vec::new(),
             realized_index: HashMap::new(),
             nb_runs: 0.0,
+            configs: HashMap::new(),
+            bins: Vec::new(),
+            bin_index: HashMap::new(),
+            state: vec![NO_BIT; n_automata],
+            touched: Vec::new(),
+            marked: vec![false; n_automata],
+            active: Vec::new(),
         })
     }
 
@@ -628,10 +666,85 @@ impl ImportanceReducer {
                 }
             }
         }
-        self.trajectories.push(Trajectory {
-            weight: sequence.weight,
-            changes,
-        });
+        self.tally(&changes, sequence.weight);
+    }
+
+    /// Add one trajectory's configuration at every instant to the
+    /// histogram, and its feared event to `w_target`. A change dated at an
+    /// instant is applied before the instant is read.
+    fn tally(&mut self, changes: &[Change], weight: f64) {
+        let mut n_target = 0usize;
+        let mut next = 0;
+        let mut moved = true;
+        let mut config = 0;
+        for k in 0..self.instants.len() {
+            let instant = self.instants[k];
+            while let Some(change) = changes.get(next) {
+                if change.time > instant {
+                    break;
+                }
+                let slot = change.automaton as usize;
+                let previous = self.state[slot];
+                if !self.marked[slot] {
+                    self.marked[slot] = true;
+                    self.touched.push(slot);
+                }
+                if previous == TARGET_BIT {
+                    n_target -= 1;
+                }
+                if change.bit == TARGET_BIT {
+                    n_target += 1;
+                }
+                self.state[slot] = change.bit;
+                next += 1;
+                moved = true;
+            }
+            if moved {
+                // Each basic event belongs to exactly one automaton, so the
+                // active set is the basic-event state of each moved one.
+                self.active.clear();
+                for &slot in &self.touched {
+                    let bit = self.state[slot];
+                    if bit != NO_BIT && bit != TARGET_BIT {
+                        self.active.push(bit);
+                    }
+                }
+                self.active.sort_unstable();
+                config = match self.configs.get(self.active.as_slice()) {
+                    Some(&id) => id,
+                    None => {
+                        let id = self.configs.len();
+                        self.configs.insert(self.active.as_slice().into(), id);
+                        id
+                    }
+                };
+                moved = false;
+            }
+            if n_target > 0 {
+                self.w_target[k] += weight;
+            }
+            match self.bin_index.entry((k, config)) {
+                Entry::Occupied(bin) => self.bins[*bin.get()].weight += weight,
+                Entry::Vacant(bin) => {
+                    bin.insert(self.bins.len());
+                    self.bins.push(Bin {
+                        instant: k,
+                        config,
+                        weight,
+                    });
+                }
+            }
+        }
+        for &slot in &self.touched {
+            self.state[slot] = NO_BIT;
+            self.marked[slot] = false;
+        }
+        self.touched.clear();
+    }
+
+    #[cfg(test)]
+    fn held(&self) -> usize {
+        self.bins.len() + self.configs.len()
     }
 
     /// The minimal cut sets: the realized cuts, merged, every superset of
@@ -725,77 +838,60 @@ impl ImportanceReducer {
         let bound: Vec<usize> = (0..n_units).filter(|&u| index.meets_a_cut(u)).collect();
 
         // --- Accumulators, flat and instant-major so the inner loop over
-        // units is contiguous. Every fold runs over the replicas in corpus
-        // order, so the reduction is byte-reproducible.
-        let mut w_target = vec![0.0; n_instants];
+        // units is contiguous.
         let mut w_cuts = vec![0.0; n_instants];
         let mut w_plus = vec![0.0; n_instants * n_units];
         let mut w_minus = vec![0.0; n_instants * n_units];
         let mut w_down = vec![0.0; n_instants * n_units];
         let mut w_fv = vec![0.0; n_instants * n_units];
 
-        // Scratch reused across replicas: the state of each relevant
-        // automaton, the replay counters, and the verdicts of one instant,
-        // recomputed only when the trajectory moved between two.
-        let mut state = vec![NO_BIT; self.n_automata];
+        // The histogram grouped by configuration, so each distinct
+        // configuration is judged once whatever the number of instants and
+        // replicas it gathers. The keys are unique, so the order is total
+        // and the reduction byte-reproducible.
+        let mut bins = self.bins;
+        drop(self.bin_index);
+        let mut configs: Vec<Box<[u32]>> = vec![Box::default(); self.configs.len()];
+        for (bits, id) in self.configs {
+            configs[id] = bits;
+        }
+        bins.sort_unstable_by_key(|bin| (bin.config, bin.instant));
+
         let mut replay = Replay::new(&index);
         let mut is_plus = vec![false; n_units];
         let mut is_minus = vec![false; n_units];
         let mut is_fv = vec![false; n_units];
+        let mut down_units: Vec<usize> = Vec::new();
+        let mut previous: &[u32] = &[];
 
-        for trajectory in &self.trajectories {
-            state.iter_mut().for_each(|s| *s = NO_BIT);
-            replay.reset();
-            let mut n_target = 0usize;
-            let mut next = 0;
-            let mut moved = true;
-            let mut target_active = false;
-            let mut system_down = false;
-            for (k, &instant) in self.instants.iter().enumerate() {
-                while let Some(change) = trajectory.changes.get(next) {
-                    if change.time > instant {
-                        break;
-                    }
-                    let slot = change.automaton as usize;
-                    let previous = state[slot];
-                    // Each basic event belongs to exactly one automaton, so
-                    // leaving a state deactivates its event outright.
-                    if previous == TARGET_BIT {
-                        n_target -= 1;
-                    } else if previous != NO_BIT {
-                        replay.toggle(previous as usize, false);
-                    }
-                    if change.bit == TARGET_BIT {
-                        n_target += 1;
-                    } else if change.bit != NO_BIT {
-                        replay.toggle(change.bit as usize, true);
-                    }
-                    state[slot] = change.bit;
-                    next += 1;
-                    moved = true;
-                }
-                if moved {
-                    system_down = replay.realized > 0;
-                    target_active = n_target > 0;
-                    for &u in &bound {
-                        is_plus[u] = system_down || replay.pivotal_with(u);
-                        // Φ(D \ E_u): a realized cut that does not meet `u`
-                        // survives the removal, and only those do.
-                        is_minus[u] = replay.realized > replay.touching[u] as usize;
-                        is_fv[u] = replay.touching[u] > 0;
-                    }
-                    moved = false;
-                }
-                let weight = trajectory.weight;
-                if target_active {
-                    w_target[k] += weight;
-                }
+        for group in bins.chunk_by(|a, b| a.config == b.config) {
+            let bits: &[u32] = &configs[group[0].config];
+            switch(&mut replay, previous, bits);
+            previous = bits;
+            let system_down = replay.realized > 0;
+            for &u in &bound {
+                is_plus[u] = system_down || replay.pivotal_with(u);
+                // Φ(D \ E_u): a realized cut that does not meet `u`
+                // survives the removal, and only those do.
+                is_minus[u] = replay.realized > replay.touching[u] as usize;
+                is_fv[u] = replay.touching[u] > 0;
+            }
+            down_units.clear();
+            for &bit in bits {
+                down_units.extend_from_slice(&index.event_units[bit as usize]);
+            }
+            down_units.sort_unstable();
+            down_units.dedup();
+            // Only a true verdict adds: `x + 0.0` is `x` for these
+            // non-negative sums, so skipping the false ones leaves every
+            // sum bit-identical.
+            for &Bin {
+                instant: k, weight, ..
+            } in group
+            {
                 if system_down {
                     w_cuts[k] += weight;
                 }
-                // Only a true verdict adds: `x + 0.0` is `x` for these
-                // non-negative sums, so skipping the false ones leaves every
-                // sum bit-identical.
                 let base = k * n_units;
                 for &u in &bound {
                     if is_plus[u] {
@@ -808,15 +904,13 @@ impl ImportanceReducer {
                         w_fv[base + u] += weight;
                     }
                 }
-                for (u, &active) in replay.down.iter().enumerate() {
-                    if active > 0 {
-                        w_down[base + u] += weight;
-                    }
+                for &u in &down_units {
+                    w_down[base + u] += weight;
                 }
             }
         }
         // The units that meet no cut: both pivotal terms are `Φ(D)`, summed
-        // in the same replica order as `w_cuts`, hence equal to it.
+        // in the same order as `w_cuts`, hence equal to it.
         for u in (0..n_units).filter(|&u| !index.meets_a_cut(u)) {
             for (k, &cuts) in w_cuts.iter().enumerate() {
                 w_plus[k * n_units + u] = cuts;
@@ -827,7 +921,7 @@ impl ImportanceReducer {
         // --- Derive the measures.
         let nb_runs = self.nb_runs;
         let ratio = |x: f64| if nb_runs > 0.0 { x / nb_runs } else { 0.0 };
-        let q_target: Vec<f64> = w_target.iter().copied().map(ratio).collect();
+        let q_target: Vec<f64> = self.w_target.iter().copied().map(ratio).collect();
         let q_cuts: Vec<f64> = w_cuts.iter().copied().map(ratio).collect();
         let column = |flat: &[f64], u: usize| -> Vec<f64> {
             (0..n_instants)
@@ -1066,8 +1160,6 @@ struct Replay<'a> {
     realized: usize,
     /// Per unit, the realized cuts it meets.
     touching: Vec<u32>,
-    /// Per unit, its active events.
-    down: Vec<u32>,
     /// Per incidence, the shared events not active.
     open: Vec<u32>,
 }
@@ -1079,7 +1171,6 @@ impl<'a> Replay<'a> {
             missing: Vec::new(),
             realized: 0,
             touching: vec![0; index.n_units()],
-            down: vec![0; index.n_units()],
             open: Vec::new(),
         };
         replay.reset();
@@ -1092,7 +1183,6 @@ impl<'a> Replay<'a> {
         // An empty cut is realized whatever is active.
         self.realized = self.missing.iter().filter(|&&m| m == 0).count();
         self.touching.iter_mut().for_each(|t| *t = 0);
-        self.down.iter_mut().for_each(|d| *d = 0);
         self.open.clone_from(&self.index.incidence_shared);
     }
 
@@ -1100,13 +1190,6 @@ impl<'a> Replay<'a> {
     /// toggles an event only into the other value.
     fn toggle(&mut self, bit: usize, on: bool) {
         let index = self.index;
-        for &u in &index.event_units[bit] {
-            if on {
-                self.down[u] += 1;
-            } else {
-                self.down[u] -= 1;
-            }
-        }
         for &incidence in &index.event_incidences[bit] {
             if on {
                 self.open[incidence] -= 1;
@@ -1145,6 +1228,36 @@ impl<'a> Replay<'a> {
         let index = self.index;
         (index.incidence_start[u]..index.incidence_start[u + 1])
             .any(|i| self.missing[index.incidence_cut[i]] == self.open[i])
+    }
+}
+
+/// Move `replay` from the configuration `from` to `to`, both sorted bit
+/// lists: the events of `from` only are switched off, those of `to` only
+/// on, and the shared ones are left alone. Configuration ids follow
+/// first-seen order, so consecutive configurations are mostly successive
+/// instants of one replica and differ by a few events.
+fn switch(replay: &mut Replay<'_>, from: &[u32], to: &[u32]) {
+    let (mut i, mut j) = (0, 0);
+    while i < from.len() || j < to.len() {
+        match (from.get(i), to.get(j)) {
+            (Some(&a), Some(&b)) if a == b => {
+                i += 1;
+                j += 1;
+            }
+            (Some(&a), Some(&b)) if a < b => {
+                replay.toggle(a as usize, false);
+                i += 1;
+            }
+            (Some(&a), None) => {
+                replay.toggle(a as usize, false);
+                i += 1;
+            }
+            (_, Some(&b)) => {
+                replay.toggle(b as usize, true);
+                j += 1;
+            }
+            (None, None) => break,
+        }
     }
 }
 
@@ -1522,6 +1635,95 @@ mod tests {
         // Instants and basic events are sorted, so the two calls describe
         // the same analysis and must produce identical bytes.
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn what_the_reduction_holds_does_not_grow_with_the_replicas() {
+        // A campaign grows by running more replicas of the same system, so
+        // the replicas keep reaching configurations already seen. What the
+        // reduction holds is one entry per (instant, configuration) pair
+        // reached, never one per replica: pushing the same corpus a
+        // hundred times more must not hold a single entry more.
+        let reducer = |rounds: usize| {
+            let mut reducer = match ImportanceReducer::new(
+                target(),
+                modes(&["A", "B", "C"]),
+                Vec::new(),
+                &[0.3, 1.0],
+            ) {
+                Ok(found) => found,
+                Err(error) => unreachable!("{error}"),
+            };
+            for _ in 0..rounds {
+                for sequence in series_parallel() {
+                    reducer.push(&sequence);
+                }
+            }
+            reducer
+        };
+        let few = reducer(10);
+        let many = reducer(1000);
+        assert_eq!(many.held(), few.held());
+        // And the measures are those of the corpus, scaled away.
+        let once = analyse(&series_parallel(), modes(&["A", "B", "C"]), &[0.3, 1.0]);
+        let finished = many.finish();
+        assert_eq!(finished.q_cuts, once.q_cuts);
+        assert_eq!(finished.basic_events, once.basic_events);
+        assert_eq!(finished.components, once.components);
+    }
+
+    #[test]
+    fn a_new_configuration_adds_its_entries_and_nothing_else() {
+        // A campaign that keeps running reaches configurations no earlier
+        // replica did. Each adds exactly its (instant, configuration)
+        // entries, and the measures, feared event and groups included, are
+        // those of the corpus read as one.
+        let instants = [0.3, 1.0];
+        let groups = || {
+            vec![ImportanceGroup {
+                name: "pair".into(),
+                events: modes(&["B", "C"]),
+            }]
+        };
+        let mut reducer =
+            match ImportanceReducer::new(target(), modes(&["A", "B", "C"]), groups(), &instants) {
+                Ok(found) => found,
+                Err(error) => unreachable!("{error}"),
+            };
+        for sequence in series_parallel() {
+            reducer.push(&sequence);
+        }
+        let before = reducer.held();
+        // `{C}` at both instants: the configuration, held once, and its
+        // entry at each of the two instants.
+        let novel = traj(&[fail("C", 0.1)]);
+        reducer.push(&novel);
+        assert_eq!(reducer.held(), before + 3);
+        // Seen again, it adds nothing.
+        reducer.push(&novel);
+        assert_eq!(reducer.held(), before + 3);
+
+        let mut raw = series_parallel();
+        raw.push(novel.clone());
+        raw.push(novel);
+        let whole = match importance(
+            &raw,
+            &target(),
+            modes(&["A", "B", "C"]),
+            groups(),
+            &instants,
+        ) {
+            Ok(found) => found,
+            Err(error) => unreachable!("{error}"),
+        };
+        assert_eq!(reducer.finish(), whole);
+        assert_eq!(whole.q_target, vec![0.0, 2.0 / 6.0]);
+        // The pair is down where B or C is: replicas 2 and 3, and both
+        // new ones, at either instant.
+        assert_eq!(
+            group(&whole, "pair").unavailability,
+            vec![4.0 / 6.0, 4.0 / 6.0]
+        );
     }
 
     #[test]

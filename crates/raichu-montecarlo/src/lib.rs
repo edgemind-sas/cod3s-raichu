@@ -1820,8 +1820,9 @@ fn observed_number(value: Value) -> f64 {
 ///
 /// The trajectories are reduced as they are produced
 /// ([`raichu_analysis::ImportanceReducer`]): what the campaign holds is a
-/// compact record of the state changes the measures read, never the
-/// trajectories.
+/// histogram of the configurations of basic events reached at each
+/// instant, never the trajectories, so its memory does not grow with the
+/// number of replicas once the system's configurations have been visited.
 ///
 /// See [`mod@raichu_analysis::importance`] for what the measures mean and what
 /// they assume.

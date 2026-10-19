@@ -271,9 +271,10 @@ before reading the ranking.
 ## What it costs
 
 One campaign, plus a reduction linear in the replicas. The trajectories
-are reduced as they are produced: what the campaign holds is a few words
-per state change of an automaton that carries a basic event or the
-feared event, never the trajectories themselves. On the project's
+are reduced as they are produced: each one adds the configuration of
+basic events it is in at every instant to a histogram, and is dropped.
+The cut structure, only known once the campaign is over, is then applied
+once per distinct configuration. On the project's
 hybrid benchmark (room-temperature ODE, watched thermostats, stochastic
 failures) the measures cost **the campaign and nothing measurable on top**:
 1.04 s against 1.04 s for a bare Monte-Carlo run of the same size. On a
@@ -284,13 +285,37 @@ post-processing is as visible as it will ever be, 32 000 replicas of a
 0.39 s.
 
 Declared groups add to the reduction in proportion to what they hold: a
-replayed state change updates only the units and cuts that contain the
-changed basic event, and a group that meets no cut costs one counter per
-instant. Declaring one group per component on a model of 10 000
-components with repairs (200 replicas, 50 instants, 3.9 million recorded
-state changes) reduces in 1.8 s against 1.5 s without the groups, a
-fraction of the campaign that produced the trajectories (the previous
-reduction took 54 s and 24 s on the same corpus).
+replayed configuration updates only the units and cuts that contain its
+basic events, and a group that meets no cut costs one counter per
+instant. Declaring one group per component on a synthetic model of
+10 000 components with repairs (200 replicas, 50 instants, 3.5 million
+recorded state changes) reduces in 1.9 s against 1.4 s without the
+groups, a fraction of the campaign that produced the trajectories. That
+corpus is the least favourable one to the histogram described below,
+since almost no configuration repeats: there it costs 5 to 10 % more
+time than the reduction of 0.103.1, and 30 to 40 % less memory.
+
+Memory follows the configurations the system visits, not `nb_runs`. The
+reduction holds one entry per distinct (instant, configuration) pair
+reached, and never more than `nb_runs` times the number of instants. A
+system with few concurrent failures visits few configurations, and the
+replicas of a larger campaign mostly fall into configurations already
+seen. On the repairable emergency power supply benchmark (39 components,
+11 instants, one feared event), the peak memory of the whole process is:
+
+| `nb_runs` | Peak memory | Before 0.103.2 |
+|---|---|---|
+| 10⁴ | 75 MB | 75 MB |
+| 10⁵ | 79 MB | 81 MB |
+| 10⁶ | 83 MB | 207 MB |
+| 10⁷ | 102 MB | about 1.4 GB, extrapolated |
+
+The remaining growth is the tail of rare configurations a larger
+campaign reaches: 3 546 distinct configurations at 10⁵ replicas and
+12 218 at 10⁶, roughly as the square root of `nb_runs` on this model,
+where a failure mode once drawn stays active to the horizon.
+Up to 0.103.1 the reduction kept a record of every state change, about
+130 bytes per replica on the same benchmark.
 
 ## Limits worth knowing
 
