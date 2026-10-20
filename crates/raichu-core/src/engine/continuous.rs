@@ -539,7 +539,7 @@ impl<'m> Engine<'m> {
             // event share one index space: watched transitions, then
             // continuously-varying hazards, then the active-set margins
             // of the frozen flows. The flows come last on purpose, so a
-            // transition crossing in the same sub-interval wins the tie.
+            // transition crossing at the same located date wins the tie.
             let watched_and_hazards = system.margins.len() + system.hazards.len();
             let (t_reached, fired, crossed) = match outcome {
                 Outcome::Reached { t } => (t, None, None),

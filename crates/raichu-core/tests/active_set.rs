@@ -807,12 +807,16 @@ fn fixture(name: &str) -> Option<String> {
 /// unit. It is pinned rather than merely compared to itself, because
 /// "unchanged" is a claim about the previous engine and a self-comparison
 /// cannot make it.
+///
+/// The pdmp_001 counts were refreshed for chronological event selection
+/// (#193): bisecting competing margins adds probes, while its events and
+/// indicator trajectories remain byte-identical to the previous baseline.
 #[test]
 fn a_model_with_no_continuous_flow_is_byte_identical() {
     let expected = [
         // (fixture, t_max, explicit_evaluations, segments, margin_evaluations)
         ("tank_01", 40.0, 9394u64, 6u64, 6946u64),
-        ("pdmp_001", 1000.0, 233_376, 90, 1_034_946),
+        ("pdmp_001", 1000.0, 235_638, 90, 1_048_518),
         ("heated_room_s3", 100.0, 23552, 16, 34852),
         ("tank_02", 1000.0, 142_437, 6, 412_795),
         ("pool_02", 1000.0, 242_800, 471, 886_355),

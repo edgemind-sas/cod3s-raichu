@@ -77,7 +77,8 @@ pub enum Outcome {
         /// Final time (== requested `t_end`).
         t: f64,
     },
-    /// A boundary crossing was located; `y` holds the state at `t`.
+    /// The earliest detected boundary crossing was located; `y` holds
+    /// the state at `t`. Identical located dates use the lowest index.
     Event {
         /// Index of the crossed margin.
         index: usize,
@@ -400,8 +401,10 @@ fn has_room(lo: f64, mid: f64, hi: f64) -> bool {
 /// Shared event-scan machinery: locate the earliest negative→non-negative
 /// transition inside `[t_lo, t_hi]` given a dense evaluator.
 ///
-/// Scans `sub_samples + 1` points then bisects the bracketing interval
-/// down to `tol_event`. Returns `(event index, time)`.
+/// Scans `sub_samples.max(1)` points, including the right endpoint, then
+/// bisects every crossing in the first bracketing interval down to
+/// `tol_event`. Returns the earliest `(event index, time)`, breaking ties
+/// between identical located dates by the lowest index.
 ///
 /// **Precondition**: every margin in `g_lo` is strictly negative (see
 /// [`first_satisfied`]). A crossing that already holds at `t_lo` is not
@@ -426,9 +429,13 @@ fn locate_event(
         let t = t_lo + (t_hi - t_lo) * (p as f64) / (points as f64);
         dense(t, y_scratch);
         system.events(t, y_scratch, g_scratch);
-        // Earliest crossing among indices, by sub-interval then index.
-        let crossing = (0..n).find(|&i| prev_g[i] < 0.0 && g_scratch[i] >= 0.0);
-        if let Some(index) = crossing {
+        // Capture all brackets before bisection overwrites the shared
+        // margin scratch. Index order alone does not imply time order.
+        let crossings: Vec<_> = (0..n)
+            .filter(|&i| prev_g[i] < 0.0 && g_scratch[i] >= 0.0)
+            .collect();
+        let mut earliest: Option<(usize, f64)> = None;
+        for index in crossings {
             // Bisect [prev_t, t] on margin `index`.
             let (mut lo, mut hi) = (prev_t, t);
             while hi - lo > tol_event {
@@ -444,7 +451,12 @@ fn locate_event(
                     lo = mid;
                 }
             }
-            return Some((index, hi));
+            if earliest.is_none_or(|(_, time)| hi < time) {
+                earliest = Some((index, hi));
+            }
+        }
+        if earliest.is_some() {
+            return earliest;
         }
         prev_t = t;
         prev_g.copy_from_slice(g_scratch);

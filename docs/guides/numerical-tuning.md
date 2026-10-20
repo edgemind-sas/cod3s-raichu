@@ -38,6 +38,14 @@ to every step wider than it, and the short episode is bracketed; setting it
 coarser than the engine's own spacing changes nothing, bit for bit. Through
 the muscadet route, a study's `pdmp_dt` arrives as this keyword.
 
+When several margins cross in the same scan interval, both Dormand-Prince
+and FixedEuler locate every bracketed crossing and select the earliest
+located date. Identical located dates keep the lowest event index as the
+deterministic tie rule. The state is reconstructed at that date; samples
+are delivered strictly before it, and observation callbacks never beyond
+it. An already satisfied initial margin still returns an immediate event.
+This ordering does not detect episodes that fall entirely between scan points.
+
 The scan and the location, on one step of the Dormand-Prince 4(5) solver
 (Dormand and Prince 1980), whose dense output (Hairer, Nørsett and Wanner
 1987) gives the trajectory between the step's ends:
