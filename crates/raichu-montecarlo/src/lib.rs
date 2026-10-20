@@ -1175,26 +1175,63 @@ fn chunk_len(samples_per_replica: usize) -> u64 {
     fits.clamp(MIN_CHUNK, MAX_CHUNK)
 }
 
-/// Running sums of one indicator at one instant, folded in replica order.
+/// Replica-ordered mean and centered sample variance.
+///
+/// Keep the sum for the existing mean/non-finite-result contract. Compute
+/// dispersion independently with Welford's recurrence, after subtracting
+/// the first sample: even a mean update smaller than an ulp of a large
+/// physical offset then remains representable.
 #[derive(Clone, Copy, Default)]
-struct InstantSums {
+struct Moments {
     sum: f64,
-    sum_sq: f64,
-    sj_sum: f64,
-    sj_sum_sq: f64,
-    oc_sum: f64,
-    oc_sum_sq: f64,
+    origin: f64,
+    centered_mean: f64,
+    squared_deviations: f64,
+}
+
+impl Moments {
+    /// `n` includes this sample; the reducer supplies its shared count.
+    fn push(&mut self, value: f64, n: f64) {
+        self.sum += value;
+        if n == 1.0 {
+            self.origin = value;
+        }
+        let centered = value - self.origin;
+        let delta = centered - self.centered_mean;
+        self.centered_mean += delta / n;
+        self.squared_deviations += delta * (centered - self.centered_mean);
+    }
+
+    fn mean(&self, n: f64) -> f64 {
+        self.sum / n
+    }
+
+    fn std(&self, n: f64) -> f64 {
+        if n > 1.0 {
+            // Do not clamp a non-finite moment to zero: result validation
+            // must still refuse it instead of claiming a constant sample.
+            (self.squared_deviations / (n - 1.0)).sqrt()
+        } else {
+            0.0
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct InstantMoments {
+    value: Moments,
+    sojourn: Moments,
+    occurrences: Moments,
     /// A 0/1 draw, so its sum is also the sum of its squares.
     reached_sum: f64,
-    zd_sum: f64,
-    zd_sum_sq: f64,
+    zero_departures: Moments,
     /// A 0/1 draw as well.
     nonzero_sum: f64,
 }
 
 /// What the reduction keeps of one indicator while the replicas stream in.
 struct IndicatorFold {
-    sums: Vec<InstantSums>,
+    sums: Vec<InstantMoments>,
     extremes: Extremes,
     sojourn_extremes: Extremes,
     nb_occurrences_extremes: Extremes,
@@ -1203,7 +1240,7 @@ struct IndicatorFold {
     nonzero_reached_extremes: Extremes,
     /// `[instant][replica]` sampled values and sojourns, in replica order,
     /// kept only when quantiles are asked: a quantile needs the whole
-    /// column, every other estimator a running sum.
+    /// column, every other estimator running moments.
     value_columns: Vec<Vec<f64>>,
     sojourn_columns: Vec<Vec<f64>>,
 }
@@ -1212,9 +1249,9 @@ struct IndicatorFold {
 /// estimates (the determinism contract of the crate docs), fed one replica
 /// at a time.
 ///
-/// Each running sum receives the replicas in replica order, whatever the
+/// Each running moment receives the replicas in replica order, whatever the
 /// chunking and the thread count, so it performs the same floating-point
-/// additions in the same order as a fold over the whole collected campaign:
+/// operations in the same order as a fold over the whole collected campaign:
 /// the estimates are the same bytes, at a memory that no longer depends on
 /// the number of replicas.
 struct Reducer {
@@ -1231,7 +1268,7 @@ impl Reducer {
             .indicators
             .iter()
             .map(|_| IndicatorFold {
-                sums: vec![InstantSums::default(); n_instants],
+                sums: vec![InstantMoments::default(); n_instants],
                 extremes: Extremes::empty(n_instants),
                 sojourn_extremes: Extremes::empty(n_instants),
                 nb_occurrences_extremes: Extremes::empty(n_instants),
@@ -1256,6 +1293,7 @@ impl Reducer {
             self.folded += 1;
             return;
         }
+        let n = (self.folded + 1) as f64;
         for (fold, samples) in self
             .folds
             .iter_mut()
@@ -1270,19 +1308,15 @@ impl Reducer {
                     nonzero_reached,
                 } = *sample;
                 let s = &mut fold.sums[k];
-                s.sum += value;
-                s.sum_sq += value * value;
-                s.sj_sum += sojourn;
-                s.sj_sum_sq += sojourn * sojourn;
-                s.oc_sum += nb_occ;
-                s.oc_sum_sq += nb_occ * nb_occ;
+                s.value.push(value, n);
+                s.sojourn.push(sojourn, n);
+                s.occurrences.push(nb_occ, n);
                 // Reached by `instant` exactly when it occurred by then: the
                 // occurrence count takes an active initial value as its first
                 // entry, and its bound is the sample's own.
                 let reached = if nb_occ > 0.0 { 1.0 } else { 0.0 };
                 s.reached_sum += reached;
-                s.zd_sum += zero_departures;
-                s.zd_sum_sq += zero_departures * zero_departures;
+                s.zero_departures.push(zero_departures, n);
                 s.nonzero_sum += nonzero_reached;
                 // Extremes are order-independent, but folded here, in the
                 // same replica-ordered pass, so a NaN or a signed zero
@@ -1340,31 +1374,18 @@ impl Reducer {
             let mut nonzero_reached_mean = vec![0.0; n_instants];
             let mut nonzero_reached_std = vec![0.0; n_instants];
             for (k, s) in sums.iter().enumerate() {
-                mean[k] = s.sum / n;
-                sojourn_mean[k] = s.sj_sum / n;
-                nb_occurrences_mean[k] = s.oc_sum / n;
+                mean[k] = s.value.mean(n);
+                sojourn_mean[k] = s.sojourn.mean(n);
+                nb_occurrences_mean[k] = s.occurrences.mean(n);
                 reached_mean[k] = s.reached_sum / n;
-                zero_departures_mean[k] = s.zd_sum / n;
+                zero_departures_mean[k] = s.zero_departures.mean(n);
                 nonzero_reached_mean[k] = s.nonzero_sum / n;
+                std[k] = s.value.std(n);
+                sojourn_std[k] = s.sojourn.std(n);
+                nb_occurrences_std[k] = s.occurrences.std(n);
+                zero_departures_std[k] = s.zero_departures.std(n);
                 if config.nb_runs > 1 {
-                    std[k] = ((s.sum_sq - n * mean[k] * mean[k]) / (n - 1.0))
-                        .max(0.0)
-                        .sqrt();
-                    sojourn_std[k] = ((s.sj_sum_sq - n * sojourn_mean[k] * sojourn_mean[k])
-                        / (n - 1.0))
-                        .max(0.0)
-                        .sqrt();
-                    nb_occurrences_std[k] = ((s.oc_sum_sq
-                        - n * nb_occurrences_mean[k] * nb_occurrences_mean[k])
-                        / (n - 1.0))
-                        .max(0.0)
-                        .sqrt();
                     reached_std[k] = ((s.reached_sum - n * reached_mean[k] * reached_mean[k])
-                        / (n - 1.0))
-                        .max(0.0)
-                        .sqrt();
-                    zero_departures_std[k] = ((s.zd_sum_sq
-                        - n * zero_departures_mean[k] * zero_departures_mean[k])
                         / (n - 1.0))
                         .max(0.0)
                         .sqrt();
@@ -1403,9 +1424,6 @@ impl Reducer {
                     values: sojourn_rows,
                 });
             }
-            // Confidence intervals: closed forms over the sums already
-            // reduced above, so they cost O(instants) arithmetic and never
-            // revisit a replica.
             let level = config.confidence;
             // The declared kind decides both the construction and, where a
             // campaign observed no dispersion at all, the size of the
@@ -1970,6 +1988,105 @@ mod departure_tests {
         assert_eq!(zero_departures_at(&points, 2.0), 1.0);
         assert_eq!(nb_occurrences_at(&points, 2.0), 2.0);
         assert_eq!(nonzero_reached_at(&points, 0.0), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod variance_tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use raichu_model::Model;
+
+    /// Feed valid sampled values directly to the reducer so very large
+    /// counts do not require millions of simulated transitions per replica.
+    fn estimates(values: &[f64]) -> IndicatorEstimate {
+        let model = CompiledModel::compile(
+            &Model::from_json(
+                r#"{"name":"moments","components":[{"name":"c","attributes":[
+                {"name":"x","kind":"float","init":{"kind":"float","value":0.0}}
+                ]}],"indicators":[{"name":"x","target":"attribute",
+                "attr":{"component":"c","attribute":"x"}}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let config = McConfig {
+            nb_runs: values.len() as u64,
+            seed: 0,
+            t_max: 1.0,
+            samples: vec![1.0],
+            threads: Some(1),
+            quantiles: vec![],
+            confidence: DEFAULT_CONFIDENCE,
+            ode: Default::default(),
+            stop_at_targets: false,
+            flow: Default::default(),
+        };
+        let mut reducer = Reducer::new(&model, &config);
+        for &value in values {
+            reducer.push(&ReplicaSamples {
+                per_indicator: 1,
+                samples: vec![Sample {
+                    value,
+                    sojourn: value,
+                    nb_occurrences: value.abs().floor(),
+                    zero_departures: value.abs().floor(),
+                    nonzero_reached: f64::from(value != 0.0),
+                }],
+            });
+        }
+        reducer
+            .finish(&model, &config, vec![], None)
+            .indicators
+            .remove(0)
+    }
+
+    #[test]
+    fn sampled_integrated_and_count_variances_survive_large_offsets() {
+        for offset in [0.0, 1e6, 1e8, 1e9, 1e12] {
+            let values: Vec<_> = (0..2000).map(|i| offset + (i % 2) as f64).collect();
+            let estimate = estimates(&values);
+            // Exactly half the values are offset and half offset + 1.
+            let expected = (0.25 * 2000.0_f64 / 1999.0).sqrt();
+            for (std, ci) in [
+                (&estimate.std, &estimate.ci),
+                (&estimate.sojourn_std, &estimate.sojourn_ci),
+                (&estimate.nb_occurrences_std, &estimate.nb_occurrences_ci),
+                (&estimate.zero_departures_std, &estimate.zero_departures_ci),
+            ] {
+                assert!(
+                    (std[0] - expected).abs() < 1e-12,
+                    "offset={offset}: {std:?}"
+                );
+                assert!(!ci.constant_sample[0], "offset={offset}");
+            }
+        }
+    }
+
+    #[test]
+    fn nearly_constant_samples_keep_their_representable_dispersion() {
+        let offset = 1e12;
+        let step = 1.0 / 8192.0; // One binary64 ulp at this offset.
+        let estimate = estimates(&[offset, offset + step, offset, offset + step]);
+        assert!((estimate.std[0] - step / 3.0_f64.sqrt()).abs() < 1e-16);
+        assert!(!estimate.ci.constant_sample[0]);
+    }
+
+    #[test]
+    fn alternating_large_values_and_degenerate_samples_keep_their_contract() {
+        let estimate = estimates(&[1e12, -1e12, 1e12, -1e12]);
+        let expected = (4.0_f64 / 3.0).sqrt() * 1e12;
+        assert!((estimate.std[0] / expected - 1.0).abs() < 1e-12);
+        for values in [vec![0.1; 2000], vec![1e12; 2000]] {
+            let constant = estimates(&values);
+            assert_eq!(constant.std, vec![0.0]);
+            assert!(constant.ci.constant_sample[0]);
+            assert!(constant.ci.low[0] < constant.ci.high[0]);
+        }
+        let single = estimates(&[1e12]);
+        assert_eq!(single.std, vec![0.0]);
+        assert_eq!(single.ci.method, confidence::IntervalMethod::Undefined);
     }
 }
 

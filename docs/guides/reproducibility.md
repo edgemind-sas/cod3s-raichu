@@ -53,6 +53,12 @@ print("exact replay")
   results serially, in replica-index order**: estimates are
   **byte-identical whether the campaign runs on 1 or N threads** (see
   [Parallelism](parallelism.md)).
+- Sample variances use centered online moments, including sojourns and
+  occurrence/departure counts. Centering on the first sample preserves
+  small fluctuations around a large offset without subtracting two large
+  raw second moments. Updates retain replica-index order across chunks
+  and thread counts. Corrected standard deviations and confidence intervals
+  can differ from results produced before version 0.103.3.
 - Simultaneous events are ordered by (date, transition index): a
   documented, stable tie-break.
 - Mixed-integer programs use HiGHS in single-thread mode with a fixed solver
