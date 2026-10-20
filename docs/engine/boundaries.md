@@ -25,7 +25,7 @@ crossing takes its place among the dates of the
  },
  "going_further": {
   "integrate": {"rule": "evolC", "text": "Between events the continuous state follows its differential equation, integrated with an adaptive Dormand-Prince method up to the next scheduled date.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/continuous.rs"},
-  "integrate_threshold": {"rule": "schWT", "text": "A watched transition has no sampled date. While integrating, the engine watches its guard and, when the guard flips inside a step, locates the crossing by root-finding on the dense output. The crossing date is never predicted in advance.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/continuous.rs"},
+  "integrate_threshold": {"rule": "schWT", "text": "A watched transition has no sampled date. While integrating, the engine watches its guard and, when a scan of the step's dense output finds the guard flipped, locates the crossing by bisection. The crossing date is never predicted in advance.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/continuous.rs"},
   "race": {"rule": "schST, evolT", "text": "Dated transitions keep their sampled dates while the level evolves; only a change of state or rate reschedules them.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/schedule.rs"},
   "fired": {"rule": "evolT", "text": "A watched transition fires like any other: one automaton changes state, then the fixpoint runs.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"},
   "iteration": {"rule": "evolA", "text": "The same fixpoint as in the discrete chapter: one function application per iteration, lowest index first.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"},
@@ -56,7 +56,7 @@ here the date sampled for `P1 fails`.
 **Interrupted by a threshold.** The level reaches `HIGH` at 3 h, long before
 that date. The transition `level reaches HIGH` has no date of its own: its
 guard reads the level, so the engine watches it during integration and stops
-exactly where it flips. The crossing is located, not predicted: the engine
+where it flips, located to the event tolerance. The crossing is located, not predicted: the engine
 never computes in advance when the level will get there.
 
 **The race goes on.** The date of `P1 fails` is untouched by the crossing.
@@ -68,5 +68,7 @@ engine integrates again toward the same date.
 `LOW`, is again found during integration. In alarm the consumers are cut off,
 so the level holds at `LOW` until a pump refills the tank.
 
-For how a crossing is located inside one integration step, and the tolerance
-that bounds its date, see the [numerical tuning guide](../guides/numerical-tuning.md).
+For how a crossing is detected and located inside one integration step, the
+scan spacing that bounds how short an episode can be and still be seen, and the
+tolerance that bounds its date, see the
+[numerical tuning guide](../guides/numerical-tuning.md#detection-and-location).

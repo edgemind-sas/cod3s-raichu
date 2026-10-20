@@ -13,38 +13,47 @@ tolerances are part of the [provenance](reproducibility.md)).
 |---|---|---|
 | `rtol` | relative step-error tolerance | `1e-9` |
 | `atol` | absolute step-error tolerance | `1e-12` |
-| `max_step` | hard cap on the step size (missed-crossing safety net) | `0.1` |
-| `tol_event` | time tolerance of the boundary-crossing bisection, floored by the float resolution of the time axis | `1e-10` |
-| `sub_samples` | dense interior points scanned per step for guard crossings | `16` |
-| `event_resolution` | widest spacing accepted between two scan points: a floor on resolution | none (the engine's own, `step / sub_samples`) |
+| `max_step` | hard cap on the step size, and therefore on the scan spacing (detection) | `0.1` |
+| `tol_event` | time tolerance of the boundary-crossing bisection, floored by the float resolution of the time axis (location) | `1e-10` |
+| `sub_samples` | points scanned per step for guard crossings, the step's right end included (detection) | `16` |
+| `event_resolution` | widest spacing accepted between two scan points: a floor on resolution (detection) | none (the engine's own, `step / sub_samples`) |
 
-The defaults are **deliberately conservative**: they locate events to
-`1e-10` and scan 16 interior points per step, buying far more accuracy
-than most studies need. Relaxing them can speed a hybrid Monte-Carlo run
-by an order of magnitude at an accuracy that is still excellent.
+The defaults are **deliberately conservative** on accuracy: they locate
+a detected crossing to `1e-10` and scan each step at 16 points, buying
+far more accuracy than most studies need. Relaxing them can speed a
+hybrid Monte-Carlo run by an order of magnitude at an accuracy that is
+still excellent. They do not, however, see every possible episode: see
+the next section.
 
-Far from the origin, `1e-10` is finer than the time axis itself: beyond
-about `t = 5e5` two adjacent doubles are further apart than that. The
-bisection then stops at the float resolution of the time axis, the best
-any location can do there (before 0.79.1 it never stopped, and a long
-history hung).
+## Detection and location
 
-`event_resolution` answers a different question: how short an episode can
-be and still be seen. The scan finds a crossing only when a scan point
-lands inside the window where the guard holds, so a window narrower than
-the spacing (`max_step / sub_samples` at most, `0.00625` by default) can
-fall between two points. Setting `event_resolution` finer adds scan points
-to every step wider than it, and the short episode is bracketed; setting it
-coarser than the engine's own spacing changes nothing, bit for bit. Through
-the muscadet route, a study's `pdmp_dt` arrives as this keyword.
+A watched guard (or an observed threshold) is found in two stages. They
+answer two different questions, and each has its own knobs.
 
-When several margins cross in the same scan interval, both Dormand-Prince
-and FixedEuler locate every bracketed crossing and select the earliest
-located date. Identical located dates keep the lowest event index as the
-deterministic tie rule. The state is reconstructed at that date; samples
-are delivered strictly before it, and observation callbacks never beyond
-it. An already satisfied initial margin still returns an immediate event.
-This ordering does not detect episodes that fall entirely between scan points.
+**Detection: is the crossing seen at all?** On each accepted step of
+length `h`, the engine evaluates the boundary margins at `n` evenly
+spaced points of the dense output, from `h / n` after the step's start up
+to and including its end; the start was the previous step's last point.
+`n` is `sub_samples` (`0` counts as `1`), raised to `ceil(h /
+event_resolution)` when an `event_resolution` is set and that count is
+larger. The spacing `h / n` is therefore at most `max_step /
+sub_samples`, and at most `event_resolution` when one is set. With the
+defaults, a step at the cap of `0.1` is scanned every `0.1 / 16 =
+0.00625`; shorter adaptive steps are scanned more finely. A crossing is
+detected when a margin is negative at one scan point and non-negative at
+the next.
+
+**Location: when exactly?** Once two consecutive scan points bracket a
+sign change, bisection on the dense output narrows the bracket to
+`tol_event`, and the crossing is dated at the bracket's upper end. Far
+from the origin `1e-10` is finer than the time axis itself: beyond about
+`t = 5e5` two adjacent doubles are further apart than that, and the
+bisection stops at the float resolution of the time axis, the best any
+location can do there (before 0.79.1 it never stopped, and a long
+history hung). The located date is the crossing of the *computed*
+trajectory. How far it lies from the crossing of the exact solution
+also depends on the integration error (`rtol`, `atol`), amplified when
+the margin crosses zero with a small slope.
 
 The scan and the location, on one step of the Dormand-Prince 4(5) solver
 (Dormand and Prince 1980), whose dense output (Hairer, Nørsett and Wanner
@@ -54,6 +63,105 @@ The scan and the location, on one step of the Dormand-Prince 4(5) solver
 ![A crossing located inside one solver step: scan points, the bracketing pair, the bisected crossing](../assets/figures/guide-event-location-dark.svg#only-dark){ .figure }
 
 *Figure produced by `docs/figures/guide_event_location.py`.*
+
+Neither stage makes up for the other. A tighter `tol_event` refines the
+date of a crossing that was bracketed; it cannot recover an episode that
+no pair of scan points ever bracketed. A finer scan sees shorter
+episodes; it does not make a located date more precise.
+
+| symptom | knob to change |
+|---|---|
+| a guard that should flip during a short episode never fires | detection: `event_resolution` finer than the episode, or a smaller `max_step`, or more `sub_samples` |
+| a crossing fires, but its date is not precise enough | location: `tol_event`, and `rtol` / `atol` when the trajectory itself is the limit |
+
+### Scope of the guarantees
+
+Detection samples signs at finite points, so it certifies nothing
+between them:
+
+- An episode during which a margin is non-negative only between two scan
+  points leaves no sign change at the points, and is **missed
+  silently**: the run goes on as if the guard had never held, with no
+  error and no warning.
+- A margin that touches zero without going above it (a tangential
+  contact) is seen only if a scan point lands on the contact.
+- When a margin changes sign several times between two scan points, only
+  the signs at the two points are compared: an even number of changes is
+  invisible, and with an odd number the bisection locates one of the
+  crossings, not necessarily the first.
+- [Observed thresholds](../reference/model-schema.md#indicator) are found
+  by the same scan and share these limits.
+
+What does hold: an episode during which a margin of the computed
+trajectory stays non-negative for longer than the scan spacing contains
+a scan point, so a crossing is detected no later than that point. A
+resolution is thus a statement about the model, not a property of the
+engine: it is safe for a model whose shortest episode is longer than the
+spacing, and choosing it means knowing how short the model's episodes
+can be. No setting is safe for every model, and a computed trajectory is
+never the exact one.
+
+Setting `event_resolution` finer adds scan points to every step wider
+than `sub_samples` times it: each point is one evaluation of the dense
+output and of every margin, so over a run the scan costs roughly
+`t_max / event_resolution` evaluations instead of `sub_samples` per step,
+plus the bisections, and as much again when the model declares observed
+thresholds, which are scanned on the same points.
+Setting it coarser than the engine's own spacing changes nothing, bit for
+bit. Through the muscadet route, a study's `pdmp_dt` arrives as this
+keyword.
+
+The example below watches `x = sin(t)` against a threshold that `x`
+exceeds only for `1e-4` around its apex at `t = π/2`, well below the
+default spacing. The public regression
+`python/tests/unit/test_event_resolution.py` pins the same window
+through `monte_carlo`.
+
+```python
+import math
+
+import pyraichu
+
+HALF_WIDTH = 5e-5  # the guard holds on [pi/2 - HALF_WIDTH, pi/2 + HALF_WIDTH]
+apex = {"op": "cmp", "cmp": "ge",
+        "lhs": {"op": "attr", "attr": {"component": "S", "attribute": "x"}},
+        "rhs": {"op": "const",
+                "value": {"kind": "float", "value": math.cos(HALF_WIDTH)}}}
+episode = pyraichu.load_model({
+    "name": "short_episode",
+    "components": [{
+        "name": "S",
+        "attributes": [{"name": "x", "kind": "float",
+                        "init": {"kind": "float", "value": 0.0}}],
+        "equations": [{"target": "x", "kind": "explicit",
+                       "expr": {"op": "sin", "arg": {"op": "time"}}}],
+        "automata": [{"name": "watch", "states": ["waiting", "seen"],
+                      "init": "waiting",
+                      "transitions": [{"name": "cross", "source": "waiting",
+                                       "targets": ["seen"],
+                                       "distrib": "watched", "guard": apex}]}]}],
+})
+
+def fired(**knobs):
+    run = pyraichu.simulate(episode, t_max=3.0, **knobs)
+    return [event.time for event in run.events]
+
+assert fired() == []                 # between two scan points: missed, silently
+assert fired(tol_event=1e-14) == []  # a finer location does not bring it back
+[date] = fired(event_resolution=2e-5)  # a finer scan brackets it
+assert abs(date - (math.pi / 2 - HALF_WIDTH)) < 1e-6
+print(f"default: missed; event_resolution=2e-5: seen at t = {date:.9f}")
+```
+
+### Competing crossings
+
+When several margins cross in the same scan interval, both Dormand-Prince
+and FixedEuler locate every bracketed crossing and select the earliest
+located date. Identical located dates keep the lowest event index as the
+deterministic tie rule. The state is reconstructed at that date; samples
+are delivered strictly before it, and observation callbacks never beyond
+it. An already satisfied initial margin still returns an immediate event.
+This ordering does not detect episodes that fall entirely between scan points.
 
 ## A fast profile
 
@@ -386,9 +494,15 @@ it has no run-time counterpart to fall back on: see
   located by root finding; only the default cap of `0.1` multiplies the
   steps (a million for a history of `1e5` hours). On the
   [gas production example](../examples/gas-production.md), `max_step=100`
-  gave the same results 274 times faster.
-- Always record the setting: it rides in the run's provenance, so a
-  result is never ambiguous about how it was computed.
+  gave the same results 274 times faster. A larger cap also widens the
+  scan spacing: if the model has episodes shorter than
+  `max_step / sub_samples`, set `event_resolution` to keep seeing them.
+- **Set `event_resolution` from the model**, finer than the shortest
+  episode a guard must catch, when that episode is shorter than the scan
+  spacing (see [Detection and location](#detection-and-location)).
+- Always record the setting with the study. The run's provenance carries
+  `rtol` (as `ode_rtol`) and `tol_event` (as `ode_tol_event`); it does not
+  yet carry `atol`, `max_step`, `sub_samples` or `event_resolution`.
 
 ## References
 

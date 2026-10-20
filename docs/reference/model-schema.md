@@ -443,8 +443,11 @@ on the same transition object.
 `"distrib": "watched"` is **not a third nature**. It marks a *guarded*
 transition whose guard involves continuously-evolving (ODE-driven)
 attributes: the engine must **monitor the continuous trajectory** and
-fire the transition exactly when the boundary is crossed (located by
-root-finding), rather than re-checking the guard only at discrete events.
+fire the transition when the boundary is crossed (detected by scanning
+each integration step, then located by bisection), rather than
+re-checking the guard only at discrete events. An episode shorter than
+the scan spacing can be missed: see
+[Detection and location](../guides/numerical-tuning.md#detection-and-location).
 
 It is declared explicitly because that intent **cannot be inferred from
 the guard alone**: the same comparison could instead gate a timed
@@ -1023,7 +1026,8 @@ It is an **observation**, not an event: the solver takes exactly the
 steps it would take without it, so declaring a threshold never moves the
 trajectory it reads. Its sojourn and its occurrences therefore do not
 depend on the schedule: a condition entered and left between two samples
-is counted, and a ramp crossing its bound at 1.5 is above it for 0.5 by
+is counted (provided it lasts longer than the
+[scan spacing](../guides/numerical-tuning.md#detection-and-location)), and a ramp crossing its bound at 1.5 is above it for 0.5 by
 2 whatever the samples. An equality threshold cannot be crossed on a
 continuum and keeps its flips at the samples and events. The sojourn of
 an `attribute` target has no such refinement:
