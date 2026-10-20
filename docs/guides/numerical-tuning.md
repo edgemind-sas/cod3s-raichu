@@ -13,7 +13,7 @@ tolerances are part of the [provenance](reproducibility.md)).
 |---|---|---|
 | `rtol` | relative step-error tolerance | `1e-9` |
 | `atol` | absolute step-error tolerance | `1e-12` |
-| `max_step` | hard cap on the step size, and therefore on the scan spacing (detection) | `0.1` |
+| `max_step` | cap on the proposed step size, subject to time rounding (detection) | `0.1` |
 | `tol_event` | time tolerance of the boundary-crossing bisection, floored by the float resolution of the time axis (location) | `1e-10` |
 | `sub_samples` | points scanned per step for guard crossings, the step's right end included (detection) | `16` |
 | `event_resolution` | widest spacing accepted between two scan points: a floor on resolution (detection) | none (the engine's own, `step / sub_samples`) |
@@ -36,8 +36,8 @@ spaced points of the dense output, from `h / n` after the step's start up
 to and including its end; the start was the previous step's last point.
 `n` is `sub_samples` (`0` counts as `1`), raised to `ceil(h /
 event_resolution)` when an `event_resolution` is set and that count is
-larger. The spacing `h / n` is therefore at most `max_step /
-sub_samples`, and at most `event_resolution` when one is set. With the
+larger. Subject to time rounding, the spacing `h / n` is at most
+`max_step / sub_samples`, and at most `event_resolution` when one is set. With the
 defaults, a step at the cap of `0.1` is scanned every `0.1 / 16 =
 0.00625`; shorter adaptive steps are scanned more finely. A crossing is
 detected when a margin is negative at one scan point and non-negative at
@@ -162,6 +162,32 @@ deterministic tie rule. The state is reconstructed at that date; samples
 are delivered strictly before it, and observation callbacks never beyond
 it. An already satisfied initial margin still returns an immediate event.
 This ordering does not detect episodes that fall entirely between scan points.
+
+## Short intervals and work limits
+
+Dormand-Prince integrates short intervals, including a short remainder
+at the horizon, with the usual error control. A short duration cannot justify
+skipping state evolution: a derivative of `1e15` over `5e-15` changes the
+state by `5`. These steps retain error control, event and observation
+location, and sample delivery, including a requested horizon sample.
+The proposed step is capped by `max_step`, then its endpoint is rounded to
+a representable time. Integration and scanning use the effective duration:
+at `t = 1e12`, a proposal of 1.5 time ULPs can round to 2 ULPs. Scan spacing
+is also subject to the resolution of the time axis. If `max_step` is below
+the next representable time increment, or 20 consecutive
+trials fail the state-error check, integration fails with
+`StepSizeUnderflow`; it does not report the horizon reached with an
+unevolved state. This retry budget bounds an unsuccessful adaptive search,
+not the number of accepted steps; it resets after each accepted step.
+Additionally, a progress window of `min(max_step, remaining duration)`
+allows 10,000 trials, including accepted steps. The window stays fixed
+until covered; then its budget resets. This bounds stiff flows that keep
+accepting tiny steps without limiting the total steps of a long trajectory.
+Exhaustion also returns `StepSizeUnderflow`. An intentionally demanding
+trajectory can require a smaller `max_step` to shorten the work window;
+even an otherwise resolvable trajectory is refused if it exceeds this budget.
+Zero-length intervals leave the state unchanged (an already satisfied
+margin still reports an immediate event).
 
 ## A fast profile
 
