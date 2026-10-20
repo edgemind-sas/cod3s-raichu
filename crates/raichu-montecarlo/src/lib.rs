@@ -778,7 +778,7 @@ where
         }
         return Ok(());
     }
-    let chunk = chunk_len(model.indicators.len() * config.samples.len());
+    let chunk = chunk_len(model.indicators.len(), config.samples.len());
     in_pool(config.threads, || {
         let mut first = 0;
         while first < config.nb_runs {
@@ -1150,29 +1150,28 @@ where
     Ok(reducer.finish(model, &config, fmu_units, serial_fallback_unit))
 }
 
-/// The bytes of samples one chunk of replicas may hold before it is folded
-/// into the estimates. A campaign holds at most one chunk at a time, so its
-/// memory does not grow with `nb_runs`; only the quantile columns, when
-/// quantiles are asked, keep one value per replica.
+/// Budget for retained sample payload in one chunk, excluding worker state,
+/// model data, allocation metadata and final estimates. One replica is the
+/// unavoidable lower bound, even if its payload exceeds this budget.
+/// Quantile columns additionally retain values across all replicas.
 const CHUNK_BYTES: usize = 64 << 20;
 
-/// The most replicas in one chunk, reached by models with few indicators.
+/// The most replicas in one chunk, reached by models with few or no samples.
 const MAX_CHUNK: u64 = 1 << 16;
 
-/// The fewest replicas in one chunk, whatever a replica weighs: enough to
-/// keep every thread of a large machine busy between two folds.
-const MIN_CHUNK: u64 = 1 << 10;
-
-/// The replicas of one chunk, for replicas recording `samples_per_replica`
-/// samples each: as many as [`CHUNK_BYTES`] holds, between [`MIN_CHUNK`]
-/// and [`MAX_CHUNK`]. The chunking never changes a result, since the fold
-/// takes the replicas in replica order whatever their grouping.
-fn chunk_len(samples_per_replica: usize) -> u64 {
-    let replica_bytes = samples_per_replica
-        .saturating_mul(size_of::<Sample>())
-        .max(1);
+/// Fit a chunk's sample payload in [`CHUNK_BYTES`], or run one oversized
+/// replica alone. Zero samples keep [`MAX_CHUNK`]. Saturation makes even
+/// dimensions whose product cannot fit in `usize` select a single replica.
+/// The fold always visits replicas in index order, regardless of grouping.
+fn chunk_len(indicators: usize, instants: usize) -> u64 {
+    if indicators == 0 || instants == 0 {
+        return MAX_CHUNK;
+    }
+    let replica_bytes = indicators
+        .saturating_mul(instants)
+        .saturating_mul(size_of::<Sample>());
     let fits = u64::try_from(CHUNK_BYTES / replica_bytes).unwrap_or(MAX_CHUNK);
-    fits.clamp(MIN_CHUNK, MAX_CHUNK)
+    fits.clamp(1, MAX_CHUNK)
 }
 
 /// Replica-ordered mean and centered sample variance.
@@ -2096,15 +2095,38 @@ mod chunk_tests {
 
     #[test]
     fn a_chunk_holds_a_bounded_number_of_bytes_of_samples() {
-        let bytes =
-            |n_samples: usize| chunk_len(n_samples) as usize * n_samples * size_of::<Sample>();
-        // The 165 indicators of the EPS showcase, sampled once: a chunk of
-        // 65 536 replicas held about 1 GB of samples.
-        assert!(bytes(165) <= CHUNK_BYTES, "{} bytes", bytes(165));
-        // A small model keeps the largest chunk.
-        assert_eq!(chunk_len(3), MAX_CHUNK);
-        // A huge one keeps enough replicas per chunk to feed every thread.
-        assert_eq!(chunk_len(10_000_000), MIN_CHUNK);
-        assert_eq!(chunk_len(0), MAX_CHUNK);
+        for n_samples in [1, 3, 165, 165 * 101, CHUNK_BYTES / size_of::<Sample>()] {
+            let replicas = chunk_len(1, n_samples) as usize;
+            assert!(replicas * n_samples * size_of::<Sample>() <= CHUNK_BYTES);
+        }
+        assert_eq!(chunk_len(165, 101), 100);
+        assert_eq!(chunk_len(1, 3), MAX_CHUNK);
+        assert_eq!(chunk_len(0, 101), MAX_CHUNK);
+    }
+
+    #[test]
+    fn budget_boundaries_round_down() {
+        let half_budget_samples = CHUNK_BYTES / (2 * size_of::<Sample>());
+        assert_eq!(chunk_len(1, half_budget_samples), 2);
+        assert_eq!(chunk_len(1, half_budget_samples + 1), 1);
+        let maximum_chunk_samples = CHUNK_BYTES / (MAX_CHUNK as usize * size_of::<Sample>());
+        assert_eq!(chunk_len(1, maximum_chunk_samples), MAX_CHUNK);
+        assert!(chunk_len(1, maximum_chunk_samples + 1) < MAX_CHUNK);
+    }
+
+    #[test]
+    fn dimensions_saturate_without_allocating_samples() {
+        assert_eq!(chunk_len(usize::MAX, 2), 1);
+        assert_eq!(chunk_len(2, usize::MAX), 1);
+        assert_eq!(chunk_len(usize::MAX, usize::MAX), 1);
+        assert_eq!(chunk_len(0, usize::MAX), MAX_CHUNK);
+        assert_eq!(chunk_len(usize::MAX, 0), MAX_CHUNK);
+    }
+
+    #[test]
+    fn an_oversized_replica_runs_alone() {
+        assert_eq!(chunk_len(1, CHUNK_BYTES / size_of::<Sample>() + 1), 1);
+        assert_eq!(chunk_len(1, 10_000_000), 1);
+        assert_eq!(chunk_len(1, usize::MAX), 1);
     }
 }
