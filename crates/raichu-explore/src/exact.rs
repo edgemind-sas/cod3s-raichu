@@ -28,14 +28,14 @@
 //! one [`Engine`] per worker, a [`raichu_core::Snapshot`] at each node,
 //! restored before each child, and each child produced by firing the chosen
 //! transition **at the current instant**, forced to the chosen destination
-//! ([`Engine::fire_now`]). The clock never moves; the dates the engine
-//! draws for newly armed transitions are ignored, and the snapshots carry
-//! the RNG, so the exploration is deterministic.
+//! ([`Engine::fire_now`]). The clock never moves; stochastic dates are
+//! deferred, so no sampled date can compete with an instantaneous firing.
+//! The sojourn probabilities are integrated analytically instead.
 //!
 //! At a node, the armed set decides:
 //!
 //! 1. an armed **instantaneous** transition (instantaneous law or zero
-//!    delay) fires first, lowest index first (the engine's own order),
+//!    delay) fires first, in the engine's arming-wave and observer order,
 //!    branching over its destinations of nonzero probability, with no
 //!    sojourn;
 //! 2. otherwise, if the target is reached, the node is a **retained
@@ -403,14 +403,10 @@ impl Strategy for ExactStrategy<'_> {
     type Child = Child;
     type Shared = PhaseTypeAccumulator;
 
-    fn immediate(&self, engine: &Engine<'_>) -> Option<usize> {
-        let model = self.model;
-        engine
-            .fireable()
-            .iter()
-            .map(|f| f.index)
-            .filter(|&idx| is_instantaneous(&model.transitions[idx].distrib))
-            .min()
+    fn immediate(&self, engine: &mut Engine<'_>) -> Result<Option<usize>, EngineError> {
+        Ok(engine
+            .next_immediate_transition()?
+            .filter(|&idx| is_instantaneous(&self.model.transitions[idx].distrib)))
     }
 
     fn instantaneous_children(

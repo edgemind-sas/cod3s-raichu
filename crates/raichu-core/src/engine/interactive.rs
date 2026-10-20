@@ -215,9 +215,11 @@ impl<'m> Engine<'m> {
     /// engine unchanged, or a deferred stochastic transition, fired
     /// through the deferred or operator interfaces that set its date.
     ///
-    /// Sorted by date (unlocated watched last), then transition index,
-    /// so the first entry is exactly what [`Engine::step`] would fire
-    /// next.
+    /// Sorted for display by date (unlocated watched last), then transition
+    /// index. Automatic execution also respects arming waves and observer
+    /// priority, so its next firing need not be the first displayed entry.
+    /// Use [`Engine::next_immediate_transition`] for automatic selection at
+    /// the current instant; explicit [`Engine::fire_idx`] selection is unchanged.
     #[must_use]
     pub fn fireable(&self) -> Vec<Fireable> {
         let mut out: Vec<Fireable> = Vec::new();
@@ -368,12 +370,11 @@ impl<'m> Engine<'m> {
     /// transition whose guard already holds.
     ///
     /// The firing itself draws nothing when `branch` is given, but the
-    /// discrete step that follows re-arms the schedule, which draws the
-    /// dates (and `Exp(1)` hazard thresholds) of transitions it newly
-    /// arms, exactly as any firing does: the RNG advances then. An
-    /// explorer ignores those dates, and a [`Snapshot`] carries the RNG,
-    /// so exploration stays deterministic. The draw order is the
-    /// engine's own, so Monte-Carlo runs are unaffected.
+    /// discrete step that follows re-arms the schedule according to
+    /// [`StochasticDates`]. Drawn mode samples dates and `Exp(1)` hazard
+    /// thresholds for newly armed transitions, exactly as any firing does;
+    /// deferred mode draws nothing. A [`Snapshot`] carries the RNG for
+    /// deterministic replay in either mode.
     ///
     /// Errors with [`EngineError::UnknownTransition`] for an index out of
     /// range, [`EngineError::NotFireable`] if the transition is not

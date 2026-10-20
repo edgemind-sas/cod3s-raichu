@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, HashMap};
 use raichu_core::compile::CLaw;
 use raichu_core::{
     CompiledModel, Engine, EngineConfig, EngineError, PreparedCoSimulation, Snapshot,
+    StochasticDates,
 };
 use raichu_model::TransitionKind;
 
@@ -74,8 +75,8 @@ pub(crate) trait Strategy: Sync {
     type Shared: Clone + Send + Sync;
 
     /// The transition that fires at the current instant before anything
-    /// else, lowest index first, if any.
-    fn immediate(&self, engine: &Engine<'_>) -> Option<usize>;
+    /// else, using the engine's automatic firing order, if any.
+    fn immediate(&self, engine: &mut Engine<'_>) -> Result<Option<usize>, EngineError>;
 
     /// The children of the node when `idx` fires at the current instant,
     /// and what they share.
@@ -239,9 +240,8 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
         via: Option<&S::Child>,
         streak: usize,
     ) -> Result<Node<S::Child, S::Shared>, EngineError> {
-        // 1. Instantaneous first, lowest index first.
         let (children, shared, child_streak, snapshot) =
-            if let Some(idx) = self.strategy.immediate(&self.engine) {
+            if let Some(idx) = self.strategy.immediate(&mut self.engine)? {
                 if streak >= self.max_instantaneous {
                     let prefix = self.path.len().saturating_sub(streak);
                     return Err(EngineError::InstantaneousCycle {
@@ -633,6 +633,7 @@ pub(crate) fn engine_config() -> EngineConfig {
         journal: false,
         sequences: false,
         stop_at_targets: true,
+        stochastic_dates: StochasticDates::Deferred,
         samples: Vec::new(),
         ..EngineConfig::default()
     }

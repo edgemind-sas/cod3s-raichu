@@ -88,9 +88,10 @@
 //! order. The result is bit-identical whatever the thread count.
 
 use raichu_core::compile::CLaw;
+#[cfg(doc)]
+use raichu_core::StochasticDates;
 use raichu_core::{
     CompiledModel, DeferredTransition, Engine, EngineConfig, EngineError, ProbeStop,
-    StochasticDates,
 };
 use raichu_numeric::{Law, LawError};
 use std::path::Path;
@@ -290,7 +291,6 @@ fn run(
     let common = settings.common();
     let config = EngineConfig {
         t_max: settings.horizon,
-        stochastic_dates: StochasticDates::Deferred,
         allow_fmu_import: prepared.is_some() && !model.fmu_units.is_empty(),
         ..engine_config()
     };
@@ -594,13 +594,8 @@ impl Strategy for DiscretisedStrategy<'_> {
     type Child = Child;
     type Shared = ();
 
-    fn immediate(&self, engine: &Engine<'_>) -> Option<usize> {
-        let now = engine.current_time();
-        engine
-            .fireable()
-            .first()
-            .filter(|f| f.date.is_some_and(|date| date <= now))
-            .map(|f| f.index)
+    fn immediate(&self, engine: &mut Engine<'_>) -> Result<Option<usize>, EngineError> {
+        engine.next_immediate_transition()
     }
 
     fn instantaneous_children(
@@ -667,8 +662,6 @@ impl Strategy for DiscretisedStrategy<'_> {
             ProbeStop::Limit | ProbeStop::Horizon => None,
         };
         if t_end <= t0 {
-            // An event due at this very instant that the fireable list did
-            // not show (a watched guard holding at the stop): fire it.
             let Some(index) = end_event else {
                 return Ok(None);
             };

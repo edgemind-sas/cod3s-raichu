@@ -114,9 +114,9 @@ impl<'m> Engine<'m> {
     /// the authored event history or firing statistics.
     ///
     /// Returns the fired event, or `None` when nothing remains before
-    /// `t_max`. Tie-break: earliest date first, then lowest transition
-    /// index (documented deterministic order; the converged state does
-    /// not depend on it for confluent models).
+    /// `t_max`. Scheduled transitions are ordered by date, arming wave,
+    /// observer priority within that wave, then transition index. Watched
+    /// transitions already past their boundary fire immediately.
     pub fn step(&mut self) -> Result<Option<Event>, EngineError> {
         if self.config.stochastic_dates == StochasticDates::Operator {
             return Err(EngineError::InteractivePolicy {
@@ -537,6 +537,29 @@ impl<'m> Engine<'m> {
             self.armed_wave[idx] = self.wave;
         }
         self.pending[idx] = Some(date);
+    }
+
+    /// Return the next transition automatic execution would fire without
+    /// advancing time, or `None` when no transition is due yet.
+    ///
+    /// Watched transitions already past their boundary retain their immediate
+    /// precedence. Scheduled transitions use the same date, arming wave,
+    /// observation priority and positional order as [`Engine::step`]. This
+    /// query evaluates watched guards but does not fire, draw randomness,
+    /// resample clocks, or alter the presentation order of [`Engine::fireable`].
+    /// Deferred stochastic transitions without a date are not selected.
+    ///
+    /// # Errors
+    /// Returns a guard evaluation error for an active watched transition,
+    /// as automatic execution does.
+    pub fn next_immediate_transition(&mut self) -> Result<Option<TransIdx>, EngineError> {
+        if let Some(index) = self.immediate_watched()? {
+            return Ok(Some(index));
+        }
+        Ok(self
+            .next_pending()
+            .filter(|(_, date)| *date <= self.time)
+            .map(|(index, _)| index))
     }
 
     /// The earliest pending transition. Among transitions due at the same
