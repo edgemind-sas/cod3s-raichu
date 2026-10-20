@@ -187,12 +187,12 @@ fn counting_the_ends_gives_the_tally_of_the_per_replica_ends() {
     assert_eq!(counted.estimates, listed.estimates);
 }
 
-/// The repairable pair observed through 600 indicators, alternately on `A`
-/// and on `B`: each replica records 1 800 samples, so a chunk holds the
-/// fewest replicas the driver allows and 2 500 replicas span three chunks.
+/// The repairable pair observed through 165 indicators, alternately on `A`
+/// and on `B`. At 101 instants each replica holds 666 600 sample bytes:
+/// 251 replicas span two full chunks of 100 and a final partial chunk of 51.
 fn heavily_observed_pair() -> CompiledModel {
     let mut model = repairable_pair_model();
-    model.indicators = (0..600)
+    model.indicators = (0..165)
         .map(|i| {
             let unit = if i % 2 == 0 { "A" } else { "B" };
             Indicator {
@@ -212,8 +212,8 @@ fn heavily_observed_pair() -> CompiledModel {
 fn small_chunks_of_heavily_observed_replicas_keep_every_indicator_in_place() {
     let model = heavily_observed_pair();
     let config = |threads| McConfig {
-        nb_runs: 2_500,
-        quantiles: vec![],
+        nb_runs: 251,
+        samples: (0..=100).map(|i| HORIZON * f64::from(i) / 100.0).collect(),
         ..config(threads)
     };
     let one = run(&model, &config(Some(1))).unwrap();
@@ -230,8 +230,9 @@ fn small_chunks_of_heavily_observed_replicas_keep_every_indicator_in_place() {
             format!("{}_down_{i}", if i % 2 == 0 { "A" } else { "B" })
         );
         if i % 2 == 0 {
-            assert_eq!(estimate.mean, a.mean, "indicator {i}");
-            assert_eq!(estimate.sojourn_mean, a.sojourn_mean, "indicator {i}");
+            let mut renamed = estimate.clone();
+            renamed.name.clone_from(&a.name);
+            assert_eq!(&renamed, a, "indicator {i}, including all quantile columns");
         } else {
             assert_ne!(estimate.mean, a.mean, "indicator {i} reads `B`, not `A`");
         }

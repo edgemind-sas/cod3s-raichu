@@ -31,17 +31,21 @@ they are summed in do not depend on it.
   order**. Floating-point addition is not associative, so this ordered
   reduction is what makes the estimate **byte-identical** for any thread
   count: not merely statistically equal.
-- The replicas run in **chunks**, each folded into the running sums as
-  soon as it completes, in replica order. A chunk holds at most 64 MiB of
-  samples: 65 536 replicas for a model with a few indicators, fewer for one
-  that samples hundreds (about 10 000 for 165 indicators at one instant),
-  and never fewer than 1 024. A campaign therefore holds one chunk of
-  samples at a time, and its memory grows neither with the number of
-  replicas nor, beyond that bound, with the number of indicators. The
-  chunking never changes a result.
-  Quantiles are the exception: a nearest-rank quantile needs the whole
-  column, so asking for one keeps one value per replica, indicator and
-  instant. A probability of reaching a target is a count, and
+- Replicas run in chunks, each folded into the estimates in replica order.
+  One chunk retains at most 64 MiB of sample payload, except when a single
+  replica already exceeds that budget: that replica runs alone. The chunk
+  holds up to 65 536 replicas for a small model, about 10 000 for 165
+  indicators at one instant, and 100 for 165 indicators at 101 instants.
+  There is no preferred minimum that overrides the byte budget. A final
+  partial chunk holds only the remaining replicas. Chunking never changes
+  the reduction order or the result.
+  This is a limit on retained sample payload, not process RSS. Compiled
+  model memory, worker state and temporary allocations, vector metadata,
+  final estimates and quantile columns are outside this budget. Those
+  categories can grow with model size, sampling grids or thread count.
+  Quantiles retain one value per replica, indicator and instant for each
+  requested measure, so their storage still grows with the campaign size.
+  A probability of reaching a target is a count, and
   `quantify(..., method="monte_carlo")` keeps only the count.
 
 ```python

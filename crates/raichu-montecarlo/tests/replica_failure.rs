@@ -250,3 +250,46 @@ fn a_cross_entropy_campaign_reports_its_lowest_failing_replica() {
         }
     }
 }
+
+/// A wide grid reduces chunks to 100 replicas. Rare failures let at least
+/// one whole chunk finish before the lowest failing replica is reported.
+#[test]
+fn failures_after_a_reduced_chunk_boundary_keep_replica_order() {
+    let document = format!(
+        r#"{{"raichu_model": {{"format": 1, "requires": ["evaluation_order", "allocation"]}},
+            "model": {SWITCHED}}}"#
+    );
+    let mut source = Model::from_json(&document).unwrap();
+    source.components[2].automata[0].transitions[0].distrib = raichu_model::Distrib::Exp {
+        rate: Some(0.001),
+        rate_expr: None,
+    };
+    source.indicators = (0..165)
+        .map(|i| {
+            let mut indicator = source.indicators[0].clone();
+            indicator.name = format!("got_{i}");
+            indicator
+        })
+        .collect();
+    let model = CompiledModel::compile(&source).unwrap();
+    let expected = (0..4096)
+        .find(|&replica| replay(&model, replica).is_err())
+        .expect("the seeded campaign has a failing replica");
+    assert!(
+        expected >= 100,
+        "replica {expected} must follow a full chunk"
+    );
+    for threads in [Some(1), Some(4)] {
+        let cfg = McConfig {
+            nb_runs: 4096,
+            samples: (0..=100).map(|i| T_MAX * f64::from(i) / 100.0).collect(),
+            ..config(threads)
+        };
+        let error = run(&model, &cfg).expect_err("the campaign is refused");
+        assert_eq!(replica_of(&error), (expected, cfg.nb_runs, SEED));
+        assert!(matches!(
+            error.cause(),
+            EngineError::FlowNotConverged { .. }
+        ));
+    }
+}
