@@ -59,8 +59,11 @@ print("exact replay")
   raw second moments. Updates retain replica-index order across chunks
   and thread counts. Corrected standard deviations and confidence intervals
   can differ from results produced before version 0.103.3.
-- Simultaneous events are ordered by (date, transition index): a
-  documented, stable tie-break.
+- Scheduled transitions in automatic simulation and exploration are ordered
+  by date, then arming wave, then observation priority within that wave,
+  then transition index. A newly armed observer does not overtake
+  transitions from an earlier wave. See the
+  [transition contract](../reference/model-schema.md#transition).
 - Mixed-integer programs use HiGHS in single-thread mode with a fixed solver
   seed and a deterministic node cap. Equal-cost optima use lexicographic
   minimisation of decisions in declaration order unless a program declares

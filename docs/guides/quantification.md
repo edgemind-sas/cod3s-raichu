@@ -47,6 +47,17 @@ When the event is too rare for a plain campaign and the model too large to
 explore, cross-entropy keeps the simulation and makes the event frequent
 (see [Rare feared events](#rare-feared-events-cross-entropy)).
 
+Simulation and exploration share the same
+[firing-wave order](../reference/model-schema.md#transition) at a given
+date. Within one wave, an `observation` transition runs before an ordinary
+transition: an observer can therefore latch a failure before a zero-delay
+repair clears it. For a rate-1 exponential failure, an immediate repair
+and an observer that remains on once triggered, the probability of reaching
+the observer's target by time 1 is `1 - exp(-1)`, about 63.21%, even though
+the failed state's duration is zero. Declaring that observer before or
+after the equipment does not change this probability. Before 0.103.4,
+exploration could instead return zero by selecting the repair first.
+
 ## An example: a unit in series with a redundant pair
 
 Three components fail at constant rates: `A` (0.01 per hour) in series
