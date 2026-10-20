@@ -365,6 +365,10 @@ mod dopri {
 }
 
 /// One accepted step's dense interpolant: evaluates `y(t0 + θ·h)`.
+///
+/// A workspace: allocated once per integration and refilled by
+/// [`Dense::fill`] for each accepted step that something reads (an event
+/// or observation scan, or a sample date inside the step).
 struct Dense {
     t0: f64,
     h: f64,
@@ -372,6 +376,36 @@ struct Dense {
 }
 
 impl Dense {
+    /// Workspace for a `dim`-dimensional state. Zero-sized (no heap
+    /// allocation) when nothing will ever read the interpolant.
+    fn workspace(dim: usize) -> Self {
+        Dense {
+            t0: 0.0,
+            h: 0.0,
+            rcont: core::array::from_fn(|_| vec![0.0; dim]),
+        }
+    }
+
+    /// Hairer's `contd5` coefficients of the accepted step `[t0, t0 + h]`
+    /// from `y` to `y_new`, with stages `k` (k7 = f(t0 + h, y_new)).
+    fn fill(&mut self, t0: f64, h: f64, y: &[f64], y_new: &[f64], k: &[Vec<f64>; 7]) {
+        self.t0 = t0;
+        self.h = h;
+        for i in 0..y.len() {
+            let ydiff = y_new[i] - y[i];
+            let bspl = h * k[0][i] - ydiff;
+            self.rcont[0][i] = y[i];
+            self.rcont[1][i] = ydiff;
+            self.rcont[2][i] = bspl;
+            self.rcont[3][i] = ydiff - h * k[6][i] - bspl;
+            let mut acc = 0.0;
+            for (j, dj) in dopri::D.iter().enumerate() {
+                acc += dj * k[j][i];
+            }
+            self.rcont[4][i] = h * acc;
+        }
+    }
+
     fn eval(&self, t: f64, out: &mut [f64]) {
         let theta = (t - self.t0) / self.h;
         let theta1 = 1.0 - theta;
@@ -427,6 +461,9 @@ fn has_room(lo: f64, mid: f64, hi: f64) -> bool {
 /// **Precondition**: every margin in `g_lo` is strictly negative (see
 /// [`first_satisfied`]). A crossing that already holds at `t_lo` is not
 /// reported here; it belongs to the caller that produced `g_lo`.
+///
+/// `prev_g` and `g_scratch` are caller-owned scratch of `g_lo`'s length,
+/// so a scan allocates nothing per step.
 #[allow(clippy::too_many_arguments)] // internal kernel shared by both backends
 fn locate_event(
     system: &mut dyn OdeSystem,
@@ -437,11 +474,12 @@ fn locate_event(
     sub_samples: usize,
     tol_event: f64,
     y_scratch: &mut [f64],
+    prev_g: &mut [f64],
     g_scratch: &mut [f64],
 ) -> Option<(usize, f64)> {
     let n = g_lo.len();
     let mut prev_t = t_lo;
-    let mut prev_g = g_lo.to_vec();
+    prev_g.copy_from_slice(g_lo);
     let points = sub_samples.max(1);
     for p in 1..=points {
         let t = t_lo + (t_hi - t_lo) * (p as f64) / (points as f64);
@@ -500,14 +538,18 @@ fn observe_interval(
     sub_samples: usize,
     tol_event: f64,
     y_scratch: &mut [f64],
+    scratch: &mut ObservationScratch,
 ) {
     let n = v_lo.len();
     if n == 0 || t_hi <= t_lo {
         return;
     }
-    let mut at_point = vec![false; n];
-    let mut probe = vec![false; n];
-    let mut flips: Vec<(f64, usize, bool)> = Vec::new();
+    let ObservationScratch {
+        at_point,
+        probe,
+        flips,
+    } = scratch;
+    flips.clear();
     let points = sub_samples.max(1);
     let mut prev_t = t_lo;
     for p in 1..=points {
@@ -517,7 +559,7 @@ fn observe_interval(
             t_lo + (t_hi - t_lo) * (p as f64) / (points as f64)
         };
         dense(t, y_scratch);
-        system.observations(t, y_scratch, &mut at_point);
+        system.observations(t, y_scratch, at_point);
         for index in 0..n {
             if at_point[index] == v_lo[index] {
                 continue;
@@ -530,7 +572,7 @@ fn observe_interval(
                     break;
                 }
                 dense(mid, y_scratch);
-                system.observations(mid, y_scratch, &mut probe);
+                system.observations(mid, y_scratch, probe);
                 if probe[index] == before {
                     lo = mid;
                 } else {
@@ -539,12 +581,31 @@ fn observe_interval(
             }
             flips.push((hi, index, at_point[index]));
         }
-        v_lo.copy_from_slice(&at_point);
+        v_lo.copy_from_slice(at_point);
         prev_t = t;
     }
     flips.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-    for (t, index, now) in flips {
+    for &(t, index, now) in flips.iter() {
         system.observed(index, t, now);
+    }
+}
+
+/// Workspace of [`observe_interval`], sized once per integration for the
+/// system's observed verdicts. The flip list keeps its capacity between
+/// steps, so it only grows when a step holds more flips than any before.
+struct ObservationScratch {
+    at_point: Vec<bool>,
+    probe: Vec<bool>,
+    flips: Vec<(f64, usize, bool)>,
+}
+
+impl ObservationScratch {
+    fn new(n_observations: usize) -> Self {
+        ObservationScratch {
+            at_point: vec![false; n_observations],
+            probe: vec![false; n_observations],
+            flips: Vec::new(),
+        }
     }
 }
 
@@ -641,6 +702,16 @@ impl OdeSolver for DormandPrince45 {
         let mut y_stage = vec![0.0; dim];
         let mut y_new = vec![0.0; dim];
         let mut y_scratch = vec![0.0; dim];
+        let mut g_prev = vec![0.0; n_events];
+        let mut observation_scratch = ObservationScratch::new(v0.len());
+        // The interpolant is read by the event scan, the observation scan
+        // and the sample dates; with none of them it is never built.
+        let scanned = n_events > 0 || !v0.is_empty();
+        let mut dense = Dense::workspace(if scanned || sample_cursor < samples.len() {
+            dim
+        } else {
+            0
+        });
         system.rhs(t, y, &mut k[0]);
 
         loop {
@@ -712,24 +783,12 @@ impl OdeSolver for DormandPrince45 {
             }
             self.stats.accepted += 1;
 
-            // Accepted: build the dense interpolant.
-            let mut dense = Dense {
-                t0: t,
-                h,
-                rcont: core::array::from_fn(|_| vec![0.0; dim]),
-            };
-            for i in 0..dim {
-                let ydiff = y_new[i] - y[i];
-                let bspl = h * k[0][i] - ydiff;
-                dense.rcont[0][i] = y[i];
-                dense.rcont[1][i] = ydiff;
-                dense.rcont[2][i] = bspl;
-                dense.rcont[3][i] = ydiff - h * k[6][i] - bspl;
-                let mut acc = 0.0;
-                for (j, dj) in dopri::D.iter().enumerate() {
-                    acc += dj * k[j][i];
-                }
-                dense.rcont[4][i] = h * acc;
+            // Accepted: build the dense interpolant, unless nothing reads
+            // it on this step (no scan, and no sample date up to its end,
+            // the endpoint included).
+            let sampled = sample_cursor < samples.len() && samples[sample_cursor] <= t + h;
+            if scanned || sampled {
+                dense.fill(t, h, y, &y_new, &k);
             }
 
             // Event scan over the accepted step (safety net + bisection).
@@ -744,6 +803,7 @@ impl OdeSolver for DormandPrince45 {
                     p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
+                    &mut g_prev,
                     &mut g1,
                 ) {
                     observe_interval(
@@ -755,6 +815,7 @@ impl OdeSolver for DormandPrince45 {
                         p.scan_points(h),
                         p.tol_event,
                         &mut y_scratch,
+                        &mut observation_scratch,
                     );
                     // Deliver samples strictly before the event.
                     while sample_cursor < samples.len() && samples[sample_cursor] < t_event {
@@ -776,6 +837,7 @@ impl OdeSolver for DormandPrince45 {
                     p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
+                    &mut observation_scratch,
                 );
                 system.events(t + h, &y_new, &mut g0);
                 if let Some(outcome) = reestablish_precondition(
@@ -791,7 +853,7 @@ impl OdeSolver for DormandPrince45 {
                 ) {
                     return Ok(outcome);
                 }
-            } else {
+            } else if scanned {
                 let mut dense_eval = |tt: f64, out: &mut [f64]| dense.eval(tt, out);
                 observe_interval(
                     system,
@@ -802,6 +864,7 @@ impl OdeSolver for DormandPrince45 {
                     p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
+                    &mut observation_scratch,
                 );
             }
 
@@ -882,6 +945,8 @@ impl OdeSolver for FixedEuler {
         let mut dydt = vec![0.0; dim];
         let mut y_new = vec![0.0; dim];
         let mut y_scratch = vec![0.0; dim];
+        let mut g_prev = vec![0.0; n_events];
+        let mut observation_scratch = ObservationScratch::new(v0.len());
         let mut sample_cursor = samples.partition_point(|s| *s <= t0);
 
         while t < t_end {
@@ -910,6 +975,7 @@ impl OdeSolver for FixedEuler {
                     4,
                     self.tol_event,
                     &mut y_scratch,
+                    &mut g_prev,
                     &mut g1,
                 ) {
                     observe_interval(
@@ -921,6 +987,7 @@ impl OdeSolver for FixedEuler {
                         4,
                         self.tol_event,
                         &mut y_scratch,
+                        &mut observation_scratch,
                     );
                     while sample_cursor < samples.len() && samples[sample_cursor] < t_event {
                         let ts = samples[sample_cursor];
@@ -941,6 +1008,7 @@ impl OdeSolver for FixedEuler {
                     4,
                     self.tol_event,
                     &mut y_scratch,
+                    &mut observation_scratch,
                 );
                 system.events(t + h, &y_new, &mut g0);
                 // Re-establishing the scan's precondition here is exactly
@@ -969,6 +1037,7 @@ impl OdeSolver for FixedEuler {
                     4,
                     self.tol_event,
                     &mut y_scratch,
+                    &mut observation_scratch,
                 );
             }
             while sample_cursor < samples.len() && samples[sample_cursor] <= t + h {
