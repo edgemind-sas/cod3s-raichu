@@ -77,8 +77,11 @@ print("exact replay")
   tolerances (relative/absolute step control, maximum step and the
   event-location tolerance) as *configuration*, not hidden constants.
   See [Numerical tuning](numerical-tuning.md).
-- Boundary crossings are located by bracketing on the dense interpolant,
-  never stepped over silently.
+- Boundary crossings are detected by scanning each step of the dense
+  interpolant, then located by bisection to the event tolerance. An
+  episode shorter than the scan spacing can be missed silently; the
+  scan is deterministic, so a replay misses it again. See
+  [Detection and location](numerical-tuning.md#detection-and-location).
 
 ## Provenance
 

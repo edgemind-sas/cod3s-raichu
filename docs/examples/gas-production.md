@@ -64,7 +64,7 @@ construct:
 | lognormal repair, independent of the other unit | `lognormal` transition, whose guard reads nothing else, so a failure of the other unit never restarts it |
 | reservoir level, drained or refilled at a state-dependent speed | ODE on `reservoir.level` |
 | level held at 0 while empty, at capacity while full | a `store` automaton (`full`, `partial`, `empty`) whose state clamps the speed |
-| the reservoir runs dry, or fills up | **watched** transitions: the crossing is located on the solver's dense output, not stepped over |
+| the reservoir runs dry, or fills up | **watched** transitions: the crossing is detected by scanning the solver's dense output and located by bisection, not stepped over |
 | refill at the instant both units are up (cases 1 to 3) | an **edge effect** of the repair on the level, an ODE target: a reset map, the jump of a piecewise-deterministic Markov process (Davis 1984), since RAICHU 0.80 |
 | delivered production, total loss | attributes written by a sensitive function, observed as indicators |
 

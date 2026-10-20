@@ -79,8 +79,8 @@ outflow = {"op": "port_agg", "port": {"component": "tank", "port": "valve_in"}, 
 ```
 
 A unit is a four-state automaton. Its start and stop transitions are
-**watched**: they fire exactly when the level crosses a set-point, located
-by root-finding on the solver's dense output. Its four failures draw an
+**watched**: they fire when the level crosses a set-point, detected by
+scanning the solver's dense output and located by bisection. Its four failures draw an
 exponential law whose rate is an **expression of the temperature**, so the
 engine integrates the cumulative hazard along the trajectory rather than
 freezing the rate between events. They are `monitored`, which records them

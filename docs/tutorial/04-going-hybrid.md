@@ -13,9 +13,9 @@ Two new ingredients:
   (`ode`) or `V = …` (`explicit`);
 - **watched transitions**: a *guarded* transition whose guard involves a
   continuous attribute. Because that attribute drifts between events, the
-  engine must **watch the trajectory** and fire the transition exactly
-  when the guard flips: the crossing is located by root-finding, not by
-  stepping. You declare this intent explicitly (`"distrib": "watched"`): the
+  engine must **watch the trajectory** and fire the transition when the
+  guard flips: each integration step is scanned for the flip, and the
+  crossing is then located by bisection, not by stepping. You declare this intent explicitly (`"distrib": "watched"`): the
   engine cannot guess, from a comparison alone, whether you mean "fire at
   the crossing" or merely "be eligible while true". The
   [boundaries chapter](../engine/boundaries.md) of "How the engine works"
@@ -158,12 +158,14 @@ print("mean temperature:", [round(v, 1) for v in est.indicators["temp"].mean])
 
 !!! note "What the engine did"
     Between jumps it integrated the temperature ODE with an adaptive
-    Dormand-Prince method and **located each thermostat crossing** by
-    root-finding on the guard, not by stepping. When the heater failed,
+    Dormand-Prince method, detected each thermostat crossing by scanning
+    every step of the dense output, and **located it** by bisection on
+    the guard, not by stepping. When the heater failed,
     the discrete jump changed the ODE's right-hand side, and integration
     resumed from the exact failure instant. The numerical tolerances are
-    explicit and tunable: see
-    [Numerical tuning](../guides/numerical-tuning.md).
+    explicit and tunable, including how short an episode can be and
+    still be seen: see
+    [Numerical tuning](../guides/numerical-tuning.md#detection-and-location).
 
 ## Where to go next
 
