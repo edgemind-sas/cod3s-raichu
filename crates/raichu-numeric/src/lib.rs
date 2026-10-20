@@ -1,8 +1,12 @@
 //! # raichu-numeric: continuous evolution (milestone M1)
 //!
-//! ODE integration with dense output and **guaranteed event location**
-//! for watched transitions: a boundary crossing is never silently
-//! missed because of the time step (the `schedule_boundary` rule).
+//! ODE integration with dense output and event location for watched
+//! transitions (the `schedule_boundary` rule). Two separate controls
+//! govern it: the **detection resolution** (`max_step`, `sub_samples`,
+//! `event_resolution`) sets the spacing at which boundary margins are
+//! inspected, and the **location accuracy** (`tol_event`) bounds the
+//! bisection of a crossing once it is bracketed. An episode narrower
+//! than the scan spacing can be missed without any error.
 //!
 //! Design:
 //!
@@ -16,16 +20,26 @@
 //!   simple second backend proving the trait boundary (used by tests
 //!   and available for coarse debugging runs). `diffsol` remains the
 //!   candidate backend for stiff/large systems in a later milestone.
-//! - **Missed-crossing safety net**: every accepted step is scanned at
-//!   `sub_samples` interior points of the dense interpolant in
-//!   addition to its endpoint, then the earliest sign change is
-//!   bracketed and bisected down to `tol_event`, or to the gap between
-//!   two adjacent doubles when that gap is the wider. `max_step` caps the
-//!   step so a boundary feature narrower than the scan spacing cannot
-//!   hide inside one step (stress-tested).
+//! - **Crossing scan** ([`DormandPrince45`]): every accepted step of
+//!   length `h` is scanned at `n` evenly spaced points of the dense
+//!   interpolant, its right endpoint included (the left one is the
+//!   previous step's last point), with `n` given by
+//!   [`SolverParams::scan_points`]. The first pair of consecutive
+//!   points where a margin goes from negative to non-negative brackets
+//!   the crossing, which is bisected down to `tol_event`, or to the gap
+//!   between two adjacent doubles when that gap is the wider. The
+//!   spacing is at most `max_step / sub_samples`, and at most
+//!   `event_resolution` when one is set. Finite sign sampling certifies
+//!   nothing between the points: a margin non-negative only between two
+//!   of them, a tangential contact, or an even number of sign changes
+//!   leaves no bracket and goes undetected. A tighter `tol_event`
+//!   cannot recover such an episode; a finer resolution can, at the
+//!   cost of more margin evaluations. [`FixedEuler`] scans each of its
+//!   fixed steps at 4 points and takes only `tol_event` from these
+//!   settings.
 //!
-//! All tolerances are explicit in [`SolverParams`] and recorded by the
-//! caller as provenance (validation-contract level 3).
+//! All tolerances are explicit in [`SolverParams`], so a caller can
+//! record them as provenance (validation-contract level 3).
 //!
 //! Two further kernels serve the sequence-tree exploration:
 //! [`phase_type`] (absorption probability of a chain of exponential
@@ -114,11 +128,15 @@ pub struct SolverParams {
     pub rtol: f64,
     /// Absolute tolerance of the step-error controller.
     pub atol: f64,
-    /// Hard cap on the step size (missed-crossing safety net).
+    /// Hard cap on the step size. It also caps the crossing-scan
+    /// spacing at `max_step / sub_samples` (detection resolution).
     pub max_step: f64,
-    /// Time tolerance of the event bisection.
+    /// Time tolerance of the event bisection (location accuracy of a
+    /// crossing already bracketed by the scan).
     pub tol_event: f64,
-    /// Interior dense-output points scanned per step for sign changes.
+    /// Dense-output points scanned per step for sign changes, evenly
+    /// spaced and including the step's right endpoint (`0` scans like
+    /// `1`); see [`Self::scan_points`].
     pub sub_samples: usize,
     /// The widest spacing a study accepts between two scan points, or
     /// `None` for the engine's own (`step / sub_samples`).

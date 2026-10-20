@@ -29,7 +29,9 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
 - **Coupled discrete/continuous dynamics**: component-level automata
   (delay, instantaneous, watched/boundary and stochastic transitions)
   over a continuous state integrated with a Dormand-Prince 4(5)
-  dense-output solver and guaranteed event location.
+  dense-output solver. Boundary crossings are detected by scanning each
+  step at a resolution the study can set, then located by bisection to
+  an explicit tolerance.
 - **A rich occurrence-law library**: exponential (with an optional
   state-dependent rate), Weibull, lognormal, gamma, uniform,
   deterministic/delay and empirical laws behind a single interface.
