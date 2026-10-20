@@ -809,14 +809,15 @@ fn fixture(name: &str) -> Option<String> {
 /// cannot make it.
 ///
 /// The pdmp_001 counts were refreshed for chronological event selection
-/// (#193): bisecting competing margins adds probes, while its events and
-/// indicator trajectories remain byte-identical to the previous baseline.
+/// (#193), then representable ODE steps (#195). The latter uses fewer
+/// probes; its discrete trace is unchanged and numerical differences
+/// remain within the configured solver tolerances.
 #[test]
 fn a_model_with_no_continuous_flow_is_byte_identical() {
     let expected = [
         // (fixture, t_max, explicit_evaluations, segments, margin_evaluations)
         ("tank_01", 40.0, 9394u64, 6u64, 6946u64),
-        ("pdmp_001", 1000.0, 235_638, 90, 1_048_518),
+        ("pdmp_001", 1000.0, 235_536, 90, 1_048_014),
         ("heated_room_s3", 100.0, 23552, 16, 34852),
         ("tank_02", 1000.0, 142_437, 6, 412_795),
         ("pool_02", 1000.0, 242_800, 471, 886_355),

@@ -571,7 +571,8 @@ fn every_watched_fixture_reproduces_its_event_dates() {
         ("tank_02", 1000.0, 5, "461f4b8d9e56fb0a"),
         ("heated_room_s3", 100.0, 15, "42f214e7090d5cb3"),
         ("pool_02", 1000.0, 470, "0c1c6d566324761e"),
-        ("pdmp_001", 1000.0, 176, "72e7f58411cdc9a6"),
+        // Representable ODE steps (#195) move dates within solver tolerances.
+        ("pdmp_001", 1000.0, 176, "0b924ebc85dcfe6e"),
     ];
     for (name, t_max, events, pinned) in expected {
         let Some(json) = fixture(name) else { continue };

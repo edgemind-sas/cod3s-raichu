@@ -29,7 +29,7 @@
 //!   the crossing, which is bisected down to `tol_event`, or to the gap
 //!   between two adjacent doubles when that gap is the wider. The
 //!   spacing is at most `max_step / sub_samples`, and at most
-//!   `event_resolution` when one is set. Finite sign sampling certifies
+//!   `event_resolution` when one is set, subject to time rounding. Finite sign sampling certifies
 //!   nothing between the points: a margin non-negative only between two
 //!   of them, a tangential contact, or an even number of sign changes
 //!   leaves no bracket and goes undetected. A tighter `tol_event`
@@ -104,8 +104,8 @@ pub enum Outcome {
 /// Typed integration errors (never a panic on the library path).
 #[derive(Debug, Error)]
 pub enum OdeError {
-    /// The adaptive controller could not meet the tolerance.
-    #[error("step size underflow at t={t} (h={h}); system too stiff for this backend")]
+    /// The controller exhausted its work budget or cannot represent a capped step.
+    #[error("step size underflow at t={t} (h={h}); adaptive work budget exhausted or time progress is unrepresentable")]
     StepSizeUnderflow {
         /// Time of failure.
         t: f64,
@@ -128,8 +128,10 @@ pub struct SolverParams {
     pub rtol: f64,
     /// Absolute tolerance of the step-error controller.
     pub atol: f64,
-    /// Hard cap on the step size. It also caps the crossing-scan
-    /// spacing at `max_step / sub_samples` (detection resolution).
+    /// Cap on the proposed step size. Dormand-Prince rounds the endpoint
+    /// to a representable time and integrates that effective duration;
+    /// a cap below the next representable time increment is refused.
+    /// Crossing scans use the effective duration, subject to time rounding.
     pub max_step: f64,
     /// Time tolerance of the event bisection (location accuracy of a
     /// crossing already bracketed by the scan).
@@ -295,6 +297,12 @@ pub trait OdeSolver {
 
 /// Adaptive Dormand-Prince 4(5) with Hairer's dense-output interpolant
 /// and bisection event location (default backend).
+///
+/// Short intervals use the same error-controlled steps as other intervals.
+/// Twenty consecutive rejected trials return [`OdeError::StepSizeUnderflow`];
+/// an accepted step resets this retry budget, regardless of its duration.
+/// A progress window of `min(max_step, remaining duration)` permits at most
+/// 10,000 trials, including accepted steps; covering it resets that budget.
 #[derive(Debug, Clone)]
 pub struct DormandPrince45 {
     /// Numerical parameters.
@@ -675,24 +683,14 @@ impl OdeSolver for DormandPrince45 {
         if t_end <= t0 {
             return Ok(Outcome::Reached { t: t_end });
         }
-        // A span below the step-resolution floor (the underflow guard
-        // below) is crossed without integration: the flow cannot move
-        // the state by more than round-off over one ulp of t. This
-        // arises when an event is located within round-off of a
-        // segment end (e.g. a hazard crossing at the horizon).
-        if t_end - t0 <= 1e-14 * t0.abs().max(1.0) {
-            for &s in samples {
-                if s > t0 && s <= t_end {
-                    on_sample(s, y);
-                }
-            }
-            return Ok(Outcome::Reached { t: t_end });
-        }
 
         // Cloned, not borrowed: the step counters below take `&mut self`.
         let p = self.params.clone();
         let mut t = t0;
         let mut h = p.max_step.min(t_end - t0);
+        let mut rejected_in_row = 0;
+        let mut work_window_end = (t0 + h).min(t_end);
+        let mut window_trials = 0;
         let mut sample_cursor = 0usize;
         while sample_cursor < samples.len() && samples[sample_cursor] <= t0 {
             sample_cursor += 1;
@@ -718,17 +716,25 @@ impl OdeSolver for DormandPrince45 {
             if t >= t_end {
                 return Ok(Outcome::Reached { t: t_end });
             }
-            h = h.min(t_end - t).min(p.max_step);
-            if h < 1e-14 * t.abs().max(1.0) {
-                if t_end - t <= 1e-14 * t.abs().max(1.0) {
-                    // The *remaining span* is within round-off of the
-                    // target (a previous step landed one ulp short):
-                    // snap to the target. Only a step shrunk by the
-                    // error controller signals real stiffness below.
-                    return Ok(Outcome::Reached { t: t_end });
-                }
+            if window_trials >= 10_000 {
                 return Err(OdeError::StepSizeUnderflow { t, h });
             }
+            window_trials += 1;
+            h = h.min(t_end - t).min(p.max_step);
+            // Integrate the interval between the representable endpoints.
+            let next_t = (t + h).min(t_end);
+            // A rounded-up endpoint must not conceal a sub-resolution cap.
+            let first_t = if t == 0.0 {
+                f64::from_bits(1)
+            } else if t > 0.0 {
+                f64::from_bits(t.to_bits() + 1)
+            } else {
+                f64::from_bits(t.to_bits() - 1)
+            };
+            if p.max_step < first_t - t || next_t <= t {
+                return Err(OdeError::StepSizeUnderflow { t, h });
+            }
+            h = next_t - t;
 
             // Stages 2..6 (k1 is FSAL from the previous step).
             let stage = |a: &[f64], k: &[Vec<f64>; 7], y: &[f64], y_stage: &mut [f64], h: f64| {
@@ -778,9 +784,14 @@ impl OdeSolver for DormandPrince45 {
 
             if err > 1.0 {
                 self.stats.rejected += 1;
+                rejected_in_row += 1;
+                if rejected_in_row >= 20 {
+                    return Err(OdeError::StepSizeUnderflow { t, h });
+                }
                 h *= (0.9 * err.powf(-0.2)).clamp(0.2, 1.0);
                 continue;
             }
+            rejected_in_row = 0;
             self.stats.accepted += 1;
 
             // Accepted: build the dense interpolant, unless nothing reads
@@ -877,6 +888,10 @@ impl OdeSolver for DormandPrince45 {
             }
 
             t += h;
+            if t >= work_window_end {
+                work_window_end = (t + p.max_step).min(t_end);
+                window_trials = 0;
+            }
             y.copy_from_slice(&y_new);
             let (head, tail) = k.split_at_mut(6);
             head[0].copy_from_slice(&tail[0]); // FSAL: k1 ← k7

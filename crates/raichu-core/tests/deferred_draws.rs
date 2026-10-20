@@ -398,9 +398,11 @@ fn drawn_mode_is_bit_identical_on_every_law() {
 fn drawn_mode_is_bit_identical_on_a_continuously_varying_hazard() {
     let samples: Vec<f64> = (1..=15).map(f64::from).collect();
     let got = characterise(&continuous_model(1.0, 0.5, 0.05), 15.0, &samples);
+    // Rebaselined for representable ODE steps (#195): all 436 events and
+    // discrete values agree across 50 seeds; numeric differences are < 2e-14.
     assert_eq!(
         got,
-        (5_608_455_318_325_514_104, 436),
+        (13_711_923_994_193_641_134, 436),
         "continuous model characterisation moved"
     );
 }

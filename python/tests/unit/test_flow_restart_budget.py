@@ -20,10 +20,11 @@ legitimate model that crosses one flow boundary, a cap set below what it
 needs, and the diagnosis naming the edge that crossed.
 """
 
-import pytest
+import re
 
 import pyraichu
 import pyraichu.muscadet as mu
+import pytest
 
 #: A supply that swings between 0 and 8 over a period of 6.
 WIND = {
@@ -97,7 +98,11 @@ def test_the_diagnosis_names_the_edge_that_crossed():
         two_tanks().simulate(t_max=12.0, max_flow_restarts=1)
     message = str(raised.value)
     assert "S.E_alloc[S.E_out__alloc__A__E_in]" in message, message
-    assert f"t={CROSSES_AT}" in message, message
+    times = re.search(r"between t=(\S+) and t=(\S+) \(", message)
+    assert times is not None, message
+    assert [float(value) for value in times.groups()] == pytest.approx(
+        [CROSSES_AT, CROSSES_AT], rel=0, abs=1e-12
+    ), message
 
 
 def test_one_restart_more_is_enough():
