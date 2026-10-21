@@ -173,19 +173,29 @@ location, and sample delivery, including a requested horizon sample.
 The proposed step is capped by `max_step`, then its endpoint is rounded to
 a representable time. Integration and scanning use the effective duration:
 at `t = 1e12`, a proposal of 1.5 time ULPs can round to 2 ULPs. Scan spacing
-is also subject to the resolution of the time axis. If `max_step` is below
-the next representable time increment, or 20 consecutive
+is also subject to the resolution of the time axis. A step sized to the
+remaining span lands on the endpoint exactly: neither the right-hand side,
+nor an event margin, nor an observation is evaluated past it. If `max_step`
+is below the next representable time increment, or 20 consecutive
 trials fail the state-error check, integration fails with
 `StepSizeUnderflow`; it does not report the horizon reached with an
 unevolved state. This retry budget bounds an unsuccessful adaptive search,
 not the number of accepted steps; it resets after each accepted step.
-Additionally, a progress window of `min(max_step, remaining duration)`
-allows 10,000 trials, including accepted steps. The window stays fixed
-until covered; then its budget resets. This bounds stiff flows that keep
+With a finite `max_step`, a progress window of `min(max_step, remaining
+duration)` allows 10,000 trials, including accepted steps. The window stays
+fixed until covered; then its budget resets. This bounds stiff flows that keep
 accepting tiny steps without limiting the total steps of a long trajectory.
 Exhaustion also returns `StepSizeUnderflow`. An intentionally demanding
 trajectory can require a smaller `max_step` to shorten the work window;
 even an otherwise resolvable trajectory is refused if it exceeds this budget.
+The window is as long as `max_step`, so a large cap lets fewer trials cover
+more time. A finite `max_step` at or above the integrated interval makes one
+window of the whole interval: more than 10,000 trials over it are refused,
+however well resolved the flow. This bound is what refuses a stiff flow on a
+segment shorter than the cap, so it is kept; to integrate a long flow that
+needs more steps, set `max_step` below the interval or make it infinite.
+An infinite `max_step` (no cap) sets no window and no bound on
+the number of steps: a stiff flow then runs until it reaches the horizon.
 Zero-length intervals leave the state unchanged (an already satisfied
 margin still reports an immediate event).
 

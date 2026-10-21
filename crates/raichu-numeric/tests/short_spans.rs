@@ -250,3 +250,95 @@ fn adaptive_work_is_bounded_without_limiting_long_resolved_flows() {
     assert!((y[0] - 10_001.0).abs() <= 8.0 * f64::EPSILON * 10_001.0);
     assert!(solver.stats().accepted > 10_000);
 }
+
+#[test]
+fn uncapped_steps_do_not_bound_the_total_work_of_a_long_flow() {
+    // `max_step = inf` is the documented "no cap": a long oscillation that
+    // needs more than 10,000 accepted steps must still reach the horizon.
+    struct Oscillator;
+    impl OdeSystem for Oscillator {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn rhs(&mut self, _: f64, y: &[f64], out: &mut [f64]) {
+            out[0] = y[1];
+            out[1] = -y[0];
+        }
+        fn n_events(&self) -> usize {
+            0
+        }
+        fn events(&mut self, _: f64, _: &[f64], _: &mut [f64]) {}
+    }
+    let horizon = 2_000.0;
+    let mut solver = DormandPrince45::new(SolverParams {
+        max_step: f64::INFINITY,
+        ..SolverParams::default()
+    });
+    let mut y = [1.0, 0.0];
+    let result = solver.integrate(&mut Oscillator, 0.0, &mut y, horizon, &[], &mut |_, _| {});
+    assert_eq!(result.unwrap(), Outcome::Reached { t: horizon });
+    assert!(solver.stats().accepted > 10_000, "{:?}", solver.stats());
+    assert!((y[0] - horizon.cos()).abs() < 1e-5, "{y:?}");
+    assert!((y[1] + horizon.sin()).abs() < 1e-5, "{y:?}");
+}
+
+#[test]
+fn steps_land_on_the_horizon_without_evaluating_beyond_it() {
+    // `t + (end - t)` can round one ulp above or below `end`: the solver
+    // must neither evaluate past the horizon nor add a sliver step.
+    struct Probe {
+        latest: f64,
+    }
+    impl OdeSystem for Probe {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn rhs(&mut self, t: f64, _: &[f64], out: &mut [f64]) {
+            self.latest = self.latest.max(t);
+            out[0] = 1.0;
+        }
+        fn n_events(&self) -> usize {
+            1
+        }
+        fn events(&mut self, t: f64, _: &[f64], out: &mut [f64]) {
+            self.latest = self.latest.max(t);
+            out[0] = -1.0;
+        }
+    }
+    for (start, end) in [
+        (-0.1, 0.3),
+        (-0.887_368_495_870_918_2, 0.319_843_233_565_404_4),
+    ] {
+        assert_ne!(
+            start + (end - start),
+            end,
+            "the pair must exercise rounding"
+        );
+        // One step covers the whole span.
+        let mut solver = DormandPrince45::new(SolverParams {
+            max_step: 2.0,
+            ..SolverParams::default()
+        });
+        let mut probe = Probe {
+            latest: f64::NEG_INFINITY,
+        };
+        let mut y = [0.0];
+        let mut samples = vec![];
+        let result = solver.integrate(&mut probe, start, &mut y, end, &[end], &mut |t, _| {
+            samples.push(t)
+        });
+        assert_eq!(result.unwrap(), Outcome::Reached { t: end });
+        assert!(
+            probe.latest <= end,
+            "{start}..{end}: evaluated at {}",
+            probe.latest
+        );
+        assert_eq!(
+            solver.stats().accepted,
+            1,
+            "{start}..{end}: {:?}",
+            solver.stats()
+        );
+        assert_eq!(samples, vec![end]);
+    }
+}
