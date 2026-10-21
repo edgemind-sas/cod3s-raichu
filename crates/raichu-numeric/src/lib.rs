@@ -301,8 +301,11 @@ pub trait OdeSolver {
 /// Short intervals use the same error-controlled steps as other intervals.
 /// Twenty consecutive rejected trials return [`OdeError::StepSizeUnderflow`];
 /// an accepted step resets this retry budget, regardless of its duration.
-/// A progress window of `min(max_step, remaining duration)` permits at most
-/// 10,000 trials, including accepted steps; covering it resets that budget.
+/// A step sized to the remaining span lands on the endpoint exactly, and no
+/// evaluation passes it.
+/// With a finite `max_step`, a progress window of `min(max_step, remaining
+/// duration)` permits at most 10,000 trials, including accepted steps;
+/// covering it resets that budget. An infinite `max_step` sets no window.
 #[derive(Debug, Clone)]
 pub struct DormandPrince45 {
     /// Numerical parameters.
@@ -428,6 +431,18 @@ impl Dense {
     }
 }
 
+/// The smallest double above a finite `t` (`f64::next_up`, stable only
+/// from Rust 1.86, above this crate's MSRV).
+fn next_up(t: f64) -> f64 {
+    if t == 0.0 {
+        f64::from_bits(1)
+    } else if t > 0.0 {
+        f64::from_bits(t.to_bits() + 1)
+    } else {
+        f64::from_bits(t.to_bits() - 1)
+    }
+}
+
 /// Index of the first margin that is **already satisfied** (`≥ 0`), if any.
 ///
 /// The single expression of the firing rule "event `i` fires when
@@ -490,7 +505,12 @@ fn locate_event(
     prev_g.copy_from_slice(g_lo);
     let points = sub_samples.max(1);
     for p in 1..=points {
-        let t = t_lo + (t_hi - t_lo) * (p as f64) / (points as f64);
+        // The last point is the endpoint itself, never a rounding of it.
+        let t = if p == points {
+            t_hi
+        } else {
+            t_lo + (t_hi - t_lo) * (p as f64) / (points as f64)
+        };
         dense(t, y_scratch);
         system.events(t, y_scratch, g_scratch);
         // Capture all brackets before bisection overwrites the shared
@@ -688,6 +708,9 @@ impl OdeSolver for DormandPrince45 {
         let p = self.params.clone();
         let mut t = t0;
         let mut h = p.max_step.min(t_end - t0);
+        // The work window needs a finite step cap to be a time scale: an
+        // infinite `max_step` ("no cap") leaves accepted work unbounded.
+        let work_window = p.max_step.is_finite();
         let mut rejected_in_row = 0;
         let mut work_window_end = (t0 + h).min(t_end);
         let mut window_trials = 0;
@@ -716,22 +739,21 @@ impl OdeSolver for DormandPrince45 {
             if t >= t_end {
                 return Ok(Outcome::Reached { t: t_end });
             }
-            if window_trials >= 10_000 {
+            if work_window && window_trials >= 10_000 {
                 return Err(OdeError::StepSizeUnderflow { t, h });
             }
             window_trials += 1;
             h = h.min(t_end - t).min(p.max_step);
             // Integrate the interval between the representable endpoints.
-            let next_t = (t + h).min(t_end);
-            // A rounded-up endpoint must not conceal a sub-resolution cap.
-            let first_t = if t == 0.0 {
-                f64::from_bits(1)
-            } else if t > 0.0 {
-                f64::from_bits(t.to_bits() + 1)
+            // A step sized to the remaining span lands on `t_end` exactly:
+            // `t + (t_end - t)` can round one ulp to either side of it.
+            let next_t = if h >= t_end - t {
+                t_end
             } else {
-                f64::from_bits(t.to_bits() - 1)
+                (t + h).min(t_end)
             };
-            if p.max_step < first_t - t || next_t <= t {
+            // A rounded-up endpoint must not conceal a sub-resolution cap.
+            if p.max_step < next_up(t) - t || next_t <= t {
                 return Err(OdeError::StepSizeUnderflow { t, h });
             }
             h = next_t - t;
@@ -746,16 +768,18 @@ impl OdeSolver for DormandPrince45 {
                     y_stage[i] = y[i] + h * acc;
                 }
             };
+            // Stage times never pass the endpoint (`C[5] = 1` is `next_t`).
+            let stage_t = |c: f64| (t + c * h).min(next_t);
             stage(&dopri::A2, &k, y, &mut y_stage, h);
-            system.rhs(t + dopri::C[1] * h, &y_stage, &mut k[1]);
+            system.rhs(stage_t(dopri::C[1]), &y_stage, &mut k[1]);
             stage(&dopri::A3, &k, y, &mut y_stage, h);
-            system.rhs(t + dopri::C[2] * h, &y_stage, &mut k[2]);
+            system.rhs(stage_t(dopri::C[2]), &y_stage, &mut k[2]);
             stage(&dopri::A4, &k, y, &mut y_stage, h);
-            system.rhs(t + dopri::C[3] * h, &y_stage, &mut k[3]);
+            system.rhs(stage_t(dopri::C[3]), &y_stage, &mut k[3]);
             stage(&dopri::A5, &k, y, &mut y_stage, h);
-            system.rhs(t + dopri::C[4] * h, &y_stage, &mut k[4]);
+            system.rhs(stage_t(dopri::C[4]), &y_stage, &mut k[4]);
             stage(&dopri::A6, &k, y, &mut y_stage, h);
-            system.rhs(t + dopri::C[5] * h, &y_stage, &mut k[5]);
+            system.rhs(stage_t(dopri::C[5]), &y_stage, &mut k[5]);
             // 5th-order solution.
             for i in 0..dim {
                 let mut acc = 0.0;
@@ -764,7 +788,7 @@ impl OdeSolver for DormandPrince45 {
                 }
                 y_new[i] = y[i] + h * acc;
             }
-            system.rhs(t + h, &y_new, &mut k[6]);
+            system.rhs(next_t, &y_new, &mut k[6]);
 
             // Error estimate and acceptance.
             let mut err = 0.0f64;
@@ -797,7 +821,7 @@ impl OdeSolver for DormandPrince45 {
             // Accepted: build the dense interpolant, unless nothing reads
             // it on this step (no scan, and no sample date up to its end,
             // the endpoint included).
-            let sampled = sample_cursor < samples.len() && samples[sample_cursor] <= t + h;
+            let sampled = sample_cursor < samples.len() && samples[sample_cursor] <= next_t;
             if scanned || sampled {
                 dense.fill(t, h, y, &y_new, &k);
             }
@@ -810,7 +834,7 @@ impl OdeSolver for DormandPrince45 {
                     &mut dense_eval,
                     &g0,
                     t,
-                    t + h,
+                    next_t,
                     p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
@@ -844,16 +868,16 @@ impl OdeSolver for DormandPrince45 {
                     &mut dense_eval,
                     &mut v0,
                     t,
-                    t + h,
+                    next_t,
                     p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
                     &mut observation_scratch,
                 );
-                system.events(t + h, &y_new, &mut g0);
+                system.events(next_t, &y_new, &mut g0);
                 if let Some(outcome) = reestablish_precondition(
                     &g0,
-                    t + h,
+                    next_t,
                     &y_new,
                     y,
                     samples,
@@ -871,7 +895,7 @@ impl OdeSolver for DormandPrince45 {
                     &mut dense_eval,
                     &mut v0,
                     t,
-                    t + h,
+                    next_t,
                     p.scan_points(h),
                     p.tol_event,
                     &mut y_scratch,
@@ -880,14 +904,14 @@ impl OdeSolver for DormandPrince45 {
             }
 
             // Deliver samples inside the accepted step.
-            while sample_cursor < samples.len() && samples[sample_cursor] <= t + h {
+            while sample_cursor < samples.len() && samples[sample_cursor] <= next_t {
                 let ts = samples[sample_cursor];
                 dense.eval(ts, &mut y_scratch);
                 on_sample(ts, &y_scratch);
                 sample_cursor += 1;
             }
 
-            t += h;
+            t = next_t;
             if t >= work_window_end {
                 work_window_end = (t + p.max_step).min(t_end);
                 window_trials = 0;
