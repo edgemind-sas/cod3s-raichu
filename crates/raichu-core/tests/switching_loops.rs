@@ -113,6 +113,7 @@ fn pump(start: f64, release: f64) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 

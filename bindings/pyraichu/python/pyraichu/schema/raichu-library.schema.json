@@ -1,0 +1,5658 @@
+{
+  "$defs": {
+    "AggOp": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "sum",
+              "description": "Sum of connected numeric values.",
+              "type": "string"
+            },
+            {
+              "const": "count",
+              "description": "Number of connections.",
+              "type": "string"
+            },
+            {
+              "const": "all",
+              "description": "True iff all connected boolean values are true.",
+              "type": "string"
+            },
+            {
+              "const": "any",
+              "description": "True iff at least one connected boolean value is true.",
+              "type": "string"
+            },
+            {
+              "const": "mean",
+              "description": "Arithmetic mean of connected numeric values (M3: sensor\naveraging: cod3s `compute_reference_mean`). 0.0 with no\nconnection.",
+              "type": "string"
+            },
+            {
+              "const": "median",
+              "description": "Median of connected numeric values (M3: redundant-sensor\nmedian/vote). Even count averages the\ntwo central values; 0.0 with no connection.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/AggOp"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Aggregation over the values connected to an *in* port\n(sum, count, all, any, mean, median)."
+    },
+    "Allocation": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "description": "Proportional to demand: each consumer receives\n`available x demand / Σ demands`, capped at its own demand.\nNeeds no parameter, so a consumer added to the port needs no edit.",
+              "properties": {
+                "policy": {
+                  "const": "proportional",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "policy"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Fixed shares: each consumer receives `available x share`, capped at\nits own demand, and the surplus of a consumer that asked for less\nis redistributed to the others. The shares must cover every\nconnection of the port and sum to 1.",
+              "properties": {
+                "policy": {
+                  "const": "shares",
+                  "type": "string"
+                },
+                "shares": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/ConsumerParam"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_ConsumerParam"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/ConsumerParam"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_ConsumerParam"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "One share per consumer of the port."
+                }
+              },
+              "required": [
+                "policy",
+                "shares"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Strict priority: consumers are served in full, in ascending rank,\nuntil the available quantity runs out. Equal ranks break by\n**connection declaration index**, so the order is a property of\nthe model file and never of the engine's sweep.",
+              "properties": {
+                "policy": {
+                  "const": "priority",
+                  "type": "string"
+                },
+                "priorities": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/ConsumerParam"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_ConsumerParam"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/ConsumerParam"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_ConsumerParam"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "One rank per consumer of the port."
+                }
+              },
+              "required": [
+                "policy",
+                "priorities"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "allocated": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Channel of `port` receiving each consumer's share (written)."
+            },
+            "available": {
+              "$ref": "#/$defs/Expr",
+              "description": "The quantity available for distribution. Evaluated on the current\nstate; a negative value distributes nothing."
+            },
+            "demand": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Channel of `port` carrying each consumer's demand (read)."
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Operator name, unique inside its component, and the name that\ndesignates this step in [`Model::evaluation_order`]."
+            },
+            "port": {
+              "$ref": "#/$defs/Template_string",
+              "description": "The **out** port whose connections receive the quantity."
+            }
+          },
+          "required": [
+            "name",
+            "port",
+            "available",
+            "demand",
+            "allocated"
+          ],
+          "type": "object",
+          "unevaluatedProperties": false
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Allocation"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The **conservative distribution operator**: it reads one available\nquantity and one demand per outgoing connection of an out port, and\nwrites one allocated quantity per outgoing connection under a declared\npolicy.\n\n# Why it is not a sensitive function\n\nA [`SensitiveFunction`] effect writes **one** target. A split cannot be\nwritten that way: the share handed to one consumer depends on what\nevery other consumer asked for, so the operator writes the whole vector\nat once, as a single indivisible step.\n\n# Why it sits on the explicit-equation path\n\nThe engine runs only the explicit pass inside its solver callbacks; a\ntrigger-driven entity never runs during integration. Quantities written\nfrom a trigger would stay frozen across an integration segment, every\nwatched margin reading them would freeze with them, and a boundary\ncrossing would degrade silently from *located* to *polled*. The\noperator is therefore an ordinary step of the explicit sweep, named in\n[`Model::evaluation_order`] like an explicit equation, and evaluated at\nevery evaluation point.\n\nBoth channels live on the producing port: `demand` carries what each\nconsumer asks for (written upstream of this step), `allocated` carries\nwhat it gets. Nothing else may write the `allocated` quantities: a\nsecond writer is refused at build time\n([`ModelError::AllocationTargetWritten`])."
+    },
+    "Assignment": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "target": {
+              "$ref": "#/$defs/AttrRef",
+              "description": "The attribute being assigned."
+            },
+            "value": {
+              "$ref": "#/$defs/Expr",
+              "description": "The value expression."
+            }
+          },
+          "required": [
+            "target",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Assignment"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A direct assignment `target := value`: the M0 form of a\nsensitive-function *effect* (the mutation is declarative data)."
+    },
+    "AttrKind": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "bool",
+              "description": "Boolean state.",
+              "type": "string"
+            },
+            {
+              "const": "int",
+              "description": "64-bit signed integer state.",
+              "type": "string"
+            },
+            {
+              "const": "float",
+              "description": "64-bit floating-point state.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/AttrKind"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The type of an attribute (M0 kinds; `String` discrete state is reserved\nand will extend this enum without breaking serialized models)."
+    },
+    "AttrRef": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attribute": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Name of the attribute inside the component."
+            },
+            "component": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Name of the component owning the attribute."
+            }
+          },
+          "required": [
+            "component",
+            "attribute"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/AttrRef"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Reference to an attribute by hierarchical name: the *authoring /\nserialized* form. Build-time validation resolves it to dense indices\n(typed errors on dangling references; no stringly-typed lookups at\nsimulation time)."
+    },
+    "Attribute": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "init": {
+              "$ref": "#/$defs/Value",
+              "description": "Initial value (must match `kind`; checked at validation)."
+            },
+            "kind": {
+              "$ref": "#/$defs/AttrKind",
+              "description": "Type of the attribute."
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Attribute name, unique inside its component."
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "init"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Attribute"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "An intrinsic, typed state attribute of a component."
+    },
+    "Automaton": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "init": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Initial state (must be one of `states`)."
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Automaton name, unique inside its component."
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Template_string"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_string"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Template_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_string"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "State names (unique)."
+            },
+            "transitions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Transition"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Transition"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Transition"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Transition"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "Transitions."
+            }
+          },
+          "required": [
+            "name",
+            "states",
+            "init",
+            "transitions"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Automaton"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A finite automaton owned by a component. The global state space is\nthe Cartesian product of component automata but is **never\nmaterialised** (the key to avoiding combinatorial explosion: keep it\nthat way)."
+    },
+    "BodyParts": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allocations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Allocation"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Allocation"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Allocation"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Allocation"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": []
+            },
+            "attributes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Attribute"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Attribute"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Attribute"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Attribute"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": []
+            },
+            "automata": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Automaton"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Automaton"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Automaton"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Automaton"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": []
+            },
+            "equations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Equation"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Equation"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Equation"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Equation"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": []
+            },
+            "interfaces": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Interface"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Interface"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Interface"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Interface"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": []
+            },
+            "ports": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Port"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Port"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Port"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Port"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": []
+            },
+            "sensitive_functions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/SensitiveFunction"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_SensitiveFunction"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/SensitiveFunction"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_SensitiveFunction"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": []
+            }
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/BodyParts"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The body of a type or fragment once its templates are resolved: the\nparts of a core component, without its name."
+    },
+    "BoolOp": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "and",
+              "description": "Conjunction of all arguments.",
+              "type": "string"
+            },
+            {
+              "const": "or",
+              "description": "Disjunction of all arguments.",
+              "type": "string"
+            },
+            {
+              "const": "not",
+              "description": "Negation (exactly one argument; enforced by model validation).",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/BoolOp"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Boolean connectives."
+    },
+    "CatalogueMode": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Condition"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/Condition"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": null
+            },
+            "description": {
+              "$ref": "#/$defs/Template_string_or_null",
+              "default": null
+            },
+            "effects": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Effect"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Effect"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Effect"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Effect"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": []
+            },
+            "metadata": {
+              "anyOf": [
+                {},
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {},
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": null
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string"
+            },
+            "nature": {
+              "$ref": "#/$defs/Nature"
+            }
+          },
+          "required": [
+            "name",
+            "nature"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/CatalogueMode"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "One entry of a type's mode catalogue, templates resolved."
+    },
+    "Channel": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "init": {
+              "$ref": "#/$defs/Template_number_double",
+              "default": 0.0,
+              "description": "Initial value of every attribute materialised for this channel:\nthe value a consumer reads before anything writes the channel."
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Channel name, unique inside its port."
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Channel"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A **per-connection channel** declared on an out port.\n\nAn out port exposes one attribute, so every in port connected to it\nreads the same number. A channel adds the opposite affordance: one\nquantity *per connection*, so a producer can hand a different share to\neach consumer over the same port (the conservative-flow shape).\n\nThe channel is declared once, here, on the port; the **compiler\nmaterialises** one float attribute per (connection, channel) on the\nproducing component, named by [`channel_attribute_name`]. Declaring\nthose attributes by hand would name the topology twice and let a model\ndeclare a channel with no matching connection.\n\nMaterialised attributes are ordinary float attributes: equations and\nsensitive functions write them, the causal journal records them, the\nsnapshot carries them, and indicators observe them."
+    },
+    "CmpOp": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "eq",
+              "description": "Equality.",
+              "type": "string"
+            },
+            {
+              "const": "ne",
+              "description": "Inequality.",
+              "type": "string"
+            },
+            {
+              "const": "lt",
+              "description": "Strictly less than.",
+              "type": "string"
+            },
+            {
+              "const": "le",
+              "description": "Less than or equal.",
+              "type": "string"
+            },
+            {
+              "const": "gt",
+              "description": "Strictly greater than.",
+              "type": "string"
+            },
+            {
+              "const": "ge",
+              "description": "Greater than or equal.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/CmpOp"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Comparison operators (guards on discrete state)."
+    },
+    "CombineRule": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "any_cuts",
+              "description": "Boolean: false while at least one active mode cuts.",
+              "type": "string"
+            },
+            {
+              "const": "any_activates",
+              "description": "Boolean: true while at least one active mode activates.",
+              "type": "string"
+            },
+            {
+              "const": "min",
+              "description": "Numeric: the smallest value held by an active mode.",
+              "type": "string"
+            },
+            {
+              "const": "max",
+              "description": "Numeric: the largest value held by an active mode.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/CombineRule"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "How the effects of several active modes on one attribute combine."
+    },
+    "Condition": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "Literal constant.",
+              "properties": {
+                "op": {
+                  "const": "const",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/$defs/Value",
+                  "description": "The constant value."
+                }
+              },
+              "required": [
+                "op",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Read an attribute.",
+              "properties": {
+                "attr": {
+                  "$ref": "#/$defs/AttrRef",
+                  "description": "The referenced attribute."
+                },
+                "op": {
+                  "const": "attr",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "attr"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Aggregate the values connected to an in-port.",
+              "properties": {
+                "agg": {
+                  "$ref": "#/$defs/AggOp",
+                  "description": "The aggregation operator."
+                },
+                "channel": {
+                  "$ref": "#/$defs/Template_string_or_null",
+                  "description": "Optional **channel selector**. Absent (the default) reads the\nattribute each connected out-port exports: its single, shared\nvalue. Present, it reads instead the per-connection quantity\nthe compiler materialises for that channel, so two consumers\non the same out-port receive different numbers (the\nconservative-flow shape). Every connected out-port must\ndeclare the named channel; validation refuses otherwise."
+                },
+                "op": {
+                  "const": "port_agg",
+                  "type": "string"
+                },
+                "port": {
+                  "$ref": "#/$defs/PortRef",
+                  "description": "The referenced in-port."
+                }
+              },
+              "required": [
+                "op",
+                "port",
+                "agg"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Compare two sub-expressions.",
+              "properties": {
+                "cmp": {
+                  "$ref": "#/$defs/CmpOp",
+                  "description": "The comparison operator."
+                },
+                "lhs": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Left operand."
+                },
+                "op": {
+                  "const": "cmp",
+                  "type": "string"
+                },
+                "rhs": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Right operand."
+                }
+              },
+              "required": [
+                "op",
+                "cmp",
+                "lhs",
+                "rhs"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Combine boolean sub-expressions.",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Condition"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Condition"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (`Not` takes exactly one; validated at model build)."
+                },
+                "bool_op": {
+                  "$ref": "#/$defs/BoolOp",
+                  "description": "The boolean connective."
+                },
+                "op": {
+                  "const": "bool",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "bool_op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "True while the referenced automaton is in the given state:\nmuscadet links state changes to attribute changes through it.",
+              "properties": {
+                "op": {
+                  "const": "state_active",
+                  "type": "string"
+                },
+                "state": {
+                  "$ref": "#/$defs/StateRef",
+                  "description": "The referenced state."
+                }
+              },
+              "required": [
+                "op",
+                "state"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "N-ary sum (M1).",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Condition"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Condition"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (≥ 1, validated at model build)."
+                },
+                "op": {
+                  "const": "add",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Binary subtraction.",
+              "properties": {
+                "lhs": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Minuend."
+                },
+                "op": {
+                  "const": "sub",
+                  "type": "string"
+                },
+                "rhs": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Subtrahend."
+                }
+              },
+              "required": [
+                "op",
+                "lhs",
+                "rhs"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "N-ary product.",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Condition"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Condition"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (≥ 1, validated at model build)."
+                },
+                "op": {
+                  "const": "mul",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Binary division (always evaluates as float).",
+              "properties": {
+                "lhs": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Dividend."
+                },
+                "op": {
+                  "const": "div",
+                  "type": "string"
+                },
+                "rhs": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Divisor."
+                }
+              },
+              "required": [
+                "op",
+                "lhs",
+                "rhs"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "N-ary minimum (clamping: `min(max(lo, v), hi)` patterns).",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Condition"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Condition"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (≥ 1, validated at model build)."
+                },
+                "op": {
+                  "const": "min",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "N-ary maximum.",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Condition"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Condition"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (≥ 1, validated at model build)."
+                },
+                "op": {
+                  "const": "max",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Conditional expression: with [`Expr::StateActive`] as condition\nit covers the piecewise-by-automaton-state right-hand sides of\nthe corpus (empty/full tank freezing `dv/dt`).",
+              "properties": {
+                "cond": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Boolean condition."
+                },
+                "op": {
+                  "const": "if",
+                  "type": "string"
+                },
+                "otherwise": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Value otherwise."
+                },
+                "then": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Value when the condition holds."
+                }
+              },
+              "required": [
+                "op",
+                "cond",
+                "then",
+                "otherwise"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Sine (M4: sinusoidal sources, RLC generator).",
+              "properties": {
+                "arg": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Operand (radians)."
+                },
+                "op": {
+                  "const": "sin",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "arg"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Natural exponential `e^arg` (state-dependent failure rates:\nthe heated-tank λ(T) of the Aldemir benchmark).",
+              "properties": {
+                "arg": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Operand."
+                },
+                "op": {
+                  "const": "exp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "arg"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Current simulation time (M4). Meaningful in continuously\nevaluated expressions (equations, watched margins, guards);\nsensitive functions are *not* re-triggered by the passage of\ntime alone.",
+              "properties": {
+                "op": {
+                  "const": "time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "True while the named mode is occurred.",
+              "properties": {
+                "mode": {
+                  "$ref": "#/$defs/Template_string"
+                },
+                "op": {
+                  "const": "mode_active",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "mode"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A condition: a core expression in which `mode_active` names an activated mode as `Instance.mode`."
+    },
+    "ConsumerParam": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "to": {
+              "$ref": "#/$defs/PortRef",
+              "description": "The in port at the far end of the connection this value applies to."
+            },
+            "value": {
+              "$ref": "#/$defs/Template_number_double",
+              "description": "The value: a share of the available quantity under\n[`AllocationPolicy::Shares`] (in [0, 1], summing to 1 over the\nport's connections), a priority rank under\n[`AllocationPolicy::Priority`] (lowest served first)."
+            }
+          },
+          "required": [
+            "to",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/ConsumerParam"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "One **consumer-keyed** parameter of an allocation policy: the value\nthat applies to the connection ending at `to`.\n\nKeyed by the destination port rather than by a position in a list, so\ninserting or reordering a connection cannot silently re-attach a share\nto a different consumer. Parallel edges to the same destination share\none entry, which is coherent: each of them then carries that value,\nand the share sum is checked over the *connections*."
+    },
+    "CycleCancellation": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "auto",
+              "description": "The engine decides from the compiled model: the group is not\ncancelled when its effect reaches a feared event through a\nquantity that remembers it.",
+              "type": "string"
+            },
+            {
+              "const": "never",
+              "description": "The group is never cancelled: its failures stay in the sequences,\nrepaired or not. For an effect the analysis cannot see, such as a\ncounter a sensitive function keeps.",
+              "type": "string"
+            },
+            {
+              "const": "always",
+              "description": "The group is always cancelled, whatever the analysis finds: the\nanalyst asserts that the effect of a repaired failure is gone.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/CycleCancellation"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Whether the minimal-sequence reduction may cancel a cycle group, that\nis drop a failure repaired before the feared event on the hypothesis\nthat a repaired component no longer contributes\n([`Transition::cycle_cancellation`])."
+    },
+    "Effect": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attribute": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Targeted attribute of the instance."
+            },
+            "value": {
+              "$ref": "#/$defs/Template_boolean_or_number",
+              "description": "Held value: a plain JSON boolean or number."
+            }
+          },
+          "required": [
+            "attribute",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Effect"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "One effect of a mode: the value it holds on an attribute while the\nmode is occurred."
+    },
+    "Equation": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expr": {
+              "$ref": "#/$defs/Expr",
+              "description": "Right-hand side."
+            },
+            "kind": {
+              "$ref": "#/$defs/EquationKind",
+              "description": "Explicit assignment or ODE."
+            },
+            "target": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Local attribute receiving the value (must be `Float`)."
+            }
+          },
+          "required": [
+            "target",
+            "kind",
+            "expr"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Equation"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A continuous-evolution equation attached to a component. Targets a\n*local* `Float` attribute; declaration order across the component is\nthe solving `Order` of the formalism."
+    },
+    "EquationKind": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "explicit",
+              "description": "Algebraic assignment `V = expr`, recomputed whenever its inputs\nchange during continuous evolution (solved in declaration order).",
+              "type": "string"
+            },
+            {
+              "const": "ode",
+              "description": "First-order ODE `dV/dt = expr`, integrated by `raichu-numeric`.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/EquationKind"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The kind of a continuous-evolution equation (CEvol of the paper)."
+    },
+    "Expr": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "Literal constant.",
+              "properties": {
+                "op": {
+                  "const": "const",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/$defs/Value",
+                  "description": "The constant value."
+                }
+              },
+              "required": [
+                "op",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Read an attribute.",
+              "properties": {
+                "attr": {
+                  "$ref": "#/$defs/AttrRef",
+                  "description": "The referenced attribute."
+                },
+                "op": {
+                  "const": "attr",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "attr"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Aggregate the values connected to an in-port.",
+              "properties": {
+                "agg": {
+                  "$ref": "#/$defs/AggOp",
+                  "description": "The aggregation operator."
+                },
+                "channel": {
+                  "$ref": "#/$defs/Template_string_or_null",
+                  "description": "Optional **channel selector**. Absent (the default) reads the\nattribute each connected out-port exports: its single, shared\nvalue. Present, it reads instead the per-connection quantity\nthe compiler materialises for that channel, so two consumers\non the same out-port receive different numbers (the\nconservative-flow shape). Every connected out-port must\ndeclare the named channel; validation refuses otherwise."
+                },
+                "op": {
+                  "const": "port_agg",
+                  "type": "string"
+                },
+                "port": {
+                  "$ref": "#/$defs/PortRef",
+                  "description": "The referenced in-port."
+                }
+              },
+              "required": [
+                "op",
+                "port",
+                "agg"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Compare two sub-expressions.",
+              "properties": {
+                "cmp": {
+                  "$ref": "#/$defs/CmpOp",
+                  "description": "The comparison operator."
+                },
+                "lhs": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Left operand."
+                },
+                "op": {
+                  "const": "cmp",
+                  "type": "string"
+                },
+                "rhs": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Right operand."
+                }
+              },
+              "required": [
+                "op",
+                "cmp",
+                "lhs",
+                "rhs"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Combine boolean sub-expressions.",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Expr"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Expr"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (`Not` takes exactly one; validated at model build)."
+                },
+                "bool_op": {
+                  "$ref": "#/$defs/BoolOp",
+                  "description": "The boolean connective."
+                },
+                "op": {
+                  "const": "bool",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "bool_op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "True while the referenced automaton is in the given state:\nmuscadet links state changes to attribute changes through it.",
+              "properties": {
+                "op": {
+                  "const": "state_active",
+                  "type": "string"
+                },
+                "state": {
+                  "$ref": "#/$defs/StateRef",
+                  "description": "The referenced state."
+                }
+              },
+              "required": [
+                "op",
+                "state"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "N-ary sum (M1).",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Expr"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Expr"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (≥ 1, validated at model build)."
+                },
+                "op": {
+                  "const": "add",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Binary subtraction.",
+              "properties": {
+                "lhs": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Minuend."
+                },
+                "op": {
+                  "const": "sub",
+                  "type": "string"
+                },
+                "rhs": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Subtrahend."
+                }
+              },
+              "required": [
+                "op",
+                "lhs",
+                "rhs"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "N-ary product.",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Expr"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Expr"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (≥ 1, validated at model build)."
+                },
+                "op": {
+                  "const": "mul",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Binary division (always evaluates as float).",
+              "properties": {
+                "lhs": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Dividend."
+                },
+                "op": {
+                  "const": "div",
+                  "type": "string"
+                },
+                "rhs": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Divisor."
+                }
+              },
+              "required": [
+                "op",
+                "lhs",
+                "rhs"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "N-ary minimum (clamping: `min(max(lo, v), hi)` patterns).",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Expr"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Expr"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (≥ 1, validated at model build)."
+                },
+                "op": {
+                  "const": "min",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "N-ary maximum.",
+              "properties": {
+                "args": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Expr"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Expr"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Operands (≥ 1, validated at model build)."
+                },
+                "op": {
+                  "const": "max",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Conditional expression: with [`Expr::StateActive`] as condition\nit covers the piecewise-by-automaton-state right-hand sides of\nthe corpus (empty/full tank freezing `dv/dt`).",
+              "properties": {
+                "cond": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Boolean condition."
+                },
+                "op": {
+                  "const": "if",
+                  "type": "string"
+                },
+                "otherwise": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Value otherwise."
+                },
+                "then": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Value when the condition holds."
+                }
+              },
+              "required": [
+                "op",
+                "cond",
+                "then",
+                "otherwise"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Sine (M4: sinusoidal sources, RLC generator).",
+              "properties": {
+                "arg": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Operand (radians)."
+                },
+                "op": {
+                  "const": "sin",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "arg"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Natural exponential `e^arg` (state-dependent failure rates:\nthe heated-tank λ(T) of the Aldemir benchmark).",
+              "properties": {
+                "arg": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Operand."
+                },
+                "op": {
+                  "const": "exp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op",
+                "arg"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Current simulation time (M4). Meaningful in continuously\nevaluated expressions (equations, watched margins, guards);\nsensitive functions are *not* re-triggered by the passage of\ntime alone.",
+              "properties": {
+                "op": {
+                  "const": "time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A serializable expression tree (M0 subset).\n\nThe serde representation is tag-based (`op` field), so adding variants\nin later milestones (arithmetic, math functions, ODE right-hand sides)\nkeeps old model files loadable."
+    },
+    "ForEach_Allocation": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Allocation"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Allocation"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Assignment": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Assignment"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Assignment"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Attribute": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Attribute"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Attribute"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Automaton": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Automaton"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Automaton"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Channel": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Channel"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Channel"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Condition": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Condition"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Condition"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_ConsumerParam": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConsumerParam"
+              },
+              {
+                "$ref": "#/$defs/ForEach_ConsumerParam"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Effect": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Effect"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Effect"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Equation": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Equation"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Equation"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Expr": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Expr"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Expr"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Interface": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Interface"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Interface"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Port": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Port"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Port"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_SensitiveFunction": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SensitiveFunction"
+              },
+              {
+                "$ref": "#/$defs/ForEach_SensitiveFunction"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Transition": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Transition"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Transition"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Transition_points": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/Template_number_double"
+                      },
+                      {
+                        "$ref": "#/$defs/Template_number_double"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "$choose": {
+                        "type": "string"
+                      },
+                      "cases": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "maxItems": 2,
+                              "minItems": 2,
+                              "prefixItems": [
+                                {
+                                  "$ref": "#/$defs/Template_number_double"
+                                },
+                                {
+                                  "$ref": "#/$defs/Template_number_double"
+                                }
+                              ],
+                              "type": "array"
+                            },
+                            {
+                              "$ref": "#/$defs/TemplateParam"
+                            }
+                          ]
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "$choose",
+                      "cases"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/$defs/ForEach_Transition_points"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_number": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Template_number_double"
+              },
+              {
+                "$ref": "#/$defs/ForEach_number"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_string": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Template_string"
+              },
+              {
+                "$ref": "#/$defs/ForEach_string"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "Fragment": {
+      "additionalProperties": false,
+      "description": "A named, parameterised piece of behaviour composed into types.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/BodyParts",
+          "default": {},
+          "description": "Body in core constructs, templated (attributes, ports, interfaces,\nautomata, sensitive_functions, equations, allocations)."
+        },
+        "description": {
+          "description": "Free text for the reader of the library.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "name": {
+          "description": "Fragment name, unique in its library.",
+          "type": "string"
+        },
+        "parameters": {
+          "default": [],
+          "description": "Parameters.",
+          "items": {
+            "$ref": "#/$defs/Parameter"
+          },
+          "type": "array"
+        },
+        "targetable": {
+          "default": [],
+          "description": "Attributes a mode may target, with their combination rule.",
+          "items": {
+            "$ref": "#/$defs/Targetable"
+          },
+          "type": "array"
+        },
+        "uses": {
+          "default": [],
+          "description": "Fragments this fragment applies.",
+          "items": {
+            "$ref": "#/$defs/Use"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Interface": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Interface name, unique inside its component."
+            },
+            "ports": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Template_string"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_string"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Template_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_string"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "Names of the grouped ports (must exist on the component)."
+            }
+          },
+          "required": [
+            "name",
+            "ports"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Interface"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A named group of ports, validated at build time (each port must\nexist), that an [`InterfaceConnection`] joins to another at once. The\nports stay the fundamental notion: the engine runs on the port\nconnections an interface connection stands for."
+    },
+    "InterruptionPolicy": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "reset",
+              "description": "The occurrence duration is cancelled; a fresh duration is drawn\nas soon as the guard holds again (interruptible transition).\nRAICHU's default.",
+              "type": "string"
+            },
+            {
+              "const": "resume",
+              "description": "The countdown is paused and resumes where it stopped when the\nguard holds again: a RAICHU extension, e.g. suspended repair\nwork.",
+              "type": "string"
+            },
+            {
+              "const": "continue",
+              "description": "The countdown never stops: the transition fires at the drawn\ndate even if the guard dropped meanwhile\n(pinned by the `interrupt_01` cross-validation).",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/InterruptionPolicy"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "What happens to a pending occurrence countdown when the transition\nguard turns false (naming set by Roland, 2026-07-04). Only\nmeaningful for duration distributions (delay, exp, …) with a guard."
+    },
+    "ItemKind": {
+      "description": "The kind of the items of a list parameter.",
+      "oneOf": [
+        {
+          "const": "number",
+          "description": "Float items.",
+          "type": "string"
+        },
+        {
+          "const": "integer",
+          "description": "Integer items.",
+          "type": "string"
+        },
+        {
+          "const": "bool",
+          "description": "Boolean items.",
+          "type": "string"
+        },
+        {
+          "const": "string",
+          "description": "String items.",
+          "type": "string"
+        },
+        {
+          "const": "string_list",
+          "description": "Items that are themselves lists of strings (a production condition:\na disjunction of conjunctions, each a list of attribute names).",
+          "type": "string"
+        }
+      ]
+    },
+    "Library": {
+      "additionalProperties": false,
+      "description": "A library of types and fragments.",
+      "properties": {
+        "description": {
+          "description": "Free text for the reader of the library.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fragments": {
+          "default": [],
+          "description": "Fragments.",
+          "items": {
+            "$ref": "#/$defs/Fragment"
+          },
+          "type": "array"
+        },
+        "imports": {
+          "default": [],
+          "description": "Imported libraries, by name (`std`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "name": {
+          "description": "Library name (no `.`: it prefixes imported fragment names).",
+          "type": "string"
+        },
+        "types": {
+          "default": [],
+          "description": "Types.",
+          "items": {
+            "$ref": "#/$defs/TypeDef"
+          },
+          "type": "array"
+        },
+        "version": {
+          "description": "Library version, matched exactly by the systems that use it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "Nature": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "failure",
+              "description": "A failure mode.",
+              "type": "string"
+            },
+            {
+              "const": "compromise",
+              "description": "A compromise (cyber) mode.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Nature"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The nature of a mode. It serves selection and reporting and changes\nno semantics."
+    },
+    "ParamKind": {
+      "description": "The kind of a declared parameter.",
+      "oneOf": [
+        {
+          "const": "number",
+          "description": "A float (an integer literal is accepted).",
+          "type": "string"
+        },
+        {
+          "const": "integer",
+          "description": "An integer.",
+          "type": "string"
+        },
+        {
+          "const": "bool",
+          "description": "A boolean.",
+          "type": "string"
+        },
+        {
+          "const": "string",
+          "description": "A string (names, interpolated into identifiers).",
+          "type": "string"
+        },
+        {
+          "const": "law",
+          "description": "A probability law, written as a core law object\n(`{\"distrib\": \"exp\", \"rate\": 0.1}`).",
+          "type": "string"
+        },
+        {
+          "const": "list",
+          "description": "A list whose items repeat a part of the type (`$for_each`).",
+          "type": "string"
+        },
+        {
+          "const": "enum",
+          "description": "One value among `values`, selecting a variant (`$choose`).",
+          "type": "string"
+        }
+      ]
+    },
+    "Parameter": {
+      "additionalProperties": false,
+      "description": "A parameter of a type or a fragment.",
+      "properties": {
+        "default": {
+          "description": "Default value; a parameter without one is required."
+        },
+        "description": {
+          "description": "Free text for the reader of the library.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The item kind of a `list` parameter."
+        },
+        "kind": {
+          "$ref": "#/$defs/ParamKind",
+          "description": "Parameter kind."
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "name": {
+          "description": "Parameter name, unique in its type or fragment.",
+          "type": "string"
+        },
+        "values": {
+          "description": "The allowed values of an `enum` parameter.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "Port": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attr": {
+              "$ref": "#/$defs/Template_string_or_null",
+              "description": "For an **out** port: the local attribute it exposes (required).\nFor an **in** port: must be absent, in-port values are read\nthrough aggregation expressions (`Expr::PortAgg`)."
+            },
+            "channels": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Channel"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Channel"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Channel"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Channel"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "**Out ports only**: per-connection channels (see [`Channel`]).\nAn in port reads channels through `Expr::PortAgg`, it never\ndeclares them; validation refuses a channel list on an in port."
+            },
+            "dir": {
+              "$ref": "#/$defs/PortDir",
+              "description": "Direction."
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Port name, unique inside its component."
+            }
+          },
+          "required": [
+            "name",
+            "dir"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Port"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A connection endpoint on a component boundary: the fundamental\ninterconnection notion of RAICHU (the model representation)."
+    },
+    "PortDir": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "in",
+              "description": "The port receives values from connected out-ports.",
+              "type": "string"
+            },
+            {
+              "const": "out",
+              "description": "The port exposes a local attribute to connected in-ports.",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/PortDir"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Direction of a port."
+    },
+    "PortRef": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Name of the component owning the port."
+            },
+            "port": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Name of the port inside the component."
+            }
+          },
+          "required": [
+            "component",
+            "port"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/PortRef"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Reference to a port by hierarchical name (authoring form)."
+    },
+    "SensitiveFunction": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effects": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Assignment"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Assignment"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Assignment"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Assignment"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "Ordered assignments applied when the function fires."
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Function name, unique inside its component."
+            }
+          },
+          "required": [
+            "name",
+            "effects"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/SensitiveFunction"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A sensitive function: declarative effects re-evaluated whenever one of\nthe attributes read by its expressions changes (the sensitivity set is\n*derived* from the expressions: no manual `addSensitiveMethod`\nbookkeeping). Effects run to a fixpoint during the discrete-evolution\nphase (paper rule `propagate_effects`)."
+    },
+    "StateRef": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "automaton": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Name of the automaton."
+            },
+            "component": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Name of the component owning the automaton."
+            },
+            "state": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Name of the state."
+            }
+          },
+          "required": [
+            "component",
+            "automaton",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/StateRef"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Reference to an automaton state by hierarchical name (authoring form)."
+    },
+    "Targetable": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attribute": {
+              "$ref": "#/$defs/Template_string"
+            },
+            "rule": {
+              "$ref": "#/$defs/CombineRule"
+            }
+          },
+          "required": [
+            "attribute",
+            "rule"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Targetable"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "An attribute a mode may target, with its combination rule."
+    },
+    "TemplateParam": {
+      "additionalProperties": false,
+      "description": "A template parameter: stands for the parameter's value.",
+      "properties": {
+        "$param": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "$param"
+      ],
+      "type": "object"
+    },
+    "Template_boolean": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Template_boolean_or_number": {
+      "anyOf": [
+        {
+          "type": [
+            "boolean",
+            "number"
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "boolean",
+                      "number"
+                    ]
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Template_integer_int64": {
+      "anyOf": [
+        {
+          "format": "int64",
+          "type": "integer"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Template_number_double": {
+      "anyOf": [
+        {
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Template_number_or_null_double": {
+      "anyOf": [
+        {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Template_string": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Template_string_or_null": {
+      "anyOf": [
+        {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Transition": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "description": "Deterministic delay: fires `time` after the source state is\nentered. Exactly one target state.",
+              "properties": {
+                "distrib": {
+                  "const": "delay",
+                  "type": "string"
+                },
+                "time": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Delay duration (simulation time units, ≥ 0)."
+                }
+              },
+              "required": [
+                "distrib",
+                "time"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Instantaneous branching: fires immediately;\nthe destination is drawn among `targets` with the given\nprobabilities. `probs` holds N−1 values for N targets, the last\nprobability being the complement `1 − Σ probs`.",
+              "properties": {
+                "distrib": {
+                  "const": "inst",
+                  "type": "string"
+                },
+                "probs": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Template_number_double"
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_number"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Template_number_double"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_number"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "First N−1 branch probabilities, each in [0, 1], Σ ≤ 1."
+                }
+              },
+              "required": [
+                "distrib",
+                "probs"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Watched transition (paper rule `schedule_boundary`, M1): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
+              "properties": {
+                "distrib": {
+                  "const": "watched",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "distrib"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a\nspontaneous PDMP jump with survival\n`P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,\nand exactly one of the two rate forms:\n\n- `rate`: fixed positive λ; the firing date is sampled as\n  `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a\n  guard turning true re-arms with a fresh draw.\n- `rate_expr`: **state-dependent** λ(x) as an expression. The\n  engine realises the survival integral with a cumulative\n  hazard: a threshold `E ~ Exp(1)` is drawn at source-state\n  entry and the transition fires when `∫ λ dt` reaches `E`.\n  When λ depends only on discretely-updated state the hazard is\n  piecewise-constant and the firing date is rescheduled at each\n  discrete change (`reschedule_modifiable`); when it depends on\n  ODE-integrated attributes (or time), the hazard is integrated\n  alongside the continuous state and the firing time is located\n  like a watched boundary crossing. λ must evaluate ≥ 0.",
+              "properties": {
+                "distrib": {
+                  "const": "exp",
+                  "type": "string"
+                },
+                "rate": {
+                  "$ref": "#/$defs/Template_number_or_null_double",
+                  "description": "Fixed occurrence rate λ > 0 (events per time unit)."
+                },
+                "rate_expr": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Expr"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Expr"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "State-dependent occurrence rate λ(x) ≥ 0 (events per time\nunit), evaluated on the current model state."
+                }
+              },
+              "required": [
+                "distrib"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Weibull distribution (M4): delay sampled with CDF `1 − e^{−(t/scale)^shape}`.",
+              "properties": {
+                "distrib": {
+                  "const": "weibull",
+                  "type": "string"
+                },
+                "scale": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Scale parameter λ > 0 (time units)."
+                },
+                "shape": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Shape parameter k > 0."
+                }
+              },
+              "required": [
+                "distrib",
+                "shape",
+                "scale"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Log-normal distribution (M4): `ln(delay) ~ N(mu, sigma²)`.",
+              "properties": {
+                "distrib": {
+                  "const": "lognormal",
+                  "type": "string"
+                },
+                "mu": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Mean of the underlying normal."
+                },
+                "sigma": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Standard deviation of the underlying normal (> 0)."
+                }
+              },
+              "required": [
+                "distrib",
+                "mu",
+                "sigma"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Gamma distribution (M4): shape/scale parametrisation\n(mean = shape·scale).",
+              "properties": {
+                "distrib": {
+                  "const": "gamma",
+                  "type": "string"
+                },
+                "scale": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Scale parameter θ > 0 (time units)."
+                },
+                "shape": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Shape parameter k > 0."
+                }
+              },
+              "required": [
+                "distrib",
+                "shape",
+                "scale"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Uniform distribution (M4): delay drawn uniformly in `[low, high)`.",
+              "properties": {
+                "distrib": {
+                  "const": "uniform",
+                  "type": "string"
+                },
+                "high": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Upper bound (> low)."
+                },
+                "low": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Lower bound (≥ 0)."
+                }
+              },
+              "required": [
+                "distrib",
+                "low",
+                "high"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Empirical / user-defined distribution (M4): inverse-CDF sampling from a\ntable of `(time, cumulative probability)` points: any\ndistribution supplied as a sampled CDF. `u < points[0].1` maps\nto `points[0].0` (probability mass at the first time); between\npoints the CDF is linearly interpolated; the last cumulative\nprobability must be 1.",
+              "properties": {
+                "distrib": {
+                  "const": "empirical",
+                  "type": "string"
+                },
+                "points": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "maxItems": 2,
+                                "minItems": 2,
+                                "prefixItems": [
+                                  {
+                                    "$ref": "#/$defs/Template_number_double"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/Template_number_double"
+                                  }
+                                ],
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "$choose": {
+                                    "type": "string"
+                                  },
+                                  "cases": {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "maxItems": 2,
+                                          "minItems": 2,
+                                          "prefixItems": [
+                                            {
+                                              "$ref": "#/$defs/Template_number_double"
+                                            },
+                                            {
+                                              "$ref": "#/$defs/Template_number_double"
+                                            }
+                                          ],
+                                          "type": "array"
+                                        },
+                                        {
+                                          "$ref": "#/$defs/TemplateParam"
+                                        }
+                                      ]
+                                    },
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "$choose",
+                                  "cases"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Transition_points"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "maxItems": 2,
+                                          "minItems": 2,
+                                          "prefixItems": [
+                                            {
+                                              "$ref": "#/$defs/Template_number_double"
+                                            },
+                                            {
+                                              "$ref": "#/$defs/Template_number_double"
+                                            }
+                                          ],
+                                          "type": "array"
+                                        },
+                                        {
+                                          "$ref": "#/$defs/TemplateParam"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "$choose": {
+                                              "type": "string"
+                                            },
+                                            "cases": {
+                                              "additionalProperties": {
+                                                "anyOf": [
+                                                  {
+                                                    "maxItems": 2,
+                                                    "minItems": 2,
+                                                    "prefixItems": [
+                                                      {
+                                                        "$ref": "#/$defs/Template_number_double"
+                                                      },
+                                                      {
+                                                        "$ref": "#/$defs/Template_number_double"
+                                                      }
+                                                    ],
+                                                    "type": "array"
+                                                  },
+                                                  {
+                                                    "$ref": "#/$defs/TemplateParam"
+                                                  }
+                                                ]
+                                              },
+                                              "type": "object"
+                                            }
+                                          },
+                                          "required": [
+                                            "$choose",
+                                            "cases"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Transition_points"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Non-decreasing `(time, cumulative probability)` table."
+                }
+              },
+              "required": [
+                "distrib",
+                "points"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "cycle_cancellation": {
+              "$ref": "#/$defs/CycleCancellation",
+              "description": "**Sequence analysis**: whether the reduction may cancel this\ntransition's [`Transition::cycle_group`]\n([`CycleCancellation`]): `auto` (the default) lets the engine decide\nfrom the model, `never` and `always` override that decision. Every\ntransition of one `(component, cycle_group)` declares the same\nvalue, and a transition with no `cycle_group` declares none.\n\nNon-baseline construct when not `auto`: a document carrying it must\ndeclare [`Feature::CycleCancellation`]. An engine that ignored the\nfield would cancel a group the analyst declared `never`, which is\nexactly the silent collapse the declaration exists to prevent."
+            },
+            "cycle_group": {
+              "$ref": "#/$defs/Template_string_or_null",
+              "description": "**Sequence analysis**: cycle-pair group id: occ/rep (occ/not_occ)\npartner transitions of one failure mode share it, so the\ncycle-filtering step can drop transient failure→repair pairs that net\nout before the feared event. `None` = not part of a cycle pair."
+            },
+            "effects": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Assignment"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Assignment"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Assignment"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Assignment"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "**Edge effects**: assignments evaluated ONCE, when the transition\nfires, after its state change, in declaration order. Unlike a\nsensitive function's effects (a level, re-evaluated whenever what it\nreads changes), nothing re-applies them and nothing restores the\nvalue: the attribute keeps what was written until something else\nwrites it. That is a one-shot effect, and on an attribute nothing\nelse writes, a variable that memorises (a latched detection, an\nalarm). An interrupted transition writes nothing.\n\nOn the target of an ODE equation, an edge effect is a **reset\nmap**, the jump of a piecewise-deterministic Markov process: the\ncontinuous state takes the written value at the firing instant and\nthe integration restarts from it (the value must be a finite float).\n\nNon-baseline construct: a document carrying it must declare\n[`Feature::TransitionEffects`]. An effect on an attribute an explicit\nequation or a sensitive function writes is refused\n([`ModelError::TransitionEffectOverwritten`]): the next evaluation\nwould erase it."
+            },
+            "guard": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Expr"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/Expr"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "Guard: the transition is armed while the guard holds.\nAbsent means \"always true\"."
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TransitionKind"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/TransitionKind"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "**Declared reliability role** (see [`TransitionKind`]): `failure`,\n`repair`, or absent (the default, and the reading of every model\nwritten before the field existed). Applies to the first declared\ntarget only. The muscadet plugin sets it on the failure-mode edges\nit emits."
+            },
+            "monitored": {
+              "$ref": "#/$defs/Template_boolean",
+              "description": "**Sequence analysis**: when true, firing this transition records a\n`SeqEvent` (component, target state, time) into the per-trajectory\nsequence trace (zero cost unless sequence recording is enabled). The\nmuscadet plugin sets it on ObjFM occ/rep and ObjEvent occ transitions."
+            },
+            "monitored_states": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Template_string"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_string"
+                      }
+                    ]
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Template_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_string"
+                                }
+                              ]
+                            },
+                            "type": [
+                              "array",
+                              "null"
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "**Sequence analysis**: the targets whose entry a `monitored`\ntransition records, when not all of them. `None` (the default)\nrecords every target; a list records the entry into those targets\nonly, and a firing that realises another branch records nothing.\n\nThis is how a Bernoulli draw is monitored: its winning branch is\nthe event of the mission, while its losing branch only parks the\nautomaton until the solicitation falls, and recording that park\nwould break the strict failure/repair alternation the cycle filter\nrelies on. Each entry must name a target of the transition, the\nlist must not be empty, and the transition must be `monitored`.\n\nNon-baseline construct: a document carrying it must declare\n[`Feature::MonitoredStates`]. An engine that ignored the field\nwould record every branch, and the sequence and importance analyses\nwould read a lost draw as an event without a word."
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Transition name, unique inside its automaton."
+            },
+            "on_interruption": {
+              "$ref": "#/$defs/InterruptionPolicy",
+              "default": "reset",
+              "description": "What happens to a pending countdown when the guard turns false\n(paper rule `drop_disabled`; see [`InterruptionPolicy`])."
+            },
+            "source": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Source state (must exist in the automaton)."
+            },
+            "targets": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Template_string"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_string"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Template_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_string"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "Target states (exactly one for `Delay`; one per branch for\n`Inst`, with `probs.len() == targets.len() - 1`)."
+            }
+          },
+          "required": [
+            "name",
+            "source",
+            "targets"
+          ],
+          "type": "object",
+          "unevaluatedProperties": false
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Transition"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A transition of an automaton.\n\nMaps to the paper's deterministic transitions ⟨q_src, guard, delay,\ndest-distribution⟩; stochastic (`schedule_stochastic`) and watched (`schedule_boundary`)\ntransitions arrive in M2/M1 respectively."
+    },
+    "TransitionKind": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "failure",
+              "description": "Firing into the first declared target is a failure occurrence.",
+              "type": "string"
+            },
+            {
+              "const": "repair",
+              "description": "Firing into the first declared target is a repair (a return to\nservice).",
+              "type": "string"
+            },
+            {
+              "const": "observation",
+              "description": "The transition belongs to an **observer**: an automaton that watches\nthe model (a feared event, a counted alarm) and writes nothing the\nrest of the model reads. Unlike the two roles above it changes the\ntrajectory, in one place only: among transitions due at the same\ndate, an observer's fires first, so a state the model reaches and\nleaves within one instant is still observed, as the reference engine\nobserves it. Requires [`Feature::ObserverPriority`].",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/TransitionKind"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "The declared **reliability role** of a transition: whether firing it\nfails something or repairs something.\n\nA driver that bounds the number of failures along a sequence (the\nfailure-count cut-off of the sequence-tree exploration) reads this\ndeclaration; it never infers the role from state names, a convention the\nengine could not check. The kind changes no simulated trajectory, so it\nis a baseline construct and requires no feature.\n\nFor a transition with several targets (an instantaneous branching, such\nas an on-demand failure draw towards `[failed, parked]`), the declared\nrole applies to its **first declared target** only: firing into any\nother branch is not a failure (respectively a repair)."
+    },
+    "TypeDef": {
+      "additionalProperties": false,
+      "description": "A component type: parameters, behaviour and mode catalogue.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/BodyParts",
+          "default": {},
+          "description": "Own body in core constructs, templated."
+        },
+        "description": {
+          "description": "Free text for the reader of the library.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "modes": {
+          "default": [],
+          "description": "Mode catalogue, templated.",
+          "items": {
+            "$ref": "#/$defs/CatalogueMode"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Type name, unique in its library.",
+          "type": "string"
+        },
+        "parameters": {
+          "default": [],
+          "description": "Parameters.",
+          "items": {
+            "$ref": "#/$defs/Parameter"
+          },
+          "type": "array"
+        },
+        "targetable": {
+          "default": [],
+          "description": "Attributes a mode may target, with their combination rule.",
+          "items": {
+            "$ref": "#/$defs/Targetable"
+          },
+          "type": "array"
+        },
+        "uses": {
+          "default": [],
+          "description": "Fragments this type applies.",
+          "items": {
+            "$ref": "#/$defs/Use"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Use": {
+      "additionalProperties": false,
+      "description": "The application of a fragment inside a type or another fragment.",
+      "properties": {
+        "fragment": {
+          "description": "Fragment name: local (`gate`) or from an imported library\n(`std.bool_flow_out`).",
+          "type": "string"
+        },
+        "with": {
+          "additionalProperties": true,
+          "description": "Parameter values of the fragment; a value may itself be a template\nof the enclosing type (`{\"$param\": \"name\"}`, `\"${name}_in\"`).",
+          "type": "object"
+        }
+      },
+      "required": [
+        "fragment"
+      ],
+      "type": "object"
+    },
+    "Value": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "Boolean value.",
+              "properties": {
+                "kind": {
+                  "const": "bool",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/$defs/Template_boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "64-bit signed integer value.",
+              "properties": {
+                "kind": {
+                  "const": "int",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/$defs/Template_integer_int64"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "64-bit floating-point value.",
+              "properties": {
+                "kind": {
+                  "const": "float",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/$defs/Template_number_double"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Value"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A runtime value carried by attributes and expressions.\n\nM0 kinds only: booleans, integers, floats. `String` discrete state is\nreserved (a deliberate departure) and will extend this enum\nwithout breaking serialized models (tagged representation)."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "library": {
+      "$ref": "#/$defs/Library"
+    },
+    "raichu_library": {
+      "additionalProperties": false,
+      "description": "Envelope header.",
+      "properties": {
+        "format": {
+          "const": 1
+        }
+      },
+      "required": [
+        "format"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "raichu_library",
+    "library"
+  ],
+  "title": "RAICHU library document",
+  "type": "object"
+}

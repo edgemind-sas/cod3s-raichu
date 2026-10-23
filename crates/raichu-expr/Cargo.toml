@@ -10,6 +10,11 @@ description = "Serializable expression trees for guards, effects and (later) ODE
 
 [dependencies]
 serde.workspace = true
+schemars = { workspace = true, optional = true }
+
+[features]
+# JSON Schema derivation of the serialized types (off by default).
+schema = ["dep:schemars"]
 
 [dev-dependencies]
 serde_json.workspace = true

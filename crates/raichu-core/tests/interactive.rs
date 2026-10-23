@@ -109,6 +109,7 @@ fn two_component_model() -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -315,6 +316,7 @@ fn demand_model(ok_prob: f64) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 

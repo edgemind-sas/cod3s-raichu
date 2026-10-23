@@ -1,0 +1,171 @@
+{
+  "raichu_library": {
+    "format": 1
+  },
+  "library": {
+    "name": "stra_cyber",
+    "version": "1.0.0",
+    "imports": [
+      "std"
+    ],
+    "description": "The three components of the STRA cyber example (muscadet `examples/isimu/cyber_3comp`), re-authored as a component type library.",
+    "types": [
+      {
+        "name": "AlimElec",
+        "description": "A power supply: a constant source.",
+        "uses": [
+          {
+            "fragment": "std.bool_source_out",
+            "with": {
+              "name": "power"
+            }
+          }
+        ]
+      },
+      {
+        "name": "Serveur",
+        "description": "A server fed by power, with two mission outputs and a dormant service function a compromise mode can start.",
+        "uses": [
+          {
+            "fragment": "std.bool_flow_in",
+            "with": {
+              "name": "power",
+              "logic": "and"
+            }
+          },
+          {
+            "fragment": "std.bool_flow_out",
+            "with": {
+              "name": "f_orange",
+              "prod_cond": [
+                [
+                  "power_fed_in"
+                ]
+              ]
+            }
+          },
+          {
+            "fragment": "std.bool_flow_out",
+            "with": {
+              "name": "f_blue",
+              "prod_cond": [
+                [
+                  "power_fed_in"
+                ]
+              ]
+            }
+          },
+          {
+            "fragment": "std.bool_source_out",
+            "with": {
+              "name": "f_service",
+              "prod_init": false
+            }
+          }
+        ],
+        "modes": [
+          {
+            "name": "mdc_a",
+            "nature": "compromise",
+            "description": "Privilege escalation: no effect of its own, it unlocks mdc_b."
+          },
+          {
+            "name": "mdc_b",
+            "nature": "compromise",
+            "description": "Exploit of the service function: starts it.",
+            "effects": [
+              {
+                "attribute": "f_service_prod_available",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "ProcessIndustriel",
+        "description": "An industrial process with two functions, inhibited by a compromise reached through the service function.",
+        "uses": [
+          {
+            "fragment": "std.bool_flow_in",
+            "with": {
+              "name": "f_orange",
+              "logic": "and"
+            }
+          },
+          {
+            "fragment": "std.bool_flow_in",
+            "with": {
+              "name": "f_blue",
+              "logic": "and"
+            }
+          },
+          {
+            "fragment": "std.bool_flow_in",
+            "with": {
+              "name": "f_service",
+              "logic": "or"
+            }
+          },
+          {
+            "fragment": "std.bool_flow_out",
+            "with": {
+              "name": "F1",
+              "prod_cond": [
+                [
+                  "f_orange_fed_in"
+                ]
+              ]
+            }
+          },
+          {
+            "fragment": "std.bool_flow_out",
+            "with": {
+              "name": "F2",
+              "prod_cond": [
+                [
+                  "f_blue_fed_in"
+                ]
+              ]
+            }
+          }
+        ],
+        "modes": [
+          {
+            "name": "mdc_proc",
+            "nature": "compromise",
+            "description": "Function inhibition, possible once the service flow arrives.",
+            "condition": {
+              "op": "cmp",
+              "cmp": "eq",
+              "lhs": {
+                "op": "attr",
+                "attr": {
+                  "component": "$self",
+                  "attribute": "f_service_fed_in"
+                }
+              },
+              "rhs": {
+                "op": "const",
+                "value": {
+                  "kind": "bool",
+                  "value": true
+                }
+              }
+            },
+            "effects": [
+              {
+                "attribute": "F1_fed_available_out",
+                "value": false
+              },
+              {
+                "attribute": "F2_fed_available_out",
+                "value": false
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,1731 @@
+{
+  "$defs": {
+    "Activation": {
+      "additionalProperties": false,
+      "description": "The activation of a catalogued mode by a study.",
+      "properties": {
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An extra activation condition, ANDed with the catalogue condition;\na core expression that may also use `{\"op\": \"mode_active\", \"mode\":\n\"Instance.mode\"}`."
+        },
+        "instances": {
+          "description": "The instances it applies to; exclusive with `type`.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "mode": {
+          "description": "Mode name in the type's catalogue.",
+          "type": "string"
+        },
+        "occurrence": {
+          "$ref": "#/$defs/Distrib",
+          "description": "Occurrence law (core law object), required."
+        },
+        "on_interruption": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterruptionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Interruption policy of both transitions (default `reset`)."
+        },
+        "repair": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Distrib"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Repair law; absent means the mode, once occurred, stays occurred."
+        },
+        "type": {
+          "description": "Every instance of this type; exclusive with `instances`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "occurrence"
+      ],
+      "type": "object"
+    },
+    "AggOp": {
+      "description": "Aggregation over the values connected to an *in* port\n(sum, count, all, any, mean, median).",
+      "oneOf": [
+        {
+          "const": "sum",
+          "description": "Sum of connected numeric values.",
+          "type": "string"
+        },
+        {
+          "const": "count",
+          "description": "Number of connections.",
+          "type": "string"
+        },
+        {
+          "const": "all",
+          "description": "True iff all connected boolean values are true.",
+          "type": "string"
+        },
+        {
+          "const": "any",
+          "description": "True iff at least one connected boolean value is true.",
+          "type": "string"
+        },
+        {
+          "const": "mean",
+          "description": "Arithmetic mean of connected numeric values (M3: sensor\naveraging: cod3s `compute_reference_mean`). 0.0 with no\nconnection.",
+          "type": "string"
+        },
+        {
+          "const": "median",
+          "description": "Median of connected numeric values (M3: redundant-sensor\nmedian/vote). Even count averages the\ntwo central values; 0.0 with no connection.",
+          "type": "string"
+        }
+      ]
+    },
+    "AttrRef": {
+      "additionalProperties": false,
+      "description": "Reference to an attribute by hierarchical name: the *authoring /\nserialized* form. Build-time validation resolves it to dense indices\n(typed errors on dangling references; no stringly-typed lookups at\nsimulation time).",
+      "properties": {
+        "attribute": {
+          "description": "Name of the attribute inside the component.",
+          "type": "string"
+        },
+        "component": {
+          "description": "Name of the component owning the attribute.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "attribute"
+      ],
+      "type": "object"
+    },
+    "BoolOp": {
+      "description": "Boolean connectives.",
+      "oneOf": [
+        {
+          "const": "and",
+          "description": "Conjunction of all arguments.",
+          "type": "string"
+        },
+        {
+          "const": "or",
+          "description": "Disjunction of all arguments.",
+          "type": "string"
+        },
+        {
+          "const": "not",
+          "description": "Negation (exactly one argument; enforced by model validation).",
+          "type": "string"
+        }
+      ]
+    },
+    "CmpOp": {
+      "description": "Comparison operators (guards on discrete state).",
+      "oneOf": [
+        {
+          "const": "eq",
+          "description": "Equality.",
+          "type": "string"
+        },
+        {
+          "const": "ne",
+          "description": "Inequality.",
+          "type": "string"
+        },
+        {
+          "const": "lt",
+          "description": "Strictly less than.",
+          "type": "string"
+        },
+        {
+          "const": "le",
+          "description": "Less than or equal.",
+          "type": "string"
+        },
+        {
+          "const": "gt",
+          "description": "Strictly greater than.",
+          "type": "string"
+        },
+        {
+          "const": "ge",
+          "description": "Greater than or equal.",
+          "type": "string"
+        }
+      ]
+    },
+    "Condition": {
+      "description": "A condition: a core expression in which `mode_active` names an activated mode as `Instance.mode`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Literal constant.",
+          "properties": {
+            "op": {
+              "const": "const",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Value",
+              "description": "The constant value."
+            }
+          },
+          "required": [
+            "op",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read an attribute.",
+          "properties": {
+            "attr": {
+              "$ref": "#/$defs/AttrRef",
+              "description": "The referenced attribute."
+            },
+            "op": {
+              "const": "attr",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "attr"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Aggregate the values connected to an in-port.",
+          "properties": {
+            "agg": {
+              "$ref": "#/$defs/AggOp",
+              "description": "The aggregation operator."
+            },
+            "channel": {
+              "description": "Optional **channel selector**. Absent (the default) reads the\nattribute each connected out-port exports: its single, shared\nvalue. Present, it reads instead the per-connection quantity\nthe compiler materialises for that channel, so two consumers\non the same out-port receive different numbers (the\nconservative-flow shape). Every connected out-port must\ndeclare the named channel; validation refuses otherwise.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "const": "port_agg",
+              "type": "string"
+            },
+            "port": {
+              "$ref": "#/$defs/PortRef",
+              "description": "The referenced in-port."
+            }
+          },
+          "required": [
+            "op",
+            "port",
+            "agg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Compare two sub-expressions.",
+          "properties": {
+            "cmp": {
+              "$ref": "#/$defs/CmpOp",
+              "description": "The comparison operator."
+            },
+            "lhs": {
+              "$ref": "#/$defs/Condition",
+              "description": "Left operand."
+            },
+            "op": {
+              "const": "cmp",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Condition",
+              "description": "Right operand."
+            }
+          },
+          "required": [
+            "op",
+            "cmp",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Combine boolean sub-expressions.",
+          "properties": {
+            "args": {
+              "description": "Operands (`Not` takes exactly one; validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            },
+            "bool_op": {
+              "$ref": "#/$defs/BoolOp",
+              "description": "The boolean connective."
+            },
+            "op": {
+              "const": "bool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "bool_op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "True while the referenced automaton is in the given state:\nmuscadet links state changes to attribute changes through it.",
+          "properties": {
+            "op": {
+              "const": "state_active",
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/$defs/StateRef",
+              "description": "The referenced state."
+            }
+          },
+          "required": [
+            "op",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary sum (M1).",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "add",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Binary subtraction.",
+          "properties": {
+            "lhs": {
+              "$ref": "#/$defs/Condition",
+              "description": "Minuend."
+            },
+            "op": {
+              "const": "sub",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Condition",
+              "description": "Subtrahend."
+            }
+          },
+          "required": [
+            "op",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary product.",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "mul",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Binary division (always evaluates as float).",
+          "properties": {
+            "lhs": {
+              "$ref": "#/$defs/Condition",
+              "description": "Dividend."
+            },
+            "op": {
+              "const": "div",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Condition",
+              "description": "Divisor."
+            }
+          },
+          "required": [
+            "op",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary minimum (clamping: `min(max(lo, v), hi)` patterns).",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "min",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary maximum.",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "max",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Conditional expression: with [`Expr::StateActive`] as condition\nit covers the piecewise-by-automaton-state right-hand sides of\nthe corpus (empty/full tank freezing `dv/dt`).",
+          "properties": {
+            "cond": {
+              "$ref": "#/$defs/Condition",
+              "description": "Boolean condition."
+            },
+            "op": {
+              "const": "if",
+              "type": "string"
+            },
+            "otherwise": {
+              "$ref": "#/$defs/Condition",
+              "description": "Value otherwise."
+            },
+            "then": {
+              "$ref": "#/$defs/Condition",
+              "description": "Value when the condition holds."
+            }
+          },
+          "required": [
+            "op",
+            "cond",
+            "then",
+            "otherwise"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sine (M4: sinusoidal sources, RLC generator).",
+          "properties": {
+            "arg": {
+              "$ref": "#/$defs/Condition",
+              "description": "Operand (radians)."
+            },
+            "op": {
+              "const": "sin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "arg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Natural exponential `e^arg` (state-dependent failure rates:\nthe heated-tank λ(T) of the Aldemir benchmark).",
+          "properties": {
+            "arg": {
+              "$ref": "#/$defs/Condition",
+              "description": "Operand."
+            },
+            "op": {
+              "const": "exp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "arg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Current simulation time (M4). Meaningful in continuously\nevaluated expressions (equations, watched margins, guards);\nsensitive functions are *not* re-triggered by the passage of\ntime alone.",
+          "properties": {
+            "op": {
+              "const": "time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "True while the named mode is occurred.",
+          "properties": {
+            "mode": {
+              "type": "string"
+            },
+            "op": {
+              "const": "mode_active",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "mode"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Distrib": {
+      "description": "Occurrence distribution of a transition (M0 deterministic subset; `Exp` and the\nwider distribution library arrive in milestone M2).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Deterministic delay: fires `time` after the source state is\nentered. Exactly one target state.",
+          "properties": {
+            "distrib": {
+              "const": "delay",
+              "type": "string"
+            },
+            "time": {
+              "description": "Delay duration (simulation time units, ≥ 0).",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "distrib",
+            "time"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Instantaneous branching: fires immediately;\nthe destination is drawn among `targets` with the given\nprobabilities. `probs` holds N−1 values for N targets, the last\nprobability being the complement `1 − Σ probs`.",
+          "properties": {
+            "distrib": {
+              "const": "inst",
+              "type": "string"
+            },
+            "probs": {
+              "description": "First N−1 branch probabilities, each in [0, 1], Σ ≤ 1.",
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "distrib",
+            "probs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Watched transition (paper rule `schedule_boundary`, M1): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
+          "properties": {
+            "distrib": {
+              "const": "watched",
+              "type": "string"
+            }
+          },
+          "required": [
+            "distrib"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a\nspontaneous PDMP jump with survival\n`P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,\nand exactly one of the two rate forms:\n\n- `rate`: fixed positive λ; the firing date is sampled as\n  `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a\n  guard turning true re-arms with a fresh draw.\n- `rate_expr`: **state-dependent** λ(x) as an expression. The\n  engine realises the survival integral with a cumulative\n  hazard: a threshold `E ~ Exp(1)` is drawn at source-state\n  entry and the transition fires when `∫ λ dt` reaches `E`.\n  When λ depends only on discretely-updated state the hazard is\n  piecewise-constant and the firing date is rescheduled at each\n  discrete change (`reschedule_modifiable`); when it depends on\n  ODE-integrated attributes (or time), the hazard is integrated\n  alongside the continuous state and the firing time is located\n  like a watched boundary crossing. λ must evaluate ≥ 0.",
+          "properties": {
+            "distrib": {
+              "const": "exp",
+              "type": "string"
+            },
+            "rate": {
+              "description": "Fixed occurrence rate λ > 0 (events per time unit).",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "rate_expr": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Expr"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State-dependent occurrence rate λ(x) ≥ 0 (events per time\nunit), evaluated on the current model state."
+            }
+          },
+          "required": [
+            "distrib"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Weibull distribution (M4): delay sampled with CDF `1 − e^{−(t/scale)^shape}`.",
+          "properties": {
+            "distrib": {
+              "const": "weibull",
+              "type": "string"
+            },
+            "scale": {
+              "description": "Scale parameter λ > 0 (time units).",
+              "format": "double",
+              "type": "number"
+            },
+            "shape": {
+              "description": "Shape parameter k > 0.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "distrib",
+            "shape",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Log-normal distribution (M4): `ln(delay) ~ N(mu, sigma²)`.",
+          "properties": {
+            "distrib": {
+              "const": "lognormal",
+              "type": "string"
+            },
+            "mu": {
+              "description": "Mean of the underlying normal.",
+              "format": "double",
+              "type": "number"
+            },
+            "sigma": {
+              "description": "Standard deviation of the underlying normal (> 0).",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "distrib",
+            "mu",
+            "sigma"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Gamma distribution (M4): shape/scale parametrisation\n(mean = shape·scale).",
+          "properties": {
+            "distrib": {
+              "const": "gamma",
+              "type": "string"
+            },
+            "scale": {
+              "description": "Scale parameter θ > 0 (time units).",
+              "format": "double",
+              "type": "number"
+            },
+            "shape": {
+              "description": "Shape parameter k > 0.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "distrib",
+            "shape",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Uniform distribution (M4): delay drawn uniformly in `[low, high)`.",
+          "properties": {
+            "distrib": {
+              "const": "uniform",
+              "type": "string"
+            },
+            "high": {
+              "description": "Upper bound (> low).",
+              "format": "double",
+              "type": "number"
+            },
+            "low": {
+              "description": "Lower bound (≥ 0).",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "distrib",
+            "low",
+            "high"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Empirical / user-defined distribution (M4): inverse-CDF sampling from a\ntable of `(time, cumulative probability)` points: any\ndistribution supplied as a sampled CDF. `u < points[0].1` maps\nto `points[0].0` (probability mass at the first time); between\npoints the CDF is linearly interpolated; the last cumulative\nprobability must be 1.",
+          "properties": {
+            "distrib": {
+              "const": "empirical",
+              "type": "string"
+            },
+            "points": {
+              "description": "Non-decreasing `(time, cumulative probability)` table.",
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  {
+                    "format": "double",
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "distrib",
+            "points"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Effect": {
+      "additionalProperties": false,
+      "description": "One effect of a mode: the value it holds on an attribute while the\nmode is occurred.",
+      "properties": {
+        "attribute": {
+          "description": "Targeted attribute of the instance.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Held value: a plain JSON boolean or number.",
+          "type": [
+            "boolean",
+            "number"
+          ]
+        }
+      },
+      "required": [
+        "attribute",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Expr": {
+      "description": "A serializable expression tree (M0 subset).\n\nThe serde representation is tag-based (`op` field), so adding variants\nin later milestones (arithmetic, math functions, ODE right-hand sides)\nkeeps old model files loadable.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Literal constant.",
+          "properties": {
+            "op": {
+              "const": "const",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Value",
+              "description": "The constant value."
+            }
+          },
+          "required": [
+            "op",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read an attribute.",
+          "properties": {
+            "attr": {
+              "$ref": "#/$defs/AttrRef",
+              "description": "The referenced attribute."
+            },
+            "op": {
+              "const": "attr",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "attr"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Aggregate the values connected to an in-port.",
+          "properties": {
+            "agg": {
+              "$ref": "#/$defs/AggOp",
+              "description": "The aggregation operator."
+            },
+            "channel": {
+              "description": "Optional **channel selector**. Absent (the default) reads the\nattribute each connected out-port exports: its single, shared\nvalue. Present, it reads instead the per-connection quantity\nthe compiler materialises for that channel, so two consumers\non the same out-port receive different numbers (the\nconservative-flow shape). Every connected out-port must\ndeclare the named channel; validation refuses otherwise.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "const": "port_agg",
+              "type": "string"
+            },
+            "port": {
+              "$ref": "#/$defs/PortRef",
+              "description": "The referenced in-port."
+            }
+          },
+          "required": [
+            "op",
+            "port",
+            "agg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Compare two sub-expressions.",
+          "properties": {
+            "cmp": {
+              "$ref": "#/$defs/CmpOp",
+              "description": "The comparison operator."
+            },
+            "lhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Left operand."
+            },
+            "op": {
+              "const": "cmp",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Right operand."
+            }
+          },
+          "required": [
+            "op",
+            "cmp",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Combine boolean sub-expressions.",
+          "properties": {
+            "args": {
+              "description": "Operands (`Not` takes exactly one; validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "bool_op": {
+              "$ref": "#/$defs/BoolOp",
+              "description": "The boolean connective."
+            },
+            "op": {
+              "const": "bool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "bool_op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "True while the referenced automaton is in the given state:\nmuscadet links state changes to attribute changes through it.",
+          "properties": {
+            "op": {
+              "const": "state_active",
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/$defs/StateRef",
+              "description": "The referenced state."
+            }
+          },
+          "required": [
+            "op",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary sum (M1).",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "add",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Binary subtraction.",
+          "properties": {
+            "lhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Minuend."
+            },
+            "op": {
+              "const": "sub",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Subtrahend."
+            }
+          },
+          "required": [
+            "op",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary product.",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "mul",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Binary division (always evaluates as float).",
+          "properties": {
+            "lhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Dividend."
+            },
+            "op": {
+              "const": "div",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Divisor."
+            }
+          },
+          "required": [
+            "op",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary minimum (clamping: `min(max(lo, v), hi)` patterns).",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "min",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary maximum.",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "max",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Conditional expression: with [`Expr::StateActive`] as condition\nit covers the piecewise-by-automaton-state right-hand sides of\nthe corpus (empty/full tank freezing `dv/dt`).",
+          "properties": {
+            "cond": {
+              "$ref": "#/$defs/Expr",
+              "description": "Boolean condition."
+            },
+            "op": {
+              "const": "if",
+              "type": "string"
+            },
+            "otherwise": {
+              "$ref": "#/$defs/Expr",
+              "description": "Value otherwise."
+            },
+            "then": {
+              "$ref": "#/$defs/Expr",
+              "description": "Value when the condition holds."
+            }
+          },
+          "required": [
+            "op",
+            "cond",
+            "then",
+            "otherwise"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sine (M4: sinusoidal sources, RLC generator).",
+          "properties": {
+            "arg": {
+              "$ref": "#/$defs/Expr",
+              "description": "Operand (radians)."
+            },
+            "op": {
+              "const": "sin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "arg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Natural exponential `e^arg` (state-dependent failure rates:\nthe heated-tank λ(T) of the Aldemir benchmark).",
+          "properties": {
+            "arg": {
+              "$ref": "#/$defs/Expr",
+              "description": "Operand."
+            },
+            "op": {
+              "const": "exp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "arg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Current simulation time (M4). Meaningful in continuously\nevaluated expressions (equations, watched margins, guards);\nsensitive functions are *not* re-triggered by the passage of\ntime alone.",
+          "properties": {
+            "op": {
+              "const": "time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FearedEvent": {
+      "additionalProperties": false,
+      "description": "A feared event: a generated component watching a condition.",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Condition (core expression over instance attributes)."
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "name": {
+          "description": "Event name; it becomes the component name.",
+          "type": "string"
+        },
+        "target": {
+          "default": false,
+          "description": "Whether reaching the event ends and labels a sequence.",
+          "type": "boolean"
+        },
+        "tempo_not_occ": {
+          "default": 0.0,
+          "description": "Delay the condition must fail before the event clears.",
+          "format": "double",
+          "type": "number"
+        },
+        "tempo_occ": {
+          "default": 0.0,
+          "description": "Delay the condition must hold before the event occurs.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "condition"
+      ],
+      "type": "object"
+    },
+    "Indicator": {
+      "description": "A quantity recorded during simulation.",
+      "oneOf": [
+        {
+          "description": "Observe an attribute's value over time.",
+          "properties": {
+            "attr": {
+              "$ref": "#/$defs/AttrRef",
+              "description": "The observed attribute."
+            },
+            "target": {
+              "const": "attribute",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "attr"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Observe whether an automaton is in a given state (0/1 over time).",
+          "properties": {
+            "automaton": {
+              "description": "The automaton.",
+              "type": "string"
+            },
+            "component": {
+              "description": "Component owning the automaton.",
+              "type": "string"
+            },
+            "state": {
+              "description": "The observed state.",
+              "type": "string"
+            },
+            "target": {
+              "const": "state",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "component",
+            "automaton",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Observe the **truth of a threshold** on an attribute: `true` while\n`attr cmp value` holds, `false` otherwise.\n\nThe difference with [`IndicatorTarget::Attribute`] is the whole\npoint of the variant, and it is a difference of *quantity*, not of\nspelling: on a free-valued attribute the sojourn of\n[`IndicatorTarget::Attribute`] is the time-integral of the value\n(an area), while the sojourn here is the **time spent under the\ncondition** (a duration, bounded by the horizon). A study that\nasks \"how long was there hydrogen in the tank\" asks for the\nsecond, and reading it off the first returns the tank's content\nintegrated over time, which is plausible, larger than the horizon,\nand silently the wrong question's answer.\n\n`value` is a constant: this carries the threshold a study\ndeclares (cod3s's `operator` / `value_test` pair), not a general\nexpression. Kinds are checked at build time, so a boolean\nattribute may only be tested for (in)equality and a numeric one\nmay not be compared to a boolean.",
+          "properties": {
+            "attr": {
+              "$ref": "#/$defs/AttrRef",
+              "description": "The compared attribute."
+            },
+            "cmp": {
+              "$ref": "#/$defs/CmpOp",
+              "description": "The comparison operator."
+            },
+            "target": {
+              "const": "predicate",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Value",
+              "description": "The constant the attribute is compared against."
+            }
+          },
+          "required": [
+            "target",
+            "attr",
+            "cmp",
+            "value"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "name": {
+          "description": "Indicator name (unique in the model; any length is accepted).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "InterruptionPolicy": {
+      "description": "What happens to a pending occurrence countdown when the transition\nguard turns false (naming set by Roland, 2026-07-04). Only\nmeaningful for duration distributions (delay, exp, …) with a guard.",
+      "oneOf": [
+        {
+          "const": "reset",
+          "description": "The occurrence duration is cancelled; a fresh duration is drawn\nas soon as the guard holds again (interruptible transition).\nRAICHU's default.",
+          "type": "string"
+        },
+        {
+          "const": "resume",
+          "description": "The countdown is paused and resumes where it stopped when the\nguard holds again: a RAICHU extension, e.g. suspended repair\nwork.",
+          "type": "string"
+        },
+        {
+          "const": "continue",
+          "description": "The countdown never stops: the transition fires at the drawn\ndate even if the guard dropped meanwhile\n(pinned by the `interrupt_01` cross-validation).",
+          "type": "string"
+        }
+      ]
+    },
+    "Method": {
+      "description": "How the study is run.",
+      "oneOf": [
+        {
+          "const": "monte_carlo",
+          "description": "Indicator statistics over replicas.",
+          "type": "string"
+        },
+        {
+          "const": "sequences",
+          "description": "A sequence campaign.",
+          "type": "string"
+        }
+      ]
+    },
+    "Nature": {
+      "description": "The nature of a mode. It serves selection and reporting and changes\nno semantics.",
+      "oneOf": [
+        {
+          "const": "failure",
+          "description": "A failure mode.",
+          "type": "string"
+        },
+        {
+          "const": "compromise",
+          "description": "A compromise (cyber) mode.",
+          "type": "string"
+        }
+      ]
+    },
+    "OneOffMode": {
+      "additionalProperties": false,
+      "description": "A mode the study declares on one instance only.",
+      "properties": {
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Activation condition (core expression, `mode_active` allowed)."
+        },
+        "effects": {
+          "default": [],
+          "description": "Effects on targetable attributes of the instance.",
+          "items": {
+            "$ref": "#/$defs/Effect"
+          },
+          "type": "array"
+        },
+        "instance": {
+          "description": "The instance carrying the mode.",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "name": {
+          "description": "Mode name, unique on its instance.",
+          "type": "string"
+        },
+        "nature": {
+          "$ref": "#/$defs/Nature",
+          "description": "`failure` or `compromise`."
+        },
+        "occurrence": {
+          "$ref": "#/$defs/Distrib",
+          "description": "Occurrence law, required."
+        },
+        "on_interruption": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterruptionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Interruption policy (default `reset`)."
+        },
+        "repair": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Distrib"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Repair law; absent means absorbing."
+        }
+      },
+      "required": [
+        "instance",
+        "name",
+        "nature",
+        "occurrence"
+      ],
+      "type": "object"
+    },
+    "PortRef": {
+      "additionalProperties": false,
+      "description": "Reference to a port by hierarchical name (authoring form).",
+      "properties": {
+        "component": {
+          "description": "Name of the component owning the port.",
+          "type": "string"
+        },
+        "port": {
+          "description": "Name of the port inside the component.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "port"
+      ],
+      "type": "object"
+    },
+    "Simulation": {
+      "additionalProperties": false,
+      "description": "Run settings of a study, plain data mapped onto the engine's runs by\nthe caller.",
+      "properties": {
+        "horizon": {
+          "description": "Horizon.",
+          "format": "double",
+          "type": "number"
+        },
+        "instants": {
+          "description": "Sampling instants of the indicators.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/Method",
+          "description": "Run method."
+        },
+        "nb_runs": {
+          "description": "Number of replicas.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seed": {
+          "default": 0,
+          "description": "Master seed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stop_at_targets": {
+          "default": false,
+          "description": "Stop each replica at the first target reached.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "method",
+        "nb_runs",
+        "horizon"
+      ],
+      "type": "object"
+    },
+    "StateRef": {
+      "additionalProperties": false,
+      "description": "Reference to an automaton state by hierarchical name (authoring form).",
+      "properties": {
+        "automaton": {
+          "description": "Name of the automaton.",
+          "type": "string"
+        },
+        "component": {
+          "description": "Name of the component owning the automaton.",
+          "type": "string"
+        },
+        "state": {
+          "description": "Name of the state.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "automaton",
+        "state"
+      ],
+      "type": "object"
+    },
+    "StudyDocument": {
+      "additionalProperties": false,
+      "description": "A study: which modes run, with which laws, and what is observed.",
+      "properties": {
+        "description": {
+          "description": "Free text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "feared_events": {
+          "default": [],
+          "description": "Feared events.",
+          "items": {
+            "$ref": "#/$defs/FearedEvent"
+          },
+          "type": "array"
+        },
+        "indicators": {
+          "default": [],
+          "description": "Indicators, in the core form.",
+          "items": {
+            "$ref": "#/$defs/Indicator"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "modes": {
+          "default": [],
+          "description": "Activations of catalogued modes.",
+          "items": {
+            "$ref": "#/$defs/Activation"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Study name.",
+          "type": "string"
+        },
+        "one_off_modes": {
+          "default": [],
+          "description": "Modes declared for one instance only.",
+          "items": {
+            "$ref": "#/$defs/OneOffMode"
+          },
+          "type": "array"
+        },
+        "simulation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Simulation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Run settings."
+        },
+        "system": {
+          "description": "The system the study applies to, by name.",
+          "type": "string"
+        },
+        "targets": {
+          "default": [],
+          "description": "Sequence-analysis targets, in the core form.",
+          "items": {
+            "$ref": "#/$defs/Target"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "system"
+      ],
+      "type": "object"
+    },
+    "Target": {
+      "additionalProperties": false,
+      "description": "A **sequence-analysis target** (feared event / événement redouté): a\nnamed automaton state whose activation ends and labels a trajectory's\nrecorded sequence (mirrors cod3s `endCause`). Empty `targets` = no early\nstop and no `end_cause` (the trajectory runs to `t_max`).",
+      "properties": {
+        "automaton": {
+          "description": "The automaton.",
+          "type": "string"
+        },
+        "component": {
+          "description": "Component owning the automaton.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Target name (the `end_cause` label, e.g. `doors_unsecured`).",
+          "type": "string"
+        },
+        "state": {
+          "description": "The state whose activation reaches the target.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "component",
+        "automaton",
+        "state"
+      ],
+      "type": "object"
+    },
+    "Value": {
+      "description": "A runtime value carried by attributes and expressions.\n\nM0 kinds only: booleans, integers, floats. `String` discrete state is\nreserved (a deliberate departure) and will extend this enum\nwithout breaking serialized models (tagged representation).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Boolean value.",
+          "properties": {
+            "kind": {
+              "const": "bool",
+              "type": "string"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "64-bit signed integer value.",
+          "properties": {
+            "kind": {
+              "const": "int",
+              "type": "string"
+            },
+            "value": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "64-bit floating-point value.",
+          "properties": {
+            "kind": {
+              "const": "float",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "raichu_study": {
+      "additionalProperties": false,
+      "description": "Envelope header.",
+      "properties": {
+        "format": {
+          "const": 1
+        }
+      },
+      "required": [
+        "format"
+      ],
+      "type": "object"
+    },
+    "study": {
+      "$ref": "#/$defs/StudyDocument"
+    }
+  },
+  "required": [
+    "raichu_study",
+    "study"
+  ],
+  "title": "RAICHU study document",
+  "type": "object"
+}

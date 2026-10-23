@@ -1,0 +1,133 @@
+{
+  "raichu_study": {
+    "format": 1
+  },
+  "study": {
+    "name": "cyber_3comp_study",
+    "system": "cyber_3comp",
+    "description": "STRA `cyber_3comp_study.yaml`: three compromise modes chained by privilege escalation and the service function, deterministic delays, no repair.",
+    "modes": [
+      {
+        "mode": "mdc_a",
+        "instances": [
+          "Srv"
+        ],
+        "occurrence": {
+          "distrib": "delay",
+          "time": 10
+        }
+      },
+      {
+        "mode": "mdc_b",
+        "instances": [
+          "Srv"
+        ],
+        "occurrence": {
+          "distrib": "delay",
+          "time": 5
+        },
+        "condition": {
+          "op": "mode_active",
+          "mode": "Srv.mdc_a"
+        }
+      },
+      {
+        "mode": "mdc_proc",
+        "instances": [
+          "Proc"
+        ],
+        "occurrence": {
+          "distrib": "delay",
+          "time": 8
+        }
+      }
+    ],
+    "feared_events": [
+      {
+        "name": "process_F1_lost",
+        "target": true,
+        "tempo_occ": 0.01,
+        "condition": {
+          "op": "cmp",
+          "cmp": "eq",
+          "lhs": {
+            "op": "attr",
+            "attr": {
+              "component": "Proc",
+              "attribute": "F1_fed_out"
+            }
+          },
+          "rhs": {
+            "op": "const",
+            "value": {
+              "kind": "bool",
+              "value": false
+            }
+          }
+        }
+      },
+      {
+        "name": "process_F2_lost",
+        "target": true,
+        "tempo_occ": 0.01,
+        "condition": {
+          "op": "cmp",
+          "cmp": "eq",
+          "lhs": {
+            "op": "attr",
+            "attr": {
+              "component": "Proc",
+              "attribute": "F2_fed_out"
+            }
+          },
+          "rhs": {
+            "op": "const",
+            "value": {
+              "kind": "bool",
+              "value": false
+            }
+          }
+        }
+      }
+    ],
+    "simulation": {
+      "method": "monte_carlo",
+      "nb_runs": 1,
+      "horizon": 30.0,
+      "instants": [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        7.0,
+        8.0,
+        9.0,
+        10.0,
+        11.0,
+        12.0,
+        13.0,
+        14.0,
+        15.0,
+        16.0,
+        17.0,
+        18.0,
+        19.0,
+        20.0,
+        21.0,
+        22.0,
+        23.0,
+        24.0,
+        25.0,
+        26.0,
+        27.0,
+        28.0,
+        29.0,
+        30.0
+      ],
+      "seed": 42
+    }
+  }
+}

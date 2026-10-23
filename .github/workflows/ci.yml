@@ -161,7 +161,9 @@ jobs:
         run: |
           python scripts/build_fmu_runtime.py --target x86_64-unknown-linux-gnu --release
           pipx run maturin build --profile ci -m bindings/pyraichu/Cargo.toml
-          pip install target/wheels/pyraichu-*.whl pytest
+          # jsonschema runs the schema witness of the component type
+          # libraries; pyyaml their YAML documents (both skip without).
+          pip install target/wheels/pyraichu-*.whl pytest jsonschema pyyaml
       - name: Run the unit suite
         run: pytest python/tests/unit -q
 

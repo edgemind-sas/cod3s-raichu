@@ -1,0 +1,78 @@
+{
+  "raichu_system": {
+    "format": 1
+  },
+  "system": {
+    "name": "cyber_3comp",
+    "library": {
+      "name": "stra_cyber",
+      "version": "1.0.0"
+    },
+    "instances": [
+      {
+        "name": "Alim",
+        "type": "AlimElec"
+      },
+      {
+        "name": "Srv",
+        "type": "Serveur"
+      },
+      {
+        "name": "Proc",
+        "type": "ProcessIndustriel"
+      }
+    ],
+    "connections": [
+      {
+        "from": "Alim.power_out",
+        "to": "Srv.power_in"
+      },
+      {
+        "from": "Srv.f_orange_out",
+        "to": "Proc.f_orange_in"
+      },
+      {
+        "from": "Srv.f_blue_out",
+        "to": "Proc.f_blue_in"
+      },
+      {
+        "from": "Srv.f_service_out",
+        "to": "Proc.f_service_in"
+      }
+    ],
+    "indicators": [
+      {
+        "name": "F1",
+        "target": "attribute",
+        "attr": {
+          "component": "Proc",
+          "attribute": "F1_fed_out"
+        }
+      },
+      {
+        "name": "F2",
+        "target": "attribute",
+        "attr": {
+          "component": "Proc",
+          "attribute": "F2_fed_out"
+        }
+      },
+      {
+        "name": "service",
+        "target": "attribute",
+        "attr": {
+          "component": "Srv",
+          "attribute": "f_service_fed_out"
+        }
+      },
+      {
+        "name": "service_in",
+        "target": "attribute",
+        "attr": {
+          "component": "Proc",
+          "attribute": "f_service_fed_in"
+        }
+      }
+    ]
+  }
+}

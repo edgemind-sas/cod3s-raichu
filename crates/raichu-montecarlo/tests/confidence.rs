@@ -89,6 +89,7 @@ fn exponential_model(rate: f64) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 

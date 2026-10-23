@@ -25,6 +25,7 @@ mod affine;
 /// reserved (a deliberate departure) and will extend this enum
 /// without breaking serialized models (tagged representation).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum Value {
     /// Boolean value.
@@ -40,6 +41,7 @@ pub enum Value {
 /// (typed errors on dangling references; no stringly-typed lookups at
 /// simulation time).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AttrRef {
     /// Name of the component owning the attribute.
     pub component: String,
@@ -49,6 +51,7 @@ pub struct AttrRef {
 
 /// Reference to a port by hierarchical name (authoring form).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PortRef {
     /// Name of the component owning the port.
     pub component: String,
@@ -58,6 +61,7 @@ pub struct PortRef {
 
 /// Reference to an automaton state by hierarchical name (authoring form).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct StateRef {
     /// Name of the component owning the automaton.
     pub component: String,
@@ -87,6 +91,7 @@ pub struct NonlinearTerm {
 
 /// Comparison operators (guards on discrete state).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum CmpOp {
     /// Equality.
@@ -105,6 +110,7 @@ pub enum CmpOp {
 
 /// Boolean connectives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum BoolOp {
     /// Conjunction of all arguments.
@@ -118,6 +124,7 @@ pub enum BoolOp {
 /// Aggregation over the values connected to an *in* port
 /// (sum, count, all, any, mean, median).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AggOp {
     /// Sum of connected numeric values.
@@ -144,6 +151,7 @@ pub enum AggOp {
 /// in later milestones (arithmetic, math functions, ODE right-hand sides)
 /// keeps old model files loadable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Expr {
     /// Literal constant.
@@ -455,6 +463,7 @@ impl Expr {
 /// A direct assignment `target := value`: the M0 form of a
 /// sensitive-function *effect* (the mutation is declarative data).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Assignment {
     /// The attribute being assigned.
     pub target: AttrRef,

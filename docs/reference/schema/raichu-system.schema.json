@@ -1,0 +1,397 @@
+{
+  "$defs": {
+    "AttrRef": {
+      "additionalProperties": false,
+      "description": "Reference to an attribute by hierarchical name: the *authoring /\nserialized* form. Build-time validation resolves it to dense indices\n(typed errors on dangling references; no stringly-typed lookups at\nsimulation time).",
+      "properties": {
+        "attribute": {
+          "description": "Name of the attribute inside the component.",
+          "type": "string"
+        },
+        "component": {
+          "description": "Name of the component owning the attribute.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "attribute"
+      ],
+      "type": "object"
+    },
+    "CmpOp": {
+      "description": "Comparison operators (guards on discrete state).",
+      "oneOf": [
+        {
+          "const": "eq",
+          "description": "Equality.",
+          "type": "string"
+        },
+        {
+          "const": "ne",
+          "description": "Inequality.",
+          "type": "string"
+        },
+        {
+          "const": "lt",
+          "description": "Strictly less than.",
+          "type": "string"
+        },
+        {
+          "const": "le",
+          "description": "Less than or equal.",
+          "type": "string"
+        },
+        {
+          "const": "gt",
+          "description": "Strictly greater than.",
+          "type": "string"
+        },
+        {
+          "const": "ge",
+          "description": "Greater than or equal.",
+          "type": "string"
+        }
+      ]
+    },
+    "Indicator": {
+      "description": "A quantity recorded during simulation.",
+      "oneOf": [
+        {
+          "description": "Observe an attribute's value over time.",
+          "properties": {
+            "attr": {
+              "$ref": "#/$defs/AttrRef",
+              "description": "The observed attribute."
+            },
+            "target": {
+              "const": "attribute",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "attr"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Observe whether an automaton is in a given state (0/1 over time).",
+          "properties": {
+            "automaton": {
+              "description": "The automaton.",
+              "type": "string"
+            },
+            "component": {
+              "description": "Component owning the automaton.",
+              "type": "string"
+            },
+            "state": {
+              "description": "The observed state.",
+              "type": "string"
+            },
+            "target": {
+              "const": "state",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "component",
+            "automaton",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Observe the **truth of a threshold** on an attribute: `true` while\n`attr cmp value` holds, `false` otherwise.\n\nThe difference with [`IndicatorTarget::Attribute`] is the whole\npoint of the variant, and it is a difference of *quantity*, not of\nspelling: on a free-valued attribute the sojourn of\n[`IndicatorTarget::Attribute`] is the time-integral of the value\n(an area), while the sojourn here is the **time spent under the\ncondition** (a duration, bounded by the horizon). A study that\nasks \"how long was there hydrogen in the tank\" asks for the\nsecond, and reading it off the first returns the tank's content\nintegrated over time, which is plausible, larger than the horizon,\nand silently the wrong question's answer.\n\n`value` is a constant: this carries the threshold a study\ndeclares (cod3s's `operator` / `value_test` pair), not a general\nexpression. Kinds are checked at build time, so a boolean\nattribute may only be tested for (in)equality and a numeric one\nmay not be compared to a boolean.",
+          "properties": {
+            "attr": {
+              "$ref": "#/$defs/AttrRef",
+              "description": "The compared attribute."
+            },
+            "cmp": {
+              "$ref": "#/$defs/CmpOp",
+              "description": "The comparison operator."
+            },
+            "target": {
+              "const": "predicate",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Value",
+              "description": "The constant the attribute is compared against."
+            }
+          },
+          "required": [
+            "target",
+            "attr",
+            "cmp",
+            "value"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "name": {
+          "description": "Indicator name (unique in the model; any length is accepted).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "Instance": {
+      "additionalProperties": false,
+      "description": "An instance of a type in a system.",
+      "properties": {
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "name": {
+          "description": "Instance name, unique in the system; it becomes the component name.",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "description": "Parameter values; omitted parameters take their type default.",
+          "type": "object"
+        },
+        "type": {
+          "description": "Type name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "LibraryRef": {
+      "additionalProperties": false,
+      "description": "The library a system instantiates.",
+      "properties": {
+        "name": {
+          "description": "Library name.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Exact library version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "SystemConnection": {
+      "additionalProperties": false,
+      "description": "A connection between two instance ports, written `Instance.port`.",
+      "properties": {
+        "from": {
+          "description": "Out port, `Instance.port`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Optional edge name (names the per-connection channel attributes).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "In port, `Instance.port`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "SystemModel": {
+      "additionalProperties": false,
+      "description": "A system: instances of library types, connected by ports.",
+      "properties": {
+        "connections": {
+          "default": [],
+          "description": "Connections.",
+          "items": {
+            "$ref": "#/$defs/SystemConnection"
+          },
+          "type": "array"
+        },
+        "description": {
+          "description": "Free text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "indicators": {
+          "default": [],
+          "description": "Indicators, in the core form, referencing instances by name.",
+          "items": {
+            "$ref": "#/$defs/Indicator"
+          },
+          "type": "array"
+        },
+        "instances": {
+          "default": [],
+          "description": "Instances.",
+          "items": {
+            "$ref": "#/$defs/Instance"
+          },
+          "type": "array"
+        },
+        "library": {
+          "$ref": "#/$defs/LibraryRef",
+          "description": "The library this system instantiates."
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "name": {
+          "description": "System name.",
+          "type": "string"
+        },
+        "targets": {
+          "default": [],
+          "description": "Sequence-analysis targets, in the core form.",
+          "items": {
+            "$ref": "#/$defs/Target"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "library"
+      ],
+      "type": "object"
+    },
+    "Target": {
+      "additionalProperties": false,
+      "description": "A **sequence-analysis target** (feared event / événement redouté): a\nnamed automaton state whose activation ends and labels a trajectory's\nrecorded sequence (mirrors cod3s `endCause`). Empty `targets` = no early\nstop and no `end_cause` (the trajectory runs to `t_max`).",
+      "properties": {
+        "automaton": {
+          "description": "The automaton.",
+          "type": "string"
+        },
+        "component": {
+          "description": "Component owning the automaton.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Target name (the `end_cause` label, e.g. `doors_unsecured`).",
+          "type": "string"
+        },
+        "state": {
+          "description": "The state whose activation reaches the target.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "component",
+        "automaton",
+        "state"
+      ],
+      "type": "object"
+    },
+    "Value": {
+      "description": "A runtime value carried by attributes and expressions.\n\nM0 kinds only: booleans, integers, floats. `String` discrete state is\nreserved (a deliberate departure) and will extend this enum\nwithout breaking serialized models (tagged representation).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Boolean value.",
+          "properties": {
+            "kind": {
+              "const": "bool",
+              "type": "string"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "64-bit signed integer value.",
+          "properties": {
+            "kind": {
+              "const": "int",
+              "type": "string"
+            },
+            "value": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "64-bit floating-point value.",
+          "properties": {
+            "kind": {
+              "const": "float",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "raichu_system": {
+      "additionalProperties": false,
+      "description": "Envelope header.",
+      "properties": {
+        "format": {
+          "const": 1
+        }
+      },
+      "required": [
+        "format"
+      ],
+      "type": "object"
+    },
+    "system": {
+      "$ref": "#/$defs/SystemModel"
+    }
+  },
+  "required": [
+    "raichu_system",
+    "system"
+  ],
+  "title": "RAICHU system document",
+  "type": "object"
+}

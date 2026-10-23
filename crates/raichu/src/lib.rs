@@ -27,6 +27,8 @@
 //!   answered by Monte-Carlo simulation, exact exploration or
 //!   discretised exploration in one result envelope
 //!   (`raichu.quantification`).
+//! - [`raichu_library`]: component type libraries (library, system and
+//!   study documents expanded into the flat core model).
 //! - [`raichu_fmi`]: FMI 2.0 and 3.0 co-simulation archive and instance host.
 //!
 //! The engine upholds standing validation / performance / observability
@@ -38,6 +40,7 @@ pub use raichu_explore;
 pub use raichu_expr;
 pub use raichu_fmi;
 pub use raichu_fta;
+pub use raichu_library;
 pub use raichu_milp;
 pub use raichu_model;
 pub use raichu_montecarlo;

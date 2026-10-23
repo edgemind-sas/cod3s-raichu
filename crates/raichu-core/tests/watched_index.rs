@@ -143,6 +143,7 @@ fn independent_branches(n: usize, active: usize) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -223,6 +224,7 @@ fn shared_boundary(n: usize) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -356,6 +358,7 @@ fn a_scan_over_an_unmoving_network_costs_one_cold_pass() {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     };
     let work = run(&model, 20.0).work;
     assert_eq!(

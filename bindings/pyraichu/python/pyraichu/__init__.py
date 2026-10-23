@@ -54,6 +54,7 @@ from ._pyraichu import (
 from ._pyraichu import quantify_json as quantify_json
 from ._pyraichu import validate_quantification as validate_quantification
 from .journal import AttributeChange, Cascade, JournalQuery, TransitionHistory
+from .library import check_library, expand_documents, load_system, run_study, standard_library
 
 __all__ = [
     "DEFAULT_CONFIDENCE",
@@ -118,6 +119,11 @@ __all__ = [
     "importance",
     "interactive",
     "load_model",
+    "load_system",
+    "expand_documents",
+    "check_library",
+    "run_study",
+    "standard_library",
     "model_body",
     "monte_carlo",
     "quantify",
@@ -243,6 +249,13 @@ class Model:
     name: str = field(default="", compare=False)
     allow_fmu_import: bool = field(default=False, compare=False)
     base_dir: Path = field(default_factory=Path.cwd, compare=False)
+    #: For a model expanded from a component type library: the origin of
+    #: every element, by element path (see :mod:`pyraichu.library`).
+    provenance: dict[str, Any] | None = field(default=None, compare=False)
+    #: For a model expanded with a study: its run settings.
+    simulation: dict[str, Any] | None = field(default=None, compare=False)
+    #: Non-fatal observations of the expansion.
+    warnings: tuple[str, ...] = field(default=(), compare=False)
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"Model({self.name!r})"
@@ -306,10 +319,17 @@ def expand_model(source: str | dict[str, Any]) -> dict[str, Any]:
 
 
 def load_model(
-    source: str | Path | dict[str, Any], *, allow_fmu_import: bool = False
+    source: str | Path | dict[str, Any],
+    *,
+    allow_fmu_import: bool = False,
+    libraries: Iterable[Any] = (),
+    study: Any = None,
 ) -> Model:
     """Load and validate a model from a JSON string or a dict, in either
     document shape (bare body, or body under the format envelope).
+
+    A system document (``raichu_system``) is expanded from ``libraries``
+    and the optional ``study`` (see :mod:`pyraichu.library`).
 
     Models carrying a ``"plugins"`` section (specialized object schemas:
     ObjFlow, ObjFM, ObjEvent, …) are expanded into the core schema
@@ -328,6 +348,13 @@ def load_model(
         document = json.loads(source)
     else:
         document = source
+    if "raichu_system" in document:
+        return load_system(document, libraries, study)
+    if tuple(libraries) or study is not None:
+        raise ModelError(
+            "libraries and study apply to a component type library system "
+            "(a `raichu_system` document); this document is not one"
+        )
     # What the document declares survives the plugin expansion that
     # replaces its body: a declaration this engine cannot honour has to
     # reach the engine, which is where it is refused by name.
