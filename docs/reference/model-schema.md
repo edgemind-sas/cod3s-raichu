@@ -5,6 +5,13 @@ to `pyraichu.load_model`. This page documents every field, distribution and
 expression operator. Types are the JSON types; a *ref* is a small object
 that names something elsewhere in the model.
 
+This is the flat model the engine runs. A model can also be written as a
+library of reusable component types, a system that instantiates them and a
+study that activates their modes, which the engine expands into this form:
+see the [component type library format](library-format.md). An expanded
+model carries an optional `source` naming the library and its version, the
+system and the study it came from; it changes no result.
+
 A complete, minimal model that uses most sections:
 
 <!-- model -->

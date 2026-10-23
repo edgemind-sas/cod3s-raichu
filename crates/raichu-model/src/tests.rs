@@ -391,6 +391,7 @@ fn sample_model() -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -932,6 +933,7 @@ fn continuous_cycle_model(first: EquationKind, second: EquationKind) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -1003,6 +1005,7 @@ fn fan_in_model(second: AttrKind) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -1376,6 +1379,7 @@ fn allocation_cycle_model() -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -1472,6 +1476,7 @@ fn ordered_model(order: Option<Vec<AttrRef>>) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 

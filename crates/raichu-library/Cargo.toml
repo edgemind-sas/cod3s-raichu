@@ -1,0 +1,33 @@
+[package]
+name = "raichu-library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "RAICHU component type libraries: library, system and study documents expanded into the flat core model"
+
+[dependencies]
+raichu-expr.workspace = true
+raichu-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+thiserror.workspace = true
+schemars = { workspace = true, optional = true }
+
+[features]
+# JSON Schema derivation of the three documents (off by default; the
+# schema test enables it through the self dev-dependency below).
+schema = ["dep:schemars", "raichu-model/schema", "raichu-expr/schema"]
+
+[dev-dependencies]
+raichu-core.workspace = true
+# Enables `schema` for this crate's own tests only, so default builds
+# (the umbrella crate, the Python wheel) never compile schemars.
+raichu-library = { path = ".", features = ["schema"] }
+jsonschema.workspace = true
+
+[lints]
+workspace = true

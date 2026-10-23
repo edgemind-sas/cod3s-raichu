@@ -13,6 +13,11 @@ raichu-expr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+schemars = { workspace = true, optional = true }
+
+[features]
+# JSON Schema derivation of the serialized types (off by default).
+schema = ["dep:schemars", "raichu-expr/schema"]
 
 [dev-dependencies]
 proptest.workspace = true

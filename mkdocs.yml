@@ -82,6 +82,7 @@ nav:
       - Gas production: examples/gas-production.md
       - Feedwater supply (APPRODYN): examples/approdyn-feedwater.md
   - Model schema reference: reference/model-schema.md
+  - Component type library format: reference/library-format.md
   - Raw sequence corpus format: reference/sequence-format.md
   - Quantification envelope format: reference/quantification-format.md
   - Fault-tree envelope format: reference/fault-tree-format.md
@@ -98,6 +99,7 @@ nav:
       - Quantifying a study: guides/quantification.md
       - Importance measures: guides/importance-measures.md
       - Fault trees: guides/fault-tree.md
+      - Component type libraries: guides/component-libraries.md
       - muscadet & plugins: guides/muscadet-and-plugins.md
       - Running a muscadet model: guides/muscadet-engine.md
       - COD3S-platform studies: guides/platform-import.md

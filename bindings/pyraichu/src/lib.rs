@@ -335,6 +335,98 @@ fn seal_model(model_json: &str) -> PyResult<String> {
         .map_err(|e| ModelError::new_err(format!("invalid model JSON: {e}")))
 }
 
+/// A refused library, system or study document as `ModelError`.
+fn refuse_document(error: raichu::raichu_library::ExpandError) -> PyErr {
+    ModelError::new_err(error.to_string())
+}
+
+/// Parse library documents, refusing the first malformed one.
+fn parse_libraries(texts: &[String]) -> PyResult<Vec<raichu::raichu_library::Library>> {
+    texts
+        .iter()
+        .map(|text| raichu::raichu_library::parse_library(text))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(refuse_document)
+}
+
+/// Expand a component type library system (and optionally a study) into
+/// a flat core model, returned as JSON:
+/// `{"model": <sealed model document>, "provenance": {...},
+/// "simulation": {...} | null, "warnings": [...]}`.
+///
+/// `libraries_json` holds the library documents the system may draw on;
+/// the standard library is added when one of them imports it. A refused
+/// document raises `ModelError` naming the document, the JSON Pointer of
+/// the fault and what is wrong.
+#[pyfunction]
+#[pyo3(signature = (system_json, libraries_json, study_json = None))]
+fn expand_documents_json(
+    system_json: &str,
+    libraries_json: Vec<String>,
+    study_json: Option<&str>,
+) -> PyResult<String> {
+    use raichu::raichu_library as library;
+    let refuse = refuse_document;
+    let libraries = parse_libraries(&libraries_json)?;
+    let system = library::parse_system(system_json).map_err(refuse)?;
+    let study = study_json
+        .map(library::parse_study)
+        .transpose()
+        .map_err(refuse)?;
+    let expansion = library::expand(&libraries, &system, study.as_ref()).map_err(refuse)?;
+    let model_json = expansion
+        .model
+        .to_json()
+        .map_err(|e| ModelError::new_err(e.to_string()))?;
+    let model: serde_json::Value =
+        serde_json::from_str(&model_json).map_err(|e| ModelError::new_err(e.to_string()))?;
+    let result = serde_json::json!({
+        "model": model,
+        "provenance": expansion.provenance.elements,
+        "simulation": expansion.simulation,
+        "warnings": expansion.warnings,
+    });
+    Ok(result.to_string())
+}
+
+/// Check every type of a library without a system, returned as JSON: one
+/// entry per type with its status (`valid`, `invalid`, `unchecked`), the
+/// errors of an invalid type and the required parameters of an unchecked
+/// one.
+#[pyfunction]
+#[pyo3(signature = (library_json, libraries_json = Vec::new()))]
+fn check_library_json(library_json: &str, libraries_json: Vec<String>) -> PyResult<String> {
+    use raichu::raichu_library as library;
+    let checked = library::parse_library(library_json).map_err(refuse_document)?;
+    let others = parse_libraries(&libraries_json)?;
+    let report: Vec<serde_json::Value> = library::check_library(&checked, &others)
+        .into_iter()
+        .map(|(name, outcome)| match outcome {
+            library::TypeCheck::Valid => serde_json::json!({"type": name, "status": "valid"}),
+            library::TypeCheck::Invalid(errors) => serde_json::json!({
+                "type": name,
+                "status": "invalid",
+                "errors": errors.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            }),
+            library::TypeCheck::Unchecked(parameters) => serde_json::json!({
+                "type": name,
+                "status": "unchecked",
+                "parameters": parameters,
+            }),
+        })
+        .collect();
+    Ok(serde_json::Value::Array(report).to_string())
+}
+
+/// The standard library `std` shipped with this engine, as a library
+/// document.
+#[pyfunction]
+fn standard_library_json() -> PyResult<String> {
+    use raichu::raichu_library as library;
+    let std = library::standard_library().map_err(|e| ModelError::new_err(e.to_string()))?;
+    Ok(library::document::library_document(&std).to_string())
+}
+
 /// Run a deterministic simulation and return the full result
 /// (events, indicator series, dense samples, causal journal,
 /// provenance) as JSON.
@@ -1933,6 +2025,9 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(unfed_triggers_json, module)?)?;
     module.add_function(wrap_pyfunction!(required_features, module)?)?;
     module.add_function(wrap_pyfunction!(seal_model, module)?)?;
+    module.add_function(wrap_pyfunction!(expand_documents_json, module)?)?;
+    module.add_function(wrap_pyfunction!(check_library_json, module)?)?;
+    module.add_function(wrap_pyfunction!(standard_library_json, module)?)?;
     module.add_function(wrap_pyfunction!(simulate_json, module)?)?;
     module.add_function(wrap_pyfunction!(monte_carlo_json, module)?)?;
     module.add_function(wrap_pyfunction!(analyse_sequences_json, module)?)?;

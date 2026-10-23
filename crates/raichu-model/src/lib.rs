@@ -30,6 +30,7 @@ use thiserror::Error;
 /// The type of an attribute (M0 kinds; `String` discrete state is reserved
 /// and will extend this enum without breaking serialized models).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AttrKind {
     /// Boolean state.
@@ -55,6 +56,7 @@ impl AttrKind {
 
 /// An intrinsic, typed state attribute of a component.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Attribute {
     /// Attribute name, unique inside its component.
     pub name: String,
@@ -66,6 +68,7 @@ pub struct Attribute {
 
 /// Direction of a port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PortDir {
     /// The port receives values from connected out-ports.
@@ -91,6 +94,7 @@ pub enum PortDir {
 /// sensitive functions write them, the causal journal records them, the
 /// snapshot carries them, and indicators observe them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Channel {
     /// Channel name, unique inside its port.
     pub name: String,
@@ -103,6 +107,7 @@ pub struct Channel {
 /// A connection endpoint on a component boundary: the fundamental
 /// interconnection notion of RAICHU (the model representation).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Port {
     /// Port name, unique inside its component.
     pub name: String,
@@ -125,6 +130,7 @@ pub struct Port {
 /// ports stay the fundamental notion: the engine runs on the port
 /// connections an interface connection stands for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Interface {
     /// Interface name, unique inside its component.
     pub name: String,
@@ -227,6 +233,7 @@ pub struct ChannelAttribute {
 /// Occurrence distribution of a transition (M0 deterministic subset; `Exp` and the
 /// wider distribution library arrive in milestone M2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "distrib", rename_all = "snake_case")]
 pub enum Distrib {
     /// Deterministic delay: fires `time` after the source state is
@@ -321,6 +328,7 @@ pub enum Distrib {
 
 /// The kind of a continuous-evolution equation (CEvol of the paper).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum EquationKind {
     /// Algebraic assignment `V = expr`, recomputed whenever its inputs
@@ -334,6 +342,7 @@ pub enum EquationKind {
 /// *local* `Float` attribute; declaration order across the component is
 /// the solving `Order` of the formalism.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Equation {
     /// Local attribute receiving the value (must be `Float`).
     pub target: String,
@@ -392,6 +401,7 @@ pub struct FmuUnit {
 /// one entry, which is coherent: each of them then carries that value,
 /// and the share sum is checked over the *connections*.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConsumerParam {
     /// The in port at the far end of the connection this value applies to.
     pub to: PortRef,
@@ -406,6 +416,7 @@ pub struct ConsumerParam {
 /// port. Three policies, no default: how a scarce quantity is shared is a
 /// modelling decision, never an engine convention.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "policy", rename_all = "snake_case")]
 pub enum AllocationPolicy {
     /// Proportional to demand: each consumer receives
@@ -459,6 +470,7 @@ pub enum AllocationPolicy {
 /// second writer is refused at build time
 /// ([`ModelError::AllocationTargetWritten`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Allocation {
     /// Operator name, unique inside its component, and the name that
     /// designates this step in [`Model::evaluation_order`].
@@ -481,6 +493,7 @@ pub struct Allocation {
 /// guard turns false (naming set by Roland, 2026-07-04). Only
 /// meaningful for duration distributions (delay, exp, …) with a guard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum InterruptionPolicy {
     /// The occurrence duration is cancelled; a fresh duration is drawn
@@ -512,6 +525,7 @@ pub enum InterruptionPolicy {
 /// role applies to its **first declared target** only: firing into any
 /// other branch is not a failure (respectively a repair).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TransitionKind {
     /// Firing into the first declared target is a failure occurrence.
@@ -534,6 +548,7 @@ pub enum TransitionKind {
 /// that a repaired component no longer contributes
 /// ([`Transition::cycle_cancellation`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum CycleCancellation {
     /// The engine decides from the compiled model: the group is not
@@ -564,6 +579,7 @@ impl CycleCancellation {
 /// dest-distribution⟩; stochastic (`schedule_stochastic`) and watched (`schedule_boundary`)
 /// transitions arrive in M2/M1 respectively.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Transition {
     /// Transition name, unique inside its automaton.
     pub name: String,
@@ -661,6 +677,7 @@ pub struct Transition {
 /// materialised** (the key to avoiding combinatorial explosion: keep it
 /// that way).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Automaton {
     /// Automaton name, unique inside its component.
     pub name: String,
@@ -678,6 +695,7 @@ pub struct Automaton {
 /// bookkeeping). Effects run to a fixpoint during the discrete-evolution
 /// phase (paper rule `propagate_effects`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SensitiveFunction {
     /// Function name, unique inside its component.
     pub name: String,
@@ -688,6 +706,7 @@ pub struct SensitiveFunction {
 /// What an indicator observes: a **typed, validated reference**
 /// (rather than a stringly-typed `"comp.attr"` path).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "target", rename_all = "snake_case")]
 pub enum IndicatorTarget {
     /// Observe an attribute's value over time.
@@ -735,6 +754,7 @@ pub enum IndicatorTarget {
 
 /// A quantity recorded during simulation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Indicator {
     /// Indicator name (unique in the model; any length is accepted).
     pub name: String,
@@ -782,6 +802,7 @@ pub struct Component {
 /// recorded sequence (mirrors cod3s `endCause`). Empty `targets` = no early
 /// stop and no `end_cause` (the trajectory runs to `t_max`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Target {
     /// Target name (the `end_cause` label, e.g. `doors_unsecured`).
     pub name: String,
@@ -1197,6 +1218,32 @@ pub struct Model {
     /// their use; it does not grant permission to execute their native code.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fmu_units: Vec<FmuUnit>,
+    /// **Source documents** of a model expanded from a component type
+    /// library: the library and its version, the system, the study and the
+    /// engine that supplied the standard library. Absent (the default) for
+    /// a model written directly. Provenance only: it changes no result,
+    /// needs no feature, and an absent field is not written, so a model
+    /// written before it serializes, and hashes, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ModelSource>,
+}
+
+/// The documents a model was expanded from (see [`Model::source`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelSource {
+    /// Library name.
+    pub library: String,
+    /// Library version, matched exactly by the system.
+    pub library_version: String,
+    /// System name.
+    pub system: String,
+    /// Study name, when a study was applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub study: Option<String>,
+    /// Engine version that supplied the standard library, when the
+    /// library imports it (a standard fragment changes with the engine).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub std_version: Option<String>,
 }
 
 /// Typed model-validation errors. Every invalid model is reported with a

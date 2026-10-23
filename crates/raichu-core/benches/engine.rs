@@ -154,6 +154,7 @@ fn delay_model() -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -253,6 +254,7 @@ fn tank_model() -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
@@ -579,6 +581,7 @@ fn wide_network(watched: bool) -> Model {
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 

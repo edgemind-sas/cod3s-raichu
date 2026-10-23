@@ -168,6 +168,7 @@ fn model(name: &str, components: Vec<Component>, targets: Vec<Target>) -> Model 
         unbounded_rate: None,
         fmu_units: vec![],
         interface_connections: vec![],
+        source: None,
     }
 }
 
