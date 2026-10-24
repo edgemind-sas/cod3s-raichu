@@ -367,6 +367,7 @@ fn duty(wired: bool, draws: bool, floor: f64, below: bool) -> Model {
                     dir: PortDir::Out,
                     attr: Some("carried".into()),
                     channels: vec![],
+                    equations: Vec::new(),
                 }],
                 interfaces: vec![],
                 automata: vec![],
@@ -398,6 +399,7 @@ fn duty(wired: bool, draws: bool, floor: f64, below: bool) -> Model {
                     dir: PortDir::In,
                     attr: None,
                     channels: vec![],
+                    equations: Vec::new(),
                 }],
                 interfaces: vec![],
                 automata: vec![Automaton {

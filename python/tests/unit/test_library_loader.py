@@ -197,3 +197,37 @@ def test_load_model_refuses_libraries_or_a_study_for_another_document():
         pyraichu.load_model(flat, libraries=[lamp_library()])
     with pytest.raises(ModelError, match="raichu_system"):
         pyraichu.load_model(flat, study=room_study())
+
+
+def test_the_evaluation_order_is_derived_from_what_each_step_reads():
+    """A chain declared backwards is swept forwards; a discrete model
+    needs no order. This is the order the expander gives every expanded
+    model, exposed so another authoring layer can reuse it."""
+
+    def ref(attribute: str) -> dict:
+        return {"op": "attr", "attr": {"component": "C", "attribute": attribute}}
+
+    one = {"op": "const", "value": {"kind": "float", "value": 1.0}}
+    chain = {
+        "name": "chain",
+        "components": [
+            {
+                "name": "C",
+                "attributes": [
+                    {"name": n, "kind": "float", "init": {"kind": "float", "value": 0.0}}
+                    for n in ("x", "y", "z")
+                ],
+                "equations": [
+                    {"target": "z", "kind": "explicit", "expr": {"op": "add", "args": [ref("y"), one]}},
+                    {"target": "y", "kind": "explicit", "expr": {"op": "add", "args": [ref("x"), one]}},
+                    {"target": "x", "kind": "explicit", "expr": one},
+                ],
+            }
+        ],
+    }
+    assert pyraichu.derive_evaluation_order(chain) == [
+        {"component": "C", "attribute": "x"},
+        {"component": "C", "attribute": "y"},
+        {"component": "C", "attribute": "z"},
+    ]
+    assert pyraichu.derive_evaluation_order({"name": "empty", "components": []}) is None

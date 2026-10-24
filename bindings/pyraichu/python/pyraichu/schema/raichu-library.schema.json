@@ -3095,6 +3095,37 @@
       ],
       "type": "object"
     },
+    "ForEach_CatalogueMode": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogueMode"
+              },
+              {
+                "$ref": "#/$defs/ForEach_CatalogueMode"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
     "ForEach_Channel": {
       "additionalProperties": false,
       "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
@@ -3343,6 +3374,37 @@
       ],
       "type": "object"
     },
+    "ForEach_PortEquation": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PortEquation"
+              },
+              {
+                "$ref": "#/$defs/ForEach_PortEquation"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
     "ForEach_SensitiveFunction": {
       "additionalProperties": false,
       "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
@@ -3361,6 +3423,37 @@
               },
               {
                 "$ref": "#/$defs/ForEach_SensitiveFunction"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Targetable": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Targetable"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Targetable"
               }
             ]
           },
@@ -3586,7 +3679,14 @@
           "default": [],
           "description": "Attributes a mode may target, with their combination rule.",
           "items": {
-            "$ref": "#/$defs/Targetable"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Targetable"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Targetable"
+              }
+            ]
           },
           "type": "array"
         },
@@ -3774,6 +3874,11 @@
         {
           "const": "string_list",
           "description": "Items that are themselves lists of strings (a production condition:\na disjunction of conjunctions, each a list of attribute names).",
+          "type": "string"
+        },
+        {
+          "const": "object",
+          "description": "Items that are JSON objects, inserted as written where the list is\nsubstituted with `$param` (a split share keyed by its consumer:\n`{\"to\": {\"component\", \"port\"}, \"value\"}`); the core reader then\nchecks them strictly at the place they land.",
           "type": "string"
         }
       ]
@@ -4032,6 +4137,63 @@
               "$ref": "#/$defs/PortDir",
               "description": "Direction."
             },
+            "equations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/PortEquation"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_PortEquation"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/PortEquation"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_PortEquation"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "**Port equations**: per-connection channel equations (see\n[`PortEquation`]). Non-baseline construct: a document carrying one\nmust declare [`Feature::PortEquations`]."
+            },
             "name": {
               "$ref": "#/$defs/Template_string",
               "description": "Port name, unique inside its component."
@@ -4108,6 +4270,51 @@
         }
       ],
       "description": "Direction of a port."
+    },
+    "PortEquation": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "$ref": "#/$defs/Template_string",
+              "description": "The channel written, on each connection through the port."
+            },
+            "expr": {
+              "$ref": "#/$defs/Expr",
+              "description": "Right-hand side, evaluated per connection."
+            }
+          },
+          "required": [
+            "channel",
+            "expr"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/PortEquation"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "An equation declared on a port and evaluated **once per connection**\nthrough it, writing that connection's `channel`.\n\nA component cannot name its connections, so this is how it states a\nper-connection quantity locally. On an **in** port it writes the\nchannel of every connection that feeds the port (a consumer publishing\nits demand on each supplier's edge); on an **out** port, the channel of\nevery connection leaving it (a producer's claim per consumer). Channels\nlive on the producer's out port, which must declare `channel`.\n\nInside `expr`, an `attr` leaf whose component is the reserved name\n[`EDGE`] reads another channel of the same connection\n(`{\"component\": \"$edge\", \"attribute\": \"demand\"}`); every other leaf\nreads as anywhere else. A total over an out port's connections is read\nback with `port_agg` (`sum` or `count`) on that out port.\n\nThe construct is an authoring form: [`Model::with_resolved_connections`]\nlowers it to one ordinary explicit equation per connection, named by\nthe channel attribute it writes, so the engine never sees it."
     },
     "PortRef": {
       "anyOf": [
@@ -5486,7 +5693,14 @@
           "default": [],
           "description": "Mode catalogue, templated.",
           "items": {
-            "$ref": "#/$defs/CatalogueMode"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogueMode"
+              },
+              {
+                "$ref": "#/$defs/ForEach_CatalogueMode"
+              }
+            ]
           },
           "type": "array"
         },
@@ -5506,7 +5720,14 @@
           "default": [],
           "description": "Attributes a mode may target, with their combination rule.",
           "items": {
-            "$ref": "#/$defs/Targetable"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Targetable"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Targetable"
+              }
+            ]
           },
           "type": "array"
         },

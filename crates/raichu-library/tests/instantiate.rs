@@ -335,3 +335,138 @@ fn an_integral_number_interpolates_without_a_fraction() {
     assert_eq!(model.components[0].attributes[0].name, "a_2");
     assert_eq!(model.components[1].attributes[0].name, "a_2.5");
 }
+
+fn shares_library() -> Library {
+    library(json!({
+        "name": "plant", "version": "1.0.0",
+        "types": [{
+            "name": "Splitter",
+            "parameters": [{"name": "shares", "kind": "list", "items": "object", "default": []}],
+            "body": {
+                "attributes": [{"name": "stock", "kind": "float", "init": float(5.0)}],
+                "ports": [{"name": "out", "dir": "out", "attr": "stock",
+                           "channels": [{"name": "demand"}, {"name": "alloc"}]}],
+                "allocations": [{"name": "split", "port": "out", "demand": "demand",
+                                 "allocated": "alloc", "policy": "shares", "shares": {"$param": "shares"},
+                                 "available": {"op": "attr", "attr": {"component": "$self", "attribute": "stock"}}}]
+            }
+        }, {
+            "name": "Sink",
+            "body": {"ports": [{"name": "in", "dir": "in"}]}
+        }]
+    }))
+}
+
+#[test]
+fn a_list_of_objects_is_inserted_as_written() {
+    let s = system(
+        json!({"name": "s", "library": {"name": "plant", "version": "1.0.0"},
+        "instances": [
+            {"name": "S", "type": "Splitter", "parameters": {"shares": [
+                {"to": {"component": "A", "port": "in"}, "value": 1.0}]}},
+            {"name": "A", "type": "Sink"}],
+        "connections": [{"from": "S.out", "to": "A.in"}]}),
+    );
+    let model = expand(&[shares_library()], &s, None).unwrap().model;
+    let written = serde_json::to_value(&model.components[0].allocations[0]).unwrap();
+    assert_eq!(
+        written["shares"],
+        json!([{"to": {"component": "A", "port": "in"}, "value": 1.0}])
+    );
+}
+
+#[test]
+fn a_list_of_objects_refuses_an_item_that_is_not_one() {
+    let s = system(
+        json!({"name": "s", "library": {"name": "plant", "version": "1.0.0"},
+        "instances": [{"name": "S", "type": "Splitter", "parameters": {"shares": [0.25]}}]}),
+    );
+    let err = expand(&[shares_library()], &s, None).unwrap_err();
+    assert!(err.message.contains("object"), "{}", err.message);
+    assert!(err.message.contains("`shares`"), "{}", err.message);
+}
+
+fn edge_library(read: Value) -> Library {
+    library(json!({
+        "name": "plant", "version": "1.0.0",
+        "types": [{
+            "name": "Supply",
+            "body": {
+                "attributes": [{"name": "stock", "kind": "float", "init": float(5.0)}],
+                "ports": [{"name": "out", "dir": "out", "attr": "stock",
+                           "channels": [{"name": "demand"}, {"name": "claim"}],
+                           "equations": [{"channel": "claim", "expr": {"op": "min", "args": [
+                               read,
+                               {"op": "attr", "attr": {"component": "$self", "attribute": "stock"}}]}}]}]
+            }
+        }, {
+            "name": "Need",
+            "body": {
+                "attributes": [{"name": "need", "kind": "float", "init": float(3.0)}],
+                "ports": [{"name": "in", "dir": "in", "equations": [
+                    {"channel": "demand", "expr": {"op": "attr", "attr": {"component": "$self", "attribute": "need"}}}]}]
+            }
+        }]
+    }))
+}
+
+fn edge_system() -> SystemModel {
+    system(
+        json!({"name": "s", "library": {"name": "plant", "version": "1.0.0"},
+        "instances": [{"name": "S", "type": "Supply"}, {"name": "N", "type": "Need"}],
+        "connections": [{"from": "S.out", "to": "N.in"}]}),
+    )
+}
+
+#[test]
+fn a_port_equation_in_a_type_body_reads_its_edge() {
+    let lib =
+        edge_library(json!({"op": "attr", "attr": {"component": "$edge", "attribute": "demand"}}));
+    let model = expand(&[lib], &edge_system(), None).unwrap().model;
+    let resolved = model.with_resolved_connections().unwrap();
+    let targets: Vec<&str> = resolved.components[0]
+        .equations
+        .iter()
+        .map(|e| e.target.as_str())
+        .collect();
+    assert!(targets.contains(&"out__claim__N__in"), "{targets:?}");
+    assert!(targets.contains(&"out__demand__N__in"), "{targets:?}");
+    CompiledModel::compile(&model).unwrap();
+}
+
+#[test]
+fn a_port_equation_in_a_type_body_cannot_reach_another_instance() {
+    let lib = edge_library(json!({"op": "attr", "attr": {"component": "N", "attribute": "need"}}));
+    let err = expand(&[lib], &edge_system(), None).unwrap_err();
+    assert!(
+        err.message.contains("outside its own instance"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("`N.need`"), "{}", err.message);
+}
+
+#[test]
+fn a_misspelled_port_equation_key_is_refused() {
+    let lib = library(json!({
+        "name": "plant", "version": "1.0.0",
+        "types": [{"name": "T", "body": {
+            "attributes": [{"name": "x", "kind": "float", "init": float(0.0)}],
+            "ports": [{"name": "out", "dir": "out", "attr": "x", "channels": [{"name": "claim"}],
+                       "equations": [{"chanel": "claim", "expr": {"op": "const", "value": float(1.0)}}]}]
+        }}]
+    }));
+    let s = system(
+        json!({"name": "s", "library": {"name": "plant", "version": "1.0.0"},
+        "instances": [{"name": "T1", "type": "T"}]}),
+    );
+    // The required `channel` is missing, so the reader refuses at the
+    // equation before any key is probed, naming the field it expected.
+    let err = expand(&[lib], &s, None).unwrap_err();
+    assert!(err.message.contains("`channel`"), "{}", err.message);
+    assert!(
+        err.pointer.contains("/ports/0/equations/0"),
+        "{}",
+        err.pointer
+    );
+}

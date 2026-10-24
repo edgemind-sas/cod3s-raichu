@@ -81,9 +81,13 @@ neighbour is reached through a port.
 | `kind` | `number`, `integer`, `bool`, `string`, `law`, `list` or `enum` |
 | `default` | default value; a parameter without one is required |
 | `values` | the allowed values of an `enum` |
-| `items` | the item kind of a `list`: `number`, `integer`, `bool`, `string` or `string_list` |
+| `items` | the item kind of a `list`: `number`, `integer`, `bool`, `string`, `string_list` or `object` |
 
-A `law` is a core law object (`{"distrib": "exp", "rate": 0.1}`). An instance
+A `law` is a core law object (`{"distrib": "exp", "rate": 0.1}`). A list of
+`object` items is inserted as written where `{"$param": ...}` substitutes it,
+and the core reader then checks each item at the place it lands: this is
+how a split's shares, keyed by consumer, reach a distribution operator
+(`[{"to": {"component": "B1", "port": "Elec_in"}, "value": 0.1}]`). An instance
 giving a parameter its type does not declare, omitting a required one,
 giving a value of the wrong kind, or choosing an `enum` value outside its
 list, is refused naming the instance and the parameter.
@@ -103,6 +107,11 @@ four forms are resolved against the instance's parameter values:
 The string `"$self"` names the instance, and `"$self.x"` reads
 `"<instance>.x"`. Nothing else computes at expansion: parameters reduce to
 literals, and arithmetic stays in runtime expressions.
+
+A body reaches its neighbours through its ports only. A
+[port equation](model-schema.md#port-equation) is the one place a body may
+also read the component `$edge`: the other channels of the connection the
+equation is evaluated for.
 
 ### Mode catalogue
 
@@ -148,6 +157,39 @@ the engine's, and the expanded model records it. A library imports it with
 | `bool_flow_out` | `name`, `prod_cond`, `fed_available_init` | out port `<name>_out` exporting `<name>_fed_out`, true while the production condition holds and `<name>_fed_available_out` is true |
 | `bool_source_out` | `name`, `prod_init`, `fed_available_init` | the same output with no production condition: a constant source, or a dormant function when `prod_init` is false |
 | `logic_gate` | `name`, `logic`, `k`, `default` | a boolean input re-exported on the out port `<name>_out` |
+
+The continuous fragments build a conservative flow network out of
+component-local declarations: each output publishes, on every connection,
+what it can deliver and what it hands over, each input publishes what it
+asks and the share it accepts, and a distribution operator splits the
+output over the claims ([port equations](model-schema.md#port-equation)
+write the per-connection quantities). They are the shapes of the muscadet
+plugin's continuous objects, and each is characterised against it.
+
+| Fragment | Parameters | Builds |
+|---|---|---|
+| `continuous_flow_out` | `name`, `available` (`capability`, `produced`), `allocation` (`proportional`, `shares`), `shares`, `held`, `empty_automaton` | out port `<name>_out` with its channels, the totals `<name>_demand_out` and `<name>_fed_out`, the claims and the distribution operator `<name>_alloc`; `held` makes a volume that has run out pass on what arrives |
+| `continuous_flow_in` | `name`, `demand` | in port `<name>_in`, `<name>_capability_in`, `<name>_fed_in`, and the demand and shares it publishes |
+| `surplus_release` | `name` | the input hands back, pro rata of offers, what two suppliers or more offer beyond its demand, a supplier that has run out being accepted first |
+| `continuous_source` | `name`, `rate`, `profiled` | the capability of a source output, times `<name>_out_profile` when profiled |
+| `continuous_sink` | `name`, `demand`, `profiled` | the demand of a consumer input, times `<name>_in_profile` when profiled |
+| `time_profile` | `target`, `amplitude`, `phase_shift`, `period`, `offset`, `value_min`, `initial` | a sinusoidal profile written into `target` |
+| `rate_publisher` | `name`, `of` (`capability`, `delivered`) | out port `<name>_rate_out` exporting `<name>_rate` |
+| `volume_flow` | `volume`, `flow`, `capacity`, `content_init`, `demand`, `fill_rate`, `outlet` | one flow held in a volume: its content (an ODE), its fill fraction, and the demand of the input |
+| `volume_outlet` | `volume`, `flow`, `rate`, `empty_automaton` | the capability of an output leaving a volume, bounded by what arrives while it is empty |
+| `volume_stock` | `volume`, `flow`, `capacity`, `initial` | automaton `<volume>_stock_<flow>` (`empty`, `stocked`) for one flow of a multi-flow volume |
+| `volume_total` | `volume`, `flows`, `capacity`, `initial`, `ratio_flows` | total content and fill, the bounds automaton `<volume>_bounds` (`empty`, `partial`, `full`), and each listed flow's share |
+| `rule_set` | `name`, `active`, `idle`, `consumes`, `produces`, `capped`, `conditions`, `threshold` (`none`, `band`), `threshold_flow`, `activate`, `release` | automaton `<name>_mode` running the producing rule while its boolean inputs are fed (and its band holds), and the three scales `<name>_capability_scale`, `<name>_scale`, `<name>_draw_scale` |
+| `rule_consumes` | `rule_set`, `active`, `flow`, `rate` | the demand of a consumed input |
+| `rule_produces` | `rule_set`, `active`, `flow`, `rate`, `capped`, `max_rate`, `tapped` | the capability and production of an output |
+| `tap` | `flow`, `outlets` | leaks taken from an output into the outlets, each the fraction `<outlet>_pct`, targetable with `max` |
+| `aggregate_measure` | `name` | attribute `<name>`, the sum over the in port `<name>_in` |
+| `threshold_compare` | `name`, `input`, `operator`, `threshold` | boolean output `<name>` true while `input` compares to the threshold |
+| `threshold_band` | `name`, `input`, `direction` (`below`, `above`), `activate`, `release` | boolean output `<name>` with a hysteresis band |
+
+The muscadet plugin's mixture serving and ring tearing need a pass over the
+whole connection graph and have no fragment: a plant that needs them stays
+on the plugin route.
 
 The production condition `prod_cond` is a disjunction of conjunctions,
 stated explicitly: a list of groups, each a list of attribute names of the
@@ -214,6 +256,12 @@ AND its activation condition.
   `tempo_not_occ`; `target: true` adds a sequence target.
 - The model's `source` names the library and its version, the system, the
   study and the engine version that supplied `std`.
+- A model with explicit equations gets an `evaluation_order` derived from
+  what each step reads: a step follows every step whose result it reads,
+  independent steps keep their declaration order, and the steps of a cycle
+  stay together, each after what it reads but for the reads that close the
+  cycle. `pyraichu.derive_evaluation_order` returns the same order for any
+  flat model.
 
 The provenance maps every element path to its origin:
 

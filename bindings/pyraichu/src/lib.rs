@@ -418,6 +418,23 @@ fn check_library_json(library_json: &str, libraries_json: Vec<String>) -> PyResu
     Ok(serde_json::Value::Array(report).to_string())
 }
 
+/// The evaluation order derived from what each explicit step reads, as a
+/// JSON list of `{"component", "attribute"}` (or `null` for a model with
+/// no explicit step): the order the expander gives every expanded model.
+///
+/// `model_json` is a model document, enveloped or bare; a bare body may
+/// use any construct, since only its read relation is looked at.
+#[pyfunction]
+fn derive_evaluation_order_json(model_json: &str) -> PyResult<String> {
+    let sealed = Model::seal_json(model_json)
+        .map_err(|e| ModelError::new_err(format!("invalid model JSON: {e}")))?;
+    let model = Model::from_json(&sealed)
+        .map_err(|e| ModelError::new_err(format!("invalid model JSON: {e}")))?;
+    let order = raichu::raichu_library::derive_evaluation_order(&model)
+        .map_err(|e| ModelError::new_err(e.to_string()))?;
+    serde_json::to_string(&order).map_err(|e| ModelError::new_err(e.to_string()))
+}
+
 /// The standard library `std` shipped with this engine, as a library
 /// document.
 #[pyfunction]
@@ -2027,6 +2044,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(seal_model, module)?)?;
     module.add_function(wrap_pyfunction!(expand_documents_json, module)?)?;
     module.add_function(wrap_pyfunction!(check_library_json, module)?)?;
+    module.add_function(wrap_pyfunction!(derive_evaluation_order_json, module)?)?;
     module.add_function(wrap_pyfunction!(standard_library_json, module)?)?;
     module.add_function(wrap_pyfunction!(simulate_json, module)?)?;
     module.add_function(wrap_pyfunction!(monte_carlo_json, module)?)?;

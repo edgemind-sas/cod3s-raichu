@@ -152,6 +152,12 @@ pub fn expand(
         }
         expansion.model.components.push(instance.component);
     }
+    // The sweep order is derived, never authored (KTD14). A model the
+    // derivation cannot read is structurally invalid, and validation below
+    // reports it with its origin.
+    if let Ok(order) = crate::order::derive_evaluation_order(&expansion.model) {
+        expansion.model.evaluation_order = order;
+    }
     expansion
         .model
         .validate()

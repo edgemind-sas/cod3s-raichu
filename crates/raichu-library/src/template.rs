@@ -136,6 +136,7 @@ fn check_value(param: &Parameter, value: &Value) -> Result<Value, String> {
                         .as_array()
                         .filter(|xs| xs.iter().all(Value::is_string))
                         .map(|xs| Value::Array(xs.clone())),
+                    ItemKind::Object => item.as_object().map(|o| Value::Object(o.clone())),
                 };
                 out.push(ok.ok_or_else(|| {
                     let kind = match item_kind {
@@ -144,6 +145,7 @@ fn check_value(param: &Parameter, value: &Value) -> Result<Value, String> {
                         ItemKind::Bool => "bool",
                         ItemKind::String => "string",
                         ItemKind::StringList => "string_list",
+                        ItemKind::Object => "object",
                     };
                     format!(
                         "parameter `{}` is a list of {kind} items; `{item}` is not one",

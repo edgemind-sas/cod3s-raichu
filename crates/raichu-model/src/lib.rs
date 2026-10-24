@@ -123,7 +123,44 @@ pub struct Port {
     /// declares them; validation refuses a channel list on an in port.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<Channel>,
+    /// **Port equations**: per-connection channel equations (see
+    /// [`PortEquation`]). Non-baseline construct: a document carrying one
+    /// must declare [`Feature::PortEquations`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub equations: Vec<PortEquation>,
 }
+
+/// An equation declared on a port and evaluated **once per connection**
+/// through it, writing that connection's `channel`.
+///
+/// A component cannot name its connections, so this is how it states a
+/// per-connection quantity locally. On an **in** port it writes the
+/// channel of every connection that feeds the port (a consumer publishing
+/// its demand on each supplier's edge); on an **out** port, the channel of
+/// every connection leaving it (a producer's claim per consumer). Channels
+/// live on the producer's out port, which must declare `channel`.
+///
+/// Inside `expr`, an `attr` leaf whose component is the reserved name
+/// [`EDGE`] reads another channel of the same connection
+/// (`{"component": "$edge", "attribute": "demand"}`); every other leaf
+/// reads as anywhere else. A total over an out port's connections is read
+/// back with `port_agg` (`sum` or `count`) on that out port.
+///
+/// The construct is an authoring form: [`Model::with_resolved_connections`]
+/// lowers it to one ordinary explicit equation per connection, named by
+/// the channel attribute it writes, so the engine never sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PortEquation {
+    /// The channel written, on each connection through the port.
+    pub channel: String,
+    /// Right-hand side, evaluated per connection.
+    pub expr: Expr,
+}
+
+/// Reserved component name reading a channel of the connection a
+/// [`PortEquation`] is evaluated for.
+pub const EDGE: &str = "$edge";
 
 /// A named group of ports, validated at build time (each port must
 /// exist), that an [`InterfaceConnection`] joins to another at once. The
@@ -228,6 +265,28 @@ pub struct ChannelAttribute {
     pub attribute: String,
     /// Initial value (the channel's declared default).
     pub init: f64,
+}
+
+/// One step of the explicit sweep with the attributes it writes and the
+/// attributes it reads at the instant it is evaluated, produced by
+/// [`Model::evaluation_step_reads`].
+///
+/// A step is named as in [`Model::evaluation_order`]: an explicit
+/// equation by its target attribute, a distribution operator by its own
+/// name. In-port aggregations are resolved through the connections that
+/// feed them, so `reads` names the producer-side attributes, and `count`
+/// reads nothing (it reads the topology, never a value).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvaluationStepReads {
+    /// Component owning the step.
+    pub component: String,
+    /// The step's name in [`Model::evaluation_order`].
+    pub step: String,
+    /// Attributes the step writes: the equation's target, or one
+    /// allocated channel attribute per outgoing connection of an operator.
+    pub writes: Vec<AttrRef>,
+    /// Attributes the step reads, in expression order, possibly repeated.
+    pub reads: Vec<AttrRef>,
 }
 
 /// Occurrence distribution of a transition (M0 deterministic subset; `Exp` and the
@@ -886,6 +945,11 @@ pub enum Feature {
     /// `never`, and the minimal sequences would lose the failures the
     /// declaration was there to keep, without a word.
     CycleCancellation,
+    /// Port-level [`Port::equations`] and `port_agg` over an out port:
+    /// per-connection channel equations. An engine that ignored them would
+    /// leave every channel they write at its default, and a flow network
+    /// would deliver nothing without a word.
+    PortEquations,
 }
 
 impl Feature {
@@ -901,6 +965,7 @@ impl Feature {
         Feature::InterfaceConnections,
         Feature::MonitoredStates,
         Feature::CycleCancellation,
+        Feature::PortEquations,
     ];
 
     /// Serialized name of the feature.
@@ -917,6 +982,7 @@ impl Feature {
             Feature::InterfaceConnections => "interface_connections",
             Feature::MonitoredStates => "monitored_states",
             Feature::CycleCancellation => "cycle_cancellation",
+            Feature::PortEquations => "port_equations",
         }
     }
 
@@ -1613,6 +1679,51 @@ pub enum ModelError {
         component: String,
         /// The offending attribute.
         target: String,
+    },
+    /// A port equation writes a channel the producer's out port does not
+    /// declare.
+    #[error(
+        "port equation of `{port}` writes channel `{channel}`, which \
+         `{producer_port}` does not declare"
+    )]
+    PortEquationUnknownChannel {
+        /// The port declaring the equation, as `component.port`.
+        port: String,
+        /// The channel written.
+        channel: String,
+        /// The producer's out port at the other end of a connection (the
+        /// port itself for an out port), as `component.port`.
+        producer_port: String,
+    },
+    /// A port equation reads `$edge.<channel>` for a channel the
+    /// connection's producer does not declare.
+    #[error(
+        "port equation of `{port}` reads `$edge.{channel}`, which \
+         `{producer_port}` does not declare"
+    )]
+    PortEquationUnknownEdgeChannel {
+        /// The port declaring the equation, as `component.port`.
+        port: String,
+        /// The channel read.
+        channel: String,
+        /// The producer's out port at the other end of the connection, as
+        /// `component.port`.
+        producer_port: String,
+    },
+    /// An aggregation of an out port's channel is not a `sum` or a `count`.
+    #[error(
+        "{context} aggregates a channel of out port `{component}.{port}` with `{agg}`: an \
+         out port aggregates one of its channels with `sum` or `count`"
+    )]
+    OutPortAggregation {
+        /// Where the expression appears.
+        context: String,
+        /// The component.
+        component: String,
+        /// The out port.
+        port: String,
+        /// The aggregation written.
+        agg: String,
     },
     /// A attribute may carry at most one equation.
     #[error("attribute `{component}.{target}` has more than one equation")]
@@ -2553,6 +2664,9 @@ impl Model {
         if !self.interface_connections.is_empty() {
             features.insert(Feature::InterfaceConnections);
         }
+        if self.has_port_constructs() {
+            features.insert(Feature::PortEquations);
+        }
         if self.evaluation_order.is_some() {
             features.insert(Feature::EvaluationOrder);
         }
@@ -2662,7 +2776,7 @@ impl Model {
     /// the fail-fast gate (typed errors at build
     /// time, never mid-simulation surprises).
     pub fn validate(&self) -> Result<(), ModelError> {
-        if !self.interface_connections.is_empty() {
+        if self.needs_resolution() {
             return self.with_resolved_connections()?.validate();
         }
         let scopes = self.check_components()?;
@@ -3531,6 +3645,90 @@ impl Model {
             .collect()
     }
 
+    /// The read relation of the explicit sweep: every step of
+    /// [`Model::evaluation_steps`], in that positional order, with what it
+    /// writes and what it reads.
+    ///
+    /// This is the relation cycle detection and the priority-surplus check
+    /// walk, exposed so an authoring layer can derive an evaluation order
+    /// from it rather than from a convention of its own. A distribution
+    /// operator reads its available quantity and the demand channel of each
+    /// of its connections. Interface connections are resolved first.
+    ///
+    /// # Errors
+    /// The structural errors of the component checks (an unknown
+    /// component, port or attribute named by an expression), and of
+    /// interface-connection resolution.
+    pub fn evaluation_step_reads(&self) -> Result<Vec<EvaluationStepReads>, ModelError> {
+        if self.needs_resolution() {
+            return self.with_resolved_connections()?.evaluation_step_reads();
+        }
+        let scopes = self.check_components()?;
+        let mut feeds: HashMap<(&str, &str), Vec<&Connection>> = HashMap::new();
+        for connection in &self.connections {
+            feeds
+                .entry((
+                    connection.to.component.as_str(),
+                    connection.to.port.as_str(),
+                ))
+                .or_default()
+                .push(connection);
+        }
+        let to_refs = |nodes: Vec<EquationNode>| -> Vec<AttrRef> {
+            nodes
+                .into_iter()
+                .map(|(component, attribute)| AttrRef {
+                    component,
+                    attribute,
+                })
+                .collect()
+        };
+        let mut steps = Vec::new();
+        for component in &self.components {
+            for equation in &component.equations {
+                if equation.kind != EquationKind::Explicit {
+                    continue;
+                }
+                let mut reads = Vec::new();
+                Self::collect_reads(&scopes, &feeds, &equation.expr, &mut reads);
+                steps.push(EvaluationStepReads {
+                    component: component.name.clone(),
+                    step: equation.target.clone(),
+                    writes: vec![AttrRef {
+                        component: component.name.clone(),
+                        attribute: equation.target.clone(),
+                    }],
+                    reads: to_refs(reads),
+                });
+            }
+            for allocation in &component.allocations {
+                let mut reads = Vec::new();
+                Self::collect_reads(&scopes, &feeds, &allocation.available, &mut reads);
+                let edges = self.allocation_edges(component, allocation);
+                for connection in &edges {
+                    reads.push((
+                        component.name.clone(),
+                        channel_attribute_name(connection, &allocation.demand),
+                    ));
+                }
+                let writes = edges
+                    .iter()
+                    .map(|connection| AttrRef {
+                        component: component.name.clone(),
+                        attribute: channel_attribute_name(connection, &allocation.allocated),
+                    })
+                    .collect();
+                steps.push(EvaluationStepReads {
+                    component: component.name.clone(),
+                    step: allocation.name.clone(),
+                    writes,
+                    reads: to_refs(reads),
+                });
+            }
+        }
+        Ok(steps)
+    }
+
     /// Every per-connection channel attribute the compiler materialises,
     /// in **connection declaration order**, and within a connection in
     /// the source port's channel declaration order.
@@ -3542,7 +3740,7 @@ impl Model {
     /// connection checks have run.
     #[must_use]
     pub fn channel_attributes(&self) -> Vec<ChannelAttribute> {
-        if !self.interface_connections.is_empty() {
+        if self.needs_resolution() {
             if let Ok(resolved) = self.with_resolved_connections() {
                 return resolved.channel_attributes();
             }
@@ -4244,23 +4442,415 @@ impl Model {
         Ok(Cow::Owned(out))
     }
 
-    /// This model with its interface connections expanded into
-    /// [`Model::connections`] and the list emptied: the model the engine
-    /// actually runs. Borrowed when there is nothing to expand.
+    /// This model with its authoring forms resolved: interface connections
+    /// expanded into [`Model::connections`] and the list emptied, then port
+    /// equations and out-port aggregations lowered to explicit equations
+    /// ([`PortEquation`]). The model the engine actually runs. Borrowed
+    /// when there is nothing to resolve.
     ///
     /// # Errors
     ///
-    /// As [`Model::resolved_connections`].
+    /// As [`Model::resolved_connections`], and the port-equation refusals
+    /// ([`ModelError::PortEquationUnknownChannel`],
+    /// [`ModelError::PortEquationUnknownEdgeChannel`],
+    /// [`ModelError::OutPortAggregation`]).
     pub fn with_resolved_connections(&self) -> Result<Cow<'_, Model>, ModelError> {
-        if self.interface_connections.is_empty() {
+        if !self.needs_resolution() {
             return Ok(Cow::Borrowed(self));
         }
         let connections = self.resolved_connections()?.into_owned();
-        Ok(Cow::Owned(Model {
+        let mut model = Model {
             connections,
             interface_connections: Vec::new(),
             ..self.clone()
-        }))
+        };
+        if model.has_port_constructs() {
+            model.lower_port_constructs()?;
+        }
+        Ok(Cow::Owned(model))
+    }
+
+    /// Whether [`Model::with_resolved_connections`] has anything to do.
+    fn needs_resolution(&self) -> bool {
+        !self.interface_connections.is_empty() || self.has_port_constructs()
+    }
+
+    /// Whether the model uses a port equation or aggregates an out port.
+    fn has_port_constructs(&self) -> bool {
+        if self
+            .components
+            .iter()
+            .any(|c| c.ports.iter().any(|p| !p.equations.is_empty()))
+        {
+            return true;
+        }
+        let out_ports = self.out_ports();
+        let mut found = false;
+        self.for_each_expr(&mut |_, expr| {
+            // Only a channel-named aggregation is the construct; one without
+            // a channel stays the malformed read the validation refuses.
+            expr.for_each_port_agg(&mut |port, channel| {
+                found |= channel.is_some()
+                    && out_ports.contains(&(port.component.as_str(), port.port.as_str()));
+            });
+        });
+        found
+    }
+
+    fn out_ports(&self) -> HashSet<(&str, &str)> {
+        self.components
+            .iter()
+            .flat_map(|c| {
+                c.ports
+                    .iter()
+                    .filter(|p| p.dir == PortDir::Out)
+                    .map(move |p| (c.name.as_str(), p.name.as_str()))
+            })
+            .collect()
+    }
+
+    /// Visit every expression an out-port aggregation may appear in, with
+    /// a description of where it is.
+    fn for_each_expr(&self, f: &mut impl FnMut(&dyn Fn() -> String, &Expr)) {
+        for component in &self.components {
+            for automaton in &component.automata {
+                for transition in &automaton.transitions {
+                    let here = || {
+                        format!(
+                            "transition `{}` in `{}.{}`",
+                            transition.name, component.name, automaton.name
+                        )
+                    };
+                    if let Some(guard) = &transition.guard {
+                        f(&here, guard);
+                    }
+                    if let Distrib::Exp {
+                        rate_expr: Some(rate),
+                        ..
+                    } = &transition.distrib
+                    {
+                        f(&here, rate);
+                    }
+                    for assignment in &transition.effects {
+                        f(&here, &assignment.value);
+                    }
+                }
+            }
+            for function in &component.sensitive_functions {
+                let here = || format!("sensitive function `{}.{}`", component.name, function.name);
+                for assignment in &function.effects {
+                    f(&here, &assignment.value);
+                }
+            }
+            for equation in &component.equations {
+                let here = || format!("equation of `{}.{}`", component.name, equation.target);
+                f(&here, &equation.expr);
+            }
+            for allocation in &component.allocations {
+                let here = || {
+                    format!(
+                        "available quantity of distribution operator `{}.{}`",
+                        component.name, allocation.name
+                    )
+                };
+                f(&here, &allocation.available);
+            }
+            for port in &component.ports {
+                for equation in &port.equations {
+                    let here = || {
+                        format!(
+                            "port equation `{}` of `{}.{}`",
+                            equation.channel, component.name, port.name
+                        )
+                    };
+                    f(&here, &equation.expr);
+                }
+            }
+        }
+    }
+
+    /// Visit mutably the same expressions as [`Model::for_each_expr`]: one
+    /// slot list, kept beside it so the two cannot drift apart.
+    fn for_each_expr_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        for component in &mut self.components {
+            for automaton in &mut component.automata {
+                for transition in &mut automaton.transitions {
+                    if let Some(guard) = &mut transition.guard {
+                        f(guard);
+                    }
+                    if let Distrib::Exp {
+                        rate_expr: Some(rate),
+                        ..
+                    } = &mut transition.distrib
+                    {
+                        f(rate);
+                    }
+                    for assignment in &mut transition.effects {
+                        f(&mut assignment.value);
+                    }
+                }
+            }
+            for function in &mut component.sensitive_functions {
+                for assignment in &mut function.effects {
+                    f(&mut assignment.value);
+                }
+            }
+            for equation in &mut component.equations {
+                f(&mut equation.expr);
+            }
+            for allocation in &mut component.allocations {
+                f(&mut allocation.available);
+            }
+            for port in &mut component.ports {
+                for equation in &mut port.equations {
+                    f(&mut equation.expr);
+                }
+            }
+        }
+    }
+
+    /// The connections through each port, by `(component, port)` of either
+    /// end, in declaration order.
+    fn connections_by_port(&self) -> HashMap<(&str, &str), Vec<&Connection>> {
+        let mut through: HashMap<(&str, &str), Vec<&Connection>> = HashMap::new();
+        for connection in &self.connections {
+            through
+                .entry((
+                    connection.from.component.as_str(),
+                    connection.from.port.as_str(),
+                ))
+                .or_default()
+                .push(connection);
+            through
+                .entry((
+                    connection.to.component.as_str(),
+                    connection.to.port.as_str(),
+                ))
+                .or_default()
+                .push(connection);
+        }
+        through
+    }
+
+    /// Lower every port equation to one explicit equation per connection,
+    /// then every out-port aggregation to an explicit sum or count, in
+    /// place. Port equations lower in component, port and equation
+    /// declaration order, connections in declaration order; each lands on
+    /// the producer, after its own equations.
+    fn lower_port_constructs(&mut self) -> Result<(), ModelError> {
+        let declared: HashMap<(&str, &str), Vec<&str>> = self
+            .components
+            .iter()
+            .flat_map(|c| {
+                c.ports
+                    .iter()
+                    .filter(|p| p.dir == PortDir::Out)
+                    .map(move |p| {
+                        (
+                            (c.name.as_str(), p.name.as_str()),
+                            p.channels.iter().map(|ch| ch.name.as_str()).collect(),
+                        )
+                    })
+            })
+            .collect();
+        let through = self.connections_by_port();
+        let index: HashMap<&str, usize> = self
+            .components
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.name.as_str(), i))
+            .collect();
+        let mut lowered: Vec<(usize, Equation)> = Vec::new();
+        for component in &self.components {
+            for port in &component.ports {
+                let here = format!("{}.{}", component.name, port.name);
+                let connections = through
+                    .get(&(component.name.as_str(), port.name.as_str()))
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|k| match port.dir {
+                        PortDir::Out => {
+                            k.from.component == component.name && k.from.port == port.name
+                        }
+                        PortDir::In => k.to.component == component.name && k.to.port == port.name,
+                    });
+                let connections: Vec<&Connection> = connections.copied().collect();
+                for equation in &port.equations {
+                    // An out port checks its own channels even when nothing
+                    // is connected to it yet.
+                    if port.dir == PortDir::Out
+                        && !declared[&(component.name.as_str(), port.name.as_str())]
+                            .contains(&equation.channel.as_str())
+                    {
+                        return Err(ModelError::PortEquationUnknownChannel {
+                            port: here.clone(),
+                            channel: equation.channel.clone(),
+                            producer_port: here,
+                        });
+                    }
+                    for connection in &connections {
+                        let producer = (
+                            connection.from.component.as_str(),
+                            connection.from.port.as_str(),
+                        );
+                        let channels: &[&str] = declared.get(&producer).map_or(&[], Vec::as_slice);
+                        let unknown = |channel: &str| !channels.contains(&channel);
+                        let producer_port = || format!("{}.{}", producer.0, producer.1);
+                        if unknown(&equation.channel) {
+                            return Err(ModelError::PortEquationUnknownChannel {
+                                port: here,
+                                channel: equation.channel.clone(),
+                                producer_port: producer_port(),
+                            });
+                        }
+                        let mut expr = equation.expr.clone();
+                        let mut missing: Option<String> = None;
+                        expr.rewrite(&mut |node| {
+                            if let Expr::Attr { attr } = node {
+                                if attr.component == EDGE {
+                                    if unknown(&attr.attribute) {
+                                        missing.get_or_insert_with(|| attr.attribute.clone());
+                                    }
+                                    *attr = AttrRef {
+                                        component: connection.from.component.clone(),
+                                        attribute: channel_attribute_name(
+                                            connection,
+                                            &attr.attribute,
+                                        ),
+                                    };
+                                }
+                            }
+                        });
+                        if let Some(channel) = missing {
+                            return Err(ModelError::PortEquationUnknownEdgeChannel {
+                                port: here,
+                                channel,
+                                producer_port: producer_port(),
+                            });
+                        }
+                        if let Some(&target) = index.get(producer.0) {
+                            lowered.push((
+                                target,
+                                Equation {
+                                    target: channel_attribute_name(connection, &equation.channel),
+                                    kind: EquationKind::Explicit,
+                                    expr,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        for component in &mut self.components {
+            for port in &mut component.ports {
+                port.equations.clear();
+            }
+        }
+        for (target, equation) in lowered {
+            self.components[target].equations.push(equation);
+        }
+        self.lower_out_port_aggregations()
+    }
+
+    /// Rewrite every `port_agg` over an out port as the explicit sum (or
+    /// count) of the named channel over the port's connections.
+    fn lower_out_port_aggregations(&mut self) -> Result<(), ModelError> {
+        // Each out port with the connections leaving it, in declaration
+        // order; owned, so the rewrite below can borrow it while it mutates
+        // the components.
+        let mut leaving: HashMap<(String, String), Vec<Connection>> = self
+            .out_ports()
+            .into_iter()
+            .map(|(c, p)| ((c.to_owned(), p.to_owned()), Vec::new()))
+            .collect();
+        if leaving.is_empty() {
+            return Ok(());
+        }
+        for connection in &self.connections {
+            let key = (
+                connection.from.component.clone(),
+                connection.from.port.clone(),
+            );
+            if let Some(edges) = leaving.get_mut(&key) {
+                edges.push(connection.clone());
+            }
+        }
+        let is_out =
+            |port: &PortRef| leaving.contains_key(&(port.component.clone(), port.port.clone()));
+        // Refuse first, over the unmodified model, so the error names
+        // where the aggregation was written.
+        let mut refusal: Option<ModelError> = None;
+        self.for_each_expr(&mut |here, expr| {
+            Self::find_out_aggregation(expr, &is_out, &mut |port, agg| {
+                if refusal.is_none() && !matches!(agg, AggOp::Sum | AggOp::Count) {
+                    refusal = Some(ModelError::OutPortAggregation {
+                        context: here(),
+                        component: port.component.clone(),
+                        port: port.port.clone(),
+                        agg: agg.name().to_owned(),
+                    });
+                }
+            });
+        });
+        if let Some(error) = refusal {
+            return Err(error);
+        }
+        self.for_each_expr_mut(&mut |expr| {
+            expr.rewrite(&mut |node| {
+                let Expr::PortAgg {
+                    port,
+                    agg,
+                    channel: Some(channel),
+                } = node
+                else {
+                    return;
+                };
+                let Some(edges) = leaving.get(&(port.component.clone(), port.port.clone())) else {
+                    return;
+                };
+                *node = match agg {
+                    AggOp::Count => Expr::Const {
+                        value: Value::Int(i64::try_from(edges.len()).unwrap_or(i64::MAX)),
+                    },
+                    _ if edges.is_empty() => Expr::Const {
+                        value: Value::Int(0),
+                    },
+                    _ => Expr::Add {
+                        args: edges
+                            .iter()
+                            .map(|k| Expr::Attr {
+                                attr: AttrRef {
+                                    component: k.from.component.clone(),
+                                    attribute: channel_attribute_name(k, channel),
+                                },
+                            })
+                            .collect(),
+                    },
+                };
+            });
+        });
+        Ok(())
+    }
+
+    /// Calls `f` on every channel-named aggregation of an out port in `expr`.
+    fn find_out_aggregation(
+        expr: &Expr,
+        is_out: &impl Fn(&PortRef) -> bool,
+        f: &mut impl FnMut(&PortRef, AggOp),
+    ) {
+        if let Expr::PortAgg {
+            port,
+            agg,
+            channel: Some(_),
+        } = expr
+        {
+            if is_out(port) {
+                f(port, *agg);
+            }
+        }
+        expr.for_each_child(&mut |child| Self::find_out_aggregation(child, is_out, f));
     }
 
     fn expand_interface_connection(
@@ -4439,6 +5029,17 @@ impl Model {
                             transition.name, component.name, automaton.name
                         );
                         Self::check_expr(scopes, &sources, guard, &context)?;
+                    }
+                    if let Distrib::Exp {
+                        rate_expr: Some(rate),
+                        ..
+                    } = &transition.distrib
+                    {
+                        let context = format!(
+                            "rate of transition `{}` in `{}.{}`",
+                            transition.name, component.name, automaton.name
+                        );
+                        Self::check_expr(scopes, &sources, rate, &context)?;
                     }
                     for (index, assignment) in transition.effects.iter().enumerate() {
                         let context = format!(

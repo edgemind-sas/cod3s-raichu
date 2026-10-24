@@ -245,6 +245,7 @@ fn sample_model() -> Model {
                     dir: PortDir::Out,
                     attr: Some("flow_out".into()),
                     channels: vec![],
+                    equations: Vec::new(),
                 }],
                 interfaces: vec![Interface {
                     name: "outputs".into(),
@@ -332,6 +333,7 @@ fn sample_model() -> Model {
                     dir: PortDir::In,
                     attr: None,
                     channels: vec![],
+                    equations: Vec::new(),
                 }],
                 interfaces: vec![],
                 automata: vec![],
@@ -844,6 +846,7 @@ fn out_port(name: &str, attribute: &str) -> Port {
         dir: PortDir::Out,
         attr: Some(attribute.into()),
         channels: vec![],
+        equations: Vec::new(),
     }
 }
 
@@ -854,6 +857,7 @@ fn in_port(name: &str) -> Port {
         dir: PortDir::In,
         attr: None,
         channels: vec![],
+        equations: Vec::new(),
     }
 }
 
@@ -1324,6 +1328,7 @@ fn allocation_cycle_model() -> Model {
                                 init: 0.0,
                             },
                         ],
+                        equations: Vec::new(),
                     },
                     in_port("back"),
                 ],

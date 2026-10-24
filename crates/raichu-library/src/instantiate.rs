@@ -446,14 +446,22 @@ fn check_self_references(
     }
     exprs.extend(component.equations.iter().map(|e| &e.expr));
     exprs.extend(component.allocations.iter().map(|a| &a.available));
+    // Each expression with whether it may read `$edge`: only a port
+    // equation reads the channels of its own connection.
+    let checked = exprs.into_iter().map(|e| (e, false)).chain(
+        component
+            .ports
+            .iter()
+            .flat_map(|p| p.equations.iter().map(|e| (&e.expr, true))),
+    );
     let mut found: Vec<String> = targets
         .iter()
         .filter(|t| t.component != me)
         .map(|t| format!("`{}.{}`", t.component, t.attribute))
         .collect();
-    for expr in exprs {
+    for (expr, edge_allowed) in checked {
         expr.for_each_attr_ref(&mut |r| {
-            if r.component != me {
+            if r.component != me && !(edge_allowed && r.component == raichu_model::EDGE) {
                 found.push(format!("`{}.{}`", r.component, r.attribute));
             }
         });

@@ -28,6 +28,7 @@ mod expand;
 mod instantiate;
 mod modes;
 pub mod names;
+mod order;
 pub mod provenance;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -46,5 +47,6 @@ pub use document::{
 pub use error::{DocumentKind, ExpandError};
 pub use expand::{expand, Expansion};
 pub use instantiate::CombineRule;
+pub use order::derive_evaluation_order;
 pub use provenance::{Origin, Provenance};
 pub use std_library::{standard_library, STD};
