@@ -181,3 +181,58 @@ except pyraichu.ModelError as error:
 `.yml` files are read through PyYAML when it is installed. YAML reads an
 unquoted `on`, `off`, `yes` or `no` as a boolean, so quote a name spelled
 that way.
+
+## Continuous types
+
+The continuous fragments of `std` build a conservative flow network out of
+component-local declarations: every output publishes, on each of its
+connections, what it can deliver and what it hands over, every input what
+it asks and the share it accepts, and a distribution operator splits the
+output over the claims. A type assembles them the way the boolean types
+above assemble theirs. Here a source of 2 per hour fills a tank of
+capacity 10 that nobody draws from:
+
+```python
+tank_library = {
+    "raichu_library": {"format": 1},
+    "library": {
+        "name": "tanks", "version": "1.0.0", "imports": ["std"],
+        "types": [
+            {"name": "Source", "uses": [
+                {"fragment": "std.continuous_flow_out", "with": {"name": "Q"}},
+                {"fragment": "std.continuous_source", "with": {"name": "Q", "rate": 2.0}}]},
+            {"name": "Tank", "uses": [
+                {"fragment": "std.continuous_flow_in", "with": {"name": "Q", "demand": 2.0}},
+                {"fragment": "std.volume_flow",
+                 "with": {"volume": "tank", "flow": "Q", "capacity": 10.0, "demand": 2.0}},
+                {"fragment": "std.volume_outlet",
+                 "with": {"volume": "tank", "flow": "Q", "rate": 2.0, "empty_automaton": "tank_bounds"}},
+                {"fragment": "std.continuous_flow_out",
+                 "with": {"name": "Q", "held": True, "empty_automaton": "tank_bounds"}},
+                {"fragment": "std.volume_total",
+                 "with": {"volume": "tank", "flows": ["Q"], "capacity": 10.0}}]},
+        ],
+    },
+}
+tank_system = {
+    "raichu_system": {"format": 1},
+    "system": {
+        "name": "filling", "library": {"name": "tanks", "version": "1.0.0"},
+        "instances": [{"name": "S", "type": "Source"}, {"name": "T", "type": "Tank"}],
+        "connections": [{"from": "S.Q_out", "to": "T.Q_in"}],
+        "indicators": [{"name": "content", "target": "attribute",
+                        "attr": {"component": "T", "attribute": "tank_content"}}],
+    },
+}
+tank_model = pyraichu.load_system(tank_system, [tank_library])
+run = pyraichu.simulate(tank_model, t_max=8.0, samples=[0.0, 2.0, 4.0, 6.0, 8.0])
+assert [round(v, 9) for _, v in run.samples["content"]] == [0.0, 4.0, 8.0, 10.0, 10.0]
+full = [e.time for e in run.events if e.transition == "T.tank_bounds.tank_reach_full"]
+assert abs(full[0] - 5.0) < 1e-9
+```
+
+The engine derives the order in which the network's equations are swept
+from what each one reads, so a library author never writes one; the
+per-connection quantities are [port equations](../reference/model-schema.md#port-equation)
+of the fragments. The [format reference](../reference/library-format.md#the-standard-library)
+lists every continuous fragment.

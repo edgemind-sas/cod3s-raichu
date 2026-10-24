@@ -73,6 +73,7 @@ pub fn standby(logic: &str, connected: bool, init: &str) -> Model {
                     dir: PortDir::Out,
                     attr: Some("cooling".into()),
                     channels: vec![],
+                    equations: Vec::new(),
                 }],
                 interfaces: vec![],
                 automata: vec![],
@@ -92,6 +93,7 @@ pub fn standby(logic: &str, connected: bool, init: &str) -> Model {
                     dir: PortDir::In,
                     attr: None,
                     channels: vec![],
+                    equations: Vec::new(),
                 }],
                 interfaces: vec![],
                 automata: vec![Automaton {

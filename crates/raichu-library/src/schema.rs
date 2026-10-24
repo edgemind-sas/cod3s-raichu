@@ -173,6 +173,24 @@ fn document_schema<T: JsonSchema>(
                 defs.insert(name, templated);
             }
         }
+        // The targetable list and the mode catalogue of a type or a fragment
+        // are read after substitution like the body: their items may repeat
+        // with `$for_each`, although the type and fragment objects themselves
+        // are the library's own, untemplated shape.
+        for owner in ["Fragment", "TypeDef"] {
+            let Some(Value::Object(properties)) = defs
+                .get_mut(owner)
+                .and_then(|def| def.get_mut("properties"))
+            else {
+                continue;
+            };
+            for key in ["targetable", "modes"] {
+                if let Some(list) = properties.remove(key) {
+                    let templated = templater.node(list, &format!("{owner}_{key}"));
+                    properties.insert(key.to_owned(), templated);
+                }
+            }
+        }
         defs.insert(
             PARAM_DEF.to_owned(),
             json!({

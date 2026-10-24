@@ -45,6 +45,7 @@ fn delay_model() -> Model {
                     dir: PortDir::Out,
                     attr: Some("flow_out".into()),
                     channels: vec![],
+                    equations: Vec::new(),
                 }],
                 interfaces: vec![],
                 automata: vec![Automaton {
@@ -113,6 +114,7 @@ fn delay_model() -> Model {
                     dir: PortDir::In,
                     attr: None,
                     channels: vec![],
+                    equations: Vec::new(),
                 }],
                 interfaces: vec![],
                 automata: vec![],
@@ -332,6 +334,7 @@ fn wide_network(watched: bool) -> Model {
             dir: PortDir::Out,
             attr: Some("power".into()),
             channels: vec![],
+            equations: Vec::new(),
         }],
         interfaces: vec![],
         automata: vec![Automaton {
@@ -507,6 +510,7 @@ fn wide_network(watched: bool) -> Model {
                 dir: PortDir::In,
                 attr: None,
                 channels: vec![],
+                equations: Vec::new(),
             }],
             interfaces: vec![],
             automata,

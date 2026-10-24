@@ -22,6 +22,7 @@ from typing import Any, Union
 from ._pyraichu import (
     ModelError,
     check_library_json,
+    derive_evaluation_order_json,
     expand_documents_json,
     standard_library_json,
 )
@@ -112,6 +113,18 @@ def check_library(library: Document, libraries: Iterable[Document] = ()) -> list
     """
     raw = check_library_json(_text(library), _texts(libraries))
     return json.loads(raw)
+
+
+def derive_evaluation_order(model: Document) -> list[dict[str, str]] | None:
+    """The evaluation order of a flat core model, derived from what each
+    explicit step reads: a step comes after every step whose result it
+    reads, independent steps keep declaration order, and the steps of a
+    cycle stay together. ``None`` for a model with no explicit step.
+
+    This is the order the expander gives every expanded model; it does not
+    look at an ``evaluation_order`` the model already carries.
+    """
+    return json.loads(derive_evaluation_order_json(_text(model)))
 
 
 def standard_library() -> dict[str, Any]:

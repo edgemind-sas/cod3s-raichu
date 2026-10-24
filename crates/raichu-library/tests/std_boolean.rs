@@ -205,9 +205,11 @@ fn a_gate_starting_unavailable_resolves_to_any_activates() {
 fn the_standard_library_parses_checks_and_carries_the_engine_version() {
     let std = standard_library().unwrap();
     assert_eq!(std.version, env!("CARGO_PKG_VERSION"));
+    // The boolean fragments come first; the continuous ones follow them
+    // (`std_continuous.rs`).
     let names: Vec<&str> = std.fragments.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(
-        names,
+        names[..4],
         [
             "bool_flow_in",
             "bool_flow_out",

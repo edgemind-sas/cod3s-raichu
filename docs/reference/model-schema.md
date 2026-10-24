@@ -241,6 +241,7 @@ A **Value** is `{ "kind": "bool"|"int"|"float", "value": <literal> }`.
 | `dir` | `"in"` \| `"out"` | direction |
 | `attr` | string | **out-ports only**: the attribute this port exports |
 | `channels` | array of [Channel](#channel) | **out-ports only**, optional (default `[]`): per-connection quantities |
+| `equations` | array of [Port equation](#port-equation) | optional (default `[]`): per-connection channel equations; requires the `port_equations` feature |
 
 An in-port omits `attr`; it aggregates whatever is connected to it (read
 with the [`port_agg`](#expressions) operator).
@@ -278,6 +279,51 @@ with a materialised name is refused at build time, naming both.
 A consumer reads a channel through `port_agg` with a `channel` selector
 (see [Expressions](#expressions)). Without a selector, `port_agg` keeps
 reading the exported `attr`: the producer's total stays visible.
+
+### Port equation
+
+`{ "channel": string, "expr": Expr }`, declared on an in or an out port,
+and evaluated **once per connection** through that port: it writes the
+`channel` of each such connection. A component cannot name its
+connections, so this is how it states a per-connection quantity on its
+own:
+
+- on an **in** port, it writes the channel of every connection feeding
+  the port (a consumer publishing its demand on each supplier's edge);
+- on an **out** port, it writes the channel of every connection leaving
+  it (a producer's claim per consumer).
+
+The channel must be declared on the producer's out port, since that is
+where per-connection attributes live; one that is not is refused, naming
+the producer's port. Inside `expr`, an `attr` leaf whose component is the
+reserved name `$edge` reads another channel **of the same connection**
+(`{"op": "attr", "attr": {"component": "$edge", "attribute": "demand"}}`);
+every other leaf reads as anywhere else. `$edge` outside a port equation
+is refused as an unknown component.
+
+A total over an out port's connections is read back with
+[`port_agg`](#expressions) on that **out** port, naming a channel, with
+`sum` or `count`. Any other aggregation of an out port's channel is
+refused, and an aggregation of an out port without a channel stays the
+malformed read it always was.
+
+```json
+{"name": "out", "dir": "out", "attr": "available",
+ "channels": [{"name": "demand"}, {"name": "claim"}],
+ "equations": [{"channel": "claim", "expr": {"op": "min", "args": [
+    {"op": "attr", "attr": {"component": "$edge", "attribute": "demand"}},
+    {"op": "attr", "attr": {"component": "supply", "attribute": "available"}}]}}]}
+```
+
+Port equations are an authoring form. When the model is resolved (the
+same step that expands [interface connections](#interface-connection)),
+each one becomes an ordinary explicit [equation](#equation) on the
+producer per connection, named by the channel attribute it writes and
+appended after the producer's own equations, and each out-port
+aggregation becomes an explicit sum or a constant count. The engine never
+sees the construct; an [evaluation order](#evaluation-order) names the
+lowered steps by their channel attribute (`supply.out__claim__to_a`), and
+two writers of one channel are refused like any doubly-defined attribute.
 
 ### Interface
 
@@ -939,6 +985,7 @@ The Python helpers, all in `pyraichu`:
 | `interface_connections` | model-level [interface connections](#interface-connection) |
 | `monitored_states` | transition-level [recorded targets](#transition) |
 | `cycle_cancellation` | transition-level [cycle-group cancellation override](#transition) |
+| `port_equations` | port-level [port equations](#port-equation) and `port_agg` over an out port |
 
 The transition-level [declared kind](#declared-kind) `failure` or
 `repair` is a **baseline** construct and has no feature name (the kind
@@ -1050,7 +1097,7 @@ Every expression is an object with an `"op"` tag. The 16 operators:
 | `const` | `value`: Value | a literal |
 | `attr` | `attr`: VarRef | an attribute's current value |
 | `state_active` | `state`: StateRef | `true` iff the automaton is in that state |
-| `port_agg` | `port`: PortRef, `agg`: AggOp, `channel`: string (optional) | aggregate an in-port's connected values; with `channel`, the [per-connection](#channel) quantities instead of the exported attributes |
+| `port_agg` | `port`: PortRef, `agg`: AggOp, `channel`: string (optional) | aggregate an in-port's connected values; with `channel`, the [per-connection](#channel) quantities instead of the exported attributes. Over an **out** port, `sum` or `count` of one of its channels ([port equations](#port-equation)) |
 | `cmp` | `cmp`: CmpOp, `lhs`, `rhs`: Expr | a comparison → bool |
 | `bool` | `bool_op`: `and`\|`or`\|`not`, `args`: array of Expr | boolean combination (`not` takes exactly one) |
 | `add` | `args`: array of Expr | sum |

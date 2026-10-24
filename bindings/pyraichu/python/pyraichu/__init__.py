@@ -54,7 +54,14 @@ from ._pyraichu import (
 from ._pyraichu import quantify_json as quantify_json
 from ._pyraichu import validate_quantification as validate_quantification
 from .journal import AttributeChange, Cascade, JournalQuery, TransitionHistory
-from .library import check_library, expand_documents, load_system, run_study, standard_library
+from .library import (
+    check_library,
+    derive_evaluation_order,
+    expand_documents,
+    load_system,
+    run_study,
+    standard_library,
+)
 
 __all__ = [
     "DEFAULT_CONFIDENCE",
@@ -122,6 +129,7 @@ __all__ = [
     "load_system",
     "expand_documents",
     "check_library",
+    "derive_evaluation_order",
     "run_study",
     "standard_library",
     "model_body",

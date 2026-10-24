@@ -617,6 +617,3560 @@
             }
           ]
         }
+      },
+      {
+        "name": "continuous_flow_out",
+        "description": "A continuous output flow `<name>` of a conservative network: the out port `<name>_out` and the totals `<name>_demand_out` (what its consumers ask) and `<name>_fed_out` (what they receive). Each connection's claim is its consumer's demand truncated at the quantity distributed, and a distribution operator splits that quantity over the claims. What a consumer receives is its allocation scaled by the share it accepts. The capability `<name>_capability_out` is declared here and written by the fragment that makes the flow (`continuous_source`, `volume_outlet`, `rule_produces`, `tap`).",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Flow name."
+          },
+          {
+            "name": "available",
+            "kind": "enum",
+            "values": [
+              "capability",
+              "produced"
+            ],
+            "default": "capability",
+            "description": "What the operator distributes: the capability (a source, a volume) or what a rule set actually produced, `<name>_produced_out`."
+          },
+          {
+            "name": "allocation",
+            "kind": "enum",
+            "values": [
+              "proportional",
+              "shares"
+            ],
+            "default": "proportional",
+            "description": "Split policy over the connections."
+          },
+          {
+            "name": "shares",
+            "kind": "list",
+            "items": "object",
+            "default": [],
+            "description": "For `shares`: one `{\"to\": {\"component\", \"port\"}, \"value\"}` per consumer, summing to 1."
+          },
+          {
+            "name": "held",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the flow leaves a volume: while that volume has run out, it passes on what arrives and a releasing consumer accepts it first."
+          },
+          {
+            "name": "empty_automaton",
+            "kind": "string",
+            "default": "",
+            "description": "With `held`: the automaton whose `empty` state says the volume has run out of the flow."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}_out_rate",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 1.0
+              }
+            },
+            {
+              "name": "${name}_capability_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${name}_demand_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${name}_fed_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_out",
+              "dir": "out",
+              "attr": "${name}_fed_out",
+              "channels": [
+                {
+                  "name": "demand"
+                },
+                {
+                  "name": "capability"
+                },
+                {
+                  "name": "alloc"
+                },
+                {
+                  "name": "delivered"
+                },
+                {
+                  "name": "claim"
+                },
+                {
+                  "name": "accepted"
+                },
+                {
+                  "name": "held_share"
+                },
+                {
+                  "name": "held"
+                }
+              ],
+              "equations": [
+                {
+                  "channel": "capability",
+                  "expr": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_capability_out"
+                    }
+                  }
+                },
+                {
+                  "channel": "claim",
+                  "expr": {
+                    "op": "min",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$edge",
+                          "attribute": "demand"
+                        }
+                      },
+                      {
+                        "$choose": "available",
+                        "cases": {
+                          "capability": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_capability_out"
+                            }
+                          },
+                          "produced": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_produced_out"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "channel": "held",
+                  "expr": {
+                    "$choose": "held",
+                    "cases": {
+                      "false": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      "true": {
+                        "op": "if",
+                        "cond": {
+                          "op": "state_active",
+                          "state": {
+                            "component": "$self",
+                            "automaton": "${empty_automaton}",
+                            "state": "empty"
+                          }
+                        },
+                        "then": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$edge",
+                            "attribute": "alloc"
+                          }
+                        },
+                        "otherwise": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "channel": "delivered",
+                  "expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$edge",
+                          "attribute": "alloc"
+                        }
+                      },
+                      {
+                        "$choose": "held",
+                        "cases": {
+                          "false": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$edge",
+                              "attribute": "accepted"
+                            }
+                          },
+                          "true": {
+                            "op": "if",
+                            "cond": {
+                              "op": "state_active",
+                              "state": {
+                                "component": "$self",
+                                "automaton": "${empty_automaton}",
+                                "state": "empty"
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$edge",
+                                "attribute": "held_share"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$edge",
+                                "attribute": "accepted"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "${name}_demand_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "port_agg",
+                "port": {
+                  "component": "$self",
+                  "port": "${name}_out"
+                },
+                "agg": "sum",
+                "channel": "demand"
+              }
+            },
+            {
+              "target": "${name}_fed_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "port_agg",
+                "port": {
+                  "component": "$self",
+                  "port": "${name}_out"
+                },
+                "agg": "sum",
+                "channel": "delivered"
+              }
+            }
+          ],
+          "allocations": [
+            {
+              "$choose": "allocation",
+              "cases": {
+                "proportional": {
+                  "name": "${name}_alloc",
+                  "port": "${name}_out",
+                  "available": {
+                    "$choose": "available",
+                    "cases": {
+                      "capability": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_capability_out"
+                        }
+                      },
+                      "produced": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_produced_out"
+                        }
+                      }
+                    }
+                  },
+                  "demand": "claim",
+                  "allocated": "alloc",
+                  "policy": "proportional"
+                },
+                "shares": {
+                  "name": "${name}_alloc",
+                  "port": "${name}_out",
+                  "available": {
+                    "$choose": "available",
+                    "cases": {
+                      "capability": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_capability_out"
+                        }
+                      },
+                      "produced": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_produced_out"
+                        }
+                      }
+                    }
+                  },
+                  "demand": "claim",
+                  "allocated": "alloc",
+                  "policy": "shares",
+                  "shares": {
+                    "$param": "shares"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "continuous_flow_in",
+        "description": "A continuous input flow `<name>` of a conservative network: the in port `<name>_in`, the capability `<name>_capability_in` its suppliers offer, and `<name>_fed_in`, what it receives. It publishes its demand `<name>_demand_in` (written by the fragment that consumes the flow) and the shares it accepts on every connection feeding it; the shares stay 1 unless `surplus_release` applies. An input no connection feeds receives zero.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Flow name."
+          },
+          {
+            "name": "demand",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Initial demand."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}_fed_in",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${name}_demand_in",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "demand"
+                }
+              }
+            },
+            {
+              "name": "${name}_capability_in",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${name}_accepted_held",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${name}_accepted_held_share",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 1.0
+              }
+            },
+            {
+              "name": "${name}_accepted_share",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 1.0
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_in",
+              "dir": "in",
+              "equations": [
+                {
+                  "channel": "demand",
+                  "expr": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_demand_in"
+                    }
+                  }
+                },
+                {
+                  "channel": "accepted",
+                  "expr": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_accepted_share"
+                    }
+                  }
+                },
+                {
+                  "channel": "held_share",
+                  "expr": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_accepted_held_share"
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "${name}_capability_in",
+              "kind": "explicit",
+              "expr": {
+                "op": "port_agg",
+                "port": {
+                  "component": "$self",
+                  "port": "${name}_in"
+                },
+                "agg": "sum",
+                "channel": "capability"
+              }
+            },
+            {
+              "target": "${name}_fed_in",
+              "kind": "explicit",
+              "expr": {
+                "op": "port_agg",
+                "port": {
+                  "component": "$self",
+                  "port": "${name}_in"
+                },
+                "agg": "sum",
+                "channel": "delivered"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "surplus_release",
+        "description": "Makes the input `<name>` (a `continuous_flow_in`) hand back what it does not need when two suppliers or more offer more than its demand, pro rata of what each offered. A supplier whose volume has run out (`held` on its `continuous_flow_out`) passes on what arrives and is accepted first; the others share what is left. With a single supplier both shares stay 1. Apply it to an input a rule set consumes and no volume holds.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Flow name of the input."
+          }
+        ],
+        "body": {
+          "equations": [
+            {
+              "target": "${name}_accepted_held",
+              "kind": "explicit",
+              "expr": {
+                "op": "port_agg",
+                "port": {
+                  "component": "$self",
+                  "port": "${name}_in"
+                },
+                "agg": "sum",
+                "channel": "held"
+              }
+            },
+            {
+              "target": "${name}_accepted_held_share",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "cmp",
+                  "cmp": "ge",
+                  "lhs": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "${name}_in"
+                    },
+                    "agg": "count"
+                  },
+                  "rhs": {
+                    "op": "const",
+                    "value": {
+                      "kind": "int",
+                      "value": 2
+                    }
+                  }
+                },
+                "then": {
+                  "op": "if",
+                  "cond": {
+                    "op": "cmp",
+                    "cmp": "gt",
+                    "lhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_accepted_held"
+                      }
+                    },
+                    "rhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_demand_in"
+                      }
+                    }
+                  },
+                  "then": {
+                    "op": "div",
+                    "lhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_demand_in"
+                      }
+                    },
+                    "rhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_accepted_held"
+                      }
+                    }
+                  },
+                  "otherwise": {
+                    "op": "const",
+                    "value": {
+                      "kind": "float",
+                      "value": 1.0
+                    }
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            },
+            {
+              "target": "${name}_accepted_share",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "cmp",
+                  "cmp": "ge",
+                  "lhs": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "${name}_in"
+                    },
+                    "agg": "count"
+                  },
+                  "rhs": {
+                    "op": "const",
+                    "value": {
+                      "kind": "int",
+                      "value": 2
+                    }
+                  }
+                },
+                "then": {
+                  "op": "if",
+                  "cond": {
+                    "op": "cmp",
+                    "cmp": "gt",
+                    "lhs": {
+                      "op": "sub",
+                      "lhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "${name}_in"
+                        },
+                        "agg": "sum",
+                        "channel": "alloc"
+                      },
+                      "rhs": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_accepted_held"
+                        }
+                      }
+                    },
+                    "rhs": {
+                      "op": "max",
+                      "args": [
+                        {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        },
+                        {
+                          "op": "sub",
+                          "lhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_demand_in"
+                            }
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_accepted_held"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "then": {
+                    "op": "div",
+                    "lhs": {
+                      "op": "max",
+                      "args": [
+                        {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        },
+                        {
+                          "op": "sub",
+                          "lhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_demand_in"
+                            }
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_accepted_held"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "rhs": {
+                      "op": "sub",
+                      "lhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "${name}_in"
+                        },
+                        "agg": "sum",
+                        "channel": "alloc"
+                      },
+                      "rhs": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_accepted_held"
+                        }
+                      }
+                    }
+                  },
+                  "otherwise": {
+                    "op": "const",
+                    "value": {
+                      "kind": "float",
+                      "value": 1.0
+                    }
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "continuous_source",
+        "description": "Writes the capability of the output `<name>` (a `continuous_flow_out`) of a source: its rate, times the time profile `<name>_out_profile` when `profiled`.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Flow name."
+          },
+          {
+            "name": "rate",
+            "kind": "number",
+            "description": "Nominal rate."
+          },
+          {
+            "name": "profiled",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether a `time_profile` writes `<name>_out_profile`."
+          }
+        ],
+        "body": {
+          "equations": [
+            {
+              "target": "${name}_capability_out",
+              "kind": "explicit",
+              "expr": {
+                "$choose": "profiled",
+                "cases": {
+                  "false": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_out_rate"
+                        }
+                      },
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "rate"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "true": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_out_rate"
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_out_profile"
+                        }
+                      },
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "rate"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "continuous_sink",
+        "description": "Writes the demand of the input `<name>` (a `continuous_flow_in`) of a consumer: its rate, times the time profile `<name>_in_profile` when `profiled`.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Flow name."
+          },
+          {
+            "name": "demand",
+            "kind": "number",
+            "description": "Nominal demand."
+          },
+          {
+            "name": "profiled",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether a `time_profile` writes `<name>_in_profile`."
+          }
+        ],
+        "body": {
+          "equations": [
+            {
+              "target": "${name}_demand_in",
+              "kind": "explicit",
+              "expr": {
+                "$choose": "profiled",
+                "cases": {
+                  "false": {
+                    "op": "const",
+                    "value": {
+                      "kind": "float",
+                      "value": {
+                        "$param": "demand"
+                      }
+                    }
+                  },
+                  "true": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "demand"
+                          }
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_in_profile"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "time_profile",
+        "description": "A sinusoidal time profile written into the attribute `<target>`: max(value_min, amplitude sin(2 pi (t - phase_shift) / period) + offset).",
+        "parameters": [
+          {
+            "name": "target",
+            "kind": "string",
+            "description": "Attribute written (declared here)."
+          },
+          {
+            "name": "amplitude",
+            "kind": "number",
+            "description": "Amplitude."
+          },
+          {
+            "name": "phase_shift",
+            "kind": "number",
+            "description": "Phase shift, in time units."
+          },
+          {
+            "name": "period",
+            "kind": "number",
+            "description": "Period, in time units."
+          },
+          {
+            "name": "offset",
+            "kind": "number",
+            "description": "Offset."
+          },
+          {
+            "name": "value_min",
+            "kind": "number",
+            "description": "Floor of the profile."
+          },
+          {
+            "name": "initial",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Initial value of the attribute (the profile at t = 0)."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${target}",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "initial"
+                }
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${target}",
+              "kind": "explicit",
+              "expr": {
+                "op": "max",
+                "args": [
+                  {
+                    "op": "const",
+                    "value": {
+                      "kind": "float",
+                      "value": {
+                        "$param": "value_min"
+                      }
+                    }
+                  },
+                  {
+                    "op": "add",
+                    "args": [
+                      {
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": {
+                                "$param": "amplitude"
+                              }
+                            }
+                          },
+                          {
+                            "op": "sin",
+                            "arg": {
+                              "op": "mul",
+                              "args": [
+                                {
+                                  "op": "sub",
+                                  "lhs": {
+                                    "op": "time"
+                                  },
+                                  "rhs": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "phase_shift"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "op": "div",
+                                  "lhs": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 6.283185307179586
+                                    }
+                                  },
+                                  "rhs": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "period"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "offset"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "rate_publisher",
+        "description": "Publishes a flow's rate on the out port `<name>_rate_out` (attribute `<name>_rate`): the capability of an output, or what an input receives.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Flow name."
+          },
+          {
+            "name": "of",
+            "kind": "enum",
+            "values": [
+              "capability",
+              "delivered"
+            ],
+            "description": "Which quantity is published."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}_rate",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_rate_out",
+              "dir": "out",
+              "attr": "${name}_rate"
+            }
+          ],
+          "equations": [
+            {
+              "target": "${name}_rate",
+              "kind": "explicit",
+              "expr": {
+                "$choose": "of",
+                "cases": {
+                  "capability": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_capability_out"
+                    }
+                  },
+                  "delivered": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_fed_in"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "volume_flow",
+        "description": "One flow `<flow>` held in the volume `<volume>`: its content (an ODE: what arrives less what leaves), its fill fraction, and the demand of the input `<flow>` (a `continuous_flow_in`), which asks its nominal demand plus the fill rate while the volume is not full and no more than leaves once it is. The volume's bounds come from `volume_total`; an outlet adds `volume_outlet`.",
+        "parameters": [
+          {
+            "name": "volume",
+            "kind": "string",
+            "description": "Volume name."
+          },
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Flow name."
+          },
+          {
+            "name": "capacity",
+            "kind": "number",
+            "description": "Capacity of the volume."
+          },
+          {
+            "name": "content_init",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Initial content of this flow."
+          },
+          {
+            "name": "demand",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Nominal demand of the input."
+          },
+          {
+            "name": "fill_rate",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Rate the volume fills at on top of the demand."
+          },
+          {
+            "name": "outlet",
+            "kind": "bool",
+            "default": true,
+            "description": "Whether the flow also leaves the volume (a `volume_outlet`)."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${volume}_content_${flow}",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "content_init"
+                }
+              }
+            },
+            {
+              "name": "${volume}_fill_${flow}",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${volume}_serve_rate_${flow}",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 1e+30
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${volume}_level_${flow}_out",
+              "dir": "out",
+              "attr": "${volume}_content_${flow}"
+            },
+            {
+              "name": "${volume}_fill_${flow}_out",
+              "dir": "out",
+              "attr": "${volume}_fill_${flow}"
+            }
+          ],
+          "equations": [
+            {
+              "target": "${flow}_demand_in",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "${volume}_bounds",
+                    "state": "full"
+                  }
+                },
+                "then": {
+                  "op": "min",
+                  "args": [
+                    {
+                      "op": "min",
+                      "args": [
+                        {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "demand"
+                            }
+                          }
+                        },
+                        {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${volume}_serve_rate_${flow}"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$choose": "outlet",
+                      "cases": {
+                        "true": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${flow}_fed_out"
+                          }
+                        },
+                        "false": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "otherwise": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "op": "min",
+                      "args": [
+                        {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "demand"
+                            }
+                          }
+                        },
+                        {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${volume}_serve_rate_${flow}"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": {
+                          "$param": "fill_rate"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "target": "${volume}_content_${flow}",
+              "kind": "ode",
+              "expr": {
+                "op": "sub",
+                "lhs": {
+                  "op": "attr",
+                  "attr": {
+                    "component": "$self",
+                    "attribute": "${flow}_fed_in"
+                  }
+                },
+                "rhs": {
+                  "$choose": "outlet",
+                  "cases": {
+                    "true": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${flow}_fed_out"
+                      }
+                    },
+                    "false": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "target": "${volume}_fill_${flow}",
+              "kind": "explicit",
+              "expr": {
+                "op": "div",
+                "lhs": {
+                  "op": "mul",
+                  "args": [
+                    {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${volume}_content_${flow}"
+                      }
+                    },
+                    {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
+                      }
+                    }
+                  ]
+                },
+                "rhs": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": {
+                      "$param": "capacity"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "volume_outlet",
+        "description": "Writes the capability of the output `<flow>` (a `continuous_flow_out`) leaving the volume `<volume>`: its rate, bounded by what the volume serves, and by what arrives while the automaton `<empty_automaton>` is `empty`.",
+        "parameters": [
+          {
+            "name": "volume",
+            "kind": "string",
+            "description": "Volume name."
+          },
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Flow name."
+          },
+          {
+            "name": "rate",
+            "kind": "number",
+            "description": "Nominal rate of the output."
+          },
+          {
+            "name": "empty_automaton",
+            "kind": "string",
+            "description": "Automaton whose `empty` state says the flow has run out."
+          }
+        ],
+        "body": {
+          "equations": [
+            {
+              "target": "${flow}_capability_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "min",
+                "args": [
+                  {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${flow}_out_rate"
+                        }
+                      },
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "rate"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "op": "if",
+                    "cond": {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "${empty_automaton}",
+                        "state": "empty"
+                      }
+                    },
+                    "then": {
+                      "op": "min",
+                      "args": [
+                        {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${volume}_serve_rate_${flow}"
+                          }
+                        },
+                        {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${flow}_fed_in"
+                          }
+                        }
+                      ]
+                    },
+                    "otherwise": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${volume}_serve_rate_${flow}"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "volume_stock",
+        "description": "An automaton `<volume>_stock_<flow>` (`empty`, `stocked`) following whether the volume `<volume>` holds any of the flow `<flow>`: what a multi-flow volume tests per flow.",
+        "parameters": [
+          {
+            "name": "volume",
+            "kind": "string",
+            "description": "Volume name."
+          },
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Flow name."
+          },
+          {
+            "name": "capacity",
+            "kind": "number",
+            "description": "Capacity of the volume."
+          },
+          {
+            "name": "initial",
+            "kind": "enum",
+            "values": [
+              "empty",
+              "stocked"
+            ],
+            "default": "empty",
+            "description": "Initial state."
+          }
+        ],
+        "body": {
+          "automata": [
+            {
+              "name": "${volume}_stock_${flow}",
+              "states": [
+                "empty",
+                "stocked"
+              ],
+              "init": {
+                "$param": "initial"
+              },
+              "transitions": [
+                {
+                  "name": "${volume}_stock_${flow}_leave_empty",
+                  "source": "empty",
+                  "targets": [
+                    "stocked"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "ge",
+                    "lhs": {
+                      "op": "div",
+                      "lhs": {
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${volume}_content_${flow}"
+                            }
+                          },
+                          {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 1.0
+                            }
+                          }
+                        ]
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "capacity"
+                          }
+                        }
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1e-06
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "${volume}_stock_${flow}_reach_empty",
+                  "source": "stocked",
+                  "targets": [
+                    "empty"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "le",
+                    "lhs": {
+                      "op": "div",
+                      "lhs": {
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${volume}_content_${flow}"
+                            }
+                          },
+                          {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 1.0
+                            }
+                          }
+                        ]
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "capacity"
+                          }
+                        }
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.0
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "volume_total",
+        "description": "The volume `<volume>` holding the flows `<flows>` (each a `volume_flow`): its total content and fill, the bounds automaton `<volume>_bounds` (`empty`, `partial`, `full`) on the total, and the share of each flow listed in `ratio_flows`.",
+        "parameters": [
+          {
+            "name": "volume",
+            "kind": "string",
+            "description": "Volume name."
+          },
+          {
+            "name": "flows",
+            "kind": "list",
+            "items": "string",
+            "description": "Flows the volume holds."
+          },
+          {
+            "name": "capacity",
+            "kind": "number",
+            "description": "Capacity."
+          },
+          {
+            "name": "initial",
+            "kind": "enum",
+            "values": [
+              "empty",
+              "partial",
+              "full"
+            ],
+            "default": "empty",
+            "description": "Initial bounds state."
+          },
+          {
+            "name": "ratio_flows",
+            "kind": "list",
+            "items": "string",
+            "default": [],
+            "description": "Flows whose share of the content is published as `<volume>_ratio_<flow>`."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${volume}_content",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${volume}_fill",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "$for_each": "ratio_flows",
+              "as": "f",
+              "items": [
+                {
+                  "name": "${volume}_ratio_${f}",
+                  "kind": "float",
+                  "init": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              ]
+            }
+          ],
+          "ports": [
+            {
+              "name": "${volume}_level_out",
+              "dir": "out",
+              "attr": "${volume}_content"
+            },
+            {
+              "name": "${volume}_fill_out",
+              "dir": "out",
+              "attr": "${volume}_fill"
+            },
+            {
+              "$for_each": "ratio_flows",
+              "as": "f",
+              "items": [
+                {
+                  "name": "${volume}_ratio_${f}_out",
+                  "dir": "out",
+                  "attr": "${volume}_ratio_${f}"
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "${volume}_content",
+              "kind": "explicit",
+              "expr": {
+                "op": "add",
+                "args": [
+                  {
+                    "$for_each": "flows",
+                    "as": "f",
+                    "items": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${volume}_content_${f}"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "target": "${volume}_fill",
+              "kind": "explicit",
+              "expr": {
+                "op": "add",
+                "args": [
+                  {
+                    "$for_each": "flows",
+                    "as": "f",
+                    "items": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${volume}_fill_${f}"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "$for_each": "ratio_flows",
+              "as": "f",
+              "items": [
+                {
+                  "target": "${volume}_ratio_${f}",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "if",
+                    "cond": {
+                      "op": "cmp",
+                      "cmp": "gt",
+                      "lhs": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${volume}_content"
+                        }
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      }
+                    },
+                    "then": {
+                      "op": "div",
+                      "lhs": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${volume}_content_${f}"
+                        }
+                      },
+                      "rhs": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${volume}_content"
+                        }
+                      }
+                    },
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.0
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "automata": [
+            {
+              "name": "${volume}_bounds",
+              "states": [
+                "empty",
+                "partial",
+                "full"
+              ],
+              "init": {
+                "$param": "initial"
+              },
+              "transitions": [
+                {
+                  "name": "${volume}_leave_empty",
+                  "source": "empty",
+                  "targets": [
+                    "partial"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "ge",
+                    "lhs": {
+                      "op": "div",
+                      "lhs": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "$for_each": "flows",
+                            "as": "f",
+                            "items": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${volume}_content_${f}"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "capacity"
+                          }
+                        }
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1e-06
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "${volume}_reach_empty",
+                  "source": "partial",
+                  "targets": [
+                    "empty"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "le",
+                    "lhs": {
+                      "op": "div",
+                      "lhs": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "$for_each": "flows",
+                            "as": "f",
+                            "items": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${volume}_content_${f}"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "capacity"
+                          }
+                        }
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.0
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "${volume}_reach_full",
+                  "source": "partial",
+                  "targets": [
+                    "full"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "ge",
+                    "lhs": {
+                      "op": "div",
+                      "lhs": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "$for_each": "flows",
+                            "as": "f",
+                            "items": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${volume}_content_${f}"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "capacity"
+                          }
+                        }
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "${volume}_leave_full",
+                  "source": "full",
+                  "targets": [
+                    "partial"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "le",
+                    "lhs": {
+                      "op": "div",
+                      "lhs": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "$for_each": "flows",
+                            "as": "f",
+                            "items": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${volume}_content_${f}"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "capacity"
+                          }
+                        }
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.999999
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "rule_set",
+        "description": "A rule set `<name>` with one producing rule `<active>` and one idle rule `<idle>`: the automaton `<name>_mode` runs `<active>` while every boolean input in `conditions` is fed (and, with a `band` threshold, while the capability of `<threshold_flow>` has reached `activate` and not fallen below `release`). The rule's scale is the largest fraction of its nominal rates the inputs' capabilities allow (`<name>_capability_scale`), bounded by what the outputs are asked (`<name>_scale`) and by what actually arrives (`<name>_draw_scale`). Each consumed flow is a `rule_consumes`, each produced one a `rule_produces`.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Rule set name."
+          },
+          {
+            "name": "active",
+            "kind": "string",
+            "description": "Name of the producing rule."
+          },
+          {
+            "name": "idle",
+            "kind": "string",
+            "description": "Name of the idle rule."
+          },
+          {
+            "name": "consumes",
+            "kind": "list",
+            "items": "string",
+            "description": "Flows the producing rule consumes."
+          },
+          {
+            "name": "produces",
+            "kind": "list",
+            "items": "string",
+            "description": "Flows the producing rule produces."
+          },
+          {
+            "name": "capped",
+            "kind": "list",
+            "items": "string",
+            "default": [],
+            "description": "Produced flows with a maximum rate (`rule_produces` with `capped`)."
+          },
+          {
+            "name": "conditions",
+            "kind": "list",
+            "items": "string",
+            "default": [],
+            "description": "Boolean inputs (`bool_flow_in`) that must all be fed."
+          },
+          {
+            "name": "threshold",
+            "kind": "enum",
+            "values": [
+              "none",
+              "band"
+            ],
+            "default": "none",
+            "description": "An optional band on the capability of `threshold_flow`."
+          },
+          {
+            "name": "threshold_flow",
+            "kind": "string",
+            "default": "",
+            "description": "With `band`: the input whose capability is compared."
+          },
+          {
+            "name": "activate",
+            "kind": "number",
+            "default": 0.0,
+            "description": "With `band`: the capability at which the rule starts (>=)."
+          },
+          {
+            "name": "release",
+            "kind": "number",
+            "default": 0.0,
+            "description": "With `band`: the capability under which it stops (<)."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}_capability_scale",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${name}_scale",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${name}_draw_scale",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${name}_capability_scale",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "${name}_mode",
+                    "state": "${active}"
+                  }
+                },
+                "then": {
+                  "op": "min",
+                  "args": [
+                    {
+                      "$for_each": "consumes",
+                      "as": "f",
+                      "items": [
+                        {
+                          "op": "div",
+                          "lhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${f}_capability_in"
+                            }
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_cons_${f}"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "$for_each": "capped",
+                      "as": "f",
+                      "items": [
+                        {
+                          "op": "div",
+                          "lhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_max_${f}"
+                            }
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_prod_${f}"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            },
+            {
+              "target": "${name}_scale",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "${name}_mode",
+                    "state": "${active}"
+                  }
+                },
+                "then": {
+                  "op": "min",
+                  "args": [
+                    {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_capability_scale"
+                      }
+                    },
+                    {
+                      "$for_each": "produces",
+                      "as": "f",
+                      "items": [
+                        {
+                          "op": "div",
+                          "lhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${f}_demand_out"
+                            }
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_prod_${f}"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "otherwise": {
+                  "op": "attr",
+                  "attr": {
+                    "component": "$self",
+                    "attribute": "${name}_capability_scale"
+                  }
+                }
+              }
+            },
+            {
+              "target": "${name}_draw_scale",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "${name}_mode",
+                    "state": "${active}"
+                  }
+                },
+                "then": {
+                  "op": "min",
+                  "args": [
+                    {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_scale"
+                      }
+                    },
+                    {
+                      "$for_each": "consumes",
+                      "as": "f",
+                      "items": [
+                        {
+                          "op": "div",
+                          "lhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "${f}_in"
+                            },
+                            "agg": "sum",
+                            "channel": "alloc"
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_cons_${f}"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "otherwise": {
+                  "op": "attr",
+                  "attr": {
+                    "component": "$self",
+                    "attribute": "${name}_scale"
+                  }
+                }
+              }
+            }
+          ],
+          "automata": [
+            {
+              "name": "${name}_mode",
+              "states": [
+                "${active}",
+                "${idle}"
+              ],
+              "init": "${idle}",
+              "transitions": [
+                {
+                  "$choose": "threshold",
+                  "cases": {
+                    "none": {
+                      "name": "${name}_${active}_to_${idle}",
+                      "source": "${active}",
+                      "targets": [
+                        "${idle}"
+                      ],
+                      "distrib": "inst",
+                      "probs": [],
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "or",
+                        "args": [
+                          {
+                            "$for_each": "conditions",
+                            "as": "c",
+                            "items": [
+                              {
+                                "op": "bool",
+                                "bool_op": "not",
+                                "args": [
+                                  {
+                                    "op": "attr",
+                                    "attr": {
+                                      "component": "$self",
+                                      "attribute": "${c}_fed_in"
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "band": {
+                      "name": "${name}_${active}_to_${idle}",
+                      "source": "${active}",
+                      "targets": [
+                        "${idle}"
+                      ],
+                      "distrib": "watched",
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "or",
+                        "args": [
+                          {
+                            "$for_each": "conditions",
+                            "as": "c",
+                            "items": [
+                              {
+                                "op": "bool",
+                                "bool_op": "not",
+                                "args": [
+                                  {
+                                    "op": "attr",
+                                    "attr": {
+                                      "component": "$self",
+                                      "attribute": "${c}_fed_in"
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "cmp",
+                            "cmp": "lt",
+                            "lhs": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${threshold_flow}_capability_in"
+                              }
+                            },
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "release"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "$choose": "threshold",
+                  "cases": {
+                    "none": {
+                      "name": "${name}_${idle}_to_${active}",
+                      "source": "${idle}",
+                      "targets": [
+                        "${active}"
+                      ],
+                      "distrib": "inst",
+                      "probs": [],
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "and",
+                        "args": [
+                          {
+                            "$for_each": "conditions",
+                            "as": "c",
+                            "items": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${c}_fed_in"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "band": {
+                      "name": "${name}_${idle}_to_${active}",
+                      "source": "${idle}",
+                      "targets": [
+                        "${active}"
+                      ],
+                      "distrib": "watched",
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "and",
+                        "args": [
+                          {
+                            "$for_each": "conditions",
+                            "as": "c",
+                            "items": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${c}_fed_in"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "cmp",
+                            "cmp": "ge",
+                            "lhs": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${threshold_flow}_capability_in"
+                              }
+                            },
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "activate"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "rule_consumes",
+        "description": "The producing rule `<active>` of the rule set `<rule_set>` consumes the input `<flow>` (a `continuous_flow_in`) at `rate` per unit of scale: it writes the input's demand.",
+        "parameters": [
+          {
+            "name": "rule_set",
+            "kind": "string",
+            "description": "Rule set name."
+          },
+          {
+            "name": "active",
+            "kind": "string",
+            "description": "Name of the producing rule."
+          },
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Flow consumed."
+          },
+          {
+            "name": "rate",
+            "kind": "number",
+            "description": "Consumption per unit of scale."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${rule_set}_cons_${flow}",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "rate"
+                }
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${flow}_demand_in",
+              "kind": "explicit",
+              "expr": {
+                "op": "mul",
+                "args": [
+                  {
+                    "op": "if",
+                    "cond": {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "${rule_set}_mode",
+                        "state": "${active}"
+                      }
+                    },
+                    "then": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${rule_set}_cons_${flow}"
+                      }
+                    },
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.0
+                      }
+                    }
+                  },
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${rule_set}_scale"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "rule_produces",
+        "description": "The producing rule `<active>` of the rule set `<rule_set>` produces the output `<flow>` (a `continuous_flow_out` with `available: produced`) at `rate` per unit of scale: its capability at the capability scale and `<flow>_produced_out` at the draw scale, bounded by `max_rate` when `capped`. With `tapped`, they are written before a `tap` takes its leaks (`<flow>_pre_tap_capability_out`, `<flow>_pre_tap_produced_out`).",
+        "parameters": [
+          {
+            "name": "rule_set",
+            "kind": "string",
+            "description": "Rule set name."
+          },
+          {
+            "name": "active",
+            "kind": "string",
+            "description": "Name of the producing rule."
+          },
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Flow produced."
+          },
+          {
+            "name": "rate",
+            "kind": "number",
+            "description": "Production per unit of scale."
+          },
+          {
+            "name": "capped",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the output has a maximum rate."
+          },
+          {
+            "name": "max_rate",
+            "kind": "number",
+            "default": 0.0,
+            "description": "With `capped`: the maximum rate."
+          },
+          {
+            "name": "tapped",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether a `tap` takes leaks from the output."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${rule_set}_prod_${flow}",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "rate"
+                }
+              }
+            },
+            {
+              "name": "${rule_set}_max_${flow}",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "max_rate"
+                }
+              }
+            },
+            {
+              "name": "${flow}_produced_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": {
+                "$choose": "tapped",
+                "cases": {
+                  "false": "${flow}_capability_out",
+                  "true": "${flow}_pre_tap_capability_out"
+                }
+              },
+              "kind": "explicit",
+              "expr": {
+                "$choose": "capped",
+                "cases": {
+                  "false": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${flow}_out_rate"
+                        }
+                      },
+                      {
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "if",
+                            "cond": {
+                              "op": "state_active",
+                              "state": {
+                                "component": "$self",
+                                "automaton": "${rule_set}_mode",
+                                "state": "${active}"
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${rule_set}_prod_${flow}"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          },
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_capability_scale"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "true": {
+                    "op": "min",
+                    "args": [
+                      {
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${flow}_out_rate"
+                            }
+                          },
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "if",
+                                "cond": {
+                                  "op": "state_active",
+                                  "state": {
+                                    "component": "$self",
+                                    "automaton": "${rule_set}_mode",
+                                    "state": "${active}"
+                                  }
+                                },
+                                "then": {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${rule_set}_prod_${flow}"
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              },
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${rule_set}_capability_scale"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${rule_set}_max_${flow}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "target": {
+                "$choose": "tapped",
+                "cases": {
+                  "false": "${flow}_produced_out",
+                  "true": "${flow}_pre_tap_produced_out"
+                }
+              },
+              "kind": "explicit",
+              "expr": {
+                "$choose": "capped",
+                "cases": {
+                  "false": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${flow}_out_rate"
+                        }
+                      },
+                      {
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "if",
+                            "cond": {
+                              "op": "state_active",
+                              "state": {
+                                "component": "$self",
+                                "automaton": "${rule_set}_mode",
+                                "state": "${active}"
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${rule_set}_prod_${flow}"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          },
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_draw_scale"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "true": {
+                    "op": "min",
+                    "args": [
+                      {
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${flow}_out_rate"
+                            }
+                          },
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "if",
+                                "cond": {
+                                  "op": "state_active",
+                                  "state": {
+                                    "component": "$self",
+                                    "automaton": "${rule_set}_mode",
+                                    "state": "${active}"
+                                  }
+                                },
+                                "then": {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${rule_set}_prod_${flow}"
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              },
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${rule_set}_draw_scale"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${rule_set}_max_${flow}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "tap",
+        "description": "Leaks taken from the output `<flow>` (a `rule_produces` with `tapped`) into the outputs `<outlets>` (each a `continuous_flow_out` with `available: produced`): outlet `o` takes the fraction `<o>_pct` (0 by default, the attribute a failure mode targets) and the output keeps `<flow>_tap_rate`, one less their sum.",
+        "parameters": [
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Flow tapped."
+          },
+          {
+            "name": "outlets",
+            "kind": "list",
+            "items": "string",
+            "description": "Outputs the leaks go to."
+          }
+        ],
+        "targetable": [
+          {
+            "$for_each": "outlets",
+            "as": "o",
+            "items": [
+              {
+                "attribute": "${o}_pct",
+                "rule": "max"
+              }
+            ]
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${flow}_tap_rate",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 1.0
+              }
+            },
+            {
+              "name": "${flow}_pre_tap_capability_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "${flow}_pre_tap_produced_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "$for_each": "outlets",
+              "as": "o",
+              "items": [
+                {
+                  "name": "${o}_pct",
+                  "kind": "float",
+                  "init": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                },
+                {
+                  "name": "${o}_produced_out",
+                  "kind": "float",
+                  "init": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "${flow}_tap_rate",
+              "kind": "explicit",
+              "expr": {
+                "op": "sub",
+                "lhs": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 1.0
+                  }
+                },
+                "rhs": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "$for_each": "outlets",
+                      "as": "o",
+                      "items": [
+                        {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${o}_pct"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "target": "${flow}_capability_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "mul",
+                "args": [
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${flow}_pre_tap_capability_out"
+                    }
+                  },
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${flow}_tap_rate"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "target": "${flow}_produced_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "mul",
+                "args": [
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${flow}_pre_tap_produced_out"
+                    }
+                  },
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${flow}_tap_rate"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "$for_each": "outlets",
+              "as": "o",
+              "items": [
+                {
+                  "target": "${o}_capability_out",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${flow}_pre_tap_capability_out"
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${o}_pct"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "target": "${o}_produced_out",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${flow}_pre_tap_produced_out"
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${o}_pct"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "aggregate_measure",
+        "description": "A measured quantity `<name>`: the sum of what is connected to the in port `<name>_in`.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Measure name (an attribute and its in port)."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_in",
+              "dir": "in"
+            }
+          ],
+          "equations": [
+            {
+              "target": "${name}",
+              "kind": "explicit",
+              "expr": {
+                "op": "port_agg",
+                "port": {
+                  "component": "$self",
+                  "port": "${name}_in"
+                },
+                "agg": "sum"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "threshold_compare",
+        "description": "A boolean output `<name>` (out port `<name>_out`), true while the attribute `<input>` compares to `<name>_threshold` under `operator`, the crossing located exactly; `<name>_signal_available` false forces it false.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Output name."
+          },
+          {
+            "name": "input",
+            "kind": "string",
+            "description": "Attribute compared."
+          },
+          {
+            "name": "operator",
+            "kind": "enum",
+            "values": [
+              "lt",
+              "le",
+              "gt",
+              "ge"
+            ],
+            "description": "Comparison that makes the output true."
+          },
+          {
+            "name": "threshold",
+            "kind": "number",
+            "description": "Threshold."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": false
+              }
+            },
+            {
+              "name": "${name}_signal_available",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": true
+              }
+            },
+            {
+              "name": "${name}_threshold",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "threshold"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_out",
+              "dir": "out",
+              "attr": "${name}"
+            }
+          ],
+          "automata": [
+            {
+              "name": "${name}_compare",
+              "states": [
+                "${name}_compare_below",
+                "${name}_compare_above"
+              ],
+              "init": "${name}_compare_below",
+              "transitions": [
+                {
+                  "name": "${name}_compare_up",
+                  "source": "${name}_compare_below",
+                  "targets": [
+                    "${name}_compare_above"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": {
+                      "$param": "operator"
+                    },
+                    "lhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${input}"
+                      }
+                    },
+                    "rhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_threshold"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "${name}_compare_down",
+                  "source": "${name}_compare_above",
+                  "targets": [
+                    "${name}_compare_below"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": {
+                      "$choose": "operator",
+                      "cases": {
+                        "lt": "ge",
+                        "le": "gt",
+                        "gt": "le",
+                        "ge": "lt"
+                      }
+                    },
+                    "lhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${input}"
+                      }
+                    },
+                    "rhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_threshold"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "sensitive_functions": [
+            {
+              "name": "emit_${name}",
+              "effects": [
+                {
+                  "target": {
+                    "component": "$self",
+                    "attribute": "${name}"
+                  },
+                  "value": {
+                    "op": "if",
+                    "cond": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_signal_available"
+                      }
+                    },
+                    "then": {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "${name}_compare",
+                        "state": "${name}_compare_above"
+                      }
+                    },
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "bool",
+                        "value": false
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "threshold_band",
+        "description": "A boolean output `<name>` (out port `<name>_out`) with a hysteresis band on the attribute `<input>`: `below` turns it true when the input falls to `activate` and false when it rises above `release`; `above` the other way round. `<name>_signal_available` false forces it false.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Output name."
+          },
+          {
+            "name": "input",
+            "kind": "string",
+            "description": "Attribute watched."
+          },
+          {
+            "name": "direction",
+            "kind": "enum",
+            "values": [
+              "below",
+              "above"
+            ],
+            "description": "Side of the band that activates."
+          },
+          {
+            "name": "activate",
+            "kind": "number",
+            "description": "Activation threshold."
+          },
+          {
+            "name": "release",
+            "kind": "number",
+            "description": "Release threshold."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": false
+              }
+            },
+            {
+              "name": "${name}_signal_available",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": true
+              }
+            },
+            {
+              "name": "${name}_activate",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "activate"
+                }
+              }
+            },
+            {
+              "name": "${name}_release",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "release"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_out",
+              "dir": "out",
+              "attr": "${name}"
+            }
+          ],
+          "automata": [
+            {
+              "name": "${name}_band",
+              "states": [
+                "${name}_band_released",
+                "${name}_band_activated"
+              ],
+              "init": "${name}_band_released",
+              "transitions": [
+                {
+                  "name": "${name}_band_up",
+                  "source": "${name}_band_released",
+                  "targets": [
+                    "${name}_band_activated"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "$choose": "direction",
+                    "cases": {
+                      "below": {
+                        "op": "cmp",
+                        "cmp": "le",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${input}"
+                          }
+                        },
+                        "rhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${name}_activate"
+                          }
+                        }
+                      },
+                      "above": {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${input}"
+                          }
+                        },
+                        "rhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${name}_activate"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "${name}_band_down",
+                  "source": "${name}_band_activated",
+                  "targets": [
+                    "${name}_band_released"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "$choose": "direction",
+                    "cases": {
+                      "below": {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${input}"
+                          }
+                        },
+                        "rhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${name}_release"
+                          }
+                        }
+                      },
+                      "above": {
+                        "op": "cmp",
+                        "cmp": "lt",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${input}"
+                          }
+                        },
+                        "rhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${name}_release"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "sensitive_functions": [
+            {
+              "name": "emit_${name}",
+              "effects": [
+                {
+                  "target": {
+                    "component": "$self",
+                    "attribute": "${name}"
+                  },
+                  "value": {
+                    "op": "if",
+                    "cond": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_signal_available"
+                      }
+                    },
+                    "then": {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "${name}_band",
+                        "state": "${name}_band_activated"
+                      }
+                    },
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "bool",
+                        "value": false
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
       }
     ]
   }

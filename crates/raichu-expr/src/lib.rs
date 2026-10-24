@@ -145,6 +145,21 @@ pub enum AggOp {
     Median,
 }
 
+impl AggOp {
+    /// Serialized name of the operator.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            AggOp::Sum => "sum",
+            AggOp::Count => "count",
+            AggOp::All => "all",
+            AggOp::Any => "any",
+            AggOp::Mean => "mean",
+            AggOp::Median => "median",
+        }
+    }
+}
+
 /// A serializable expression tree (M0 subset).
 ///
 /// The serde representation is tag-based (`op` field), so adding variants
@@ -321,6 +336,50 @@ impl Expr {
         }
     }
 
+    /// Visit the direct children of this node mutably: the rewriting
+    /// counterpart of [`Expr::for_each_child`], with the same cases.
+    pub fn for_each_child_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        match self {
+            Expr::Const { .. }
+            | Expr::Attr { .. }
+            | Expr::PortAgg { .. }
+            | Expr::StateActive { .. }
+            | Expr::Time => {}
+            Expr::Sin { arg } | Expr::Exp { arg } => f(arg),
+            Expr::Cmp { lhs, rhs, .. } | Expr::Sub { lhs, rhs } | Expr::Div { lhs, rhs } => {
+                f(lhs);
+                f(rhs);
+            }
+            Expr::Bool { args, .. }
+            | Expr::Add { args }
+            | Expr::Mul { args }
+            | Expr::Min { args }
+            | Expr::Max { args } => {
+                for a in args {
+                    f(a);
+                }
+            }
+            Expr::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                f(cond);
+                f(then);
+                f(otherwise);
+            }
+        }
+    }
+
+    /// Rewrite every node of the tree, children before their parent.
+    ///
+    /// `f` may replace the node it is given; the replacement is not
+    /// visited again.
+    pub fn rewrite(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        self.for_each_child_mut(&mut |child| child.rewrite(f));
+        f(self);
+    }
+
     /// Visit every attribute reference in the tree (used by model
     /// validation to check that all references resolve, and by the engine
     /// to derive sensitivity sets: which attribute changes must re-trigger
@@ -381,14 +440,7 @@ impl Expr {
             },
             Expr::Attr { attr } => format!("{}.{}", attr.component, attr.attribute),
             Expr::PortAgg { port, agg, channel } => {
-                let operator = match agg {
-                    AggOp::Sum => "sum",
-                    AggOp::Count => "count",
-                    AggOp::All => "all",
-                    AggOp::Any => "any",
-                    AggOp::Mean => "mean",
-                    AggOp::Median => "median",
-                };
+                let operator = agg.name();
                 match channel {
                     Some(channel) => {
                         format!("{operator}({}.{}[{channel}])", port.component, port.port)

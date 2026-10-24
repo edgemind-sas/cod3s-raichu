@@ -70,6 +70,11 @@ pub enum ItemKind {
     /// Items that are themselves lists of strings (a production condition:
     /// a disjunction of conjunctions, each a list of attribute names).
     StringList,
+    /// Items that are JSON objects, inserted as written where the list is
+    /// substituted with `$param` (a split share keyed by its consumer:
+    /// `{"to": {"component", "port"}, "value"}`); the core reader then
+    /// checks them strictly at the place they land.
+    Object,
 }
 
 /// A parameter of a type or a fragment.
