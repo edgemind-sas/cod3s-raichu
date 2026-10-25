@@ -162,6 +162,23 @@ pub struct PortEquation {
 /// [`PortEquation`] is evaluated for.
 pub const EDGE: &str = "$edge";
 
+/// Reserved component name of an edge effect written **through a port**:
+/// `{"component": "$port", "attribute": "<in port>"}` as the target of a
+/// [`Transition::effects`] assignment names an in port of the transition's
+/// own component, and the effect writes the attribute exported by every
+/// out port connected to it.
+///
+/// A component cannot name its neighbours, so this is how a transition
+/// acts on one (a unit whose repair refills the buffer it feeds). The
+/// construct is an authoring form: [`Model::with_resolved_connections`]
+/// lowers it to one ordinary edge effect per connection, in connection
+/// declaration order, so the engine never sees it. An in port nothing is
+/// connected to writes nothing. Only edge effects may write through a
+/// port: a sensitive function is a level re-evaluated to a fixpoint, and
+/// one writing a neighbour is refused. Non-baseline construct: a document
+/// carrying it must declare [`Feature::PortEffects`].
+pub const PORT: &str = "$port";
+
 /// A named group of ports, validated at build time (each port must
 /// exist), that an [`InterfaceConnection`] joins to another at once. The
 /// ports stay the fundamental notion: the engine runs on the port
@@ -950,6 +967,11 @@ pub enum Feature {
     /// leave every channel they write at its default, and a flow network
     /// would deliver nothing without a word.
     PortEquations,
+    /// Edge effects written through a port ([`PORT`]). An engine that
+    /// ignored them would refuse the reserved target or write nothing, and
+    /// a unit whose repair refills its buffer would leave it empty without
+    /// a word.
+    PortEffects,
 }
 
 impl Feature {
@@ -966,6 +988,7 @@ impl Feature {
         Feature::MonitoredStates,
         Feature::CycleCancellation,
         Feature::PortEquations,
+        Feature::PortEffects,
     ];
 
     /// Serialized name of the feature.
@@ -983,6 +1006,7 @@ impl Feature {
             Feature::MonitoredStates => "monitored_states",
             Feature::CycleCancellation => "cycle_cancellation",
             Feature::PortEquations => "port_equations",
+            Feature::PortEffects => "port_effects",
         }
     }
 
@@ -1724,6 +1748,27 @@ pub enum ModelError {
         port: String,
         /// The aggregation written.
         agg: String,
+    },
+    /// An edge effect written through a port ([`PORT`]) names a port that
+    /// is not an in port of the transition's component.
+    #[error(
+        "{transition} writes through port `{port}`, which is not an in port of its \
+         component: an effect through a port names one of the component's in ports"
+    )]
+    PortEffectNotAnInPort {
+        /// The transition, as `transition `name` in `component.automaton``.
+        transition: String,
+        /// The port named.
+        port: String,
+    },
+    /// A sensitive function writes through a port ([`PORT`]).
+    #[error(
+        "sensitive function `{function}` writes through a port: only a transition's edge \
+         effects may write through a port"
+    )]
+    PortEffectInSensitiveFunction {
+        /// The function, as `component.function`.
+        function: String,
     },
     /// A attribute may carry at most one equation.
     #[error("attribute `{component}.{target}` has more than one equation")]
@@ -2666,6 +2711,9 @@ impl Model {
         }
         if self.has_port_constructs() {
             features.insert(Feature::PortEquations);
+        }
+        if self.has_port_effects() {
+            features.insert(Feature::PortEffects);
         }
         if self.evaluation_order.is_some() {
             features.insert(Feature::EvaluationOrder);
@@ -4467,12 +4515,121 @@ impl Model {
         if model.has_port_constructs() {
             model.lower_port_constructs()?;
         }
+        if model.has_port_effects() {
+            model.lower_port_effects()?;
+        }
         Ok(Cow::Owned(model))
     }
 
     /// Whether [`Model::with_resolved_connections`] has anything to do.
     fn needs_resolution(&self) -> bool {
-        !self.interface_connections.is_empty() || self.has_port_constructs()
+        !self.interface_connections.is_empty()
+            || self.has_port_constructs()
+            || self.has_port_effects()
+    }
+
+    /// Whether an edge effect or a sensitive function writes through a
+    /// port ([`PORT`]).
+    fn has_port_effects(&self) -> bool {
+        let through = |effects: &[Assignment]| effects.iter().any(|a| a.target.component == PORT);
+        self.components.iter().any(|c| {
+            c.automata
+                .iter()
+                .any(|a| a.transitions.iter().any(|t| through(&t.effects)))
+                || c.sensitive_functions.iter().any(|f| through(&f.effects))
+        })
+    }
+
+    /// Lower every edge effect written through a port to one ordinary edge
+    /// effect per connection feeding that port, on the attribute the
+    /// connected out port exports, in connection declaration order. The
+    /// lowered effects take the place of the one they come from, so the
+    /// order of a transition's effects is kept.
+    fn lower_port_effects(&mut self) -> Result<(), ModelError> {
+        let exported: HashMap<(&str, &str), &str> = self
+            .components
+            .iter()
+            .flat_map(|c| {
+                c.ports
+                    .iter()
+                    .filter(|p| p.dir == PortDir::Out)
+                    .filter_map(move |p| {
+                        p.attr
+                            .as_deref()
+                            .map(|attr| ((c.name.as_str(), p.name.as_str()), attr))
+                    })
+            })
+            .collect();
+        let mut sources: HashMap<(String, String), Vec<AttrRef>> = HashMap::new();
+        for connection in &self.connections {
+            let from = (
+                connection.from.component.as_str(),
+                connection.from.port.as_str(),
+            );
+            if let Some(attribute) = exported.get(&from) {
+                sources
+                    .entry((connection.to.component.clone(), connection.to.port.clone()))
+                    .or_default()
+                    .push(AttrRef {
+                        component: connection.from.component.clone(),
+                        attribute: (*attribute).to_owned(),
+                    });
+            }
+        }
+        for component in &mut self.components {
+            if let Some(function) = component
+                .sensitive_functions
+                .iter()
+                .find(|f| f.effects.iter().any(|a| a.target.component == PORT))
+            {
+                return Err(ModelError::PortEffectInSensitiveFunction {
+                    function: format!("{}.{}", component.name, function.name),
+                });
+            }
+            let in_ports: HashSet<&str> = component
+                .ports
+                .iter()
+                .filter(|p| p.dir == PortDir::In)
+                .map(|p| p.name.as_str())
+                .collect();
+            for automaton in &mut component.automata {
+                for transition in &mut automaton.transitions {
+                    if !transition
+                        .effects
+                        .iter()
+                        .any(|a| a.target.component == PORT)
+                    {
+                        continue;
+                    }
+                    let mut lowered = Vec::with_capacity(transition.effects.len());
+                    for assignment in transition.effects.drain(..) {
+                        if assignment.target.component != PORT {
+                            lowered.push(assignment);
+                            continue;
+                        }
+                        let port = assignment.target.attribute;
+                        if !in_ports.contains(port.as_str()) {
+                            return Err(ModelError::PortEffectNotAnInPort {
+                                transition: format!(
+                                    "transition `{}` in `{}.{}`",
+                                    transition.name, component.name, automaton.name
+                                ),
+                                port,
+                            });
+                        }
+                        let key = (component.name.clone(), port);
+                        for source in sources.get(&key).map(Vec::as_slice).unwrap_or_default() {
+                            lowered.push(Assignment {
+                                target: source.clone(),
+                                value: assignment.value.clone(),
+                            });
+                        }
+                    }
+                    transition.effects = lowered;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Whether the model uses a port equation or aggregates an out port.

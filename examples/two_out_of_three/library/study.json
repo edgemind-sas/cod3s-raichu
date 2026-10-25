@@ -1,0 +1,24 @@
+{
+  "raichu_study": {
+    "format": 1
+  },
+  "study": {
+    "name": "repairable",
+    "system": "two_out_of_three",
+    "description": "Every pump fails at 2e-3 per hour and is repaired at 2e-2 per hour, one repair crew per pump.",
+    "modes": [
+      {
+        "mode": "failure",
+        "type": "Pump",
+        "occurrence": {
+          "distrib": "exp",
+          "rate": 0.002
+        },
+        "repair": {
+          "distrib": "exp",
+          "rate": 0.02
+        }
+      }
+    ]
+  }
+}

@@ -10,6 +10,9 @@ Policy:
   loaded with ``pyraichu.load_model`` (must be valid models).
 - A page runs in a fresh temporary directory, so an example that writes
   a file (a raw corpus, an exploration) leaves nothing in the checkout.
+  An ``examples`` entry there points at the repository's ``examples/``,
+  so a page reads a committed library by the path a reader uses from a
+  checkout root.
 
 This harness depends only on ``pyraichu`` (no PyCATSHOO), so it is safe
 to ship and to run in CI.
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -32,16 +36,20 @@ PAGES = [DOCS / "index.md"] + sorted(
     for p in (DOCS / sub).glob("*.md")
 )
 
+# A fence closes at the indentation it opened with: a block nested in a
+# tab or an admonition is indented, and a closing fence matched without
+# its indentation would swallow everything up to the next block.
 _FENCE = re.compile(
     r"(?P<skip><!--\s*(?P<marker>skip|model)\s*-->\n)?"
-    r"```(?P<lang>python|json)\b[^\n]*\n(?P<body>.*?)\n```",
+    r"(?P<indent>[ \t]*)```(?P<lang>python|json)\b[^\n]*\n(?P<body>.*?)\n(?P=indent)```",
     re.DOTALL,
 )
 
 
 def _blocks(text: str):
     for m in _FENCE.finditer(text):
-        yield m.group("lang"), m.group("marker"), m.group("body")
+        # A nested block runs as written at the top level.
+        yield m.group("lang"), m.group("marker"), textwrap.dedent(m.group("body"))
 
 
 def _page_id(p: Path) -> str:
@@ -50,6 +58,7 @@ def _page_id(p: Path) -> str:
 
 @pytest.mark.parametrize("page", PAGES, ids=_page_id)
 def test_doc_page_examples_run(page: Path, tmp_path: Path, monkeypatch):
+    (tmp_path / "examples").symlink_to(REPO / "examples", target_is_directory=True)
     monkeypatch.chdir(tmp_path)
     text = page.read_text()
     namespace: dict = {}

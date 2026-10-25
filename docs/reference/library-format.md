@@ -103,6 +103,7 @@ four forms are resolved against the instance's parameter values:
 | `"${flow}_fed_out"` | interpolates a string, number or boolean parameter, or a `$for_each` variable, into a string; an integral number reads without a fraction (`2`, not `2.0`) |
 | `{"$for_each": "flow_types", "as": "f", "items": [...]}` | as an item of an array: repeats `items` once per element of a list (or of a loop variable that is itself a list) |
 | `{"$choose": "method", "cases": {"mean": ..., "median": ...}}` | the case named by an `enum`, `string` or `bool` parameter (`"true"`, `"false"`) |
+| `{"$when": "ccf", "items": [...]}`, `{"$when": "rule", "is": ["printed", "tables"], "items": [...]}` | as an item of an array: keeps `items` in place when the parameter's value is one of `is` (a value or a list), drops them otherwise; without `is`, the parameter is a `bool` and `items` are kept when it is true. `$choose` replaces a whole value; `$when` keeps or drops one item among its siblings (an optional transition). A value in `is` that an `enum` or `bool` parameter never takes is refused, and the items are expanded even when dropped, so a misspelling or an error in them is reported on every instance |
 
 The string `"$self"` names the instance, and `"$self.x"` reads
 `"<instance>.x"`. Nothing else computes at expansion: parameters reduce to
@@ -111,7 +112,10 @@ literals, and arithmetic stays in runtime expressions.
 A body reaches its neighbours through its ports only. A
 [port equation](model-schema.md#port-equation) is the one place a body may
 also read the component `$edge`: the other channels of the connection the
-equation is evaluated for.
+equation is evaluated for. A transition's edge effect may also target the component
+`$port`, which [writes through an in port](model-schema.md#writing-through-a-port)
+to the neighbours connected to it: that is how a body acts on a
+neighbour.
 
 ### Mode catalogue
 
@@ -157,6 +161,7 @@ the engine's, and the expanded model records it. A library imports it with
 | `bool_flow_out` | `name`, `prod_cond`, `fed_available_init` | out port `<name>_out` exporting `<name>_fed_out`, true while the production condition holds and `<name>_fed_available_out` is true |
 | `bool_source_out` | `name`, `prod_init`, `fed_available_init` | the same output with no production condition: a constant source, or a dormant function when `prod_init` is false |
 | `logic_gate` | `name`, `logic`, `k`, `default` | a boolean input re-exported on the out port `<name>_out` |
+| `state_out` | `name`, `automaton`, `states`, `init` | whether `automaton` is in one of `states`, as the boolean `<name>` on the out port `<name>_out`: how a neighbour reads a state (`any`, `all`, or `sum` to count) |
 
 The continuous fragments build a conservative flow network out of
 component-local declarations: each output publishes, on every connection,

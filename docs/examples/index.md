@@ -18,3 +18,14 @@ and the page reads its numbers from there.
 | [Emergency power supply](emergency-power-supply.md) | EDF's benchmark of a nuclear plant's emergency power supply, translated from its published model: exact exploration, Monte-Carlo, cross-entropy, splitting and a static fault tree, each compared with the values published for FIGSEQ, YAMS, STORM and RiskSpectrum |
 | [Gas production](gas-production.md) | two production units and a buffer reservoir: a continuous level driven by the discrete state, boundary events, lognormal repairs, an instant refill written as a reset map, and stationary production availability compared with published references over four cases |
 | [Feedwater supply (APPRODYN)](approdyn-feedwater.md) | the feedwater supply of a PWR steam generator, discrete part: standby pumps, demand failures with several outcomes, a power cycle with holds, competing trip causes; the published result reproduced once its unexplained turbo-pump share is isolated |
+
+Six of these pages also write their system as a
+[component type library](../guides/component-libraries.md): the
+equipment stated once as reusable types, a system document that
+instantiates and wires them, and, for the two-out-of-three pumps, a study
+holding the failure laws. Each library is checked against the page's own
+model by the unit tests, event for event and seed for seed, and its
+section on the page runs the comparison again. The emergency power supply
+is the exception here too: its model is a translation of a file that
+cannot be redistributed, and that translation reads every component from
+every other, so no library of domain types can reproduce it.

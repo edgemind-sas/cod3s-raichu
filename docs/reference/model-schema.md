@@ -384,6 +384,37 @@ instant of the jump reads the state before it.
 
 A document carrying the field declares the `transition_effects` feature.
 
+#### Writing through a port
+
+A component cannot name its neighbours, so a transition acts on one
+through a port. An effect whose target names the reserved component
+`"$port"` and, as `attribute`, an **in** port of the transition's own
+component writes the attribute exported by every out port connected to
+that in port:
+
+```json
+{"name": "repair", "source": "down", "targets": ["up"], "distrib": "exp", "rate": 0.05,
+ "effects": [{"target": {"component": "$port", "attribute": "buffer_in"},
+              "value": {"op": "const", "value": {"kind": "float", "value": 220000.0}}}]}
+```
+
+A production unit whose repair refills the buffer it feeds is written this
+way, with a connection from the buffer's `level` out port to the unit's
+`buffer_in`. The effect is an authoring form: when the model is resolved
+it becomes one ordinary edge effect per connection feeding the port, in
+connection declaration order and in the place of the effect it comes
+from, so it behaves exactly as the same effect written on the
+neighbour's attribute directly, reset map included. The lowered effects
+run in turn, each on the state the previous one left: with several
+connections, a value that reads the port being written sees the writes
+already made. An in port nothing is
+connected to writes nothing. A target naming a port that is not an in
+port of the component is refused, and so is a sensitive function writing
+through a port: a sensitive function is a level re-evaluated to a
+fixpoint, and one writing a neighbour has no place in it. A document
+carrying the form declares the `port_effects` feature as well as
+`transition_effects`.
+
 #### Declared kind
 
 `kind` declares what firing the transition means: `"failure"`
@@ -986,6 +1017,7 @@ The Python helpers, all in `pyraichu`:
 | `monitored_states` | transition-level [recorded targets](#transition) |
 | `cycle_cancellation` | transition-level [cycle-group cancellation override](#transition) |
 | `port_equations` | port-level [port equations](#port-equation) and `port_agg` over an out port |
+| `port_effects` | transition-level [edge effects written through a port](#writing-through-a-port) |
 
 The transition-level [declared kind](#declared-kind) `failure` or
 `repair` is a **baseline** construct and has no feature name (the kind

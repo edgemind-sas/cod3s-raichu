@@ -202,3 +202,43 @@ campaign estimates 0.0510 for the main heater, with a 95 % interval
 
 *Figures produced by `docs/figures/example_heated_room.py`, schematic by
 `docs/figures/schematic_heated_room.py`.*
+
+## Written as a library
+
+The model above is written component by component. The same installation
+can be described from two reusable types: a `Heater`, with its
+thermostat, its failures and the heating it delivers, and a `Room`, with
+its losses and its comfort states. A
+[component type library](../guides/component-libraries.md) states them
+once, as data, and a system document instantiates them: the two heaters
+are two instances of one type that differ only by their thresholds and
+their initial state.
+
+=== "Library"
+
+    ```json
+    --8<-- "examples/heated_room/library/library.json"
+    ```
+
+=== "System"
+
+    ```json
+    --8<-- "examples/heated_room/library/system.json"
+    ```
+
+A type cannot name its neighbours, so where the flat model's thermostat
+reads `room.temperature` directly, the `Heater` reads the temperature the
+room publishes on its `temperature_out` port. Expanded, the library gives
+a model that behaves exactly as the one above: the same events at the
+same dates for every seed, the same values at every instant.
+
+```python
+library = pyraichu.load_system(
+    "examples/heated_room/library/system.json",
+    ["examples/heated_room/library/library.json"],
+)
+from_library = pyraichu.simulate(library, t_max=24.0 * 30, seed=12)
+assert [(e.time, e.transition) for e in from_library.events] == [
+    (e.time, e.transition) for e in run.events
+]
+```

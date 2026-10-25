@@ -258,6 +258,45 @@ and the valve stuck on.
 *Figures produced by `docs/figures/example_heated_tank.py`, schematic by
 `docs/figures/schematic_heated_tank.py`.*
 
+## Written as a library
+
+The two pumps and the valve behave alike: a unit the level control starts
+and stops, which can get stuck on or off at a rate that depends on the
+water temperature. Only the direction of the control differs, so a
+[component type library](../guides/component-libraries.md) writes that
+behaviour once, as the fragment `controlled_unit`, and builds a `Pump`
+and a `Valve` from it. A `Tank` type carries the physics and the three
+top events.
+
+=== "Library"
+
+    ```json
+    --8<-- "examples/heated_tank/library/library.json"
+    ```
+
+=== "System"
+
+    ```json
+    --8<-- "examples/heated_tank/library/system.json"
+    ```
+
+A type cannot name its neighbours, so the units read the level and the
+temperature the tank publishes on its ports, the failure rates included.
+The per-unit factor $\hat\lambda / 2 / (b_1 + b_2)$ is a parameter computed
+once, because nothing computes at expansion. Expanded, the library behaves
+exactly as the model above, the trajectory below included:
+
+```python
+library = pyraichu.load_system(
+    "examples/heated_tank/library/system.json",
+    ["examples/heated_tank/library/library.json"],
+)
+from_library = pyraichu.simulate(library, t_max=100.0, seed=3)
+assert [(e.time, e.transition) for e in from_library.events] == [
+    (e.time, e.transition) for e in run.events
+]
+```
+
 ## References
 
 - Aldemir, T. (1987). Computer-assisted Markov failure modeling of process

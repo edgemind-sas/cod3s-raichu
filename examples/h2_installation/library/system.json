@@ -1,0 +1,153 @@
+{
+  "raichu_system": {
+    "format": 1
+  },
+  "system": {
+    "name": "h2_installation",
+    "library": {
+      "name": "h2_installation",
+      "version": "1.0.0"
+    },
+    "instances": [
+      {
+        "name": "PV",
+        "type": "PvArray",
+        "parameters": {
+          "failure_rate": 0.00016666666666666666,
+          "repair_rate": 0.008333333333333333
+        }
+      },
+      {
+        "name": "BATT",
+        "type": "Battery",
+        "parameters": {
+          "failure_rate": 0.0002,
+          "repair_rate": 0.005952380952380952
+        }
+      },
+      {
+        "name": "ELEC",
+        "type": "Electrolyser",
+        "parameters": {
+          "failure_rate": 0.000125,
+          "repair_rate": 0.004166666666666667
+        }
+      },
+      {
+        "name": "STORE",
+        "type": "Storage"
+      },
+      {
+        "name": "COMP_A",
+        "type": "Compressor",
+        "parameters": {
+          "failure_rate": 0.0003333333333333333,
+          "repair_rate": 0.020833333333333332
+        }
+      },
+      {
+        "name": "COMP_B",
+        "type": "Compressor",
+        "parameters": {
+          "failure_rate": 0.0003333333333333333,
+          "repair_rate": 0.020833333333333332
+        }
+      },
+      {
+        "name": "USER",
+        "type": "User"
+      }
+    ],
+    "connections": [
+      {
+        "from": "PV.power_out",
+        "to": "ELEC.pv_in"
+      },
+      {
+        "from": "PV.power_out",
+        "to": "BATT.pv_in"
+      },
+      {
+        "from": "ELEC.load_out",
+        "to": "BATT.load_in"
+      },
+      {
+        "from": "BATT.reserve_out",
+        "to": "ELEC.reserve_in"
+      },
+      {
+        "from": "ELEC.h2_out",
+        "to": "STORE.h2_in"
+      },
+      {
+        "from": "USER.draw_out",
+        "to": "STORE.draw_in"
+      },
+      {
+        "from": "STORE.level_out",
+        "to": "USER.level_in"
+      },
+      {
+        "from": "STORE.level_out",
+        "to": "ELEC.level_in"
+      },
+      {
+        "from": "COMP_A.up_out",
+        "to": "USER.comp_in"
+      },
+      {
+        "from": "COMP_B.up_out",
+        "to": "USER.comp_in"
+      }
+    ],
+    "indicators": [
+      {
+        "name": "unsupplied",
+        "target": "state",
+        "component": "USER",
+        "automaton": "supply",
+        "state": "unsupplied"
+      },
+      {
+        "name": "storage",
+        "target": "attribute",
+        "attr": {
+          "component": "STORE",
+          "attribute": "level"
+        }
+      },
+      {
+        "name": "battery",
+        "target": "attribute",
+        "attr": {
+          "component": "BATT",
+          "attribute": "soc"
+        }
+      },
+      {
+        "name": "pv",
+        "target": "attribute",
+        "attr": {
+          "component": "PV",
+          "attribute": "power"
+        }
+      },
+      {
+        "name": "electrolyser",
+        "target": "attribute",
+        "attr": {
+          "component": "ELEC",
+          "attribute": "load"
+        }
+      }
+    ],
+    "targets": [
+      {
+        "name": "unsupplied",
+        "component": "USER",
+        "automaton": "supply",
+        "state": "unsupplied"
+      }
+    ]
+  }
+}

@@ -11,7 +11,12 @@
 //!   an array, repeats `items` once per element of a list parameter, with
 //!   `var` bound to the element;
 //! - `{"$choose": "enum", "cases": {"a": ..., "b": ...}}` selects the case
-//!   named by an enum (or string, or boolean) parameter.
+//!   named by an enum (or string, or boolean) parameter;
+//! - `{"$when": "param", "is": [...], "items": [...]}`, as an item of an
+//!   array, keeps `items` in place when the parameter's value is one of
+//!   `is` (a value or a list of values), and drops them otherwise; without
+//!   `is` the parameter is a boolean and `items` are kept when it is true.
+//!   An `is` value an `enum` or `bool` parameter never takes is refused.
 //!
 //! The string `"$self"`, and the prefix `"$self."`, name the instance
 //! being expanded. Parameters reduce to literals here: nothing computes at
@@ -27,6 +32,9 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Env {
     values: BTreeMap<String, Value>,
+    /// The values an `enum` or `bool` parameter can take, as selection
+    /// keys: what a `$when` may list in `is`.
+    selectable: BTreeMap<String, Vec<String>>,
 }
 
 impl Env {
@@ -37,6 +45,8 @@ impl Env {
     fn with(&self, name: &str, value: Value) -> Env {
         let mut next = self.clone();
         next.values.insert(name.to_owned(), value);
+        // A loop variable takes whatever its list holds.
+        next.selectable.remove(name);
         next
     }
 }
@@ -227,6 +237,14 @@ pub(crate) fn bind(
         let checked = check_value(param, value)
             .map_err(|m| ExpandError::new(doc, pointer, format!("{}: {m}", ctx.context)))?;
         env.values.insert(param.name.clone(), checked);
+        let keys = match param.kind {
+            ParamKind::Enum => Some(param.values.clone()),
+            ParamKind::Bool => Some(vec!["true".to_owned(), "false".to_owned()]),
+            _ => None,
+        };
+        if let Some(keys) = keys {
+            env.selectable.insert(param.name.clone(), keys);
+        }
     }
     Ok(env)
 }
@@ -246,6 +264,8 @@ pub(crate) fn substitute(
                 let here = pointer_index(pointer, index);
                 if let Some(list_name) = item.get("$for_each") {
                     out.extend(for_each(item, list_name, env, ctx, &here)?);
+                } else if let Some(map) = item.as_object().filter(|m| m.contains_key("$when")) {
+                    out.extend(when(map, env, ctx, &here)?);
                 } else {
                     out.push(substitute(item, env, ctx, &here)?);
                 }
@@ -270,6 +290,9 @@ pub(crate) fn substitute(
             }
             if map.contains_key("$for_each") {
                 return Err(ctx.err(pointer, "`$for_each` repeats items of an array; it cannot stand where a single value goes"));
+            }
+            if map.contains_key("$when") {
+                return Err(ctx.err(pointer, "`$when` keeps or drops items of an array; it cannot stand where a single value goes"));
             }
             let mut out = Map::with_capacity(map.len());
             for (key, child) in map {
@@ -340,6 +363,121 @@ fn for_each(
     Ok(out)
 }
 
+/// The items of a `$when` array item: `items`, substituted, when the
+/// parameter's value is one of `is` (or, without `is`, when the boolean
+/// parameter is true); nothing otherwise.
+fn when(
+    map: &Map<String, Value>,
+    env: &Env,
+    ctx: &Ctx<'_>,
+    pointer: &str,
+) -> Result<Vec<Value>, ExpandError> {
+    if let Some(extra) = map
+        .keys()
+        .find(|k| !matches!(k.as_str(), "$when" | "is" | "items"))
+    {
+        return Err(ctx.err(
+            &pointer_key(pointer, extra),
+            format!("unknown field `{extra}` in `$when` (fields: `$when`, `is`, `items`)"),
+        ));
+    }
+    let name = map
+        .get("$when")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ctx.err(pointer, "`$when` names a parameter by a string"))?;
+    let items = map.get("items").and_then(Value::as_array).ok_or_else(|| {
+        ctx.err(
+            pointer,
+            "`$when` needs `items`, the array kept when the condition holds",
+        )
+    })?;
+    let value = env
+        .get(name)
+        .ok_or_else(|| ctx.err(pointer, format!("unknown parameter `{name}`")))?;
+    let keep = match map.get("is") {
+        None => value.as_bool().ok_or_else(|| {
+            ctx.err(
+                pointer,
+                format!("`$when` without `is` reads a boolean parameter; `{name}` is not one, so name the values that keep the items with `is`"),
+            )
+        })?,
+        Some(listed) => {
+            let key = scalar_key(value, name, "$when", ctx, pointer)?;
+            let listed: Vec<&Value> = match listed {
+                Value::Array(values) => values.iter().collect(),
+                single => vec![single],
+            };
+            let is_pointer = pointer_key(pointer, "is");
+            let declared = env.selectable.get(name);
+            let mut keys = Vec::with_capacity(listed.len());
+            for (index, one) in listed.iter().enumerate() {
+                let here = if map.get("is").is_some_and(Value::is_array) {
+                    pointer_index(&is_pointer, index)
+                } else {
+                    is_pointer.clone()
+                };
+                let listed_key = scalar_key(one, name, "$when", ctx, &here)?;
+                // A value the parameter never takes would drop the items
+                // for every instance without a word.
+                if let Some(declared) = declared {
+                    if !declared.contains(&listed_key) {
+                        return Err(ctx.err(
+                            &here,
+                            format!(
+                                "`$when` on `{name}` lists `{listed_key}`, which `{name}` never takes (values: {})",
+                                declared
+                                    .iter()
+                                    .map(|v| format!("`{v}`"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        ));
+                    }
+                }
+                keys.push(listed_key);
+            }
+            keys.contains(&key)
+        }
+    };
+    // Substituted as one array, so a `$when` or `$for_each` among the
+    // items splices in turn; substituted even when dropped, so an error in
+    // them shows on every instance, not only on those that keep them.
+    let substituted = substitute(
+        &Value::Array(items.clone()),
+        env,
+        ctx,
+        &pointer_key(pointer, "items"),
+    )?;
+    if !keep {
+        return Ok(Vec::new());
+    }
+    match substituted {
+        Value::Array(values) => Ok(values),
+        other => Ok(vec![other]),
+    }
+}
+
+/// A scalar as it reads for a selection (`$choose` case key, `$when`
+/// value): a string as written, a boolean as `true` or `false`, a number
+/// as [`number_text`] writes it.
+fn scalar_key(
+    value: &Value,
+    name: &str,
+    form: &str,
+    ctx: &Ctx<'_>,
+    pointer: &str,
+) -> Result<String, ExpandError> {
+    match value {
+        Value::String(s) => Ok(s.clone()),
+        Value::Bool(b) => Ok(b.to_string()),
+        Value::Number(n) => Ok(number_text(n)),
+        _ => Err(ctx.err(
+            pointer,
+            format!("`{form}` selects on a scalar; `{name}` is not one"),
+        )),
+    }
+}
+
 fn choose(
     map: &Map<String, Value>,
     selector: &Value,
@@ -368,17 +506,7 @@ fn choose(
     let chosen = env
         .get(name)
         .ok_or_else(|| ctx.err(pointer, format!("unknown parameter `{name}`")))?;
-    let key = match chosen {
-        Value::String(s) => s.clone(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => number_text(n),
-        _ => {
-            return Err(ctx.err(
-                pointer,
-                format!("`$choose` selects on a scalar; `{name}` is not one"),
-            ))
-        }
-    };
+    let key = scalar_key(chosen, name, "$choose", ctx, pointer)?;
     let case = cases.get(&key).ok_or_else(|| {
         ctx.err(
             pointer,
@@ -509,6 +637,132 @@ mod tests {
             substitute(&body, &env, &ctx(), "").ok(),
             Some(json!([1, 2]))
         );
+    }
+
+    #[test]
+    fn when_keeps_its_items_on_a_true_boolean_and_drops_them_on_false() {
+        let spec = json!([{"name": "ccf", "kind": "bool"}]);
+        let body = json!(["a", {"$when": "ccf", "items": ["ccf_1", "ccf_2"]}, "b"]);
+        let on = env_of(spec.clone(), json!({"ccf": true})).unwrap_or_default();
+        assert_eq!(
+            substitute(&body, &on, &ctx(), "").ok(),
+            Some(json!(["a", "ccf_1", "ccf_2", "b"]))
+        );
+        let off = env_of(spec, json!({"ccf": false})).unwrap_or_default();
+        assert_eq!(
+            substitute(&body, &off, &ctx(), "").ok(),
+            Some(json!(["a", "b"]))
+        );
+    }
+
+    #[test]
+    fn when_on_an_enum_keeps_its_items_for_the_listed_values_only() {
+        let spec =
+            json!([{"name": "rule", "kind": "enum", "values": ["printed", "tables", "perfect"]}]);
+        let body = json!([{"$when": "rule", "is": ["printed", "tables"], "items": ["start"]}]);
+        for (rule, expected) in [
+            ("printed", json!(["start"])),
+            ("tables", json!(["start"])),
+            ("perfect", json!([])),
+        ] {
+            let env = env_of(spec.clone(), json!({"rule": rule})).unwrap_or_default();
+            assert_eq!(
+                substitute(&body, &env, &ctx(), "").ok(),
+                Some(expected),
+                "{rule}"
+            );
+        }
+        let one = json!([{"$when": "rule", "is": "perfect", "items": ["start"]}]);
+        let env = env_of(spec, json!({"rule": "perfect"})).unwrap_or_default();
+        assert_eq!(
+            substitute(&one, &env, &ctx(), "").ok(),
+            Some(json!(["start"]))
+        );
+    }
+
+    #[test]
+    fn when_naming_an_unknown_parameter_is_refused_with_its_pointer() {
+        let env = env_of(json!([]), json!({})).unwrap_or_default();
+        let body = json!(["a", {"$when": "ccf", "items": ["x"]}]);
+        let err = substitute(&body, &env, &ctx(), "/body").err();
+        let (pointer, message) = err.map(|e| (e.pointer, e.message)).unwrap_or_default();
+        assert_eq!(pointer, "/body/1");
+        assert!(message.contains("unknown parameter `ccf`"), "{message}");
+    }
+
+    #[test]
+    fn when_without_is_needs_a_boolean_parameter() {
+        let spec = json!([{"name": "rule", "kind": "enum", "values": ["printed", "perfect"]}]);
+        let env = env_of(spec, json!({"rule": "printed"})).unwrap_or_default();
+        let body = json!([{"$when": "rule", "items": ["x"]}]);
+        let message = substitute(&body, &env, &ctx(), "")
+            .err()
+            .map(|e| e.message)
+            .unwrap_or_default();
+        assert!(message.contains("`is`"), "{message}");
+    }
+
+    #[test]
+    fn when_refuses_an_is_value_the_parameter_never_takes() {
+        // A misspelled value would otherwise drop the items for every
+        // instance without a word.
+        let spec = json!([{"name": "rule", "kind": "enum", "values": ["printed", "tables"]}]);
+        let env = env_of(spec, json!({"rule": "printed"})).unwrap_or_default();
+        let body = json!([{"$when": "rule", "is": ["printed", "tabels"], "items": ["x"]}]);
+        let err = substitute(&body, &env, &ctx(), "/body").err();
+        let (pointer, message) = err.map(|e| (e.pointer, e.message)).unwrap_or_default();
+        assert_eq!(pointer, "/body/0/is/1");
+        assert!(message.contains("`tabels`"), "{message}");
+        assert!(message.contains("`printed`, `tables`"), "{message}");
+        let flag = env_of(
+            json!([{"name": "ccf", "kind": "bool"}]),
+            json!({"ccf": true}),
+        )
+        .unwrap_or_default();
+        let body = json!([{"$when": "ccf", "is": "yes", "items": ["x"]}]);
+        assert!(substitute(&body, &flag, &ctx(), "").is_err());
+    }
+
+    #[test]
+    fn when_reports_an_error_in_the_items_it_drops() {
+        let env = env_of(
+            json!([{"name": "ccf", "kind": "bool"}]),
+            json!({"ccf": false}),
+        )
+        .unwrap_or_default();
+        let body = json!([{"$when": "ccf", "items": [{"$param": "nowhere"}]}]);
+        let message = substitute(&body, &env, &ctx(), "")
+            .err()
+            .map(|e| e.message)
+            .unwrap_or_default();
+        assert!(message.contains("unknown parameter `nowhere`"), "{message}");
+    }
+
+    #[test]
+    fn when_on_a_loop_variable_takes_any_value() {
+        let env = env_of(
+            json!([{"name": "flows", "kind": "list"}]),
+            json!({"flows": ["H2", "O2"]}),
+        )
+        .unwrap_or_default();
+        let body = json!([{"$for_each": "flows", "as": "f", "items": [
+            {"$when": "f", "is": "H2", "items": ["${f}_kept"]}]}]);
+        assert_eq!(
+            substitute(&body, &env, &ctx(), "").ok(),
+            Some(json!(["H2_kept"]))
+        );
+    }
+
+    #[test]
+    fn when_outside_an_array_is_refused() {
+        let spec = json!([{"name": "ccf", "kind": "bool"}]);
+        let env = env_of(spec, json!({"ccf": true})).unwrap_or_default();
+        let body = json!({"effects": {"$when": "ccf", "items": ["x"]}});
+        let message = substitute(&body, &env, &ctx(), "")
+            .err()
+            .map(|e| e.message)
+            .unwrap_or_default();
+        assert!(message.contains("`$when`"), "{message}");
     }
 
     #[test]

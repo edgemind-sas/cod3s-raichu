@@ -1,0 +1,115 @@
+{
+  "raichu_library": {
+    "format": 1
+  },
+  "library": {
+    "name": "two_out_of_three",
+    "version": "1.0.0",
+    "imports": [
+      "std"
+    ],
+    "description": "The two-out-of-three pumps example as a component type library: a pump that can fail, and a voter that keeps the service up while at least k of its inputs are fed.",
+    "types": [
+      {
+        "name": "Pump",
+        "description": "A pump delivering water. Its failure mode cuts the delivery; the study says how fast it occurs and is repaired.",
+        "uses": [
+          {
+            "fragment": "std.bool_source_out",
+            "with": {
+              "name": "water"
+            }
+          }
+        ],
+        "modes": [
+          {
+            "name": "failure",
+            "nature": "failure",
+            "effects": [
+              {
+                "attribute": "water_fed_available_out",
+                "value": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Voter",
+        "description": "A k-out-of-n service: up while at least k pumps deliver, down otherwise.",
+        "parameters": [
+          {
+            "name": "k",
+            "kind": "integer",
+            "default": 2,
+            "description": "How many fed inputs the service needs."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.bool_flow_in",
+            "with": {
+              "name": "water",
+              "logic": "k",
+              "k": {
+                "$param": "k"
+              }
+            }
+          }
+        ],
+        "body": {
+          "automata": [
+            {
+              "name": "service",
+              "states": [
+                "up",
+                "down"
+              ],
+              "init": "up",
+              "transitions": [
+                {
+                  "name": "lose",
+                  "source": "up",
+                  "targets": [
+                    "down"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "not",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "water_fed_in"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "recover",
+                  "source": "down",
+                  "targets": [
+                    "up"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "water_fed_in"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

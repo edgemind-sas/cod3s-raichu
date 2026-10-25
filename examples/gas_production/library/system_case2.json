@@ -1,0 +1,104 @@
+{
+  "raichu_system": {
+    "format": 1
+  },
+  "system": {
+    "name": "gas_production_case2",
+    "library": {
+      "name": "gas_production",
+      "version": "1.0.0"
+    },
+    "instances": [
+      {
+        "name": "U1",
+        "type": "ProductionUnit",
+        "parameters": {
+          "failure_rate": 0.0005,
+          "failure_rate_at_max": 0.0005,
+          "repair_mu": 0.23,
+          "repair_sigma": 2.25,
+          "refill": true,
+          "at_max_while_filling": false
+        }
+      },
+      {
+        "name": "U2",
+        "type": "ProductionUnit",
+        "parameters": {
+          "failure_rate": 0.0025,
+          "failure_rate_at_max": 0.0025,
+          "repair_mu": 0.5,
+          "repair_sigma": 1.83,
+          "refill": true,
+          "at_max_while_filling": false
+        }
+      },
+      {
+        "name": "reservoir",
+        "type": "BufferReservoir",
+        "parameters": {
+          "filling": false
+        }
+      }
+    ],
+    "connections": [
+      {
+        "from": "U1.up_out",
+        "to": "U2.other_up_in"
+      },
+      {
+        "from": "U2.up_out",
+        "to": "U1.other_up_in"
+      },
+      {
+        "from": "U1.up_out",
+        "to": "reservoir.unit1_up_in"
+      },
+      {
+        "from": "U2.up_out",
+        "to": "reservoir.unit2_up_in"
+      },
+      {
+        "from": "reservoir.level_out",
+        "to": "U1.reservoir_in"
+      },
+      {
+        "from": "reservoir.level_out",
+        "to": "U2.reservoir_in"
+      },
+      {
+        "from": "reservoir.full_out",
+        "to": "U1.reservoir_full_in"
+      },
+      {
+        "from": "reservoir.full_out",
+        "to": "U2.reservoir_full_in"
+      }
+    ],
+    "indicators": [
+      {
+        "name": "empty",
+        "target": "state",
+        "component": "reservoir",
+        "automaton": "store",
+        "state": "empty"
+      },
+      {
+        "name": "delivered",
+        "target": "attribute",
+        "attr": {
+          "component": "reservoir",
+          "attribute": "delivered"
+        }
+      },
+      {
+        "name": "total_loss",
+        "target": "attribute",
+        "attr": {
+          "component": "reservoir",
+          "attribute": "total_loss"
+        }
+      }
+    ]
+  }
+}

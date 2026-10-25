@@ -261,3 +261,151 @@ fn check_library_reports_the_failing_choice_and_the_unchecked_type() {
         TypeCheck::Unchecked(vec!["capacity".to_owned()])
     );
 }
+
+/// Three pumps that fail at `fail_at` and are repaired 5 later, read by a
+/// voter that loses service while two or more are failed. `standby` puts
+/// each pump through a `standby` state before it runs, and the exported
+/// set of states is then `failed` and `standby`.
+fn pump_body(fail_at: f64, standby: bool) -> Value {
+    let (states, init, first) = if standby {
+        (
+            json!(["standby", "ok", "failed"]),
+            "standby",
+            json!({"name": "start", "source": "standby", "targets": ["ok"], "distrib": "delay", "time": 0.5}),
+        )
+    } else {
+        (json!(["ok", "failed"]), "ok", Value::Null)
+    };
+    let mut transitions = vec![
+        json!({"name": "fail", "source": "ok", "targets": ["failed"], "distrib": "delay", "time": fail_at}),
+        json!({"name": "repair", "source": "failed", "targets": ["ok"], "distrib": "delay", "time": 5.0}),
+    ];
+    if !first.is_null() {
+        transitions.insert(0, first);
+    }
+    json!({"automata": [{"name": "health", "states": states, "init": init, "transitions": transitions}]})
+}
+
+fn voter_body(lost: Value, held: Value) -> Value {
+    json!({"automata": [{"name": "service", "states": ["up", "down"], "init": "up",
+    "transitions": [
+        {"name": "lose", "source": "up", "targets": ["down"], "distrib": "inst", "probs": [], "guard": lost},
+        {"name": "recover", "source": "down", "targets": ["up"], "distrib": "inst", "probs": [], "guard": held}
+    ]}]})
+}
+
+fn count_at_least(sum: Value, k: i64) -> Value {
+    json!({"op": "cmp", "cmp": "ge", "lhs": sum, "rhs": {"op": "const", "value": {"kind": "int", "value": k}}})
+}
+
+fn count_below(sum: Value, k: i64) -> Value {
+    json!({"op": "cmp", "cmp": "lt", "lhs": sum, "rhs": {"op": "const", "value": {"kind": "int", "value": k}}})
+}
+
+/// The flat reference: the voter counts failed pumps by reading their
+/// states directly.
+fn flat_voting(fail_at: [f64; 3], standby: bool) -> Model {
+    let exported: &[&str] = if standby {
+        &["failed", "standby"]
+    } else {
+        &["failed"]
+    };
+    let term = |pump: &str| {
+        let any = json!({"op": "bool", "bool_op": "or", "args": exported.iter().map(|s|
+            json!({"op": "state_active", "state": {"component": pump, "automaton": "health", "state": s}})
+        ).collect::<Vec<_>>()});
+        json!({"op": "if", "cond": any, "then": {"op": "const", "value": {"kind": "int", "value": 1}},
+               "otherwise": {"op": "const", "value": {"kind": "int", "value": 0}}})
+    };
+    let sum = json!({"op": "add", "args": [term("P1"), term("P2"), term("P3")]});
+    let mut components: Vec<Value> = ["P1", "P2", "P3"]
+        .iter()
+        .zip(fail_at)
+        .map(|(name, at)| {
+            let mut body = pump_body(at, standby);
+            body["name"] = json!(name);
+            body["attributes"] = json!([]);
+            body
+        })
+        .collect();
+    let mut voter = voter_body(count_at_least(sum.clone(), 2), count_below(sum, 2));
+    voter["name"] = json!("system");
+    voter["attributes"] = json!([]);
+    components.push(voter);
+    Model::from_json(&json!({"name": "voting", "components": components}).to_string()).unwrap()
+}
+
+/// The same plant as a library: each pump exports its set of states with
+/// `std.state_out`, and the voter sums what its in port receives.
+fn library_voting(fail_at: [f64; 3], standby: bool) -> Model {
+    let exported: Vec<&str> = if standby {
+        vec!["failed", "standby"]
+    } else {
+        vec!["failed"]
+    };
+    let sum =
+        json!({"op": "port_agg", "agg": "sum", "port": {"component": "$self", "port": "down_in"}});
+    let pump = |name: &str, at: f64| {
+        let mut ty = json!({"name": name,
+            "uses": [{"fragment": "std.state_out", "with": {"name": "down", "automaton": "health", "states": exported}}]});
+        ty["body"] = pump_body(at, standby);
+        ty
+    };
+    let mut voter = json!({"name": "Voter"});
+    let mut body = voter_body(count_at_least(sum.clone(), 2), count_below(sum, 2));
+    body["ports"] = json!([{"name": "down_in", "dir": "in"}]);
+    voter["body"] = body;
+    let lib = library(json!({
+        "name": "voting", "version": "1.0.0", "imports": ["std"],
+        "types": [pump("Pump1", fail_at[0]), pump("Pump2", fail_at[1]), pump("Pump3", fail_at[2]), voter]
+    }));
+    let sys = system(
+        json!({"name": "voting", "library": {"name": "voting", "version": "1.0.0"},
+        "instances": [{"name": "P1", "type": "Pump1"}, {"name": "P2", "type": "Pump2"},
+                      {"name": "P3", "type": "Pump3"}, {"name": "system", "type": "Voter"}],
+        "connections": [{"from": "P1.down_out", "to": "system.down_in"},
+                        {"from": "P2.down_out", "to": "system.down_in"},
+                        {"from": "P3.down_out", "to": "system.down_in"}]}),
+    );
+    expand(&[lib, standard_library().unwrap()], &sys, None)
+        .unwrap()
+        .model
+}
+
+fn events(model: &Model, t_max: f64) -> Vec<(f64, String)> {
+    run(model, t_max)
+        .events
+        .iter()
+        .map(|e| (e.time, e.transition.clone()))
+        .collect()
+}
+
+#[test]
+fn a_voter_reading_state_mirrors_fires_as_one_reading_the_states() {
+    let flat = events(&flat_voting([1.0, 2.0, 3.0], false), 20.0);
+    let lib = events(&library_voting([1.0, 2.0, 3.0], false), 20.0);
+    assert_eq!(lib, flat);
+    assert!(
+        flat.contains(&(2.0, "system.service.lose".to_owned())),
+        "{flat:?}"
+    );
+}
+
+#[test]
+fn a_set_of_two_states_exports_true_while_either_is_active() {
+    // The pumps sit in standby for half an hour: two of three in the
+    // exported set from the start, so the service is lost at once.
+    let flat = events(&flat_voting([1.0, 2.0, 3.0], true), 20.0);
+    let lib = events(&library_voting([1.0, 2.0, 3.0], true), 20.0);
+    assert_eq!(lib, flat);
+    assert_eq!(flat[0], (0.0, "system.service.lose".to_owned()));
+}
+
+#[test]
+fn same_date_failures_and_the_vote_keep_their_order() {
+    // Two pumps fail at the same date: both failures fire before the vote
+    // they cause, in the same order on both routes.
+    let flat = events(&flat_voting([2.0, 2.0, 9.0], false), 20.0);
+    let lib = events(&library_voting([2.0, 2.0, 9.0], false), 20.0);
+    assert_eq!(lib, flat);
+}

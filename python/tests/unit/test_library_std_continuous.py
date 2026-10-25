@@ -388,10 +388,14 @@ def test_the_fragment_agrees_with_its_plugin_counterpart(bench):
         assert library_samples[name] == expected, name
 
 
+#: The fragments of `std` that are not continuous, left out of the guard below.
+BOOLEAN_FRAGMENTS = {"bool_flow_in", "bool_flow_out", "bool_source_out", "logic_gate", "state_out"}
+
+
 def test_the_benches_exercise_every_continuous_fragment():
     """No fragment of the continuous part of std goes uncharacterised."""
     std = pyraichu.standard_library()["library"]["fragments"]
-    continuous = {f["name"] for f in std} - {"bool_flow_in", "bool_flow_out", "bool_source_out", "logic_gate"}
+    continuous = {f["name"] for f in std} - BOOLEAN_FRAGMENTS
 
     def used(type_name):
         ty = next(t for t in TYPES if t["name"] == type_name)

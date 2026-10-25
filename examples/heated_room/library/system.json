@@ -1,0 +1,111 @@
+{
+  "raichu_system": {
+    "format": 1
+  },
+  "system": {
+    "name": "heated_room",
+    "library": {
+      "name": "heated_room",
+      "version": "1.0.0"
+    },
+    "instances": [
+      {
+        "name": "room",
+        "type": "Room",
+        "parameters": {
+          "outside_mean": 2.0,
+          "outside_amplitude": 6.0,
+          "outside_phase": 9.0
+        }
+      },
+      {
+        "name": "main",
+        "type": "Heater",
+        "parameters": {
+          "on_below": 19.0,
+          "off_above": 21.0,
+          "running": true
+        }
+      },
+      {
+        "name": "backup",
+        "type": "Heater",
+        "parameters": {
+          "on_below": 17.0,
+          "off_above": 20.0,
+          "running": false
+        }
+      }
+    ],
+    "connections": [
+      {
+        "from": "main.power_out",
+        "to": "room.power_in"
+      },
+      {
+        "from": "backup.power_out",
+        "to": "room.power_in"
+      },
+      {
+        "from": "room.temperature_out",
+        "to": "main.temperature_in"
+      },
+      {
+        "from": "room.temperature_out",
+        "to": "backup.temperature_in"
+      }
+    ],
+    "targets": [
+      {
+        "name": "frozen",
+        "component": "room",
+        "automaton": "comfort",
+        "state": "frozen"
+      }
+    ],
+    "indicators": [
+      {
+        "name": "temperature",
+        "target": "attribute",
+        "attr": {
+          "component": "room",
+          "attribute": "temperature"
+        }
+      },
+      {
+        "name": "cold",
+        "target": "predicate",
+        "attr": {
+          "component": "room",
+          "attribute": "temperature"
+        },
+        "cmp": "lt",
+        "value": {
+          "kind": "float",
+          "value": 17.0
+        }
+      },
+      {
+        "name": "frozen",
+        "target": "state",
+        "component": "room",
+        "automaton": "comfort",
+        "state": "frozen"
+      },
+      {
+        "name": "main_failed",
+        "target": "state",
+        "component": "main",
+        "automaton": "health",
+        "state": "failed"
+      },
+      {
+        "name": "backup_failed",
+        "target": "state",
+        "component": "backup",
+        "automaton": "health",
+        "state": "failed"
+      }
+    ]
+  }
+}

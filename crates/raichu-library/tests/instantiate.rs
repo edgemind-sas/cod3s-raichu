@@ -470,3 +470,62 @@ fn a_misspelled_port_equation_key_is_refused() {
         err.pointer
     );
 }
+
+/// A buffer type and a unit type whose repair refills the buffer it is
+/// connected to, written with `target` as the repair's effect target.
+fn refill_library(target: Value) -> Library {
+    library(json!({
+        "name": "plant", "version": "1.0.0",
+        "types": [{
+            "name": "Buffer",
+            "body": {
+                "attributes": [{"name": "level", "kind": "float", "init": float(5.0)}],
+                "ports": [{"name": "level_out", "dir": "out", "attr": "level"}]
+            }
+        }, {
+            "name": "Unit",
+            "body": {
+                "ports": [{"name": "buffer_in", "dir": "in"}],
+                "automata": [{"name": "health", "states": ["up", "down"], "init": "up",
+                    "transitions": [
+                        {"name": "fail", "source": "up", "targets": ["down"],
+                         "distrib": "delay", "time": 1.0},
+                        {"name": "repair", "source": "down", "targets": ["up"],
+                         "distrib": "delay", "time": 2.0,
+                         "effects": [{"target": target,
+                                      "value": {"op": "const", "value": float(10.0)}}]}]}]
+            }
+        }]
+    }))
+}
+
+fn refill_system() -> SystemModel {
+    system(
+        json!({"name": "s", "library": {"name": "plant", "version": "1.0.0"},
+        "instances": [{"name": "B", "type": "Buffer"}, {"name": "U", "type": "Unit"}],
+        "connections": [{"from": "B.level_out", "to": "U.buffer_in"}]}),
+    )
+}
+
+#[test]
+fn a_type_body_writes_a_neighbour_through_a_port() {
+    let lib = refill_library(json!({"component": "$port", "attribute": "buffer_in"}));
+    let model = expand(&[lib], &refill_system(), None).unwrap().model;
+    let resolved = model.with_resolved_connections().unwrap();
+    let effect = &resolved.components[1].automata[0].transitions[1].effects[0];
+    assert_eq!(
+        (
+            effect.target.component.as_str(),
+            effect.target.attribute.as_str()
+        ),
+        ("B", "level")
+    );
+    CompiledModel::compile(&model).unwrap();
+}
+
+#[test]
+fn a_type_body_still_cannot_write_a_neighbour_directly() {
+    let lib = refill_library(json!({"component": "B", "attribute": "level"}));
+    let err = expand(&[lib], &refill_system(), None).unwrap_err();
+    assert!(err.message.contains("`B.level`"), "{}", err.message);
+}
