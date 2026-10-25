@@ -1,0 +1,440 @@
+{
+  "raichu_system": {
+    "format": 1
+  },
+  "system": {
+    "name": "approdyn_pdmp_noccf",
+    "library": {
+      "name": "approdyn",
+      "version": "1.0.0"
+    },
+    "instances": [
+      {
+        "name": "power",
+        "type": "PowerCycle",
+        "parameters": {
+          "ramp_0_2": 10.0,
+          "ramp_2_15": 10.222222222222221,
+          "ramp_15_60": 2.0,
+          "ramp_60_100": 1.7777777777777777,
+          "ramp_down": 24.0,
+          "forcing_pfd": 0.001
+        }
+      },
+      {
+        "name": "calendar",
+        "type": "Calendar",
+        "parameters": {
+          "plateau_end": 12984.0
+        }
+      },
+      {
+        "name": "VVP",
+        "type": "SteamHeader",
+        "parameters": {
+          "rate": 2.17e-05
+        }
+      },
+      {
+        "name": "CEX1",
+        "type": "ExtractionPump",
+        "parameters": {
+          "running": true,
+          "fail_rate": 4.34565e-05,
+          "rupture_rate": 4.35e-08,
+          "pfd": 0.00195,
+          "ccf": false,
+          "ccf_rate": 2.175e-06,
+          "repair_rate_rep72": 0.013888888888888888,
+          "repair_rate_rep168": 0.005952380952380952
+        }
+      },
+      {
+        "name": "CEX2",
+        "type": "ExtractionPump",
+        "parameters": {
+          "running": true,
+          "fail_rate": 4.34565e-05,
+          "rupture_rate": 4.35e-08,
+          "pfd": 0.00195,
+          "ccf": false,
+          "ccf_rate": 2.175e-06,
+          "repair_rate_rep72": 0.013888888888888888,
+          "repair_rate_rep168": 0.005952380952380952
+        }
+      },
+      {
+        "name": "CEX3",
+        "type": "ExtractionPump",
+        "parameters": {
+          "running": false,
+          "fail_rate": 4.34565e-05,
+          "rupture_rate": 4.35e-08,
+          "pfd": 0.00195,
+          "ccf": false,
+          "ccf_rate": 2.175e-06,
+          "repair_rate_rep72": 0.013888888888888888,
+          "repair_rate_rep168": 0.005952380952380952
+        }
+      },
+      {
+        "name": "TPA1",
+        "type": "TurboPump",
+        "parameters": {
+          "p_ht": 0.000545,
+          "p_t_short": 0.003858895755,
+          "p_t_long": 3.8978744999999996e-05,
+          "fail_long_rate": 0.000588354,
+          "fail_short_rate": 0.0001475,
+          "rupture_rate": 1.46e-07,
+          "ccf": false,
+          "ccf_rate": 3.68e-05,
+          "perfect": false,
+          "repair_rate_rep2": 0.5,
+          "repair_rate_rep24": 0.041666666666666664,
+          "repair_rate_rep28": 0.03571428571428571,
+          "repair_rate_rep144": 0.006944444444444444
+        }
+      },
+      {
+        "name": "TPA2",
+        "type": "TurboPump",
+        "parameters": {
+          "p_ht": 0.000545,
+          "p_t_short": 0.003858895755,
+          "p_t_long": 3.8978744999999996e-05,
+          "fail_long_rate": 0.000588354,
+          "fail_short_rate": 0.0001475,
+          "rupture_rate": 1.46e-07,
+          "ccf": false,
+          "ccf_rate": 3.68e-05,
+          "perfect": false,
+          "repair_rate_rep2": 0.5,
+          "repair_rate_rep24": 0.041666666666666664,
+          "repair_rate_rep28": 0.03571428571428571,
+          "repair_rate_rep144": 0.006944444444444444
+        }
+      },
+      {
+        "name": "PD",
+        "type": "FeedwaterValve",
+        "parameters": {
+          "p_refuse": 0.004212,
+          "repair_rate": 0.08333333333333333,
+          "trip_rate": 3.53e-05
+        }
+      },
+      {
+        "name": "GD",
+        "type": "FeedwaterValve",
+        "parameters": {
+          "p_refuse": 0.004212,
+          "repair_rate": 0.08333333333333333,
+          "trip_rate": 3.53e-05
+        }
+      },
+      {
+        "name": "plant",
+        "type": "Plant"
+      },
+      {
+        "name": "trip",
+        "type": "TripLogic"
+      }
+    ],
+    "connections": [
+      {
+        "from": "TPA1.running_out",
+        "to": "power.tpa_running_in"
+      },
+      {
+        "from": "TPA2.running_out",
+        "to": "power.tpa_running_in"
+      },
+      {
+        "from": "PD.open_out",
+        "to": "power.pd_open_in"
+      },
+      {
+        "from": "GD.open_out",
+        "to": "power.gd_open_in"
+      },
+      {
+        "from": "calendar.plateau_over_out",
+        "to": "power.plateau_over_in"
+      },
+      {
+        "from": "CEX1.running_out",
+        "to": "CEX1.running_in"
+      },
+      {
+        "from": "CEX1.running_out",
+        "to": "CEX2.running_in"
+      },
+      {
+        "from": "CEX1.running_out",
+        "to": "CEX3.running_in"
+      },
+      {
+        "from": "CEX2.running_out",
+        "to": "CEX1.running_in"
+      },
+      {
+        "from": "CEX2.running_out",
+        "to": "CEX2.running_in"
+      },
+      {
+        "from": "CEX2.running_out",
+        "to": "CEX3.running_in"
+      },
+      {
+        "from": "CEX3.running_out",
+        "to": "CEX1.running_in"
+      },
+      {
+        "from": "CEX3.running_out",
+        "to": "CEX2.running_in"
+      },
+      {
+        "from": "CEX3.running_out",
+        "to": "CEX3.running_in"
+      },
+      {
+        "from": "CEX1.standby_out",
+        "to": "CEX2.earlier_standby_in"
+      },
+      {
+        "from": "CEX1.standby_out",
+        "to": "CEX3.earlier_standby_in"
+      },
+      {
+        "from": "CEX2.standby_out",
+        "to": "CEX3.earlier_standby_in"
+      },
+      {
+        "from": "plant.cex_ccf_out",
+        "to": "CEX1.cex_ccf_in"
+      },
+      {
+        "from": "plant.cex_ccf_out",
+        "to": "CEX2.cex_ccf_in"
+      },
+      {
+        "from": "plant.cex_ccf_out",
+        "to": "CEX3.cex_ccf_in"
+      },
+      {
+        "from": "TPA1.running_out",
+        "to": "TPA1.tpa_running_in"
+      },
+      {
+        "from": "TPA1.running_out",
+        "to": "TPA2.tpa_running_in"
+      },
+      {
+        "from": "TPA2.running_out",
+        "to": "TPA1.tpa_running_in"
+      },
+      {
+        "from": "TPA2.running_out",
+        "to": "TPA2.tpa_running_in"
+      },
+      {
+        "from": "power.two_tpa_out",
+        "to": "TPA1.two_tpa_in"
+      },
+      {
+        "from": "power.two_tpa_out",
+        "to": "TPA2.two_tpa_in"
+      },
+      {
+        "from": "power.one_tpa_out",
+        "to": "TPA1.one_tpa_in"
+      },
+      {
+        "from": "power.one_tpa_out",
+        "to": "TPA2.one_tpa_in"
+      },
+      {
+        "from": "power.forced60_out",
+        "to": "TPA1.forced60_in"
+      },
+      {
+        "from": "power.forced60_out",
+        "to": "TPA2.forced60_in"
+      },
+      {
+        "from": "TPA1.standby_out",
+        "to": "TPA2.priority_standby_in"
+      },
+      {
+        "from": "plant.tpa_refused_at_60_out",
+        "to": "TPA1.refused_at_60_in"
+      },
+      {
+        "from": "plant.tpa_refused_at_60_out",
+        "to": "TPA2.refused_at_60_in"
+      },
+      {
+        "from": "plant.tpa_ccf_out",
+        "to": "TPA1.tpa_ccf_in"
+      },
+      {
+        "from": "plant.tpa_ccf_out",
+        "to": "TPA2.tpa_ccf_in"
+      },
+      {
+        "from": "power.pd_takes_over_out",
+        "to": "PD.takes_over_in"
+      },
+      {
+        "from": "power.pd_in_service_out",
+        "to": "PD.in_service_in"
+      },
+      {
+        "from": "power.gd_takes_over_out",
+        "to": "GD.takes_over_in"
+      },
+      {
+        "from": "power.gd_in_service_out",
+        "to": "GD.in_service_in"
+      },
+      {
+        "from": "power.alive_out",
+        "to": "trip.alive_in"
+      },
+      {
+        "from": "power.started_out",
+        "to": "trip.started_in"
+      },
+      {
+        "from": "power.at_power_out",
+        "to": "trip.at_power_in"
+      },
+      {
+        "from": "power.forcing_failed_out",
+        "to": "trip.forcing_failed_in"
+      },
+      {
+        "from": "VVP.failed_out",
+        "to": "trip.vvp_failed_in"
+      },
+      {
+        "from": "CEX1.running_out",
+        "to": "trip.cex_running_in"
+      },
+      {
+        "from": "CEX1.standby_out",
+        "to": "trip.cex_standby_in"
+      },
+      {
+        "from": "CEX2.running_out",
+        "to": "trip.cex_running_in"
+      },
+      {
+        "from": "CEX2.standby_out",
+        "to": "trip.cex_standby_in"
+      },
+      {
+        "from": "CEX3.running_out",
+        "to": "trip.cex_running_in"
+      },
+      {
+        "from": "CEX3.standby_out",
+        "to": "trip.cex_standby_in"
+      },
+      {
+        "from": "TPA1.running_out",
+        "to": "trip.tpa_running_in"
+      },
+      {
+        "from": "TPA1.standby_out",
+        "to": "trip.tpa_standby_in"
+      },
+      {
+        "from": "TPA2.running_out",
+        "to": "trip.tpa_running_in"
+      },
+      {
+        "from": "TPA2.standby_out",
+        "to": "trip.tpa_standby_in"
+      },
+      {
+        "from": "PD.tripped_out",
+        "to": "trip.valve_tripped_in"
+      },
+      {
+        "from": "GD.tripped_out",
+        "to": "trip.valve_tripped_in"
+      },
+      {
+        "from": "plant.cex_ccf_out",
+        "to": "trip.cex_ccf_in"
+      },
+      {
+        "from": "plant.tpa_ccf_out",
+        "to": "trip.tpa_ccf_in"
+      },
+      {
+        "from": "plant.tpa_refused_at_60_out",
+        "to": "trip.tpa_refused_at_60_in"
+      }
+    ],
+    "targets": [
+      {
+        "name": "trip_vvp",
+        "component": "trip",
+        "automaton": "cause",
+        "state": "vvp"
+      },
+      {
+        "name": "trip_cex",
+        "component": "trip",
+        "automaton": "cause",
+        "state": "cex"
+      },
+      {
+        "name": "trip_tpa",
+        "component": "trip",
+        "automaton": "cause",
+        "state": "tpa"
+      },
+      {
+        "name": "trip_are",
+        "component": "trip",
+        "automaton": "cause",
+        "state": "are"
+      }
+    ],
+    "indicators": [
+      {
+        "name": "trip_vvp",
+        "target": "state",
+        "component": "trip",
+        "automaton": "cause",
+        "state": "vvp"
+      },
+      {
+        "name": "trip_cex",
+        "target": "state",
+        "component": "trip",
+        "automaton": "cause",
+        "state": "cex"
+      },
+      {
+        "name": "trip_tpa",
+        "target": "state",
+        "component": "trip",
+        "automaton": "cause",
+        "state": "tpa"
+      },
+      {
+        "name": "trip_are",
+        "target": "state",
+        "component": "trip",
+        "automaton": "cause",
+        "state": "are"
+      }
+    ]
+  }
+}

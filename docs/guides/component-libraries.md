@@ -236,3 +236,22 @@ from what each one reads, so a library author never writes one; the
 per-connection quantities are [port equations](../reference/model-schema.md#port-equation)
 of the fragments. The [format reference](../reference/library-format.md#the-standard-library)
 lists every continuous fragment.
+
+## Published examples written as libraries
+
+Six worked examples carry a library of their own, under
+`examples/<name>/library/`, each shown on its page and proved to behave
+exactly as the page's flat model:
+
+| Example | Types | What the library shows |
+|---|---|---|
+| [Two-out-of-three pumps](../examples/two-out-of-three.md) | `Pump`, `Voter` | a failure mode on the type with its laws in the study, k-out-of-n with `std.bool_flow_in` |
+| [Heated room](../examples/heated-room.md) | `Heater`, `Room` | two instances of one type differing by parameters, a neighbour's temperature read through a port |
+| [Heated tank](../examples/heated-tank.md) | `Pump`, `Valve`, `Tank` | two types built on one library-local fragment, a failure rate reading a port |
+| [Hydrogen installation](../examples/h2-installation.md) | six equipment types | a shared `health` fragment, explicit equations ordered by the expander |
+| [Gas production](../examples/gas-production.md) | `ProductionUnit`, `BufferReservoir` | four cases as four systems over one library, a state published with `std.state_out`, a repair writing a neighbour through a port |
+| [APPRODYN](../examples/approdyn-feedwater.md) | eight types | phases published as wiring, latched conditions written through ports, variants kept or dropped with `$when` |
+
+Two of them are generated from the flat model's own constants
+(`examples/<name>/library.py`), because nothing computes at expansion and
+their rates are products of published shares.

@@ -1,0 +1,61 @@
+{
+  "raichu_system": {
+    "format": 1
+  },
+  "system": {
+    "name": "two_out_of_three",
+    "library": {
+      "name": "two_out_of_three",
+      "version": "1.0.0"
+    },
+    "instances": [
+      {
+        "name": "P1",
+        "type": "Pump"
+      },
+      {
+        "name": "P2",
+        "type": "Pump"
+      },
+      {
+        "name": "P3",
+        "type": "Pump"
+      },
+      {
+        "name": "system",
+        "type": "Voter"
+      }
+    ],
+    "connections": [
+      {
+        "from": "P1.water_out",
+        "to": "system.water_in"
+      },
+      {
+        "from": "P2.water_out",
+        "to": "system.water_in"
+      },
+      {
+        "from": "P3.water_out",
+        "to": "system.water_in"
+      }
+    ],
+    "targets": [
+      {
+        "name": "system_down",
+        "component": "system",
+        "automaton": "service",
+        "state": "down"
+      }
+    ],
+    "indicators": [
+      {
+        "name": "down",
+        "target": "state",
+        "component": "system",
+        "automaton": "service",
+        "state": "down"
+      }
+    ]
+  }
+}

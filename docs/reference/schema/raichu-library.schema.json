@@ -95,6 +95,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_ConsumerParam"
+                          },
+                          {
+                            "$ref": "#/$defs/When_ConsumerParam"
                           }
                         ]
                       },
@@ -120,6 +123,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_ConsumerParam"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_ConsumerParam"
                                     }
                                   ]
                                 },
@@ -166,6 +172,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_ConsumerParam"
+                          },
+                          {
+                            "$ref": "#/$defs/When_ConsumerParam"
                           }
                         ]
                       },
@@ -191,6 +200,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_ConsumerParam"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_ConsumerParam"
                                     }
                                   ]
                                 },
@@ -487,6 +499,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_string"
+                      },
+                      {
+                        "$ref": "#/$defs/When_string"
                       }
                     ]
                   },
@@ -512,6 +527,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_string"
                                 }
                               ]
                             },
@@ -544,6 +562,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Transition"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Transition"
                       }
                     ]
                   },
@@ -569,6 +590,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Transition"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Transition"
                                 }
                               ]
                             },
@@ -640,6 +664,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Allocation"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Allocation"
                       }
                     ]
                   },
@@ -665,6 +692,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Allocation"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Allocation"
                                 }
                               ]
                             },
@@ -697,6 +727,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Attribute"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Attribute"
                       }
                     ]
                   },
@@ -722,6 +755,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Attribute"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Attribute"
                                 }
                               ]
                             },
@@ -754,6 +790,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Automaton"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Automaton"
                       }
                     ]
                   },
@@ -779,6 +818,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Automaton"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Automaton"
                                 }
                               ]
                             },
@@ -811,6 +853,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Equation"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Equation"
                       }
                     ]
                   },
@@ -836,6 +881,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Equation"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Equation"
                                 }
                               ]
                             },
@@ -868,6 +916,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Interface"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Interface"
                       }
                     ]
                   },
@@ -893,6 +944,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Interface"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Interface"
                                 }
                               ]
                             },
@@ -925,6 +979,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Port"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Port"
                       }
                     ]
                   },
@@ -950,6 +1007,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Port"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Port"
                                 }
                               ]
                             },
@@ -982,6 +1042,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_SensitiveFunction"
+                      },
+                      {
+                        "$ref": "#/$defs/When_SensitiveFunction"
                       }
                     ]
                   },
@@ -1007,6 +1070,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_SensitiveFunction"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_SensitiveFunction"
                                 }
                               ]
                             },
@@ -1173,6 +1239,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Effect"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Effect"
                       }
                     ]
                   },
@@ -1198,6 +1267,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Effect"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Effect"
                                 }
                               ]
                             },
@@ -1561,6 +1633,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Condition"
                           }
                         ]
                       },
@@ -1586,6 +1661,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Condition"
                                     }
                                   ]
                                 },
@@ -1657,6 +1735,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Condition"
                           }
                         ]
                       },
@@ -1682,6 +1763,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Condition"
                                     }
                                   ]
                                 },
@@ -1753,6 +1837,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Condition"
                           }
                         ]
                       },
@@ -1778,6 +1865,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Condition"
                                     }
                                   ]
                                 },
@@ -1849,6 +1939,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Condition"
                           }
                         ]
                       },
@@ -1874,6 +1967,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Condition"
                                     }
                                   ]
                                 },
@@ -1921,6 +2017,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Condition"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Condition"
                           }
                         ]
                       },
@@ -1946,6 +2045,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Condition"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Condition"
                                     }
                                   ]
                                 },
@@ -2445,6 +2547,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Expr"
                           }
                         ]
                       },
@@ -2470,6 +2575,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Expr"
                                     }
                                   ]
                                 },
@@ -2541,6 +2649,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Expr"
                           }
                         ]
                       },
@@ -2566,6 +2677,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Expr"
                                     }
                                   ]
                                 },
@@ -2637,6 +2751,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Expr"
                           }
                         ]
                       },
@@ -2662,6 +2779,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Expr"
                                     }
                                   ]
                                 },
@@ -2733,6 +2853,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Expr"
                           }
                         ]
                       },
@@ -2758,6 +2881,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Expr"
                                     }
                                   ]
                                 },
@@ -2805,6 +2931,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Expr"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Expr"
                           }
                         ]
                       },
@@ -2830,6 +2959,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Expr"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Expr"
                                     }
                                   ]
                                 },
@@ -2989,6 +3121,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Allocation"
+              },
+              {
+                "$ref": "#/$defs/When_Allocation"
               }
             ]
           },
@@ -3020,6 +3155,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Assignment"
+              },
+              {
+                "$ref": "#/$defs/When_Assignment"
               }
             ]
           },
@@ -3051,6 +3189,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Attribute"
+              },
+              {
+                "$ref": "#/$defs/When_Attribute"
               }
             ]
           },
@@ -3082,6 +3223,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Automaton"
+              },
+              {
+                "$ref": "#/$defs/When_Automaton"
               }
             ]
           },
@@ -3113,6 +3257,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_CatalogueMode"
+              },
+              {
+                "$ref": "#/$defs/When_CatalogueMode"
               }
             ]
           },
@@ -3144,6 +3291,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Channel"
+              },
+              {
+                "$ref": "#/$defs/When_Channel"
               }
             ]
           },
@@ -3175,6 +3325,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Condition"
+              },
+              {
+                "$ref": "#/$defs/When_Condition"
               }
             ]
           },
@@ -3206,6 +3359,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_ConsumerParam"
+              },
+              {
+                "$ref": "#/$defs/When_ConsumerParam"
               }
             ]
           },
@@ -3237,6 +3393,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Effect"
+              },
+              {
+                "$ref": "#/$defs/When_Effect"
               }
             ]
           },
@@ -3268,6 +3427,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Equation"
+              },
+              {
+                "$ref": "#/$defs/When_Equation"
               }
             ]
           },
@@ -3299,6 +3461,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Expr"
+              },
+              {
+                "$ref": "#/$defs/When_Expr"
               }
             ]
           },
@@ -3330,6 +3495,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Interface"
+              },
+              {
+                "$ref": "#/$defs/When_Interface"
               }
             ]
           },
@@ -3361,6 +3529,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Port"
+              },
+              {
+                "$ref": "#/$defs/When_Port"
               }
             ]
           },
@@ -3392,6 +3563,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_PortEquation"
+              },
+              {
+                "$ref": "#/$defs/When_PortEquation"
               }
             ]
           },
@@ -3423,6 +3597,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_SensitiveFunction"
+              },
+              {
+                "$ref": "#/$defs/When_SensitiveFunction"
               }
             ]
           },
@@ -3454,6 +3631,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Targetable"
+              },
+              {
+                "$ref": "#/$defs/When_Targetable"
               }
             ]
           },
@@ -3485,6 +3665,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Transition"
+              },
+              {
+                "$ref": "#/$defs/When_Transition"
               }
             ]
           },
@@ -3569,6 +3752,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Transition_points"
+              },
+              {
+                "$ref": "#/$defs/When_Transition_points"
               }
             ]
           },
@@ -3600,6 +3786,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_number"
+              },
+              {
+                "$ref": "#/$defs/When_number"
               }
             ]
           },
@@ -3631,6 +3820,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_string"
+              },
+              {
+                "$ref": "#/$defs/When_string"
               }
             ]
           },
@@ -3685,6 +3877,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Targetable"
+              },
+              {
+                "$ref": "#/$defs/When_Targetable"
               }
             ]
           },
@@ -3723,6 +3918,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_string"
+                      },
+                      {
+                        "$ref": "#/$defs/When_string"
                       }
                     ]
                   },
@@ -3748,6 +3946,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_string"
                                 }
                               ]
                             },
@@ -4086,6 +4287,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Channel"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Channel"
                       }
                     ]
                   },
@@ -4111,6 +4315,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Channel"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Channel"
                                 }
                               ]
                             },
@@ -4147,6 +4354,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_PortEquation"
+                      },
+                      {
+                        "$ref": "#/$defs/When_PortEquation"
                       }
                     ]
                   },
@@ -4172,6 +4382,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_PortEquation"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_PortEquation"
                                 }
                               ]
                             },
@@ -4376,6 +4589,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Assignment"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Assignment"
                       }
                     ]
                   },
@@ -4401,6 +4617,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Assignment"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Assignment"
                                 }
                               ]
                             },
@@ -4880,6 +5099,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_number"
+                          },
+                          {
+                            "$ref": "#/$defs/When_number"
                           }
                         ]
                       },
@@ -4905,6 +5127,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_number"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_number"
                                     }
                                   ]
                                 },
@@ -5177,6 +5402,9 @@
                           },
                           {
                             "$ref": "#/$defs/ForEach_Transition_points"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Transition_points"
                           }
                         ]
                       },
@@ -5255,6 +5483,9 @@
                                     },
                                     {
                                       "$ref": "#/$defs/ForEach_Transition_points"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Transition_points"
                                     }
                                   ]
                                 },
@@ -5304,6 +5535,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_Assignment"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Assignment"
                       }
                     ]
                   },
@@ -5329,6 +5563,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_Assignment"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Assignment"
                                 }
                               ]
                             },
@@ -5467,6 +5704,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_string"
+                      },
+                      {
+                        "$ref": "#/$defs/When_string"
                       }
                     ]
                   },
@@ -5495,6 +5735,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_string"
                                 }
                               ]
                             },
@@ -5543,6 +5786,9 @@
                       },
                       {
                         "$ref": "#/$defs/ForEach_string"
+                      },
+                      {
+                        "$ref": "#/$defs/When_string"
                       }
                     ]
                   },
@@ -5568,6 +5814,9 @@
                                 },
                                 {
                                   "$ref": "#/$defs/ForEach_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_string"
                                 }
                               ]
                             },
@@ -5699,6 +5948,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_CatalogueMode"
+              },
+              {
+                "$ref": "#/$defs/When_CatalogueMode"
               }
             ]
           },
@@ -5726,6 +5978,9 @@
               },
               {
                 "$ref": "#/$defs/ForEach_Targetable"
+              },
+              {
+                "$ref": "#/$defs/When_Targetable"
               }
             ]
           },
@@ -5848,6 +6103,1079 @@
         }
       ],
       "description": "A runtime value carried by attributes and expressions.\n\nM0 kinds only: booleans, integers, floats. `String` discrete state is\nreserved (a deliberate departure) and will extend this enum\nwithout breaking serialized models (tagged representation)."
+    },
+    "When_Allocation": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Allocation"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Allocation"
+              },
+              {
+                "$ref": "#/$defs/When_Allocation"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Assignment": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Assignment"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Assignment"
+              },
+              {
+                "$ref": "#/$defs/When_Assignment"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Attribute": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Attribute"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Attribute"
+              },
+              {
+                "$ref": "#/$defs/When_Attribute"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Automaton": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Automaton"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Automaton"
+              },
+              {
+                "$ref": "#/$defs/When_Automaton"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_CatalogueMode": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogueMode"
+              },
+              {
+                "$ref": "#/$defs/ForEach_CatalogueMode"
+              },
+              {
+                "$ref": "#/$defs/When_CatalogueMode"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Channel": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Channel"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Channel"
+              },
+              {
+                "$ref": "#/$defs/When_Channel"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Condition": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Condition"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Condition"
+              },
+              {
+                "$ref": "#/$defs/When_Condition"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_ConsumerParam": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConsumerParam"
+              },
+              {
+                "$ref": "#/$defs/ForEach_ConsumerParam"
+              },
+              {
+                "$ref": "#/$defs/When_ConsumerParam"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Effect": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Effect"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Effect"
+              },
+              {
+                "$ref": "#/$defs/When_Effect"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Equation": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Equation"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Equation"
+              },
+              {
+                "$ref": "#/$defs/When_Equation"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Expr": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Expr"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Expr"
+              },
+              {
+                "$ref": "#/$defs/When_Expr"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Interface": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Interface"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Interface"
+              },
+              {
+                "$ref": "#/$defs/When_Interface"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Port": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Port"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Port"
+              },
+              {
+                "$ref": "#/$defs/When_Port"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_PortEquation": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PortEquation"
+              },
+              {
+                "$ref": "#/$defs/ForEach_PortEquation"
+              },
+              {
+                "$ref": "#/$defs/When_PortEquation"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_SensitiveFunction": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SensitiveFunction"
+              },
+              {
+                "$ref": "#/$defs/ForEach_SensitiveFunction"
+              },
+              {
+                "$ref": "#/$defs/When_SensitiveFunction"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Targetable": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Targetable"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Targetable"
+              },
+              {
+                "$ref": "#/$defs/When_Targetable"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Transition": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Transition"
+              },
+              {
+                "$ref": "#/$defs/ForEach_Transition"
+              },
+              {
+                "$ref": "#/$defs/When_Transition"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Transition_points": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/Template_number_double"
+                      },
+                      {
+                        "$ref": "#/$defs/Template_number_double"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "$choose": {
+                        "type": "string"
+                      },
+                      "cases": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "maxItems": 2,
+                              "minItems": 2,
+                              "prefixItems": [
+                                {
+                                  "$ref": "#/$defs/Template_number_double"
+                                },
+                                {
+                                  "$ref": "#/$defs/Template_number_double"
+                                }
+                              ],
+                              "type": "array"
+                            },
+                            {
+                              "$ref": "#/$defs/TemplateParam"
+                            }
+                          ]
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "$choose",
+                      "cases"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/$defs/ForEach_Transition_points"
+              },
+              {
+                "$ref": "#/$defs/When_Transition_points"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_number": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Template_number_double"
+              },
+              {
+                "$ref": "#/$defs/ForEach_number"
+              },
+              {
+                "$ref": "#/$defs/When_number"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_string": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Template_string"
+              },
+              {
+                "$ref": "#/$defs/ForEach_string"
+              },
+              {
+                "$ref": "#/$defs/When_string"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

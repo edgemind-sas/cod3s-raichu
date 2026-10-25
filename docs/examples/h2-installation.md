@@ -384,6 +384,46 @@ about 9.1 kg a day against 12 kg drawn, so the storage covers the
 2.9 kg/day deficit for about fifty days, far beyond the battery's 168 h
 mean repair.
 
+## Written as a library
+
+Every component of the model above is already a box with ports, so the
+installation reads naturally as a
+[component type library](../guides/component-libraries.md): one type per
+kind of equipment (`PvArray`, `Battery`, `Electrolyser`, `Storage`,
+`Compressor`, `User`), with the shared random failures and repairs written
+once as the fragment `health`, and a system document that instantiates
+the types and wires them as the schematic does. The two compressors are
+two instances of one type.
+
+=== "Library"
+
+    ```json
+    --8<-- "examples/h2_installation/library/library.json"
+    ```
+
+=== "System"
+
+    ```json
+    --8<-- "examples/h2_installation/library/system.json"
+    ```
+
+Each type reads its neighbours only through its ports, and its
+thresholds, capacities and failure laws are parameters with the page's
+values as defaults (the failure laws are set per instance). Expanded, the
+library behaves exactly as the model above: the same events at the same
+dates for every seed, the same values at every instant, the same minimal
+sequences, and the same cycle-group decisions.
+
+```python
+library = pyraichu.load_system(
+    "examples/h2_installation/library/system.json",
+    ["examples/h2_installation/library/library.json"],
+)
+from_library = pyraichu.simulate(library, t_max=24 * 7, seed=3,
+                                 samples=[24.0 * d for d in range(8)])
+assert from_library.samples["storage"] == week.samples["storage"]
+```
+
 ## Reproducing the figures
 
 The charts come from `docs/figures/example_h2_installation.py`, which runs

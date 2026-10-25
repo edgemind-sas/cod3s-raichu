@@ -1,0 +1,139 @@
+{
+  "raichu_system": {
+    "format": 1
+  },
+  "system": {
+    "name": "heated_tank",
+    "library": {
+      "name": "heated_tank",
+      "version": "1.0.0"
+    },
+    "instances": [
+      {
+        "name": "tank",
+        "type": "Tank"
+      },
+      {
+        "name": "pump1",
+        "type": "Pump",
+        "parameters": {
+          "running": true,
+          "rate_factor": 0.0003014159193661778
+        }
+      },
+      {
+        "name": "pump2",
+        "type": "Pump",
+        "parameters": {
+          "running": false,
+          "rate_factor": 0.00037720049337824533
+        }
+      },
+      {
+        "name": "valve",
+        "type": "Valve",
+        "parameters": {
+          "running": true,
+          "rate_factor": 0.00020628151981622793
+        }
+      }
+    ],
+    "connections": [
+      {
+        "from": "pump1.flow_out",
+        "to": "tank.pumps_in"
+      },
+      {
+        "from": "pump2.flow_out",
+        "to": "tank.pumps_in"
+      },
+      {
+        "from": "valve.flow_out",
+        "to": "tank.valve_in"
+      },
+      {
+        "from": "tank.level_out",
+        "to": "pump1.level_in"
+      },
+      {
+        "from": "tank.temperature_out",
+        "to": "pump1.temperature_in"
+      },
+      {
+        "from": "tank.level_out",
+        "to": "pump2.level_in"
+      },
+      {
+        "from": "tank.temperature_out",
+        "to": "pump2.temperature_in"
+      },
+      {
+        "from": "tank.level_out",
+        "to": "valve.level_in"
+      },
+      {
+        "from": "tank.temperature_out",
+        "to": "valve.temperature_in"
+      }
+    ],
+    "targets": [
+      {
+        "name": "dryout",
+        "component": "tank",
+        "automaton": "status",
+        "state": "dryout"
+      },
+      {
+        "name": "overflow",
+        "component": "tank",
+        "automaton": "status",
+        "state": "overflow"
+      },
+      {
+        "name": "overheat",
+        "component": "tank",
+        "automaton": "status",
+        "state": "overheat"
+      }
+    ],
+    "indicators": [
+      {
+        "name": "dryout",
+        "target": "state",
+        "component": "tank",
+        "automaton": "status",
+        "state": "dryout"
+      },
+      {
+        "name": "overflow",
+        "target": "state",
+        "component": "tank",
+        "automaton": "status",
+        "state": "overflow"
+      },
+      {
+        "name": "overheat",
+        "target": "state",
+        "component": "tank",
+        "automaton": "status",
+        "state": "overheat"
+      },
+      {
+        "name": "level",
+        "target": "attribute",
+        "attr": {
+          "component": "tank",
+          "attribute": "level"
+        }
+      },
+      {
+        "name": "temperature",
+        "target": "attribute",
+        "attr": {
+          "component": "tank",
+          "attribute": "temperature"
+        }
+      }
+    ]
+  }
+}

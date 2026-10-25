@@ -414,7 +414,8 @@ fn bind_params(
 
 /// Every attribute, port and state reference an expression of `component`
 /// makes must stay inside the component: a type reaches its neighbours
-/// through ports only.
+/// through ports only, reading them with `port_agg` and writing them with
+/// an edge effect through a port (`raichu_model::PORT`).
 fn check_self_references(
     component: &Component,
     ctx: &Ctx<'_>,
@@ -454,9 +455,12 @@ fn check_self_references(
             .iter()
             .flat_map(|p| p.equations.iter().map(|e| (&e.expr, true))),
     );
+    // An effect target naming `$port` writes through one of the
+    // component's own in ports: the core resolves it to the connected
+    // neighbours and refuses it outside an edge effect.
     let mut found: Vec<String> = targets
         .iter()
-        .filter(|t| t.component != me)
+        .filter(|t| t.component != me && t.component != raichu_model::PORT)
         .map(|t| format!("`{}.{}`", t.component, t.attribute))
         .collect();
     for (expr, edge_allowed) in checked {

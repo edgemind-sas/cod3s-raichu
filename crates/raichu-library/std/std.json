@@ -619,6 +619,88 @@
         }
       },
       {
+        "name": "state_out",
+        "description": "Exports whether automaton `automaton` is in one of `states`, as the boolean attribute `<name>` on the out port `<name>_out`. A port carries an attribute, never a state: this is how a neighbour reads a state, with `any`, `all` or `sum` (which counts the true sources) over its in port. The attribute is written by a sensitive function, which runs inside the firing that changes the state, so a reader sees it at the same instant as a direct read.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Name of the exported attribute; the port is `<name>_out`."
+          },
+          {
+            "name": "automaton",
+            "kind": "string",
+            "description": "The automaton of the instance whose state is exported."
+          },
+          {
+            "name": "states",
+            "kind": "list",
+            "items": "string",
+            "description": "The states for which the attribute is true."
+          },
+          {
+            "name": "init",
+            "kind": "bool",
+            "default": false,
+            "description": "The attribute's initial value: whether the automaton's initial state is one of `states`."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": {
+                  "$param": "init"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_out",
+              "dir": "out",
+              "attr": "${name}"
+            }
+          ],
+          "sensitive_functions": [
+            {
+              "name": "update_${name}",
+              "effects": [
+                {
+                  "target": {
+                    "component": "$self",
+                    "attribute": "${name}"
+                  },
+                  "value": {
+                    "op": "bool",
+                    "bool_op": "or",
+                    "args": [
+                      {
+                        "$for_each": "states",
+                        "as": "state",
+                        "items": [
+                          {
+                            "op": "state_active",
+                            "state": {
+                              "component": "$self",
+                              "automaton": "${automaton}",
+                              "state": "${state}"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
         "name": "continuous_flow_out",
         "description": "A continuous output flow `<name>` of a conservative network: the out port `<name>_out` and the totals `<name>_demand_out` (what its consumers ask) and `<name>_fed_out` (what they receive). Each connection's claim is its consumer's demand truncated at the quantity distributed, and a distribution operator splits that quantity over the claims. What a consumer receives is its allocation scaled by the share it accepts. The capability `<name>_capability_out` is declared here and written by the fragment that makes the flow (`continuous_source`, `volume_outlet`, `rule_produces`, `tap`).",
         "parameters": [

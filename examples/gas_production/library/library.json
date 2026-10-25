@@ -1,0 +1,1912 @@
+{
+  "raichu_library": {
+    "format": 1
+  },
+  "library": {
+    "name": "gas_production",
+    "version": "1.0.0",
+    "imports": [
+      "std"
+    ],
+    "description": "The gas production benchmark (Labeau and Dutuit 2004; Eymard and Mercier 2008) as a component type library: two production units and the buffer reservoir that covers their shortfall.",
+    "types": [
+      {
+        "name": "ProductionUnit",
+        "description": "A production unit: up or down, failing at `failure_rate` and at `failure_rate_at_max` while it runs at its maximum, repaired after a lognormal duration. It exports whether it is up on `up_out`. With `refill`, its repair refills the reservoir at once when the other unit is up.",
+        "parameters": [
+          {
+            "name": "failure_rate",
+            "kind": "number",
+            "description": "Failure rate at partial load, in 1/h."
+          },
+          {
+            "name": "failure_rate_at_max",
+            "kind": "number",
+            "description": "Failure rate while running at its maximum, in 1/h."
+          },
+          {
+            "name": "repair_mu",
+            "kind": "number",
+            "description": "Mean of the logarithm of the repair duration (ln h)."
+          },
+          {
+            "name": "repair_sigma",
+            "kind": "number",
+            "description": "Standard deviation of the logarithm of the repair duration."
+          },
+          {
+            "name": "refill",
+            "kind": "bool",
+            "description": "Whether a repair that brings both units up refills the reservoir at once (cases 1 to 3)."
+          },
+          {
+            "name": "at_max_while_filling",
+            "kind": "bool",
+            "description": "Whether the unit also runs at its maximum while the reservoir is not full (case 4).",
+            "default": false
+          },
+          {
+            "name": "capacity",
+            "kind": "number",
+            "description": "Reservoir capacity, in m3: the level a refill restores.",
+            "default": 220000.0
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "up",
+              "automaton": "health",
+              "states": [
+                "up"
+              ],
+              "init": true
+            }
+          }
+        ],
+        "body": {
+          "ports": [
+            {
+              "name": "other_up_in",
+              "dir": "in"
+            },
+            {
+              "name": "reservoir_full_in",
+              "dir": "in"
+            },
+            {
+              "name": "reservoir_in",
+              "dir": "in"
+            }
+          ],
+          "automata": [
+            {
+              "name": "health",
+              "states": [
+                "up",
+                "down"
+              ],
+              "init": "up",
+              "transitions": [
+                {
+                  "name": "fail",
+                  "source": "up",
+                  "targets": [
+                    "down"
+                  ],
+                  "distrib": "exp",
+                  "rate_expr": {
+                    "op": "if",
+                    "cond": {
+                      "$choose": "at_max_while_filling",
+                      "cases": {
+                        "true": {
+                          "op": "bool",
+                          "bool_op": "or",
+                          "args": [
+                            {
+                              "op": "bool",
+                              "bool_op": "not",
+                              "args": [
+                                {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "other_up_in"
+                                  },
+                                  "agg": "any"
+                                }
+                              ]
+                            },
+                            {
+                              "op": "bool",
+                              "bool_op": "not",
+                              "args": [
+                                {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "reservoir_full_in"
+                                  },
+                                  "agg": "any"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        "false": {
+                          "op": "bool",
+                          "bool_op": "not",
+                          "args": [
+                            {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "other_up_in"
+                              },
+                              "agg": "any"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": {
+                          "$param": "failure_rate_at_max"
+                        }
+                      }
+                    },
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": {
+                          "$param": "failure_rate"
+                        }
+                      }
+                    }
+                  },
+                  "kind": "failure",
+                  "monitored": true
+                },
+                {
+                  "name": "repair",
+                  "source": "down",
+                  "targets": [
+                    "up"
+                  ],
+                  "distrib": "lognormal",
+                  "mu": {
+                    "$param": "repair_mu"
+                  },
+                  "sigma": {
+                    "$param": "repair_sigma"
+                  },
+                  "kind": "repair",
+                  "monitored": true,
+                  "effects": {
+                    "$choose": "refill",
+                    "cases": {
+                      "true": [
+                        {
+                          "target": {
+                            "component": "$port",
+                            "attribute": "reservoir_in"
+                          },
+                          "value": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "other_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "capacity"
+                                }
+                              }
+                            },
+                            "otherwise": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "reservoir_in"
+                              },
+                              "agg": "sum"
+                            }
+                          }
+                        }
+                      ],
+                      "false": []
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "BufferReservoir",
+        "description": "The reservoir covering the units' shortfall: its level follows the net flow, held at 0 while empty and at the capacity while full. It reads which unit is up on `unit1_up_in` and `unit2_up_in`, publishes its level on `level_out` and whether it is full on `full_out`, and computes the delivered share of the demand.",
+        "parameters": [
+          {
+            "name": "capacity",
+            "kind": "number",
+            "description": "Capacity, in m3.",
+            "default": 220000.0
+          },
+          {
+            "name": "net_unit1_alone",
+            "kind": "number",
+            "description": "Net flow with U1 up alone, in m3/h.",
+            "default": -4300.0
+          },
+          {
+            "name": "net_unit2_alone",
+            "kind": "number",
+            "description": "Net flow with U2 up alone, in m3/h.",
+            "default": -2000.0
+          },
+          {
+            "name": "net_none",
+            "kind": "number",
+            "description": "Net flow with both units down, in m3/h.",
+            "default": -7500.0
+          },
+          {
+            "name": "net_filling",
+            "kind": "number",
+            "description": "Net flow with both units up while it refills (case 4), in m3/h.",
+            "default": 1200.0
+          },
+          {
+            "name": "share_unit1",
+            "kind": "number",
+            "description": "Delivered share of the demand with U1 alone and the reservoir empty.",
+            "default": 0.4266666666666667
+          },
+          {
+            "name": "share_unit2",
+            "kind": "number",
+            "description": "Delivered share of the demand with U2 alone and the reservoir empty.",
+            "default": 0.7333333333333333
+          },
+          {
+            "name": "filling",
+            "kind": "bool",
+            "description": "Whether both units up refill it at their maximum instead of keeping it as it is (case 4)."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "full",
+              "automaton": "store",
+              "states": [
+                "full"
+              ],
+              "init": true
+            }
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "level",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "capacity"
+                }
+              }
+            },
+            {
+              "name": "delivered",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 1.0
+              }
+            },
+            {
+              "name": "total_loss",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": false
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "unit1_up_in",
+              "dir": "in"
+            },
+            {
+              "name": "unit2_up_in",
+              "dir": "in"
+            },
+            {
+              "name": "level_out",
+              "dir": "out",
+              "attr": "level"
+            }
+          ],
+          "automata": [
+            {
+              "name": "store",
+              "states": [
+                "full",
+                "partial",
+                "empty"
+              ],
+              "init": "full",
+              "transitions": [
+                {
+                  "name": "start_draining",
+                  "source": "full",
+                  "targets": [
+                    "partial"
+                  ],
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "lt",
+                    "lhs": {
+                      "$choose": "filling",
+                      "cases": {
+                        "true": {
+                          "op": "if",
+                          "cond": {
+                            "op": "bool",
+                            "bool_op": "and",
+                            "args": [
+                              {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit1_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit2_up_in"
+                                },
+                                "agg": "any"
+                              }
+                            ]
+                          },
+                          "then": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": {
+                                "$param": "net_filling"
+                              }
+                            }
+                          },
+                          "otherwise": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit1_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit2_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              },
+                              "otherwise": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_unit1_alone"
+                                  }
+                                }
+                              }
+                            },
+                            "otherwise": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit2_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_unit2_alone"
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_none"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "false": {
+                          "op": "if",
+                          "cond": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "unit1_up_in"
+                            },
+                            "agg": "any"
+                          },
+                          "then": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit2_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_unit1_alone"
+                                }
+                              }
+                            }
+                          },
+                          "otherwise": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit2_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_unit2_alone"
+                                }
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_none"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.0
+                      }
+                    }
+                  },
+                  "distrib": "inst",
+                  "probs": []
+                },
+                {
+                  "name": "run_dry",
+                  "source": "partial",
+                  "targets": [
+                    "empty"
+                  ],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "le",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "level"
+                          }
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      },
+                      {
+                        "op": "cmp",
+                        "cmp": "lt",
+                        "lhs": {
+                          "$choose": "filling",
+                          "cases": {
+                            "true": {
+                              "op": "if",
+                              "cond": {
+                                "op": "bool",
+                                "bool_op": "and",
+                                "args": [
+                                  {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit1_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  }
+                                ]
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_filling"
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit1_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "if",
+                                  "cond": {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  "then": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 0.0
+                                    }
+                                  },
+                                  "otherwise": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_unit1_alone"
+                                      }
+                                    }
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "if",
+                                  "cond": {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  "then": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_unit2_alone"
+                                      }
+                                    }
+                                  },
+                                  "otherwise": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_none"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "false": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit1_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_unit1_alone"
+                                    }
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_unit2_alone"
+                                    }
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_none"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "distrib": "watched"
+                },
+                {
+                  "name": "fill_up",
+                  "source": "partial",
+                  "targets": [
+                    "full"
+                  ],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "level"
+                          }
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "capacity"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "$choose": "filling",
+                          "cases": {
+                            "true": {
+                              "op": "if",
+                              "cond": {
+                                "op": "bool",
+                                "bool_op": "and",
+                                "args": [
+                                  {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit1_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  }
+                                ]
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_filling"
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit1_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "if",
+                                  "cond": {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  "then": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 0.0
+                                    }
+                                  },
+                                  "otherwise": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_unit1_alone"
+                                      }
+                                    }
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "if",
+                                  "cond": {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  "then": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_unit2_alone"
+                                      }
+                                    }
+                                  },
+                                  "otherwise": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_none"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "false": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit1_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_unit1_alone"
+                                    }
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_unit2_alone"
+                                    }
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_none"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "distrib": "watched"
+                },
+                {
+                  "name": "restart",
+                  "source": "empty",
+                  "targets": [
+                    "partial"
+                  ],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "or",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "$choose": "filling",
+                          "cases": {
+                            "true": {
+                              "op": "if",
+                              "cond": {
+                                "op": "bool",
+                                "bool_op": "and",
+                                "args": [
+                                  {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit1_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  }
+                                ]
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_filling"
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit1_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "if",
+                                  "cond": {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  "then": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 0.0
+                                    }
+                                  },
+                                  "otherwise": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_unit1_alone"
+                                      }
+                                    }
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "if",
+                                  "cond": {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "unit2_up_in"
+                                    },
+                                    "agg": "any"
+                                  },
+                                  "then": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_unit2_alone"
+                                      }
+                                    }
+                                  },
+                                  "otherwise": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "net_none"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "false": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit1_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_unit1_alone"
+                                    }
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_unit2_alone"
+                                    }
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_none"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      },
+                      {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "level"
+                          }
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "distrib": "inst",
+                  "probs": []
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "level",
+              "kind": "ode",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "store",
+                    "state": "empty"
+                  }
+                },
+                "then": {
+                  "op": "max",
+                  "args": [
+                    {
+                      "$choose": "filling",
+                      "cases": {
+                        "true": {
+                          "op": "if",
+                          "cond": {
+                            "op": "bool",
+                            "bool_op": "and",
+                            "args": [
+                              {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit1_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit2_up_in"
+                                },
+                                "agg": "any"
+                              }
+                            ]
+                          },
+                          "then": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": {
+                                "$param": "net_filling"
+                              }
+                            }
+                          },
+                          "otherwise": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit1_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit2_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              },
+                              "otherwise": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_unit1_alone"
+                                  }
+                                }
+                              }
+                            },
+                            "otherwise": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit2_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_unit2_alone"
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_none"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "false": {
+                          "op": "if",
+                          "cond": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "unit1_up_in"
+                            },
+                            "agg": "any"
+                          },
+                          "then": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit2_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_unit1_alone"
+                                }
+                              }
+                            }
+                          },
+                          "otherwise": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit2_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_unit2_alone"
+                                }
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_none"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.0
+                      }
+                    }
+                  ]
+                },
+                "otherwise": {
+                  "op": "if",
+                  "cond": {
+                    "op": "state_active",
+                    "state": {
+                      "component": "$self",
+                      "automaton": "store",
+                      "state": "full"
+                    }
+                  },
+                  "then": {
+                    "op": "min",
+                    "args": [
+                      {
+                        "$choose": "filling",
+                        "cases": {
+                          "true": {
+                            "op": "if",
+                            "cond": {
+                              "op": "bool",
+                              "bool_op": "and",
+                              "args": [
+                                {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit1_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                }
+                              ]
+                            },
+                            "then": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_filling"
+                                }
+                              }
+                            },
+                            "otherwise": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit1_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_unit1_alone"
+                                    }
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "unit2_up_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_unit2_alone"
+                                    }
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "net_none"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "false": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit1_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit2_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              },
+                              "otherwise": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_unit1_alone"
+                                  }
+                                }
+                              }
+                            },
+                            "otherwise": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "unit2_up_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_unit2_alone"
+                                  }
+                                }
+                              },
+                              "otherwise": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "net_none"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      }
+                    ]
+                  },
+                  "otherwise": {
+                    "$choose": "filling",
+                    "cases": {
+                      "true": {
+                        "op": "if",
+                        "cond": {
+                          "op": "bool",
+                          "bool_op": "and",
+                          "args": [
+                            {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit1_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit2_up_in"
+                              },
+                              "agg": "any"
+                            }
+                          ]
+                        },
+                        "then": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "net_filling"
+                            }
+                          }
+                        },
+                        "otherwise": {
+                          "op": "if",
+                          "cond": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "unit1_up_in"
+                            },
+                            "agg": "any"
+                          },
+                          "then": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit2_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_unit1_alone"
+                                }
+                              }
+                            }
+                          },
+                          "otherwise": {
+                            "op": "if",
+                            "cond": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "unit2_up_in"
+                              },
+                              "agg": "any"
+                            },
+                            "then": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_unit2_alone"
+                                }
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "net_none"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "false": {
+                        "op": "if",
+                        "cond": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "unit1_up_in"
+                          },
+                          "agg": "any"
+                        },
+                        "then": {
+                          "op": "if",
+                          "cond": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "unit2_up_in"
+                            },
+                            "agg": "any"
+                          },
+                          "then": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
+                            }
+                          },
+                          "otherwise": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": {
+                                "$param": "net_unit1_alone"
+                              }
+                            }
+                          }
+                        },
+                        "otherwise": {
+                          "op": "if",
+                          "cond": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "unit2_up_in"
+                            },
+                            "agg": "any"
+                          },
+                          "then": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": {
+                                "$param": "net_unit2_alone"
+                              }
+                            }
+                          },
+                          "otherwise": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": {
+                                "$param": "net_none"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "sensitive_functions": [
+            {
+              "name": "production",
+              "effects": [
+                {
+                  "target": {
+                    "component": "$self",
+                    "attribute": "delivered"
+                  },
+                  "value": {
+                    "op": "if",
+                    "cond": {
+                      "op": "bool",
+                      "bool_op": "not",
+                      "args": [
+                        {
+                          "op": "state_active",
+                          "state": {
+                            "component": "$self",
+                            "automaton": "store",
+                            "state": "empty"
+                          }
+                        }
+                      ]
+                    },
+                    "then": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
+                      }
+                    },
+                    "otherwise": {
+                      "op": "if",
+                      "cond": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "unit1_up_in"
+                        },
+                        "agg": "any"
+                      },
+                      "then": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "share_unit1"
+                          }
+                        }
+                      },
+                      "otherwise": {
+                        "op": "if",
+                        "cond": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "unit2_up_in"
+                          },
+                          "agg": "any"
+                        },
+                        "then": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "share_unit2"
+                            }
+                          }
+                        },
+                        "otherwise": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "target": {
+                    "component": "$self",
+                    "attribute": "total_loss"
+                  },
+                  "value": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "state_active",
+                        "state": {
+                          "component": "$self",
+                          "automaton": "store",
+                          "state": "empty"
+                        }
+                      },
+                      {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "unit1_up_in"
+                            },
+                            "agg": "any"
+                          }
+                        ]
+                      },
+                      {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "unit2_up_in"
+                            },
+                            "agg": "any"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -18,7 +18,8 @@
 //!   targetable lists and mode catalogues are read after template
 //!   substitution, so every value there also accepts `{"$param": name}`
 //!   and a `{"$choose": enum, "cases": {...}}` object, and every array
-//!   also accepts `{"$for_each": list, "as": var, "items": [...]}` items.
+//!   also accepts `{"$for_each": list, "as": var, "items": [...]}` and
+//!   `{"$when": param, "is": values, "items": [...]}` items.
 //!   Tag values (`"distrib": "exp"`, `"op": "cmp"`) stay literal: a
 //!   variant is selected with `$choose`, never with `$param`.
 //!
@@ -353,13 +354,20 @@ impl Templater {
         }
         if let Some(items) = map.remove("items") {
             let item_slot = self.slot(items.clone(), owner);
-            let name = for_each_name(&items, owner);
+            let suffix = repeat_suffix(&items, owner);
+            let name = format!("ForEach_{suffix}");
+            let when_name = format!("When_{suffix}");
             let item_or_repeat = json!({
-                "anyOf": [item_slot, {"$ref": format!("{DEFS}{name}")}]
+                "anyOf": [
+                    item_slot,
+                    {"$ref": format!("{DEFS}{name}")},
+                    {"$ref": format!("{DEFS}{when_name}")}
+                ]
             });
             if !self.added.contains_key(&name) {
                 self.added
                     .insert(name.clone(), for_each(item_or_repeat.clone()));
+                self.added.insert(when_name, when(item_or_repeat.clone()));
             }
             map.insert("items".to_owned(), item_or_repeat);
         }
@@ -473,10 +481,25 @@ fn for_each(item: Value) -> Value {
     })
 }
 
-/// Name of the `$for_each` definition repeating `items`: after the
+fn when(item: Value) -> Value {
+    let scalar = json!({"type": ["string", "boolean", "number"]});
+    json!({
+        "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+        "type": "object",
+        "properties": {
+            "$when": {"type": "string"},
+            "is": {"anyOf": [scalar.clone(), {"type": "array", "items": scalar}]},
+            "items": {"type": "array", "items": item}
+        },
+        "required": ["$when", "items"],
+        "additionalProperties": false
+    })
+}
+
+/// Suffix of the `$for_each` and `$when` definitions over `items`: the
 /// referenced definition, the scalar type, or the owning slot.
-fn for_each_name(items: &Value, owner: &str) -> String {
-    let suffix = match items {
+fn repeat_suffix(items: &Value, owner: &str) -> String {
+    match items {
         Value::Object(map) => match (map.get("$ref"), map.get("type"), map.len()) {
             (Some(Value::String(reference)), _, _) => {
                 reference.strip_prefix(DEFS).unwrap_or(reference).to_owned()
@@ -487,8 +510,7 @@ fn for_each_name(items: &Value, owner: &str) -> String {
             _ => owner.to_owned(),
         },
         _ => owner.to_owned(),
-    };
-    format!("ForEach_{suffix}")
+    }
 }
 
 fn without_annotations(value: &Value) -> Value {

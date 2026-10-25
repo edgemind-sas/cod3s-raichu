@@ -1,0 +1,1168 @@
+{
+  "raichu_library": {
+    "format": 1
+  },
+  "library": {
+    "name": "heated_tank",
+    "version": "1.0.0",
+    "description": "The heated tank benchmark as a component type library: two pumps and a valve built on one controlled-unit fragment, and the tank.",
+    "fragments": [
+      {
+        "name": "controlled_unit",
+        "description": "A unit the level control starts and stops, and that can get stuck on or off at a rate depending on the water temperature. It reads the level and the temperature through `level_in` and `temperature_in`, and publishes whether it lets water through on `flow_out`.",
+        "parameters": [
+          {
+            "name": "role",
+            "kind": "enum",
+            "values": [
+              "inlet",
+              "outlet"
+            ],
+            "description": "An inlet (a pump) starts below `low` and stops above `high`; an outlet (the valve) the reverse."
+          },
+          {
+            "name": "running",
+            "kind": "bool",
+            "description": "Whether the unit is on at the start."
+          },
+          {
+            "name": "rate_factor",
+            "kind": "number",
+            "description": "λ̂ / 2 / (b1 + b2), in 1/h: the base failure rate, halved (a failure is stuck-on or stuck-off with equal chance) and normalised."
+          },
+          {
+            "name": "low",
+            "kind": "number",
+            "default": 6.0,
+            "description": "Low level set-point, in m."
+          },
+          {
+            "name": "high",
+            "kind": "number",
+            "default": 8.0,
+            "description": "High level set-point, in m."
+          },
+          {
+            "name": "b1",
+            "kind": "number",
+            "default": 3.0295
+          },
+          {
+            "name": "b2",
+            "kind": "number",
+            "default": 0.7578
+          },
+          {
+            "name": "c1",
+            "kind": "number",
+            "default": 0.05756,
+            "description": "Exponent coefficient of the first term, in 1/°C."
+          },
+          {
+            "name": "c2",
+            "kind": "number",
+            "default": -0.2301,
+            "description": "Exponent coefficient of the second term, in 1/°C."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "flowing",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": {
+                  "$param": "running"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "flow_out",
+              "dir": "out",
+              "attr": "flowing"
+            },
+            {
+              "name": "level_in",
+              "dir": "in"
+            },
+            {
+              "name": "temperature_in",
+              "dir": "in"
+            }
+          ],
+          "automata": [
+            {
+              "name": "mode",
+              "states": [
+                "on",
+                "off",
+                "stuck_on",
+                "stuck_off"
+              ],
+              "init": {
+                "$choose": "running",
+                "cases": {
+                  "true": "on",
+                  "false": "off"
+                }
+              },
+              "transitions": [
+                {
+                  "name": "start",
+                  "source": "off",
+                  "targets": [
+                    "on"
+                  ],
+                  "guard": {
+                    "$choose": "role",
+                    "cases": {
+                      "inlet": {
+                        "op": "cmp",
+                        "cmp": "le",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "level_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "low"
+                            }
+                          }
+                        }
+                      },
+                      "outlet": {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "level_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "high"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "distrib": "watched"
+                },
+                {
+                  "name": "stop",
+                  "source": "on",
+                  "targets": [
+                    "off"
+                  ],
+                  "guard": {
+                    "$choose": "role",
+                    "cases": {
+                      "inlet": {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "level_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "high"
+                            }
+                          }
+                        }
+                      },
+                      "outlet": {
+                        "op": "cmp",
+                        "cmp": "le",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "level_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "low"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "distrib": "watched"
+                },
+                {
+                  "name": "stuck_on_from_on",
+                  "source": "on",
+                  "targets": [
+                    "stuck_on"
+                  ],
+                  "distrib": "exp",
+                  "rate_expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "rate_factor"
+                          }
+                        }
+                      },
+                      {
+                        "op": "add",
+                        "args": [
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "b1"
+                                  }
+                                }
+                              },
+                              {
+                                "op": "exp",
+                                "arg": {
+                                  "op": "mul",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "c1"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "sub",
+                                      "lhs": {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "temperature_in"
+                                        },
+                                        "agg": "sum"
+                                      },
+                                      "rhs": {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 20.0
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "b2"
+                                  }
+                                }
+                              },
+                              {
+                                "op": "exp",
+                                "arg": {
+                                  "op": "mul",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "c2"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "sub",
+                                      "lhs": {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "temperature_in"
+                                        },
+                                        "agg": "sum"
+                                      },
+                                      "rhs": {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 20.0
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "stuck_off_from_on",
+                  "source": "on",
+                  "targets": [
+                    "stuck_off"
+                  ],
+                  "distrib": "exp",
+                  "rate_expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "rate_factor"
+                          }
+                        }
+                      },
+                      {
+                        "op": "add",
+                        "args": [
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "b1"
+                                  }
+                                }
+                              },
+                              {
+                                "op": "exp",
+                                "arg": {
+                                  "op": "mul",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "c1"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "sub",
+                                      "lhs": {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "temperature_in"
+                                        },
+                                        "agg": "sum"
+                                      },
+                                      "rhs": {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 20.0
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "b2"
+                                  }
+                                }
+                              },
+                              {
+                                "op": "exp",
+                                "arg": {
+                                  "op": "mul",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "c2"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "sub",
+                                      "lhs": {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "temperature_in"
+                                        },
+                                        "agg": "sum"
+                                      },
+                                      "rhs": {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 20.0
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "stuck_on_from_off",
+                  "source": "off",
+                  "targets": [
+                    "stuck_on"
+                  ],
+                  "distrib": "exp",
+                  "rate_expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "rate_factor"
+                          }
+                        }
+                      },
+                      {
+                        "op": "add",
+                        "args": [
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "b1"
+                                  }
+                                }
+                              },
+                              {
+                                "op": "exp",
+                                "arg": {
+                                  "op": "mul",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "c1"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "sub",
+                                      "lhs": {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "temperature_in"
+                                        },
+                                        "agg": "sum"
+                                      },
+                                      "rhs": {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 20.0
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "b2"
+                                  }
+                                }
+                              },
+                              {
+                                "op": "exp",
+                                "arg": {
+                                  "op": "mul",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "c2"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "sub",
+                                      "lhs": {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "temperature_in"
+                                        },
+                                        "agg": "sum"
+                                      },
+                                      "rhs": {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 20.0
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "stuck_off_from_off",
+                  "source": "off",
+                  "targets": [
+                    "stuck_off"
+                  ],
+                  "distrib": "exp",
+                  "rate_expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "rate_factor"
+                          }
+                        }
+                      },
+                      {
+                        "op": "add",
+                        "args": [
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "b1"
+                                  }
+                                }
+                              },
+                              {
+                                "op": "exp",
+                                "arg": {
+                                  "op": "mul",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "c1"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "sub",
+                                      "lhs": {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "temperature_in"
+                                        },
+                                        "agg": "sum"
+                                      },
+                                      "rhs": {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 20.0
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": {
+                                    "$param": "b2"
+                                  }
+                                }
+                              },
+                              {
+                                "op": "exp",
+                                "arg": {
+                                  "op": "mul",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "c2"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "sub",
+                                      "lhs": {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "temperature_in"
+                                        },
+                                        "agg": "sum"
+                                      },
+                                      "rhs": {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 20.0
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "monitored": true
+                }
+              ]
+            }
+          ],
+          "sensitive_functions": [
+            {
+              "name": "update_flowing",
+              "effects": [
+                {
+                  "target": {
+                    "component": "$self",
+                    "attribute": "flowing"
+                  },
+                  "value": {
+                    "op": "bool",
+                    "bool_op": "or",
+                    "args": [
+                      {
+                        "op": "state_active",
+                        "state": {
+                          "component": "$self",
+                          "automaton": "mode",
+                          "state": "on"
+                        }
+                      },
+                      {
+                        "op": "state_active",
+                        "state": {
+                          "component": "$self",
+                          "automaton": "mode",
+                          "state": "stuck_on"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "types": [
+      {
+        "name": "Pump",
+        "description": "A pump feeding the tank: on below the low set-point, off above the high one.",
+        "parameters": [
+          {
+            "name": "running",
+            "kind": "bool",
+            "description": "Whether the unit is on at the start."
+          },
+          {
+            "name": "rate_factor",
+            "kind": "number",
+            "description": "λ̂ / 2 / (b1 + b2), in 1/h."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "controlled_unit",
+            "with": {
+              "role": "inlet",
+              "running": {
+                "$param": "running"
+              },
+              "rate_factor": {
+                "$param": "rate_factor"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "Valve",
+        "description": "The outlet valve: open above the high set-point, closed below the low one.",
+        "parameters": [
+          {
+            "name": "running",
+            "kind": "bool",
+            "description": "Whether the unit is on at the start."
+          },
+          {
+            "name": "rate_factor",
+            "kind": "number",
+            "description": "λ̂ / 2 / (b1 + b2), in 1/h."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "controlled_unit",
+            "with": {
+              "role": "outlet",
+              "running": {
+                "$param": "running"
+              },
+              "rate_factor": {
+                "$param": "rate_factor"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "Tank",
+        "description": "The tank: its level and temperature, the three top events, and the physics, frozen once a top event occurs. It publishes its level and temperature on `level_out` and `temperature_out`.",
+        "parameters": [
+          {
+            "name": "level_init",
+            "kind": "number",
+            "default": 7.0,
+            "description": "Initial level, in m."
+          },
+          {
+            "name": "temperature_init",
+            "kind": "number",
+            "default": 30.9261,
+            "description": "Initial temperature, in °C."
+          },
+          {
+            "name": "rate",
+            "kind": "number",
+            "default": 1.5,
+            "description": "Level rate moved by one active unit, in m/h."
+          },
+          {
+            "name": "inlet_temperature",
+            "kind": "number",
+            "default": 15.0,
+            "description": "Inlet water temperature, in °C."
+          },
+          {
+            "name": "heat",
+            "kind": "number",
+            "default": 23.88915,
+            "description": "Heating term, in °C·m/h."
+          },
+          {
+            "name": "dry_below",
+            "kind": "number",
+            "default": 4.0
+          },
+          {
+            "name": "overflow_above",
+            "kind": "number",
+            "default": 10.0
+          },
+          {
+            "name": "overheat_above",
+            "kind": "number",
+            "default": 100.0
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "level",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "level_init"
+                }
+              }
+            },
+            {
+              "name": "temperature",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "temperature_init"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "pumps_in",
+              "dir": "in"
+            },
+            {
+              "name": "valve_in",
+              "dir": "in"
+            },
+            {
+              "name": "level_out",
+              "dir": "out",
+              "attr": "level"
+            },
+            {
+              "name": "temperature_out",
+              "dir": "out",
+              "attr": "temperature"
+            }
+          ],
+          "automata": [
+            {
+              "name": "status",
+              "states": [
+                "ok",
+                "dryout",
+                "overflow",
+                "overheat"
+              ],
+              "init": "ok",
+              "transitions": [
+                {
+                  "name": "dryout",
+                  "source": "ok",
+                  "targets": [
+                    "dryout"
+                  ],
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "le",
+                    "lhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "level"
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": {
+                          "$param": "dry_below"
+                        }
+                      }
+                    }
+                  },
+                  "distrib": "watched"
+                },
+                {
+                  "name": "overflow",
+                  "source": "ok",
+                  "targets": [
+                    "overflow"
+                  ],
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "ge",
+                    "lhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "level"
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": {
+                          "$param": "overflow_above"
+                        }
+                      }
+                    }
+                  },
+                  "distrib": "watched"
+                },
+                {
+                  "name": "overheat",
+                  "source": "ok",
+                  "targets": [
+                    "overheat"
+                  ],
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "ge",
+                    "lhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "temperature"
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": {
+                          "$param": "overheat_above"
+                        }
+                      }
+                    }
+                  },
+                  "distrib": "watched"
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "level",
+              "kind": "ode",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "status",
+                    "state": "ok"
+                  }
+                },
+                "then": {
+                  "op": "mul",
+                  "args": [
+                    {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": {
+                          "$param": "rate"
+                        }
+                      }
+                    },
+                    {
+                      "op": "sub",
+                      "lhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "pumps_in"
+                        },
+                        "agg": "sum"
+                      },
+                      "rhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "valve_in"
+                        },
+                        "agg": "sum"
+                      }
+                    }
+                  ]
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            },
+            {
+              "target": "temperature",
+              "kind": "ode",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "status",
+                    "state": "ok"
+                  }
+                },
+                "then": {
+                  "op": "div",
+                  "lhs": {
+                    "op": "add",
+                    "args": [
+                      {
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "pumps_in"
+                            },
+                            "agg": "sum"
+                          },
+                          {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": {
+                                "$param": "rate"
+                              }
+                            }
+                          },
+                          {
+                            "op": "sub",
+                            "lhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "inlet_temperature"
+                                }
+                              }
+                            },
+                            "rhs": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "temperature"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": {
+                            "$param": "heat"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "rhs": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "level"
+                    }
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

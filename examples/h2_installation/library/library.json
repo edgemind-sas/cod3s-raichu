@@ -1,0 +1,1250 @@
+{
+  "raichu_library": {
+    "format": 1
+  },
+  "library": {
+    "name": "h2_installation",
+    "version": "1.0.0",
+    "description": "The solar hydrogen installation example as a component type library: PV panels, a battery, an electrolyser, a storage, compressors and a user, with one shared fragment for random failures and repairs.",
+    "fragments": [
+      {
+        "name": "health",
+        "description": "Random failures and repairs, the same for every component that can fail: `monitored` so that sequence analysis records them, and paired in a cycle group.",
+        "parameters": [
+          {
+            "name": "failure_rate",
+            "kind": "number",
+            "description": "1 / MTTF, in 1/h."
+          },
+          {
+            "name": "repair_rate",
+            "kind": "number",
+            "description": "1 / MTTR, in 1/h."
+          }
+        ],
+        "body": {
+          "automata": [
+            {
+              "name": "health",
+              "states": [
+                "ok",
+                "failed"
+              ],
+              "init": "ok",
+              "transitions": [
+                {
+                  "name": "fail",
+                  "source": "ok",
+                  "targets": [
+                    "failed"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "failure_rate"
+                  },
+                  "kind": "failure",
+                  "monitored": true,
+                  "cycle_group": "$self"
+                },
+                {
+                  "name": "repair",
+                  "source": "failed",
+                  "targets": [
+                    "ok"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "repair_rate"
+                  },
+                  "kind": "repair",
+                  "monitored": true,
+                  "cycle_group": "$self"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "types": [
+      {
+        "name": "PvArray",
+        "description": "PV panels and their inverter: electricity following the sun, zero while the inverter is down.",
+        "parameters": [
+          {
+            "name": "failure_rate",
+            "kind": "number",
+            "description": "1 / MTTF, in 1/h."
+          },
+          {
+            "name": "repair_rate",
+            "kind": "number",
+            "description": "1 / MTTR, in 1/h."
+          },
+          {
+            "name": "peak",
+            "kind": "number",
+            "default": 150.0,
+            "description": "Peak power, in kW."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "health",
+            "with": {
+              "failure_rate": {
+                "$param": "failure_rate"
+              },
+              "repair_rate": {
+                "$param": "repair_rate"
+              }
+            }
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "power",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "power_out",
+              "dir": "out",
+              "attr": "power"
+            }
+          ],
+          "equations": [
+            {
+              "target": "power",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "health",
+                    "state": "ok"
+                  }
+                },
+                "then": {
+                  "op": "mul",
+                  "args": [
+                    {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": {
+                          "$param": "peak"
+                        }
+                      }
+                    },
+                    {
+                      "op": "max",
+                      "args": [
+                        {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        },
+                        {
+                          "op": "sin",
+                          "arg": {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.2617993877991494
+                                }
+                              },
+                              {
+                                "op": "sub",
+                                "lhs": {
+                                  "op": "time"
+                                },
+                                "rhs": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 6.0
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Battery",
+        "description": "Stores the daytime PV surplus and powers the electrolyser at night. Being full is a state, so the solver locates it.",
+        "parameters": [
+          {
+            "name": "failure_rate",
+            "kind": "number",
+            "description": "1 / MTTF, in 1/h."
+          },
+          {
+            "name": "repair_rate",
+            "kind": "number",
+            "description": "1 / MTTR, in 1/h."
+          },
+          {
+            "name": "capacity",
+            "kind": "number",
+            "default": 300.0,
+            "description": "Capacity, in kWh."
+          },
+          {
+            "name": "charge_init",
+            "kind": "number",
+            "default": 150.0,
+            "description": "Charge at the start, in kWh."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "health",
+            "with": {
+              "failure_rate": {
+                "$param": "failure_rate"
+              },
+              "repair_rate": {
+                "$param": "repair_rate"
+              }
+            }
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "soc",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "charge_init"
+                }
+              }
+            },
+            {
+              "name": "reserve",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "charge_init"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "pv_in",
+              "dir": "in"
+            },
+            {
+              "name": "load_in",
+              "dir": "in"
+            },
+            {
+              "name": "reserve_out",
+              "dir": "out",
+              "attr": "reserve"
+            }
+          ],
+          "automata": [
+            {
+              "name": "charge",
+              "states": [
+                "charging",
+                "full"
+              ],
+              "init": "charging",
+              "transitions": [
+                {
+                  "name": "full",
+                  "source": "charging",
+                  "targets": [
+                    "full"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "soc"
+                          }
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "capacity"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "op": "sub",
+                          "lhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "pv_in"
+                            },
+                            "agg": "sum"
+                          },
+                          "rhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "load_in"
+                            },
+                            "agg": "sum"
+                          }
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "discharge",
+                  "source": "full",
+                  "targets": [
+                    "charging"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "lt",
+                    "lhs": {
+                      "op": "sub",
+                      "lhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "pv_in"
+                        },
+                        "agg": "sum"
+                      },
+                      "rhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "load_in"
+                        },
+                        "agg": "sum"
+                      }
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 0.0
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "soc",
+              "kind": "ode",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "health",
+                    "state": "ok"
+                  }
+                },
+                "then": {
+                  "op": "if",
+                  "cond": {
+                    "op": "state_active",
+                    "state": {
+                      "component": "$self",
+                      "automaton": "charge",
+                      "state": "charging"
+                    }
+                  },
+                  "then": {
+                    "op": "sub",
+                    "lhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "$self",
+                        "port": "pv_in"
+                      },
+                      "agg": "sum"
+                    },
+                    "rhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "$self",
+                        "port": "load_in"
+                      },
+                      "agg": "sum"
+                    }
+                  },
+                  "otherwise": {
+                    "op": "min",
+                    "args": [
+                      {
+                        "op": "sub",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "pv_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "load_in"
+                          },
+                          "agg": "sum"
+                        }
+                      },
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      }
+                    ]
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            },
+            {
+              "target": "reserve",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "health",
+                    "state": "ok"
+                  }
+                },
+                "then": {
+                  "op": "attr",
+                  "attr": {
+                    "component": "$self",
+                    "attribute": "soc"
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Electrolyser",
+        "description": "Turns electricity into hydrogen while running. Its control starts it on the sun or on the battery reserve while the storage has room, and stops it when the storage is full or both sources run low.",
+        "parameters": [
+          {
+            "name": "failure_rate",
+            "kind": "number",
+            "description": "1 / MTTF, in 1/h."
+          },
+          {
+            "name": "repair_rate",
+            "kind": "number",
+            "description": "1 / MTTR, in 1/h."
+          },
+          {
+            "name": "load",
+            "kind": "number",
+            "default": 50.0,
+            "description": "Electricity drawn while running, in kW."
+          },
+          {
+            "name": "production",
+            "kind": "number",
+            "default": 1.0,
+            "description": "Hydrogen made while running, in kg/h."
+          },
+          {
+            "name": "start_pv",
+            "kind": "number",
+            "default": 60.0
+          },
+          {
+            "name": "stop_pv",
+            "kind": "number",
+            "default": 50.0
+          },
+          {
+            "name": "start_reserve",
+            "kind": "number",
+            "default": 100.0
+          },
+          {
+            "name": "stop_reserve",
+            "kind": "number",
+            "default": 10.0
+          },
+          {
+            "name": "full_resume",
+            "kind": "number",
+            "default": 140.0,
+            "description": "Storage level below which it may restart, in kg."
+          },
+          {
+            "name": "store_capacity",
+            "kind": "number",
+            "default": 150.0,
+            "description": "Storage level at which it stops, in kg."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "health",
+            "with": {
+              "failure_rate": {
+                "$param": "failure_rate"
+              },
+              "repair_rate": {
+                "$param": "repair_rate"
+              }
+            }
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "load",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            },
+            {
+              "name": "h2",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "pv_in",
+              "dir": "in"
+            },
+            {
+              "name": "reserve_in",
+              "dir": "in"
+            },
+            {
+              "name": "level_in",
+              "dir": "in"
+            },
+            {
+              "name": "load_out",
+              "dir": "out",
+              "attr": "load"
+            },
+            {
+              "name": "h2_out",
+              "dir": "out",
+              "attr": "h2"
+            }
+          ],
+          "automata": [
+            {
+              "name": "mode",
+              "states": [
+                "stopped",
+                "running"
+              ],
+              "init": "stopped",
+              "transitions": [
+                {
+                  "name": "start",
+                  "source": "stopped",
+                  "targets": [
+                    "running"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "lt",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "level_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "full_resume"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "bool",
+                        "bool_op": "or",
+                        "args": [
+                          {
+                            "op": "cmp",
+                            "cmp": "ge",
+                            "lhs": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "pv_in"
+                              },
+                              "agg": "sum"
+                            },
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "start_pv"
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "op": "cmp",
+                            "cmp": "ge",
+                            "lhs": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "reserve_in"
+                              },
+                              "agg": "sum"
+                            },
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "start_reserve"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "stop",
+                  "source": "running",
+                  "targets": [
+                    "stopped"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "or",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "level_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "store_capacity"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "bool",
+                        "bool_op": "and",
+                        "args": [
+                          {
+                            "op": "cmp",
+                            "cmp": "lt",
+                            "lhs": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "pv_in"
+                              },
+                              "agg": "sum"
+                            },
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "stop_pv"
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "op": "cmp",
+                            "cmp": "le",
+                            "lhs": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "reserve_in"
+                              },
+                              "agg": "sum"
+                            },
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "stop_reserve"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "load",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "bool",
+                  "bool_op": "and",
+                  "args": [
+                    {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "mode",
+                        "state": "running"
+                      }
+                    },
+                    {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "health",
+                        "state": "ok"
+                      }
+                    }
+                  ]
+                },
+                "then": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": {
+                      "$param": "load"
+                    }
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            },
+            {
+              "target": "h2",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "bool",
+                  "bool_op": "and",
+                  "args": [
+                    {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "mode",
+                        "state": "running"
+                      }
+                    },
+                    {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "health",
+                        "state": "ok"
+                      }
+                    }
+                  ]
+                },
+                "then": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": {
+                      "$param": "production"
+                    }
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Storage",
+        "description": "Buffers hydrogen between production and use. It never fails.",
+        "parameters": [
+          {
+            "name": "level_init",
+            "kind": "number",
+            "default": 120.0,
+            "description": "Level at the start, in kg."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "level",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "level_init"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "h2_in",
+              "dir": "in"
+            },
+            {
+              "name": "draw_in",
+              "dir": "in"
+            },
+            {
+              "name": "level_out",
+              "dir": "out",
+              "attr": "level"
+            }
+          ],
+          "equations": [
+            {
+              "target": "level",
+              "kind": "ode",
+              "expr": {
+                "op": "sub",
+                "lhs": {
+                  "op": "port_agg",
+                  "port": {
+                    "component": "$self",
+                    "port": "h2_in"
+                  },
+                  "agg": "sum"
+                },
+                "rhs": {
+                  "op": "port_agg",
+                  "port": {
+                    "component": "$self",
+                    "port": "draw_in"
+                  },
+                  "agg": "sum"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Compressor",
+        "description": "Delivers hydrogen to the user, and publishes whether it works.",
+        "parameters": [
+          {
+            "name": "failure_rate",
+            "kind": "number",
+            "description": "1 / MTTF, in 1/h."
+          },
+          {
+            "name": "repair_rate",
+            "kind": "number",
+            "description": "1 / MTTR, in 1/h."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "health",
+            "with": {
+              "failure_rate": {
+                "$param": "failure_rate"
+              },
+              "repair_rate": {
+                "$param": "repair_rate"
+              }
+            }
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "up",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 1.0
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "up_out",
+              "dir": "out",
+              "attr": "up"
+            }
+          ],
+          "equations": [
+            {
+              "target": "up",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "health",
+                    "state": "ok"
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 1.0
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "User",
+        "description": "Draws hydrogen at a constant rate while supplied; loses supply when the storage is nearly empty or no compressor works, and recovers once the storage is back and a compressor works.",
+        "parameters": [
+          {
+            "name": "demand",
+            "kind": "number",
+            "default": 0.5,
+            "description": "Hydrogen drawn, in kg/h."
+          },
+          {
+            "name": "trip",
+            "kind": "number",
+            "default": 1.0,
+            "description": "Storage level at which supply is lost, in kg."
+          },
+          {
+            "name": "restart",
+            "kind": "number",
+            "default": 10.0,
+            "description": "Storage level at which supply resumes, in kg."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "draw",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "demand"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "level_in",
+              "dir": "in"
+            },
+            {
+              "name": "comp_in",
+              "dir": "in"
+            },
+            {
+              "name": "draw_out",
+              "dir": "out",
+              "attr": "draw"
+            }
+          ],
+          "automata": [
+            {
+              "name": "supply",
+              "states": [
+                "supplied",
+                "unsupplied"
+              ],
+              "init": "supplied",
+              "transitions": [
+                {
+                  "name": "trip",
+                  "source": "supplied",
+                  "targets": [
+                    "unsupplied"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "or",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "le",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "level_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "trip"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "cmp",
+                        "cmp": "lt",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "comp_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.5
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "restart",
+                  "source": "unsupplied",
+                  "targets": [
+                    "supplied"
+                  ],
+                  "distrib": "watched",
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "level_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": {
+                              "$param": "restart"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "comp_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.5
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ],
+          "equations": [
+            {
+              "target": "draw",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "supply",
+                    "state": "supplied"
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": {
+                      "$param": "demand"
+                    }
+                  }
+                },
+                "otherwise": {
+                  "op": "const",
+                  "value": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

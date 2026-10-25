@@ -1,0 +1,1907 @@
+{
+  "raichu_library": {
+    "format": 1
+  },
+  "library": {
+    "name": "approdyn",
+    "version": "1.0.0",
+    "imports": [
+      "std"
+    ],
+    "description": "The APPRODYN feedwater test case (Aubry et al., 2012), discrete part, as a component type library.",
+    "types": [
+      {
+        "name": "PowerCycle",
+        "description": "The power profile of scenario 1: ramps, plateau, forced return to 60 % after the loss of a turbo-pump at power, ramp down. Its takeovers wait for a running turbo-pump and the valve that serves next. It publishes every set of phases a neighbour reads.",
+        "parameters": [
+          {
+            "name": "ramp_0_2",
+            "kind": "number",
+            "description": "Rise from 0 to 2 %, in h."
+          },
+          {
+            "name": "ramp_2_15",
+            "kind": "number",
+            "description": "Rise from 2 to 15 %, in h."
+          },
+          {
+            "name": "ramp_15_60",
+            "kind": "number",
+            "description": "Rise from 15 to 60 %, in h."
+          },
+          {
+            "name": "ramp_60_100",
+            "kind": "number",
+            "description": "Rise from 60 to 100 %, in h."
+          },
+          {
+            "name": "ramp_down",
+            "kind": "number",
+            "description": "Ramp down, in h."
+          },
+          {
+            "name": "forcing_pfd",
+            "kind": "number",
+            "description": "Failure of the forced return to 60 %, per demand."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "alive",
+              "automaton": "profile",
+              "states": [
+                "up0",
+                "start2",
+                "up1",
+                "switch15",
+                "up2",
+                "at60",
+                "up3",
+                "full",
+                "forced60",
+                "forcing_failed",
+                "down"
+              ],
+              "init": true
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "started",
+              "automaton": "profile",
+              "states": [
+                "start2",
+                "up1",
+                "switch15",
+                "up2",
+                "at60",
+                "up3",
+                "full",
+                "forced60",
+                "forcing_failed",
+                "down"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "at_power",
+              "automaton": "profile",
+              "states": [
+                "up1",
+                "switch15",
+                "up2",
+                "at60",
+                "up3",
+                "full",
+                "forced60",
+                "down"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "two_tpa",
+              "automaton": "profile",
+              "states": [
+                "at60",
+                "up3",
+                "full",
+                "forced60"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "one_tpa",
+              "automaton": "profile",
+              "states": [
+                "start2",
+                "up1",
+                "switch15",
+                "up2",
+                "down"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "forced60",
+              "automaton": "profile",
+              "states": [
+                "forced60"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "forcing_failed",
+              "automaton": "profile",
+              "states": [
+                "forcing_failed"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "pd_takes_over",
+              "automaton": "profile",
+              "states": [
+                "start2"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "pd_in_service",
+              "automaton": "profile",
+              "states": [
+                "up1",
+                "switch15"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "gd_takes_over",
+              "automaton": "profile",
+              "states": [
+                "switch15"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "gd_in_service",
+              "automaton": "profile",
+              "states": [
+                "up2",
+                "at60",
+                "up3",
+                "full",
+                "forced60",
+                "down"
+              ],
+              "init": false
+            }
+          }
+        ],
+        "body": {
+          "ports": [
+            {
+              "name": "tpa_running_in",
+              "dir": "in"
+            },
+            {
+              "name": "pd_open_in",
+              "dir": "in"
+            },
+            {
+              "name": "gd_open_in",
+              "dir": "in"
+            },
+            {
+              "name": "plateau_over_in",
+              "dir": "in"
+            }
+          ],
+          "automata": [
+            {
+              "name": "profile",
+              "states": [
+                "up0",
+                "start2",
+                "up1",
+                "switch15",
+                "up2",
+                "at60",
+                "up3",
+                "full",
+                "forced60",
+                "forcing_failed",
+                "down",
+                "end"
+              ],
+              "init": "up0",
+              "transitions": [
+                {
+                  "name": "reach_2pc",
+                  "source": "up0",
+                  "targets": [
+                    "start2"
+                  ],
+                  "distrib": "delay",
+                  "time": {
+                    "$param": "ramp_0_2"
+                  }
+                },
+                {
+                  "name": "take_over_2pc",
+                  "source": "start2",
+                  "targets": [
+                    "up1"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "ge",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "tpa_running_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 1.0
+                          }
+                        }
+                      },
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "pd_open_in"
+                        },
+                        "agg": "any"
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "reach_15pc",
+                  "source": "up1",
+                  "targets": [
+                    "switch15"
+                  ],
+                  "distrib": "delay",
+                  "time": {
+                    "$param": "ramp_2_15"
+                  }
+                },
+                {
+                  "name": "take_over_15pc",
+                  "source": "switch15",
+                  "targets": [
+                    "up2"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "gd_open_in"
+                    },
+                    "agg": "any"
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "reach_60pc",
+                  "source": "up2",
+                  "targets": [
+                    "at60"
+                  ],
+                  "distrib": "delay",
+                  "time": {
+                    "$param": "ramp_15_60"
+                  }
+                },
+                {
+                  "name": "second_tpa_running",
+                  "source": "at60",
+                  "targets": [
+                    "up3"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "eq",
+                    "lhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "$self",
+                        "port": "tpa_running_in"
+                      },
+                      "agg": "sum"
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 2.0
+                      }
+                    }
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "reach_100pc",
+                  "source": "up3",
+                  "targets": [
+                    "full"
+                  ],
+                  "distrib": "delay",
+                  "time": {
+                    "$param": "ramp_60_100"
+                  }
+                },
+                {
+                  "name": "force_60pc_full",
+                  "source": "full",
+                  "targets": [
+                    "forcing_failed",
+                    "forced60"
+                  ],
+                  "distrib": "inst",
+                  "probs": [
+                    {
+                      "$param": "forcing_pfd"
+                    }
+                  ],
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "eq",
+                    "lhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "$self",
+                        "port": "tpa_running_in"
+                      },
+                      "agg": "sum"
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
+                      }
+                    }
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "force_60pc_ramp",
+                  "source": "up3",
+                  "targets": [
+                    "forcing_failed",
+                    "forced60"
+                  ],
+                  "distrib": "inst",
+                  "probs": [
+                    {
+                      "$param": "forcing_pfd"
+                    }
+                  ],
+                  "guard": {
+                    "op": "cmp",
+                    "cmp": "eq",
+                    "lhs": {
+                      "op": "port_agg",
+                      "port": {
+                        "component": "$self",
+                        "port": "tpa_running_in"
+                      },
+                      "agg": "sum"
+                    },
+                    "rhs": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
+                      }
+                    }
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "back_to_full",
+                  "source": "forced60",
+                  "targets": [
+                    "full"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "eq",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "tpa_running_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 2.0
+                          }
+                        }
+                      },
+                      {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "plateau_over_in"
+                            },
+                            "agg": "any"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "end_of_plateau",
+                  "source": "full",
+                  "targets": [
+                    "down"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "plateau_over_in"
+                    },
+                    "agg": "any"
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "end_of_plateau_forced",
+                  "source": "forced60",
+                  "targets": [
+                    "down"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "plateau_over_in"
+                    },
+                    "agg": "any"
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "shut_down",
+                  "source": "down",
+                  "targets": [
+                    "end"
+                  ],
+                  "distrib": "delay",
+                  "time": {
+                    "$param": "ramp_down"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "Calendar",
+        "description": "The end of the full-power plateau.",
+        "parameters": [
+          {
+            "name": "plateau_end",
+            "kind": "number",
+            "description": "Date the plateau ends, in h."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "plateau_over",
+              "automaton": "plateau",
+              "states": [
+                "over"
+              ],
+              "init": false
+            }
+          }
+        ],
+        "body": {
+          "automata": [
+            {
+              "name": "plateau",
+              "states": [
+                "open",
+                "over"
+              ],
+              "init": "open",
+              "transitions": [
+                {
+                  "name": "plateau_ends",
+                  "source": "open",
+                  "targets": [
+                    "over"
+                  ],
+                  "distrib": "delay",
+                  "time": {
+                    "$param": "plateau_end"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "SteamHeader",
+        "description": "The VVP steam header: any failure trips the plant.",
+        "parameters": [
+          {
+            "name": "rate",
+            "kind": "number",
+            "description": "Failure rate, in 1/h."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "failed",
+              "automaton": "state",
+              "states": [
+                "failed"
+              ],
+              "init": false
+            }
+          }
+        ],
+        "body": {
+          "automata": [
+            {
+              "name": "state",
+              "states": [
+                "ok",
+                "failed"
+              ],
+              "init": "ok",
+              "transitions": [
+                {
+                  "name": "fail",
+                  "source": "ok",
+                  "targets": [
+                    "failed"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "rate"
+                  },
+                  "monitored": true,
+                  "kind": "failure"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "ExtractionPump",
+        "description": "A CEX extraction pump, running or in standby: started on demand (it may refuse) when fewer than two run and no earlier pump stands by, repaired back to standby. A common-cause failure raises the plant's `cex_ccf` condition through `cex_ccf_in`.",
+        "parameters": [
+          {
+            "name": "running",
+            "kind": "bool",
+            "description": "Whether the pump runs at the start (else it stands by)."
+          },
+          {
+            "name": "fail_rate",
+            "kind": "number",
+            "description": "Running failure rate (72 h repair), in 1/h."
+          },
+          {
+            "name": "rupture_rate",
+            "kind": "number",
+            "description": "Running rupture rate (168 h repair), in 1/h."
+          },
+          {
+            "name": "pfd",
+            "kind": "number",
+            "description": "Refusal to start, per demand."
+          },
+          {
+            "name": "ccf",
+            "kind": "bool",
+            "description": "Whether 5 % of the running failures are common-cause."
+          },
+          {
+            "name": "ccf_rate",
+            "kind": "number",
+            "description": "Common-cause failure rate, in 1/h."
+          },
+          {
+            "name": "repair_rate_rep72",
+            "kind": "number",
+            "description": "Repair rate out of `rep72`, in 1/h."
+          },
+          {
+            "name": "repair_rate_rep168",
+            "kind": "number",
+            "description": "Repair rate out of `rep168`, in 1/h."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "running",
+              "automaton": "state",
+              "states": [
+                "running"
+              ],
+              "init": {
+                "$param": "running"
+              }
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "standby",
+              "automaton": "state",
+              "states": [
+                "standby"
+              ],
+              "init": {
+                "$choose": "running",
+                "cases": {
+                  "true": false,
+                  "false": true
+                }
+              }
+            }
+          }
+        ],
+        "body": {
+          "ports": [
+            {
+              "name": "running_in",
+              "dir": "in"
+            },
+            {
+              "name": "earlier_standby_in",
+              "dir": "in"
+            },
+            {
+              "name": "cex_ccf_in",
+              "dir": "in"
+            }
+          ],
+          "automata": [
+            {
+              "name": "state",
+              "states": [
+                "running",
+                "standby",
+                "rep72",
+                "rep168"
+              ],
+              "init": {
+                "$choose": "running",
+                "cases": {
+                  "true": "running",
+                  "false": "standby"
+                }
+              },
+              "transitions": [
+                {
+                  "name": "fail",
+                  "source": "running",
+                  "targets": [
+                    "rep72"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "fail_rate"
+                  },
+                  "monitored": true,
+                  "kind": "failure"
+                },
+                {
+                  "name": "rupture",
+                  "source": "running",
+                  "targets": [
+                    "rep168"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "rupture_rate"
+                  },
+                  "monitored": true,
+                  "kind": "failure"
+                },
+                {
+                  "name": "start",
+                  "source": "standby",
+                  "targets": [
+                    "rep72",
+                    "running"
+                  ],
+                  "distrib": "inst",
+                  "probs": [
+                    {
+                      "$param": "pfd"
+                    }
+                  ],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "cmp",
+                        "cmp": "lt",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "running_in"
+                          },
+                          "agg": "sum"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 2.0
+                          }
+                        }
+                      },
+                      {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "earlier_standby_in"
+                            },
+                            "agg": "any"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "$when": "ccf",
+                  "items": [
+                    {
+                      "name": "common_cause",
+                      "source": "running",
+                      "targets": [
+                        "rep168"
+                      ],
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "ccf_rate"
+                      },
+                      "monitored": true,
+                      "kind": "failure",
+                      "effects": [
+                        {
+                          "target": {
+                            "component": "$port",
+                            "attribute": "cex_ccf_in"
+                          },
+                          "value": {
+                            "op": "const",
+                            "value": {
+                              "kind": "bool",
+                              "value": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "repair_rep72",
+                  "source": "rep72",
+                  "targets": [
+                    "standby"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "repair_rate_rep72"
+                  },
+                  "monitored": true,
+                  "kind": "repair"
+                },
+                {
+                  "name": "repair_rep168",
+                  "source": "rep168",
+                  "targets": [
+                    "standby"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "repair_rate_rep168"
+                  },
+                  "monitored": true,
+                  "kind": "repair"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "TurboPump",
+        "description": "A TPA turbo-pump, the series of its turbine and out-of-turbine parts: started on demand when fewer run than the power phase requires (it may refuse, into one of three repair states), failing while running, repaired back to standby. A refusal while forced at 60 % raises the plant's `tpa_refused_at_60` condition, a common-cause failure its `tpa_ccf` condition, both through ports. `perfect` is the diagnostic turbo-pump that always starts and never fails.",
+        "parameters": [
+          {
+            "name": "p_ht",
+            "kind": "number",
+            "description": "Start refused by the out-of-turbine part (28 h repair)."
+          },
+          {
+            "name": "p_t_short",
+            "kind": "number",
+            "description": "Start refused by the turbine, short repair (2 h)."
+          },
+          {
+            "name": "p_t_long",
+            "kind": "number",
+            "description": "Start refused by the turbine, long repair (24 h)."
+          },
+          {
+            "name": "fail_long_rate",
+            "kind": "number",
+            "description": "Running failure rate with a 24 h repair, in 1/h."
+          },
+          {
+            "name": "fail_short_rate",
+            "kind": "number",
+            "description": "Running failure rate with a 2 h repair, in 1/h."
+          },
+          {
+            "name": "rupture_rate",
+            "kind": "number",
+            "description": "Running rupture rate (144 h repair), in 1/h."
+          },
+          {
+            "name": "ccf",
+            "kind": "bool",
+            "description": "Whether 5 % of the running failures are common-cause."
+          },
+          {
+            "name": "ccf_rate",
+            "kind": "number",
+            "description": "Common-cause failure rate, in 1/h."
+          },
+          {
+            "name": "perfect",
+            "kind": "bool",
+            "description": "The diagnostic turbo-pump: always starts, never fails."
+          },
+          {
+            "name": "repair_rate_rep2",
+            "kind": "number",
+            "description": "Repair rate out of `rep2`, in 1/h."
+          },
+          {
+            "name": "repair_rate_rep24",
+            "kind": "number",
+            "description": "Repair rate out of `rep24`, in 1/h."
+          },
+          {
+            "name": "repair_rate_rep28",
+            "kind": "number",
+            "description": "Repair rate out of `rep28`, in 1/h."
+          },
+          {
+            "name": "repair_rate_rep144",
+            "kind": "number",
+            "description": "Repair rate out of `rep144`, in 1/h."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "running",
+              "automaton": "state",
+              "states": [
+                "running"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "standby",
+              "automaton": "state",
+              "states": [
+                "standby"
+              ],
+              "init": true
+            }
+          }
+        ],
+        "body": {
+          "ports": [
+            {
+              "name": "tpa_running_in",
+              "dir": "in"
+            },
+            {
+              "name": "two_tpa_in",
+              "dir": "in"
+            },
+            {
+              "name": "one_tpa_in",
+              "dir": "in"
+            },
+            {
+              "name": "forced60_in",
+              "dir": "in"
+            },
+            {
+              "name": "priority_standby_in",
+              "dir": "in"
+            },
+            {
+              "name": "refused_at_60_in",
+              "dir": "in"
+            },
+            {
+              "name": "tpa_ccf_in",
+              "dir": "in"
+            }
+          ],
+          "automata": [
+            {
+              "name": "state",
+              "states": [
+                "standby",
+                "running",
+                "rep2",
+                "rep24",
+                "rep28",
+                "rep144"
+              ],
+              "init": "standby",
+              "transitions": [
+                {
+                  "$when": "perfect",
+                  "is": false,
+                  "items": [
+                    {
+                      "name": "start",
+                      "source": "standby",
+                      "targets": [
+                        "rep28",
+                        "rep2",
+                        "rep24",
+                        "running"
+                      ],
+                      "distrib": "inst",
+                      "probs": [
+                        {
+                          "$param": "p_ht"
+                        },
+                        {
+                          "$param": "p_t_short"
+                        },
+                        {
+                          "$param": "p_t_long"
+                        }
+                      ],
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "and",
+                        "args": [
+                          {
+                            "op": "cmp",
+                            "cmp": "lt",
+                            "lhs": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "tpa_running_in"
+                              },
+                              "agg": "sum"
+                            },
+                            "rhs": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "two_tpa_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 2.0
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "one_tpa_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 1.0
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "op": "bool",
+                            "bool_op": "not",
+                            "args": [
+                              {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "priority_standby_in"
+                                },
+                                "agg": "any"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "monitored": true,
+                      "effects": [
+                        {
+                          "target": {
+                            "component": "$port",
+                            "attribute": "refused_at_60_in"
+                          },
+                          "value": {
+                            "op": "bool",
+                            "bool_op": "and",
+                            "args": [
+                              {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "forced60_in"
+                                },
+                                "agg": "any"
+                              },
+                              {
+                                "op": "bool",
+                                "bool_op": "not",
+                                "args": [
+                                  {
+                                    "op": "state_active",
+                                    "state": {
+                                      "component": "$self",
+                                      "automaton": "state",
+                                      "state": "running"
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "fail_long",
+                      "source": "running",
+                      "targets": [
+                        "rep24"
+                      ],
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "fail_long_rate"
+                      },
+                      "monitored": true,
+                      "kind": "failure"
+                    },
+                    {
+                      "name": "fail_short",
+                      "source": "running",
+                      "targets": [
+                        "rep2"
+                      ],
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "fail_short_rate"
+                      },
+                      "monitored": true,
+                      "kind": "failure"
+                    },
+                    {
+                      "name": "rupture",
+                      "source": "running",
+                      "targets": [
+                        "rep144"
+                      ],
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "rupture_rate"
+                      },
+                      "monitored": true,
+                      "kind": "failure"
+                    },
+                    {
+                      "$when": "ccf",
+                      "items": [
+                        {
+                          "name": "common_cause",
+                          "source": "running",
+                          "targets": [
+                            "rep24"
+                          ],
+                          "distrib": "exp",
+                          "rate": {
+                            "$param": "ccf_rate"
+                          },
+                          "monitored": true,
+                          "kind": "failure",
+                          "effects": [
+                            {
+                              "target": {
+                                "component": "$port",
+                                "attribute": "tpa_ccf_in"
+                              },
+                              "value": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "bool",
+                                  "value": true
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "name": "repair_rep2",
+                      "source": "rep2",
+                      "targets": [
+                        "standby"
+                      ],
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "repair_rate_rep2"
+                      },
+                      "monitored": true,
+                      "kind": "repair"
+                    },
+                    {
+                      "name": "repair_rep24",
+                      "source": "rep24",
+                      "targets": [
+                        "standby"
+                      ],
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "repair_rate_rep24"
+                      },
+                      "monitored": true,
+                      "kind": "repair"
+                    },
+                    {
+                      "name": "repair_rep28",
+                      "source": "rep28",
+                      "targets": [
+                        "standby"
+                      ],
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "repair_rate_rep28"
+                      },
+                      "monitored": true,
+                      "kind": "repair"
+                    },
+                    {
+                      "name": "repair_rep144",
+                      "source": "rep144",
+                      "targets": [
+                        "standby"
+                      ],
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "repair_rate_rep144"
+                      },
+                      "monitored": true,
+                      "kind": "repair"
+                    }
+                  ]
+                },
+                {
+                  "$when": "perfect",
+                  "items": [
+                    {
+                      "name": "start",
+                      "source": "standby",
+                      "targets": [
+                        "running"
+                      ],
+                      "distrib": "inst",
+                      "probs": [],
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "and",
+                        "args": [
+                          {
+                            "op": "cmp",
+                            "cmp": "lt",
+                            "lhs": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "tpa_running_in"
+                              },
+                              "agg": "sum"
+                            },
+                            "rhs": {
+                              "op": "if",
+                              "cond": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "two_tpa_in"
+                                },
+                                "agg": "any"
+                              },
+                              "then": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 2.0
+                                }
+                              },
+                              "otherwise": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "one_tpa_in"
+                                  },
+                                  "agg": "any"
+                                },
+                                "then": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 1.0
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "op": "bool",
+                            "bool_op": "not",
+                            "args": [
+                              {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "priority_standby_in"
+                                },
+                                "agg": "any"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "monitored": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "FeedwaterValve",
+        "description": "An ARE regulating valve: opens when the power phase it takes over in begins (it may refuse, and is then repaired), and while in service fails into a trip at a rate set by the trip rule.",
+        "parameters": [
+          {
+            "name": "p_refuse",
+            "kind": "number",
+            "description": "Refusal to open, per demand."
+          },
+          {
+            "name": "repair_rate",
+            "kind": "number",
+            "description": "Repair rate after a refusal, in 1/h."
+          },
+          {
+            "name": "trip_rate",
+            "kind": "number",
+            "description": "Rate of the failures in service that trip the plant, in 1/h."
+          }
+        ],
+        "uses": [
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "open",
+              "automaton": "valve",
+              "states": [
+                "open"
+              ],
+              "init": false
+            }
+          },
+          {
+            "fragment": "std.state_out",
+            "with": {
+              "name": "tripped",
+              "automaton": "valve",
+              "states": [
+                "tripped"
+              ],
+              "init": false
+            }
+          }
+        ],
+        "body": {
+          "ports": [
+            {
+              "name": "takes_over_in",
+              "dir": "in"
+            },
+            {
+              "name": "in_service_in",
+              "dir": "in"
+            }
+          ],
+          "automata": [
+            {
+              "name": "valve",
+              "states": [
+                "closed",
+                "open",
+                "refused",
+                "tripped"
+              ],
+              "init": "closed",
+              "transitions": [
+                {
+                  "name": "open",
+                  "source": "closed",
+                  "targets": [
+                    "refused",
+                    "open"
+                  ],
+                  "distrib": "inst",
+                  "probs": [
+                    {
+                      "$param": "p_refuse"
+                    }
+                  ],
+                  "guard": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "takes_over_in"
+                    },
+                    "agg": "any"
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "repair",
+                  "source": "refused",
+                  "targets": [
+                    "closed"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "repair_rate"
+                  },
+                  "monitored": true,
+                  "kind": "repair"
+                },
+                {
+                  "name": "fail_in_service",
+                  "source": "open",
+                  "targets": [
+                    "tripped"
+                  ],
+                  "distrib": "exp",
+                  "rate": {
+                    "$param": "trip_rate"
+                  },
+                  "monitored": true,
+                  "kind": "failure",
+                  "guard": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "in_service_in"
+                    },
+                    "agg": "any"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "Plant",
+        "description": "The latched trip conditions, written by the pumps through their ports and read by the trip logic.",
+        "body": {
+          "attributes": [
+            {
+              "name": "cex_ccf",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": false
+              }
+            },
+            {
+              "name": "tpa_ccf",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": false
+              }
+            },
+            {
+              "name": "tpa_refused_at_60",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": false
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "cex_ccf_out",
+              "dir": "out",
+              "attr": "cex_ccf"
+            },
+            {
+              "name": "tpa_ccf_out",
+              "dir": "out",
+              "attr": "tpa_ccf"
+            },
+            {
+              "name": "tpa_refused_at_60_out",
+              "dir": "out",
+              "attr": "tpa_refused_at_60"
+            }
+          ]
+        }
+      },
+      {
+        "name": "TripLogic",
+        "description": "The first trip and its cause; each cause is a target, so a history stops at the first trip.",
+        "body": {
+          "ports": [
+            {
+              "name": "alive_in",
+              "dir": "in"
+            },
+            {
+              "name": "started_in",
+              "dir": "in"
+            },
+            {
+              "name": "at_power_in",
+              "dir": "in"
+            },
+            {
+              "name": "forcing_failed_in",
+              "dir": "in"
+            },
+            {
+              "name": "vvp_failed_in",
+              "dir": "in"
+            },
+            {
+              "name": "cex_running_in",
+              "dir": "in"
+            },
+            {
+              "name": "cex_standby_in",
+              "dir": "in"
+            },
+            {
+              "name": "tpa_running_in",
+              "dir": "in"
+            },
+            {
+              "name": "tpa_standby_in",
+              "dir": "in"
+            },
+            {
+              "name": "valve_tripped_in",
+              "dir": "in"
+            },
+            {
+              "name": "cex_ccf_in",
+              "dir": "in"
+            },
+            {
+              "name": "tpa_ccf_in",
+              "dir": "in"
+            },
+            {
+              "name": "tpa_refused_at_60_in",
+              "dir": "in"
+            }
+          ],
+          "automata": [
+            {
+              "name": "cause",
+              "states": [
+                "none",
+                "vvp",
+                "cex",
+                "tpa",
+                "are"
+              ],
+              "init": "none",
+              "transitions": [
+                {
+                  "name": "trip_vvp",
+                  "source": "none",
+                  "targets": [
+                    "vvp"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "alive_in"
+                        },
+                        "agg": "any"
+                      },
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "vvp_failed_in"
+                        },
+                        "agg": "any"
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "trip_cex",
+                  "source": "none",
+                  "targets": [
+                    "cex"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "alive_in"
+                        },
+                        "agg": "any"
+                      },
+                      {
+                        "op": "bool",
+                        "bool_op": "or",
+                        "args": [
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "cex_ccf_in"
+                            },
+                            "agg": "any"
+                          },
+                          {
+                            "op": "bool",
+                            "bool_op": "and",
+                            "args": [
+                              {
+                                "op": "cmp",
+                                "cmp": "lt",
+                                "lhs": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "cex_running_in"
+                                  },
+                                  "agg": "sum"
+                                },
+                                "rhs": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 2.0
+                                  }
+                                }
+                              },
+                              {
+                                "op": "cmp",
+                                "cmp": "eq",
+                                "lhs": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "cex_standby_in"
+                                  },
+                                  "agg": "sum"
+                                },
+                                "rhs": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "trip_tpa",
+                  "source": "none",
+                  "targets": [
+                    "tpa"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "started_in"
+                        },
+                        "agg": "any"
+                      },
+                      {
+                        "op": "bool",
+                        "bool_op": "or",
+                        "args": [
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "tpa_ccf_in"
+                            },
+                            "agg": "any"
+                          },
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "tpa_refused_at_60_in"
+                            },
+                            "agg": "any"
+                          },
+                          {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "forcing_failed_in"
+                            },
+                            "agg": "any"
+                          },
+                          {
+                            "op": "bool",
+                            "bool_op": "and",
+                            "args": [
+                              {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "at_power_in"
+                                },
+                                "agg": "any"
+                              },
+                              {
+                                "op": "cmp",
+                                "cmp": "eq",
+                                "lhs": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "tpa_running_in"
+                                  },
+                                  "agg": "sum"
+                                },
+                                "rhs": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              },
+                              {
+                                "op": "cmp",
+                                "cmp": "eq",
+                                "lhs": {
+                                  "op": "port_agg",
+                                  "port": {
+                                    "component": "$self",
+                                    "port": "tpa_standby_in"
+                                  },
+                                  "agg": "sum"
+                                },
+                                "rhs": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "monitored": true
+                },
+                {
+                  "name": "trip_are",
+                  "source": "none",
+                  "targets": [
+                    "are"
+                  ],
+                  "distrib": "inst",
+                  "probs": [],
+                  "guard": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "started_in"
+                        },
+                        "agg": "any"
+                      },
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "valve_tripped_in"
+                        },
+                        "agg": "any"
+                      }
+                    ]
+                  },
+                  "monitored": true
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

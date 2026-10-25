@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import textwrap
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -31,7 +32,7 @@ DOCS = Path(__file__).resolve().parents[1]
 OUT = DOCS / "assets" / "figures"
 
 _FENCE = re.compile(
-    r"(?P<skip><!--\s*skip\s*-->\n)?```python\b[^\n]*\n(?P<body>.*?)\n```",
+    r"(?P<skip><!--\s*skip\s*-->\n)?(?P<indent>[ \t]*)```python\b[^\n]*\n(?P<body>.*?)\n(?P=indent)```",
     re.DOTALL,
 )
 
@@ -42,17 +43,19 @@ def page_namespace(page: str) -> dict:
     A figure reuses the model its page defines instead of restating it, so
     the page and its charts cannot drift apart. Blocks marked
     ``<!-- skip -->`` are left out, as the documentation tests leave them
-    out; the page runs in a temporary directory, as there.
+    out; the page runs in a temporary directory, as there, where
+    ``examples`` points at the repository's ``examples/``.
     """
     text = (DOCS / page).read_text()
     namespace: dict = {}
     here = os.getcwd()
     with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "examples").symlink_to(DOCS.parent / "examples", target_is_directory=True)
         os.chdir(tmp)
         try:
             for match in _FENCE.finditer(text):
                 if not match.group("skip"):
-                    exec(compile(match.group("body"), page, "exec"), namespace)  # noqa: S102
+                    exec(compile(textwrap.dedent(match.group("body")), page, "exec"), namespace)  # noqa: S102
         finally:
             os.chdir(here)
     return namespace

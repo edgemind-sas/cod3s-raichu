@@ -160,6 +160,57 @@ weighs 5 to 14 times less than the one before.
 
 *Figures produced by `docs/figures/example_two_out_of_three.py`.*
 
+## Written as a library
+
+The model above is written component by component. The same system can be
+described from reusable types instead: a `Pump` that can fail, and a
+`Voter` that keeps a service up while at least *k* of its inputs are fed.
+A [component type library](../guides/component-libraries.md) states them
+once, as data; a system document instantiates them; a study document says
+how fast the failures occur and are repaired.
+
+=== "Library"
+
+    ```json
+    --8<-- "examples/two_out_of_three/library/library.json"
+    ```
+
+=== "System"
+
+    ```json
+    --8<-- "examples/two_out_of_three/library/system.json"
+    ```
+
+=== "Study"
+
+    ```json
+    --8<-- "examples/two_out_of_three/library/study.json"
+    ```
+
+The pump declares *what* its failure does (its delivery is cut) and the
+study *how fast* it happens, so the rates live in one place. The voter's
+k-out-of-n logic is the standard fragment `std.bool_flow_in`: the voter
+reads its three inputs through a port and never names a pump.
+
+Expanded, the library gives a model that behaves exactly as the one
+above: the same events at the same dates for every seed, and the same
+exploration bounds. Only the names of the failure transitions differ,
+`P1.failure.occ` for `P1.health.fail`, because a catalogued mode names
+its own automaton.
+
+```python
+library = pyraichu.load_system(
+    "examples/two_out_of_three/library/system.json",
+    ["examples/two_out_of_three/library/library.json"],
+    "examples/two_out_of_three/library/study.json",
+)
+options = {"horizon": 100.0, "min_probability": 1e-12, "max_length": 30}
+from_library = pyraichu.explore(library, "system_down", **options)
+from_page = pyraichu.explore(model, "system_down", **options)
+assert (from_library.lower, from_library.upper) == (from_page.lower, from_page.upper)
+print(f"both explored to [{from_library.lower:.8f}, {from_library.upper:.8f}]")
+```
+
 ## References
 
 - Rausand, M., Barros, A., Høyland, A. (2020). Markov analysis. In

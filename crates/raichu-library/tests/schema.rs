@@ -529,3 +529,126 @@ fn a_templated_library_the_reader_expands_validates() {
     let expansion = expand(&[library], &system, Some(&study)).unwrap();
     assert!(expansion.model.components.iter().any(|c| c.name == "P1"));
 }
+
+/// A library whose pump keeps its common-cause transition only when the
+/// `ccf` parameter is true, with `when` as the conditional item.
+fn library_with_conditional_transition(when: Value) -> Value {
+    json!({
+        "raichu_library": {"format": 1},
+        "library": {
+            "name": "demo",
+            "version": "1.0.0",
+            "types": [{
+                "name": "Pump",
+                "parameters": [{"name": "ccf", "kind": "bool", "default": false}],
+                "body": {"automata": [{
+                    "name": "life", "states": ["ok", "ko"], "init": "ok",
+                    "transitions": [
+                        {"name": "fail", "source": "ok", "targets": ["ko"], "distrib": "exp", "rate": 0.1},
+                        when
+                    ]
+                }]}
+            }]
+        }
+    })
+}
+
+#[test]
+fn a_conditional_item_validates_and_a_malformed_one_does_not() {
+    let validator = library_validator();
+    let ccf = json!({"name": "common_cause", "source": "ok", "targets": ["ko"], "distrib": "exp", "rate": 0.01});
+    assert_valid(
+        &validator,
+        &library_with_conditional_transition(json!({"$when": "ccf", "items": [ccf.clone()]})),
+    );
+    assert_valid(
+        &validator,
+        &library_with_conditional_transition(
+            json!({"$when": "ccf", "is": [true], "items": [ccf.clone()]}),
+        ),
+    );
+    // Without `items`, and with a misspelled field, it is not one.
+    assert_invalid(
+        &validator,
+        &library_with_conditional_transition(json!({"$when": "ccf"})),
+    );
+    assert_invalid(
+        &validator,
+        &library_with_conditional_transition(json!({"$when": "ccf", "item": [ccf]})),
+    );
+}
+
+#[test]
+fn the_example_libraries_validate_and_expand() {
+    // Every published example written as a library: its documents match
+    // the schemas, and the reader expands them.
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let read = |path: &PathBuf| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+    let mut systems = 0;
+    let mut expanded = 0;
+    for entry in std::fs::read_dir(&examples).unwrap() {
+        let folder = entry.unwrap().path().join("library");
+        let library_path = folder.join("library.json");
+        if !library_path.is_file() {
+            continue;
+        }
+        let library = read(&library_path);
+        assert_valid(&library_validator(), &library);
+        let parsed_library = parse_library(&library.to_string()).unwrap();
+        let std = raichu_library::standard_library().unwrap();
+        let studies: Vec<PathBuf> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("study")
+            })
+            .collect();
+        for system_entry in std::fs::read_dir(&folder).unwrap() {
+            let path = system_entry.unwrap().path();
+            if !path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("system")
+            {
+                continue;
+            }
+            systems += 1;
+            let system = read(&path);
+            assert_valid(&system_validator(), &system);
+            let parsed_system = parse_system(&system.to_string()).unwrap();
+            let libraries = [parsed_library.clone(), std.clone()];
+            match studies.as_slice() {
+                [] => {
+                    expand(&libraries, &parsed_system, None)
+                        .unwrap_or_else(|e| panic!("{}: {}", path.display(), e.message));
+                    expanded += 1;
+                }
+                studies => {
+                    for study_path in studies {
+                        let study = read(study_path);
+                        assert_valid(&study_validator(), &study);
+                        let parsed_study = parse_study(&study.to_string()).unwrap();
+                        if parsed_study.system != parsed_system.name {
+                            continue;
+                        }
+                        expand(&libraries, &parsed_system, Some(&parsed_study))
+                            .unwrap_or_else(|e| panic!("{}: {}", study_path.display(), e.message));
+                        expanded += 1;
+                    }
+                }
+            }
+        }
+    }
+    // Every system is expanded, once per study naming it or bare.
+    assert!(systems >= 12, "only {systems} example systems found");
+    assert!(
+        expanded >= systems,
+        "{expanded} expansions for {systems} systems"
+    );
+}
