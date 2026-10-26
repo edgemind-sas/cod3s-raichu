@@ -311,12 +311,14 @@ assert comparison.identical and comparison.level == "replay"
 
 What the format cannot express is refused per component, naming the
 construct, and never dropped: a conversion with one refusal yields no
-documents. In this version the converter carries discrete flows, gates
-fed by outputs, single-target timed modes (several targets only when every
-common-cause order above one is empty) and events. It refuses continuous
-flows and capacities, temporised and triggered outputs, negated outputs,
-structured production operands, common-cause orders, on-demand laws,
-repair conditions, pulse and repair effects, and controllers.
+documents. In this version the converter carries discrete flows,
+temporised outputs (`std.bool_flow_out_tempo`), gates fed by outputs,
+single-target timed modes (several targets only when every common-cause
+order above one is empty) and events. It refuses continuous flows and
+capacities, triggered outputs, negated outputs, production operands that
+compare a quantity (a negated operand converts through `std.bool_not`),
+common-cause orders, on-demand laws, repair conditions, pulse
+and repair effects, and controllers.
 
 `compare_routes` runs the declaration through both routes, the
 declaration reader and the converted library, and says whether they agree.

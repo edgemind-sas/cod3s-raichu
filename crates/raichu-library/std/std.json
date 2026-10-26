@@ -559,6 +559,356 @@
         ]
       },
       {
+        "name": "bool_flow_out_tempo",
+        "description": "A temporised boolean output `<name>` (muscadet `FlowOutTempo`): it feeds while the automaton `<name>_tempo` is `enabled`. The automaton enables after `enable_law` once the production condition holds and disables after `disable_law` once it fails; both waits restart when the condition changes again before they end. A lost condition keeps the output fed until the disable wait ends.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Flow name; the out port is `<name>_out`."
+          },
+          {
+            "name": "prod_cond",
+            "kind": "list",
+            "items": "string_list",
+            "default": [],
+            "description": "The production condition in disjunctive form: a list of groups, each a list of boolean attribute names of the instance (`<input>_fed_in`, `<output>_fed_out`) that must all hold."
+          },
+          {
+            "name": "conditioned",
+            "kind": "bool",
+            "default": true,
+            "description": "Whether `prod_cond` writes the production; false keeps `<name>_prod_available` at `prod_init` (a mode may still write it)."
+          },
+          {
+            "name": "prod_init",
+            "kind": "bool",
+            "default": false,
+            "description": "Initial value of `<name>_prod_available`."
+          },
+          {
+            "name": "fed_available_init",
+            "kind": "bool",
+            "default": true,
+            "description": "Initial (nominal) value of the availability `<name>_fed_available_out`."
+          },
+          {
+            "name": "init_enable",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the automaton starts `enabled`."
+          },
+          {
+            "name": "enable_law",
+            "kind": "enum",
+            "values": [
+              "delay",
+              "exp",
+              "never"
+            ],
+            "default": "delay",
+            "description": "Law of the wait before enabling: a fixed delay or an exponential draw; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
+          },
+          {
+            "name": "enable_value",
+            "kind": "number",
+            "default": 0.0,
+            "description": "The delay (`delay`) or the rate (`exp`, positive) of the enable wait."
+          },
+          {
+            "name": "disable_law",
+            "kind": "enum",
+            "values": [
+              "delay",
+              "exp",
+              "never"
+            ],
+            "default": "delay",
+            "description": "Law of the wait before disabling; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
+          },
+          {
+            "name": "disable_value",
+            "kind": "number",
+            "default": 0.0,
+            "description": "The delay (`delay`) or the rate (`exp`, positive) of the disable wait."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}_fed_out",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": false
+              }
+            },
+            {
+              "name": "${name}_fed_available_out",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": {
+                  "$param": "fed_available_init"
+                }
+              }
+            },
+            {
+              "name": "${name}_prod_available",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": {
+                  "$param": "prod_init"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_out",
+              "dir": "out",
+              "attr": "${name}_fed_out"
+            }
+          ],
+          "automata": [
+            {
+              "name": "${name}_tempo",
+              "states": [
+                "disabled",
+                "enabled"
+              ],
+              "init": {
+                "$choose": "init_enable",
+                "cases": {
+                  "true": "enabled",
+                  "false": "disabled"
+                }
+              },
+              "transitions": [
+                {
+                  "$when": "enable_law",
+                  "is": "delay",
+                  "items": [
+                    {
+                      "name": "${name}_enable",
+                      "source": "disabled",
+                      "targets": [
+                        "enabled"
+                      ],
+                      "guard": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_prod_available"
+                        }
+                      },
+                      "distrib": "delay",
+                      "time": {
+                        "$param": "enable_value"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "$when": "enable_law",
+                  "is": "exp",
+                  "items": [
+                    {
+                      "name": "${name}_enable",
+                      "source": "disabled",
+                      "targets": [
+                        "enabled"
+                      ],
+                      "guard": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_prod_available"
+                        }
+                      },
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "enable_value"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "$when": "disable_law",
+                  "is": "delay",
+                  "items": [
+                    {
+                      "name": "${name}_disable",
+                      "source": "enabled",
+                      "targets": [
+                        "disabled"
+                      ],
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_prod_available"
+                            }
+                          }
+                        ]
+                      },
+                      "distrib": "delay",
+                      "time": {
+                        "$param": "disable_value"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "$when": "disable_law",
+                  "is": "exp",
+                  "items": [
+                    {
+                      "name": "${name}_disable",
+                      "source": "enabled",
+                      "targets": [
+                        "disabled"
+                      ],
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_prod_available"
+                            }
+                          }
+                        ]
+                      },
+                      "distrib": "exp",
+                      "rate": {
+                        "$param": "disable_value"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "sensitive_functions": [
+            {
+              "$when": "conditioned",
+              "items": [
+                {
+                  "name": "update_${name}_prod_available",
+                  "effects": [
+                    {
+                      "target": {
+                        "component": "$self",
+                        "attribute": "${name}_prod_available"
+                      },
+                      "value": {
+                        "op": "bool",
+                        "bool_op": "or",
+                        "args": [
+                          {
+                            "$for_each": "prod_cond",
+                            "as": "group",
+                            "items": [
+                              {
+                                "op": "bool",
+                                "bool_op": "and",
+                                "args": [
+                                  {
+                                    "$for_each": "group",
+                                    "as": "operand",
+                                    "items": [
+                                      {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${operand}"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "update_${name}_fed_out",
+              "effects": [
+                {
+                  "target": {
+                    "component": "$self",
+                    "attribute": "${name}_fed_out"
+                  },
+                  "value": {
+                    "op": "bool",
+                    "bool_op": "and",
+                    "args": [
+                      {
+                        "op": "state_active",
+                        "state": {
+                          "component": "$self",
+                          "automaton": "${name}_tempo",
+                          "state": "enabled"
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_fed_available_out"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "targetable": [
+          {
+            "attribute": "${name}_fed_available_out",
+            "rule": {
+              "$choose": "fed_available_init",
+              "cases": {
+                "true": "any_cuts",
+                "false": "any_activates"
+              }
+            }
+          },
+          {
+            "$when": "conditioned",
+            "is": false,
+            "items": [
+              {
+                "attribute": "${name}_prod_available",
+                "rule": {
+                  "$choose": "prod_init",
+                  "cases": {
+                    "true": "any_cuts",
+                    "false": "any_activates"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
         "name": "logic_gate",
         "description": "A logic gate `<name>`: a boolean input combining its sources under `logic`, re-exported on the out port `<name>_out`.",
         "parameters": [
@@ -691,6 +1041,63 @@
                             }
                           }
                         ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "bool_not",
+        "description": "The negation of a boolean attribute `<of>` of the instance, as the attribute `<of>_not`: how a production condition, which only reads attributes, reads `<of>` being false. It is written by a sensitive function, so it changes inside the firing that changes `<of>`.",
+        "parameters": [
+          {
+            "name": "of",
+            "kind": "string",
+            "description": "The boolean attribute of the instance to negate."
+          },
+          {
+            "name": "init",
+            "kind": "bool",
+            "default": false,
+            "description": "Initial value of `<of>_not`; the initial fixpoint sets it from `<of>` either way."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${of}_not",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": {
+                  "$param": "init"
+                }
+              }
+            }
+          ],
+          "sensitive_functions": [
+            {
+              "name": "update_${of}_not",
+              "effects": [
+                {
+                  "target": {
+                    "component": "$self",
+                    "attribute": "${of}_not"
+                  },
+                  "value": {
+                    "op": "bool",
+                    "bool_op": "not",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${of}"
+                        }
                       }
                     ]
                   }
