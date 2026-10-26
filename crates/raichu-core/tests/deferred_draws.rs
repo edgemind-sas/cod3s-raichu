@@ -1034,3 +1034,114 @@ fn a_deferred_transition_fires_by_its_qualified_name() {
         .unwrap_err();
     assert!(unknown.to_string().contains("B.fail.nowhere"), "{unknown}");
 }
+
+// ---- deferred branch choices -----------------------------------------------
+
+/// A solicitation that rises at 1 and an on-demand start drawn on it:
+/// `start` branches to `running` (0.9) or `refused` (0.1).
+fn on_demand_model() -> Model {
+    Model::from_json(
+        &json!({"name": "on_demand", "components": [{"name": "B", "automata": [
+            {"name": "demand", "states": ["idle", "asked"], "init": "idle",
+             "transitions": [tr("ask", "idle", &["asked"], json!({"distrib": "delay", "time": 1.0}))]},
+            {"name": "start", "states": ["ready", "running", "refused"], "init": "ready",
+             "transitions": [with(
+                tr("draw", "ready", &["running", "refused"], json!({"distrib": "inst", "probs": [0.9]})),
+                "guard", active("B", "demand", "asked"))]}
+        ]}]})
+        .to_string(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_deferred_choice_waits_for_the_caller_and_takes_the_forced_branch() {
+    let compiled = CompiledModel::compile(&on_demand_model()).unwrap();
+    let config = EngineConfig {
+        seed: 7,
+        t_max: 5.0,
+        stochastic_dates: StochasticDates::Deferred,
+        deferred_choices: true,
+        ..EngineConfig::default()
+    };
+    let mut engine = Engine::new(&compiled, config).unwrap();
+    engine.advance_to(2.0).unwrap();
+    // The solicitation rose at 1; the draw is armed, not fired.
+    let armed: Vec<DeferredTransition> = engine.deferred();
+    assert_eq!(armed.len(), 1);
+    assert_eq!(armed[0].transition, "B.start.draw");
+    assert_eq!(armed[0].armed_at, 1.0);
+    assert!(matches!(armed[0].law, CLaw::Inst(_)));
+    assert_eq!(engine.state("B.start"), Some("ready"));
+    let event = engine
+        .fire_deferred_named_at("B.start.draw", 2.0, Some(1))
+        .unwrap();
+    assert_eq!((event.time, event.to.as_str()), (2.0, "refused"));
+}
+
+#[test]
+fn without_deferred_choices_the_branch_is_still_drawn_in_deferred_mode() {
+    let compiled = CompiledModel::compile(&on_demand_model()).unwrap();
+    let config = EngineConfig {
+        t_max: 5.0,
+        stochastic_dates: StochasticDates::Deferred,
+        ..EngineConfig::default()
+    };
+    let mut engine = Engine::new(&compiled, config).unwrap();
+    engine.advance_to(2.0).unwrap();
+    assert!(engine.deferred().is_empty());
+    assert_ne!(engine.state("B.start"), Some("ready"));
+}
+
+#[test]
+fn a_held_choice_fired_without_a_branch_is_refused() {
+    let compiled = CompiledModel::compile(&on_demand_model()).unwrap();
+    let config = EngineConfig {
+        t_max: 5.0,
+        stochastic_dates: StochasticDates::Deferred,
+        deferred_choices: true,
+        ..EngineConfig::default()
+    };
+    let mut engine = Engine::new(&compiled, config).unwrap();
+    engine.advance_to(2.0).unwrap();
+    let err = engine
+        .fire_deferred_named_at("B.start.draw", 2.0, None)
+        .unwrap_err();
+    assert!(
+        matches!(err, EngineError::HeldChoiceNeedsBranch { ref transition } if transition == "B.start.draw"),
+        "{err}"
+    );
+    assert_eq!(engine.state("B.start"), Some("ready"));
+}
+
+#[test]
+fn a_held_choice_is_dropped_when_its_solicitation_falls() {
+    // The demand rises at 1 and falls at 3: the held draw goes with it.
+    let model = Model::from_json(
+        &json!({"name": "on_demand", "components": [{"name": "B", "automata": [
+            {"name": "demand", "states": ["idle", "asked", "done"], "init": "idle",
+             "transitions": [
+                tr("ask", "idle", &["asked"], json!({"distrib": "delay", "time": 1.0})),
+                tr("stop", "asked", &["done"], json!({"distrib": "delay", "time": 2.0}))]},
+            {"name": "start", "states": ["ready", "running", "refused"], "init": "ready",
+             "transitions": [with(
+                tr("draw", "ready", &["running", "refused"], json!({"distrib": "inst", "probs": [0.9]})),
+                "guard", active("B", "demand", "asked"))]}
+        ]}]})
+        .to_string(),
+    )
+    .unwrap();
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let config = EngineConfig {
+        t_max: 5.0,
+        stochastic_dates: StochasticDates::Deferred,
+        deferred_choices: true,
+        ..EngineConfig::default()
+    };
+    let mut engine = Engine::new(&compiled, config).unwrap();
+    engine.advance_to(2.0).unwrap();
+    assert_eq!(engine.deferred().len(), 1);
+    engine.advance_to(4.0).unwrap();
+    assert!(engine.deferred().is_empty());
+    assert_eq!(engine.state("B.start"), Some("ready"));
+}

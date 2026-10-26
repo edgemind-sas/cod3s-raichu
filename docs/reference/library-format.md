@@ -233,7 +233,8 @@ Each instance becomes a component named after it.
 
 An activation names a catalogued `mode`, then either `instances` (a list of
 instance names) or `type` (every instance of that type), an `occurrence`
-law (required), a `repair` law (absent: the mode stays occurred once it has
+law (required; a timed law, or on demand: `{"distrib": "inst", "probs": [p]}`),
+a timed `repair` law (absent: the mode stays occurred once it has
 occurred), an `on_interruption` policy (default `reset`) and an optional
 `condition`. An activation on named instances wins over an activation on
 their type; two activations of one mode on one instance at the same level
@@ -256,6 +257,13 @@ AND its activation condition.
   with states `rep` (initial) and `occ`, transitions named after the state
   they enter (`occ`, `rep`), monitored, of kind `failure` and `repair`,
   with the mode as cycle group. A sequence event reads `Srv.mdc_b.occ`.
+- An on-demand mode (occurrence `inst` with probability `p`) adds a state
+  `parked`: on each rising edge of its condition the transition `occ`
+  draws `occ` with probability `p` or `parked` otherwise (a start
+  refused, or not, when solicited), and the transition `parked` returns to
+  `rep` once the condition falls. Only the entry into `occ` is a sequence
+  event; parking is what stops a lost draw from being drawn again within
+  one solicitation.
 - Each targeted attribute gets one sensitive function `modes__<attribute>`
   holding the combined value.
 - Each feared event is a component named after it, with an automaton `ev`

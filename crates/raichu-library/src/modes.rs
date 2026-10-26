@@ -24,6 +24,9 @@ pub const OCC: &str = "occ";
 pub const EVENT_AUTOMATON: &str = "ev";
 /// State of a feared event that has not occurred (initial).
 pub const NOT_OCC: &str = "not_occ";
+/// State an on-demand mode parks in after a draw it lost, until its
+/// solicitation falls.
+pub const PARKED: &str = "parked";
 
 /// Rewrites every `{"op": "mode_active", "mode": "Instance.mode"}` leaf of
 /// `condition` into the core `state_active` on the mode's `occ` state,
@@ -114,28 +117,53 @@ pub(crate) fn condition_expr(
     typed::<Expr>(condition, document, pointer, context)
 }
 
-/// Types a law object, refusing the shapes a mode cannot carry.
+/// Types a law object, refusing the shapes a mode cannot carry. An
+/// occurrence may be on demand (`inst` with one probability: the chance
+/// the mode occurs on each rising edge of its condition); a repair is
+/// timed.
 pub(crate) fn law(
     value: &Value,
     document: DocumentKind,
     pointer: &str,
     context: &str,
+    occurrence: bool,
 ) -> Result<Distrib, ExpandError> {
     let distrib: Distrib = typed(value, document, pointer, context)?;
     match distrib {
+        Distrib::Inst { ref probs }
+            if occurrence && probs.len() == 1 && (0.0..=1.0).contains(&probs[0]) =>
+        {
+            Ok(distrib)
+        }
+        Distrib::Inst { .. } if occurrence => Err(ExpandError::new(
+            document,
+            pointer,
+            format!(
+                "{context}: an on-demand occurrence is `{{\"distrib\": \"inst\", \"probs\": [p]}}` with one probability p in [0, 1]: the chance the mode occurs when its condition rises"
+            ),
+        )),
         Distrib::Inst { .. } | Distrib::Watched => Err(ExpandError::new(
             document,
             pointer,
             format!(
-                "{context}: a mode law is timed (exp, delay, weibull, lognormal, gamma, uniform, empirical); `{}` is not supported for modes in this version",
-                value.get("distrib").and_then(Value::as_str).unwrap_or("?")
+                "{context}: a mode law is timed (exp, delay, weibull, lognormal, gamma, uniform, empirical), and an occurrence may also be on demand (inst); `{}` is not supported for a {} in this version",
+                value.get("distrib").and_then(Value::as_str).unwrap_or("?"),
+                if occurrence { "occurrence" } else { "repair" }
             ),
         )),
         other => Ok(other),
     }
 }
 
-/// The two-state automaton of an activated mode.
+/// The automaton of an activated mode: `rep` and `occ`, plus `parked` for
+/// an on-demand occurrence.
+///
+/// An on-demand mode draws once per rising edge of its condition: the
+/// draw `occ` leaves `rep` towards `occ` (the law's probability) or
+/// `parked`, and only the entry into `occ` is a sequence event; the
+/// re-arm `parked` returns to `rep` once the condition falls, and is no
+/// event. Parking a lost draw is what stops it from being drawn again
+/// within the same solicitation.
 pub(crate) fn mode_automaton(
     name: &str,
     guard: Option<Expr>,
@@ -157,13 +185,48 @@ pub(crate) fn mode_automaton(
         effects: Vec::new(),
         distrib,
     };
-    let mut transitions = vec![edge(OCC, REP, TransitionKind::Failure, occurrence, guard)];
+    let on_demand = matches!(occurrence, Distrib::Inst { .. });
+    let mut states = vec![REP.to_owned(), OCC.to_owned()];
+    let mut transitions = Vec::new();
+    if on_demand {
+        let rearm_guard = Expr::Bool {
+            bool_op: BoolOp::Not,
+            args: vec![guard.clone().unwrap_or(Expr::Const {
+                value: raichu_expr::Value::Bool(true),
+            })],
+        };
+        // A draw is resolved within its instant: only `reset` makes sense
+        // (a solicitation that falls first cancels it), whatever the
+        // activation asks of a timed law.
+        let mut draw = edge(OCC, REP, TransitionKind::Failure, occurrence, guard);
+        draw.on_interruption = InterruptionPolicy::Reset;
+        draw.targets = vec![OCC.to_owned(), PARKED.to_owned()];
+        draw.monitored_states = Some(vec![OCC.to_owned()]);
+        transitions.push(draw);
+        transitions.push(Transition {
+            name: PARKED.to_owned(),
+            source: PARKED.to_owned(),
+            guard: Some(rearm_guard),
+            targets: vec![REP.to_owned()],
+            on_interruption: InterruptionPolicy::Reset,
+            monitored: false,
+            monitored_states: None,
+            cycle_group: None,
+            cycle_cancellation: CycleCancellation::Auto,
+            kind: None,
+            effects: Vec::new(),
+            distrib: Distrib::Inst { probs: Vec::new() },
+        });
+        states.push(PARKED.to_owned());
+    } else {
+        transitions.push(edge(OCC, REP, TransitionKind::Failure, occurrence, guard));
+    }
     if let Some(repair) = repair {
         transitions.push(edge(REP, OCC, TransitionKind::Repair, repair, None));
     }
     Automaton {
         name: name.to_owned(),
-        states: vec![REP.to_owned(), OCC.to_owned()],
+        states,
         init: REP.to_owned(),
         transitions,
     }

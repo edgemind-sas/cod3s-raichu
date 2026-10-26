@@ -233,8 +233,11 @@ impl<'m> Engine<'m> {
             None => true,
             Some(guard) => eval_bool(self.model, &self.vars, &self.states, self.time, guard)?,
         };
+        let deferred_choice = self.config.stochastic_dates == StochasticDates::Deferred
+            && self.config.deferred_choices
+            && self.operator_choice(trans_idx);
         if self.config.stochastic_dates != StochasticDates::Drawn
-            && is_stochastic(&transition.distrib)
+            && (is_stochastic(&transition.distrib) || deferred_choice)
         {
             self.refresh_deferred(trans_idx, in_source, guard_ok)?;
             self.refresh_operator_date(trans_idx, in_source, guard_ok);

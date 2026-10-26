@@ -313,11 +313,11 @@ What the format cannot express is refused per component, naming the
 construct, and never dropped: a conversion with one refusal yields no
 documents. In this version the converter carries discrete flows,
 temporised outputs (`std.bool_flow_out_tempo`), gates fed by outputs,
-single-target timed modes (several targets only when every common-cause
-order above one is empty) and events. It refuses continuous flows and
+single-target timed and on-demand modes (several targets only when every
+common-cause order above one is empty) and events. It refuses continuous flows and
 capacities, triggered outputs, negated outputs, production operands that
 compare a quantity (a negated operand converts through `std.bool_not`),
-common-cause orders, on-demand laws, repair conditions, pulse
+common-cause orders, on-demand repair laws, repair conditions, pulse
 and repair effects, and controllers.
 
 `compare_routes` runs the declaration through both routes, the
@@ -330,7 +330,9 @@ replayed on both in deferred mode (see
 is fired at its date on both routes and, after every firing, the observed
 attributes and every armed transition's law and age must agree. Checking
 the law is what catches a wrongly converted rate, which a forced date
-would fire anyway. A random transition the drawn trajectories never fire
+would fire anyway; the branch of an on-demand draw is the one the drawn
+trajectory took, and its law is compared at the draw itself. A random
+transition the drawn trajectories never fire
 is then forced once, so every mode's effects are observed; one that is
 never armed leaves the comparison at `level="replay-partial"`, not
 identical, and names it in `unexercised`. `method="statistical"` compares

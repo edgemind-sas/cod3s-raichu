@@ -92,6 +92,7 @@ _MODE_KEYS = frozenset(
         "repair_cond",
         "failure_state",
         "repair_state",
+        "absorb_state",
         "cond_inner_logic",
         "cond_outer_logic",
     }
@@ -119,6 +120,8 @@ _EVENT_STATES = ("occ", "not_occ")
 #: The two states of a converted mode automaton (`raichu-library`'s own
 #: names), and the defaults the declaration route names its states with.
 _OCC, _REP = "occ", "rep"
+#: The state an on-demand mode parks in after a lost draw (`raichu-library`).
+_PARKED = "parked"
 
 
 @dataclass(frozen=True)
@@ -608,10 +611,18 @@ def _condition(
 # ---------------------------------------------------------------------------
 
 
-def _law(spec: Any, what: str) -> dict:
+def _law(spec: Any, what: str, *, occurrence: bool = False) -> dict:
+    """A declared mode law in the study's spelling. An occurrence may be on
+    demand (`inst`: the probability the mode occurs on each rising edge of
+    its condition); a repair is timed."""
     kind = spec.get("law") or spec.get("cls") or spec.get("distrib")
     if kind == "inst":
-        raise _Refused("on-demand law (`inst`)", what)
+        if not occurrence:
+            raise _Refused("on-demand repair law (`inst`)", what)
+        prob = spec.get("prob", spec.get("gamma"))
+        if not isinstance(prob, (int, float)) or isinstance(prob, bool) or not 0.0 <= prob <= 1.0:
+            raise _Refused("on-demand law (`inst`)", f"{what}: probability {prob!r}")
+        return {"distrib": "inst", "probs": [float(prob)]}
     try:
         return plugin._law(spec)
     except ValueError as error:
@@ -642,20 +653,55 @@ def _mode_states(obj: dict) -> tuple[str, str]:
     return obj.get("failure_state") or _OCC, obj.get("repair_state") or _REP
 
 
-def _mode_transitions(name: str, obj: dict, targets: list[str]) -> list[tuple[str, str, str]]:
-    """(declaration transition, target, which) of a mode, as the plugin
-    names them: `failure`/`repair` alone, `occ__cc_i` per target otherwise."""
+def _declared_laws(obj: dict, targets: list[str]) -> tuple[list, list]:
+    """A mode's per-order occurrence and repair laws. An `ObjFMInst` object
+    writes them as bare numbers (each occurrence a probability, the repair
+    an exponential rate broadcast over the orders, zero meaning none), the
+    other modes as law objects."""
+    failures = obj.get("failure") or []
+    repairs = obj.get("repair") or []
+    if obj.get("type") != "ObjFMInst":
+        return list(failures), list(repairs)
+    failures = failures if isinstance(failures, list) else [failures]
+    failures = [
+        {"law": "inst", "prob": f} if isinstance(f, (int, float)) and not isinstance(f, bool) else f
+        for f in failures
+    ]
+    if not isinstance(repairs, list):
+        repairs = [repairs] * len(targets)
+    repairs = [
+        {"law": "exp", "rate": float(r)} if isinstance(r, (int, float)) and not isinstance(r, bool) else r
+        for r in repairs
+    ]
+    return failures, repairs
+
+
+def _mode_transitions(
+    name: str, obj: dict, targets: list[str], on_demand: bool, inst_object: bool = False
+) -> list[tuple[str, str, str]]:
+    """(declaration transition, target, library transition) of a mode, as
+    the plugin names them: `failure`/`repair` alone, `occ__cc_i` per target
+    otherwise; an on-demand draw is named after the state it enters, and
+    its re-arm after the state it parks in. An `ObjFMInst` names its repair
+    after the state it returns to, and parks in `not_occ` by default."""
     failure_state, repair_state = _mode_states(obj)
-    if len(targets) == 1:
-        return [
-            (f"{name}.fm.failure", targets[0], _OCC),
-            (f"{name}.fm.repair", targets[0], _REP),
-        ]
+    default_parked = "not_occ" if inst_object else f"not_{failure_state}"
+    parked = obj.get("absorb_state") or default_parked
     names = []
     for index, target in enumerate(targets, start=1):
-        suffix = f"__cc_{index}"
-        names.append((f"{name}.fm{suffix}.{failure_state}{suffix}", target, _OCC))
-        names.append((f"{name}.fm{suffix}.{repair_state}{suffix}", target, _REP))
+        suffix = f"__cc_{index}" if len(targets) > 1 else ""
+        automaton = f"{name}.fm{suffix}"
+        if on_demand:
+            names.append((f"{automaton}.{failure_state}{suffix}", target, _OCC))
+            names.append((f"{automaton}.{parked}{suffix}", target, _PARKED))
+        elif suffix:
+            names.append((f"{automaton}.{failure_state}{suffix}", target, _OCC))
+        else:
+            names.append((f"{automaton}.failure", target, _OCC))
+        repair = (
+            f"{automaton}.{repair_state}{suffix}" if suffix or inst_object else f"{automaton}.repair"
+        )
+        names.append((repair, target, _REP))
     return names
 
 
@@ -1054,20 +1100,25 @@ def _convert_mode(
     if missing:
         raise _Refused("mode on a refused component", f"targets {missing}")
 
-    failure = _order_laws(obj.get("failure") or [], targets, "failure")
+    inst_object = obj.get("type") == "ObjFMInst"
+    failures, repairs = _declared_laws(obj, targets)
+    failure = _order_laws(failures, targets, "failure")
     if failure is None:
         # No order carries a law (a zero rate reads as none): the declaration
         # route builds no automaton either, so the mode is not activated.
         notes.append(f"mode `{name}` declares no active occurrence law and is not activated")
         return []
-    occurrence = _law(failure, "occurrence")
+    occurrence = _law(failure, "occurrence", occurrence=True)
     repair_cond = obj.get("repair_cond", True)
     repair = None
     if repair_cond is False:
         repair = None
     elif repair_cond in (True, None):
-        repair_law = _order_laws(obj.get("repair") or [], targets, "repair")
+        repair_law = _order_laws(repairs, targets, "repair")
         repair = None if repair_law is None else _law(repair_law, "repair")
+        if repair is not None and repair["distrib"] == "exp" and float(repair.get("rate", 0.0)) == 0.0:
+            # An exponential repair at rate zero never fires: no repair.
+            repair = None
     else:
         raise _Refused("repair condition", "the study format has no repair condition")
 
@@ -1116,7 +1167,8 @@ def _convert_mode(
             except (ValueError, KeyError) as error:
                 raise _Refused("mode condition", str(error)) from error
         activations.append(activation)
-    for declared, target, which in _mode_transitions(name, obj, targets):
+    on_demand = occurrence["distrib"] == "inst"
+    for declared, target, which in _mode_transitions(name, obj, targets, on_demand, inst_object):
         rename[declared] = f"{target}.{mode}.{which}"
     return activations
 
@@ -1224,23 +1276,43 @@ def _first_difference(left: dict, right: dict) -> str:
 _DATED_LAWS = frozenset({"delay", "watched", "inst"})
 
 
+def _is_choice(transition: dict) -> bool:
+    """An instantaneous transition drawing one of several branches."""
+    if transition.get("distrib") != "inst" or len(transition.get("targets", [])) < 2:
+        return False
+    probs = list(transition.get("probs", []))
+    probs.append(1.0 - sum(probs))
+    return sum(1 for p in probs if p > 0.0) > 1
+
+
+def _targets(model) -> dict[str, list[str]]:
+    """The destination states of every transition, by qualified name."""
+    return {
+        f"{component['name']}.{automaton['name']}.{transition['name']}": transition.get("targets", [])
+        for component in _body(model)["components"]
+        for automaton in component.get("automata", [])
+        for transition in automaton.get("transitions", [])
+    }
+
+
 def _stochastic_names(model) -> set[str]:
-    """Qualified names of the transitions drawing a random date."""
+    """Qualified names of the transitions a random number decides: a
+    random date, or a random branch."""
     return {
         f"{component['name']}.{automaton['name']}.{transition['name']}"
         for component in _body(model)["components"]
         for automaton in component.get("automata", [])
         for transition in automaton.get("transitions", [])
-        if transition.get("distrib", "delay") not in _DATED_LAWS
+        if transition.get("distrib", "delay") not in _DATED_LAWS or _is_choice(transition)
     }
 
 
 def _replay_covers(model) -> bool:
-    """Whether deferred mode can replay every random draw of `model`: an
-    instantaneous transition with branch probabilities draws its branch at
-    once, which deferred mode does not defer."""
+    """Whether deferred mode can replay every random draw of `model`: it
+    holds random dates and random branches of instantaneous transitions,
+    not a timed law with several branches."""
     return not any(
-        transition.get("distrib") == "inst" or len(transition.get("targets", [])) > 1
+        len(transition.get("targets", [])) > 1 and transition.get("distrib") != "inst"
         for component in _body(model)["components"]
         for automaton in component.get("automata", [])
         for transition in automaton.get("transitions", [])
@@ -1265,13 +1337,14 @@ def _armed(session, rename: dict[str, str] | None) -> dict[str, tuple]:
     return armed
 
 
-def _drawn_trajectory(declared_model, seed: int, t_max: float) -> list[tuple[float, str]]:
-    """One trajectory drawn on the declaration route: (date, transition)."""
+def _drawn_trajectory(declared_model, seed: int, t_max: float) -> list[tuple[float, str, str]]:
+    """One trajectory drawn on the declaration route: (date, transition,
+    state entered)."""
     from .. import interactive
 
     drawn = interactive(declared_model, t_max=t_max, seed=seed)
     drawn.advance_to(t_max)
-    return [(event.time, event.transition) for event in drawn.history()]
+    return [(event.time, event.transition, event.to_state) for event in drawn.history()]
 
 
 def _replay(
@@ -1279,7 +1352,7 @@ def _replay(
     library_model,
     rename: dict[str, str],
     stochastic: set[str],
-    plan: list[tuple[float, str]],
+    plan: list[tuple[float, str, str | None]],
     t_max: float,
     attributes: list[str],
     states: list[str],
@@ -1290,10 +1363,11 @@ def _replay(
     declaration transitions fired.
 
     A `recorded` plan is a drawn trajectory, every event in it, of which
-    the random ones are fired at their dates. Otherwise the plan lists only
-    random transitions to force: each is fired at its date once both routes
-    have advanced there, and skipped when the declaration route does not
-    have it armed then."""
+    the random ones are fired at their dates, a random branch taking the
+    state the trajectory entered. Otherwise the plan lists only random
+    transitions to force: each is fired at its date once both routes have
+    advanced there (a branch taking its first destination), and skipped
+    when the declaration route does not have it armed then."""
     from .. import interactive
 
     sessions = [
@@ -1320,7 +1394,8 @@ def _replay(
     # the same-date consequences (zero delays) fire before reading.
     previous = 0.0
     compare("at t=0")
-    for date, transition in plan:
+    branches = [_targets(declared_model), _targets(library_model)]
+    for date, transition, entered in plan:
         if date > previous:
             middle = (previous + date) / 2.0
             for session in sessions:
@@ -1329,22 +1404,39 @@ def _replay(
             previous = date
         if transition not in stochastic:
             continue
-        if not recorded:
+        armed = {d["transition"] for d in sessions[0].deferred()}
+        if transition not in armed:
+            # Armed by a same-date consequence (a zero delay) of an earlier
+            # draw: let the events due at this date fire first.
             for session in sessions:
                 session.advance_to(date)
-            if transition not in {d["transition"] for d in sessions[0].deferred()}:
-                continue
+            armed = {d["transition"] for d in sessions[0].deferred()}
+        if not recorded and transition not in armed:
+            continue
+        mapped = rename.get(transition)
+        if mapped is None:
+            raise _Divergence(f"fired transition `{transition}` has no library counterpart")
+        # The law each route is about to resolve: a branch choice is armed
+        # only within its instant, so the observations between dates
+        # never see it.
+        left = _armed(sessions[0], rename).get(mapped)
+        right = _armed(sessions[1], None).get(mapped)
+        if left != right:
+            raise _Divergence(
+                f"at t={date}: armed transition `{mapped}` differs: declaration {left}, library {right}"
+            )
+        targets = branches[0].get(transition, [])
+        branch = None
+        if len(targets) > 1:
+            branch = targets.index(entered) if entered in targets else 0
         try:
-            sessions[0].fire_deferred_at(transition, date)
+            sessions[0].fire_deferred_at(transition, date, branch)
         except Exception as error:
             raise RuntimeError(
                 f"the declaration route cannot replay its own draw `{transition}` at {date}: {error}"
             ) from error
-        mapped = rename.get(transition)
-        if mapped is None:
-            raise _Divergence(f"fired transition `{transition}` has no library counterpart")
         try:
-            sessions[1].fire_deferred_at(mapped, date)
+            sessions[1].fire_deferred_at(mapped, date, branch)
         except Exception as error:
             raise _Divergence(f"the library route cannot fire `{mapped}` at {date}: {error}") from error
     if t_max > previous:
@@ -1498,6 +1590,12 @@ def compare_routes(
             fired |= replay(_drawn_trajectory(declared_model, seed, t_max), recorded=True)
         except _Divergence as divergence:
             return RouteComparison(False, level, f"seed {seed}: {divergence}", len(seeds))
+        except RuntimeError as unfaithful:
+            # The declaration route could not replay its own draw: the
+            # replay proves nothing for this trajectory, which is no proof.
+            return RouteComparison(
+                False, "replay-partial", f"seed {seed}: replay not faithful: {unfaithful}", len(seeds)
+            )
     returns = {
         name: declared
         for declared, name in conversion.rename.items()
@@ -1506,12 +1604,12 @@ def compare_routes(
     for transition in sorted(declared_draws & set(conversion.rename) - fired):
         if transition in fired:
             continue
-        plan = [(t_max / 3.0, transition)]
+        plan = [(t_max / 3.0, transition, None)]
         target = conversion.rename[transition]
         if target.endswith(f".{_OCC}"):
             back = returns.get(f"{target[: -len(_OCC)]}{_REP}")
             if back is not None:
-                plan.append((2.0 * t_max / 3.0, back))
+                plan.append((2.0 * t_max / 3.0, back, None))
         try:
             fired |= replay(plan, recorded=False)
         except _Divergence as divergence:

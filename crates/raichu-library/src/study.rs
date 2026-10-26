@@ -373,9 +373,10 @@ fn emit_mode(
         DocumentKind::Study,
         &active.occurrence.1,
         &context,
+        true,
     )?;
     let repair = match &active.repair {
-        Some((value, pointer)) => Some(law(value, DocumentKind::Study, pointer, &context)?),
+        Some((value, pointer)) => Some(law(value, DocumentKind::Study, pointer, &context, false)?),
         None => None,
     };
     let automaton = mode_automaton(

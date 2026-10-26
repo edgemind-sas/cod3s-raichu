@@ -87,3 +87,38 @@ def test_a_drawn_session_has_nothing_deferred():
 def test_deferred_draws_and_operator_control_exclude_each_other():
     with pytest.raises(ValueError, match="deferred_draws"):
         pyraichu.interactive(_pump(), t_max=10.0, deferred_draws=True, operator_control=True)
+
+
+def _on_demand() -> dict:
+    """A start drawn when a demand rises at 1: running (0.9) or refused."""
+    return {
+        "name": "on_demand",
+        "components": [
+            {
+                "name": "B",
+                "attributes": [],
+                "automata": [
+                    {"name": "demand", "states": ["idle", "asked"], "init": "idle",
+                     "transitions": [{"name": "ask", "source": "idle", "targets": ["asked"],
+                                      "distrib": "delay", "time": 1.0}]},
+                    {"name": "start", "states": ["ready", "running", "refused"], "init": "ready",
+                     "transitions": [{"name": "draw", "source": "ready",
+                                      "targets": ["running", "refused"],
+                                      "distrib": "inst", "probs": [0.9],
+                                      "guard": {"op": "state_active", "state": {
+                                          "component": "B", "automaton": "demand", "state": "asked"}}}]},
+                ],
+            }
+        ],
+    }
+
+
+def test_a_branch_choice_waits_and_takes_the_branch_the_caller_forces():
+    session = pyraichu.interactive(_on_demand(), t_max=5.0, deferred_draws=True)
+    session.advance_to(3.0)
+    (armed,) = session.deferred()
+    assert (armed["transition"], armed["armed_at"]) == ("B.start.draw", 1.0)
+    assert armed["law"]["distrib"] == "inst"
+    assert session.state("B.start") == "ready"
+    event = session.fire_deferred_at("B.start.draw", 3.0, branch=1)
+    assert (event.time, event.to_state) == (3.0, "refused")
