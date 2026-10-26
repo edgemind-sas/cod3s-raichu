@@ -227,6 +227,9 @@ impl<'m> Engine<'m> {
         }
         let forced = match branch {
             Some(branch) => Some(self.resolve_branch(trans_idx, branch)?),
+            None if self.config.deferred_choices && self.operator_choice(trans_idx) => {
+                return Err(EngineError::HeldChoiceNeedsBranch { transition: name });
+            }
             None => None,
         };
         if !t.is_finite() || t < self.time {

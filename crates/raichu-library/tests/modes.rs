@@ -475,3 +475,156 @@ fn two_catalogued_modes_with_one_name_are_refused() {
         err.message
     );
 }
+
+// ---- on-demand laws -------------------------------------------------------
+
+fn backup_library() -> Library {
+    library(
+        json!({"name": "standby", "version": "1.0.0", "imports": ["std"], "types": [
+            {"name": "Command",
+             "uses": [{"fragment": "std.bool_source_out", "with": {"name": "ctrl"}}],
+             "modes": [{"name": "lost", "nature": "failure", "effects": [{"attribute": "ctrl_fed_available_out", "value": false}]}]},
+            {"name": "Backup",
+             "uses": [
+                {"fragment": "std.bool_flow_in", "with": {"name": "ctrl"}},
+                {"fragment": "std.bool_source_out", "with": {"name": "elec"}}
+             ],
+             "modes": [{"name": "refusal", "nature": "failure", "effects": [{"attribute": "elec_fed_available_out", "value": false}]}]}
+        ]}),
+    )
+}
+
+fn backup_system() -> SystemModel {
+    system(
+        json!({"name": "standby", "library": {"name": "standby", "version": "1.0.0"},
+        "instances": [{"name": "C", "type": "Command"}, {"name": "B", "type": "Backup"}],
+        "connections": [{"from": "C.ctrl_out", "to": "B.ctrl_in"}],
+        "indicators": [{"name": "elec", "target": "attribute", "attr": {"component": "B", "attribute": "elec_fed_out"}}]}),
+    )
+}
+
+/// The backup is solicited when its command is lost (at 2), and refuses to
+/// start with probability `p`; a refusal is repaired after 5.
+fn on_demand_study(p: f64) -> StudyDocument {
+    let solicited = json!({"op": "cmp", "cmp": "eq", "lhs": attr("B", "ctrl_fed_in"),
+                           "rhs": {"op": "const", "value": boolean(false)}});
+    study(json!({"name": "s", "system": "standby", "modes": [
+        {"mode": "lost", "instances": ["C"], "occurrence": delay(2.0)},
+        {"mode": "refusal", "instances": ["B"], "occurrence": {"distrib": "inst", "probs": [p]},
+         "repair": delay(5.0), "condition": solicited}
+    ]}))
+}
+
+#[test]
+fn an_on_demand_mode_draws_once_on_the_rising_edge_of_its_solicitation() {
+    let model = expand(
+        &[backup_library()],
+        &backup_system(),
+        Some(&on_demand_study(0.3)),
+    )
+    .unwrap()
+    .model;
+    let backup = model.components.iter().find(|c| c.name == "B").unwrap();
+    let mode = backup
+        .automata
+        .iter()
+        .find(|a| a.name == "refusal")
+        .unwrap();
+    assert_eq!(mode.states, vec!["rep", "occ", "parked"]);
+    let names: Vec<_> = mode.transitions.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["occ", "parked", "rep"]);
+    let draw = &mode.transitions[0];
+    assert_eq!(draw.targets, vec!["occ", "parked"]);
+    assert_eq!(
+        draw.distrib,
+        raichu_model::Distrib::Inst { probs: vec![0.3] }
+    );
+    assert_eq!(draw.monitored_states, Some(vec!["occ".to_owned()]));
+    assert!(draw.monitored);
+    assert_eq!(draw.kind, Some(raichu_model::TransitionKind::Failure));
+    assert_eq!(draw.cycle_group.as_deref(), Some("refusal"));
+    // The re-arm waits for the solicitation to fall, and is no event.
+    let rearm = &mode.transitions[1];
+    assert_eq!(
+        (rearm.source.as_str(), rearm.targets.clone()),
+        ("parked", vec!["rep".to_owned()])
+    );
+    assert!(!rearm.monitored);
+    assert_eq!((rearm.kind, rearm.cycle_group.clone()), (None, None));
+}
+
+#[test]
+fn a_certain_refusal_cuts_the_backup_when_it_is_solicited() {
+    let model = expand(
+        &[backup_library()],
+        &backup_system(),
+        Some(&on_demand_study(1.0)),
+    )
+    .unwrap()
+    .model;
+    let result = run(&model, 6.0);
+    assert_eq!(
+        events(&result),
+        vec![
+            ("C.lost.occ".to_owned(), 2.0),
+            ("B.refusal.occ".to_owned(), 2.0)
+        ]
+    );
+    let model = expand(
+        &[backup_library()],
+        &backup_system(),
+        Some(&on_demand_study(0.0)),
+    )
+    .unwrap()
+    .model;
+    let result = run(&model, 6.0);
+    // A start that never fails parks the draw: no refusal event.
+    assert_eq!(events(&result), vec![("C.lost.occ".to_owned(), 2.0)]);
+}
+
+#[test]
+fn an_on_demand_repair_law_is_refused() {
+    let mut st = on_demand_study(0.3);
+    st.modes[1].repair = Some(json!({"distrib": "inst", "probs": [0.5]}));
+    let err = expand(&[backup_library()], &backup_system(), Some(&st)).unwrap_err();
+    assert!(err.message.contains("repair"), "{}", err.message);
+}
+
+#[test]
+fn a_lost_draw_parks_for_the_solicitation_and_re_arms_when_it_falls() {
+    // The command is lost on [2, 3), [5, 6), ...: the backup is solicited
+    // then. A start that never fails parks each draw and re-arms between.
+    let mut st = on_demand_study(0.0);
+    st.modes[0].repair = Some(json!({"distrib": "delay", "time": 1.0}));
+    // An activation asking for another interruption policy keeps `reset`
+    // on the draw: a solicitation that falls within its instant cancels it.
+    st.modes[1].on_interruption = Some(raichu_model::InterruptionPolicy::Continue);
+    st.modes[1].repair = None;
+    let model = expand(&[backup_library()], &backup_system(), Some(&st))
+        .unwrap()
+        .model;
+    let backup = model.components.iter().find(|c| c.name == "B").unwrap();
+    let mode = backup
+        .automata
+        .iter()
+        .find(|a| a.name == "refusal")
+        .unwrap();
+    assert!(mode.transitions[..2]
+        .iter()
+        .all(|t| t.on_interruption == raichu_model::InterruptionPolicy::Reset));
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let mut engine = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 7.0,
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    for t in [1.0, 2.5, 4.0, 5.5] {
+        engine.advance_to(t).unwrap();
+        seen.push(engine.state("B.refusal").unwrap().to_owned());
+    }
+    assert_eq!(seen, vec!["rep", "parked", "rep", "parked"]);
+}

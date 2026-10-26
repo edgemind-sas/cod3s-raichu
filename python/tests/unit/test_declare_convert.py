@@ -254,14 +254,72 @@ def test_a_multi_target_mode_with_independent_orders_only_converts_per_target():
     assert comparison.identical, comparison.detail
 
 
-def test_an_on_demand_law_is_refused_by_name():
-    doc = two_pumps()
-    doc["components"]["P1__fail"] = exp_mode(
-        "fail", ["P1"], {"water_fed_available_out": False}, cls="ObjFMInst", rate=0.02,
-        cond=[[{"attr": "water_fed_in", "ope": "==", "value": True}]],
+def standby_plant(prob=0.3) -> dict:
+    """A command feeding a backup set that starts only when the command is
+    lost: its start fails on demand with probability `prob`, and a failed
+    start is repaired."""
+    elec = flow_out("elec", [[{"name": "ctrl", "port": "in", "negate": True}]])
+    return document(
+        [
+            component("cmd", [flow_out("ctrl", produced=True)], class_name="Command"),
+            component("backup", [flow_in("ctrl"), elec], class_name="Backup"),
+            component("load", [flow_in("elec")], class_name="Load"),
+            exp_mode("lost", ["cmd"], {"ctrl_fed_available_out": False}, rate=2e-2, repair=0.5),
+            exp_mode(
+                "refusal", ["backup"], {"elec_fed_available_out": False}, cls="ObjFMInst",
+                rate=prob, repair=0.1,
+                cond=[[{"attr": "ctrl_fed_in", "ope": "==", "value": False}]],
+            ),
+            event("blackout", [[{"obj": "load", "attr": "elec_fed_in", "ope": "==", "value": False}]]),
+        ],
+        [link("cmd", "backup", "ctrl"), link("backup", "load", "elec")],
     )
-    (refusal,) = convert(doc).refusals
-    assert (refusal.component, refusal.construct) == ("P1__fail", "on-demand law (`inst`)")
+
+
+def test_an_on_demand_mode_converts_and_matches_by_replay():
+    declaration = standby_plant()
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    (activation,) = [a for a in conversion.study["study"]["modes"] if a["mode"] == "refusal"]
+    assert activation["occurrence"] == {"distrib": "inst", "probs": [0.3]}
+    assert conversion.rename["backup__refusal.fm.occ"] == "backup.refusal.occ"
+    assert conversion.rename["backup__refusal.fm.not_occ"] == "backup.refusal.parked"
+    comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(6))
+    assert comparison.identical, comparison.detail
+    assert comparison.level == "replay"
+
+
+def test_a_wrong_on_demand_probability_is_reported_divergent():
+    declaration = standby_plant()
+    wrong = copy.deepcopy(convert(declaration))
+    for activation in wrong.study["study"]["modes"]:
+        if activation["mode"] == "refusal":
+            activation["occurrence"]["probs"] = [0.31]
+    comparison = compare_routes(declaration, wrong, t_max=2000.0, seeds=range(2))
+    assert not comparison.identical
+    assert "backup.refusal.occ" in comparison.detail
+
+
+def test_an_on_demand_repair_law_is_refused_by_name():
+    declaration = standby_plant()
+    spec = declaration["components"]["backup__refusal"]
+    spec["cls"] = "ObjMode2S"
+    for key in ("failure_effects", "failure_param_name", "failure_param", "repair_param_name",
+                "repair_param", "failure_cond", "fm_name"):
+        spec.pop(key, None)
+    spec.update({
+        "mode_name": "refusal",
+        "occ_law": {"cls": "exp", "rate": [1e-2]},
+        "occ_effects": {"elec_fed_available_out": False},
+        "occ_param_name": ["lambda"], "occ_param": [1e-2],
+        "not_occ_state": "rep",
+        "not_occ_law": {"cls": "inst", "prob": [0.5]},
+        "not_occ_param_name": ["not_occ_prob"], "not_occ_param": [0.5],
+    })
+    refusals = convert(declaration).refusals
+    assert ("backup__refusal", "on-demand repair law (`inst`)") in [
+        (r.component, r.construct) for r in refusals
+    ]
 
 
 def test_a_controller_is_refused_by_name():
@@ -648,3 +706,15 @@ def test_a_temporised_output_reading_a_negated_input_matches():
     conversion = convert(declaration)
     assert conversion.converted, conversion.refusals
     assert compare_routes(declaration, conversion, t_max=2000.0, seeds=range(6)).identical
+
+
+def test_an_internal_on_demand_mode_converts_and_matches():
+    # An ObjFMInst read with its default (internal) behaviour carries its
+    # laws as bare numbers and names its repair after the state it enters.
+    declaration = standby_plant()
+    del declaration["components"]["backup__refusal"]["behaviour"]
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    assert conversion.rename["backup__refusal.fm.rep"] == "backup.refusal.rep"
+    comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(6))
+    assert comparison.identical, comparison.detail

@@ -159,6 +159,15 @@ pub struct EngineConfig {
     /// sequence-tree explorer), or controlled by an interactive operator
     /// ([`StochasticDates::Operator`]).
     pub stochastic_dates: StochasticDates,
+    /// In deferred mode ([`StochasticDates::Deferred`]), also defer the
+    /// random branch choices: an instantaneous transition with several
+    /// branches of positive probability is armed like a deferred clock
+    /// (listed by [`Engine::deferred`], never fired by itself) and the
+    /// caller fires it with a forced branch
+    /// ([`Engine::fire_deferred_at`]), so no random number decides it.
+    /// Off by default: the discretised explorer resolves choices itself.
+    /// Ignored in any other mode.
+    pub deferred_choices: bool,
     /// Per-transition multiplicative factors on the rate of constant-rate
     /// exponential laws, indexed like `CompiledModel::transitions`: the
     /// seam of the biased Monte-Carlo sampler fitted by cross-entropy.
@@ -297,6 +306,7 @@ impl Default for EngineConfig {
             rng_stream: 0,
             flow: FlowConfig::default(),
             stochastic_dates: StochasticDates::Drawn,
+            deferred_choices: false,
             rate_factors: Vec::new(),
         }
     }
@@ -502,6 +512,14 @@ pub enum EngineError {
         transition: String,
         /// The invalid (unknown or non-target) state name.
         state: String,
+    },
+    /// Deferred choices ([`EngineConfig::deferred_choices`]): a held
+    /// random branch choice was fired without a branch. Its branch is the
+    /// caller's to give; drawing one would let a random number decide it.
+    #[error("transition `{transition}` is a held branch choice: fire it with a branch")]
+    HeldChoiceNeedsBranch {
+        /// The held choice.
+        transition: String,
     },
     /// Interactive control: a forced destination given by *branch index*
     /// ([`Engine::fire_now`], [`Engine::fire_idx_to_branch`]) is not a

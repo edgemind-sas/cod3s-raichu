@@ -1860,6 +1860,9 @@ impl Interactive {
             } else {
                 StochasticDates::Drawn
             },
+            // A deferred session leaves every random outcome to the
+            // caller, the branch of an instantaneous choice included.
+            deferred_choices: deferred_draws,
             ..EngineConfig::default()
         };
         let (snap, host) = if model.fmu_units.is_empty() {

@@ -2377,9 +2377,11 @@ class Interactive:
     With ``operator_control=True``, stochastic dates are not drawn and
     ``advance_operator_to`` stops before unresolved probabilistic choices.
     With ``deferred_draws=True``, stochastic transitions arm without a date
-    and never fire by themselves: :meth:`deferred` reports each with its law
-    and age, and :meth:`fire_deferred_at` fires one at a chosen instant,
-    which is how a sequence of dates drawn elsewhere is replayed.
+    and never fire by themselves, and an instantaneous transition with
+    several random branches waits likewise instead of drawing one:
+    :meth:`deferred` reports each with its law and age, and
+    :meth:`fire_deferred_at` fires one at a chosen instant (with a chosen
+    branch), which is how a trajectory drawn elsewhere is replayed.
 
     Drive the engine one event at a time under your own control, rather
     than running it to the horizon in one shot:
@@ -2498,7 +2500,9 @@ class Interactive:
         """Fire the deferred transition ``name`` at ``date``.
 
         The deterministic events due before ``date`` fire on the way;
-        ``branch`` forces the destination of a multi-target law. Raises
+        ``branch`` forces the destination of a multi-target law (by
+        position in the transition's targets), which a held branch choice
+        needs. Raises
         :class:`SimulationError` when ``name`` is not armed.
         """
         return self._event(self._raw.fire_deferred_at(name, date, branch))
