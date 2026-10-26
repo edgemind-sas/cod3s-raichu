@@ -1016,3 +1016,21 @@ fn a_competitor_leaving_its_source_is_dropped_with_its_age() {
         .collect();
     assert_eq!(dropped, vec![(1.0, "M.fail.shock", DropReason::SourceLeft)]);
 }
+
+#[test]
+fn a_deferred_transition_fires_by_its_qualified_name() {
+    let compiled = CompiledModel::compile(&laws_model()).unwrap();
+    let mut by_name = Engine::new(&compiled, deferred_config()).unwrap();
+    let mut by_index = Engine::new(&compiled, deferred_config()).unwrap();
+    let fired = by_name
+        .fire_deferred_named_at("B.fail.occ", 2.5, None)
+        .unwrap();
+    let expected = by_index
+        .fire_deferred_at(index(&compiled, "B.fail.occ"), 2.5, None)
+        .unwrap();
+    assert_eq!(fired, expected);
+    let unknown = by_name
+        .fire_deferred_named_at("B.fail.nowhere", 3.0, None)
+        .unwrap_err();
+    assert!(unknown.to_string().contains("B.fail.nowhere"), "{unknown}");
+}

@@ -2376,6 +2376,10 @@ class Interactive:
 
     With ``operator_control=True``, stochastic dates are not drawn and
     ``advance_operator_to`` stops before unresolved probabilistic choices.
+    With ``deferred_draws=True``, stochastic transitions arm without a date
+    and never fire by themselves: :meth:`deferred` reports each with its law
+    and age, and :meth:`fire_deferred_at` fires one at a chosen instant,
+    which is how a sequence of dates drawn elsewhere is replayed.
 
     Drive the engine one event at a time under your own control, rather
     than running it to the horizon in one shot:
@@ -2409,6 +2413,7 @@ class Interactive:
         rng_stream: int = 0,
         flow: FlowConfig | None = None,
         operator_control: bool = False,
+        deferred_draws: bool = False,
     ) -> None:
         if not isinstance(model, Model):
             model = load_model(model)
@@ -2424,6 +2429,7 @@ class Interactive:
             model.allow_fmu_import,
             str(model.base_dir),
             operator_control,
+            deferred_draws,
         )
 
     @property
@@ -2475,6 +2481,27 @@ class Interactive:
             events=[self._event_from_dict(e) for e in raw["events"]],
             choice=raw["choice"],
         )
+
+    def deferred(self) -> list[dict[str, Any]]:
+        """The stochastic transitions armed without a date, ascending by index.
+
+        Each is ``{index, transition, law, armed_at, age, paused, hazard}``:
+        ``law`` is the compiled occurrence law in the model schema's spelling
+        (``{"distrib": "exp", "rate": 0.5}``), ``age`` the time spent armed
+        and running, ``hazard`` the cumulative hazard of a state-dependent
+        rate (``None`` otherwise). Empty unless the session was opened with
+        ``deferred_draws=True``.
+        """
+        return json.loads(self._raw.deferred())
+
+    def fire_deferred_at(self, name: str, date: float, branch: int | None = None) -> Event:
+        """Fire the deferred transition ``name`` at ``date``.
+
+        The deterministic events due before ``date`` fire on the way;
+        ``branch`` forces the destination of a multi-target law. Raises
+        :class:`SimulationError` when ``name`` is not armed.
+        """
+        return self._event(self._raw.fire_deferred_at(name, date, branch))
 
     def set_input(
         self,
@@ -2551,6 +2578,7 @@ def interactive(
     rng_stream: int = 0,
     flow: FlowConfig | None = None,
     operator_control: bool = False,
+    deferred_draws: bool = False,
 ) -> Interactive:
     """Open an :class:`Interactive` session over ``model`` (a
     :class:`Model`, a JSON string, or a dict; plugins are expanded and
@@ -2564,6 +2592,7 @@ def interactive(
         rng_stream=rng_stream,
         flow=flow,
         operator_control=operator_control,
+        deferred_draws=deferred_draws,
     )
 
 

@@ -194,6 +194,19 @@ impl<'m> Engine<'m> {
         self.operator_transaction(|engine| engine.fire_deferred_inner(trans_idx, t, branch))
     }
 
+    /// [`Engine::fire_deferred_at`] on the transition named by its
+    /// qualified name (`component.automaton.transition`), or
+    /// [`EngineError::UnknownTransition`].
+    pub fn fire_deferred_named_at(
+        &mut self,
+        name: &str,
+        t: f64,
+        branch: Option<usize>,
+    ) -> Result<Event, EngineError> {
+        let index = self.transition_index(name)?;
+        self.fire_deferred_at(index, t, branch)
+    }
+
     fn fire_deferred_inner(
         &mut self,
         trans_idx: TransIdx,

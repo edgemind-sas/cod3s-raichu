@@ -255,3 +255,88 @@ exactly as the page's flat model:
 Two of them are generated from the flat model's own constants
 (`examples/<name>/library.py`), because nothing computes at expansion and
 their rates are products of published shares.
+
+## Converting a muscadet declaration
+
+A model built with muscadet, or exported by the COD3S platform, reaches
+RAICHU as a muscadet system declaration: every component written out one
+by one. `pyraichu.muscadet.convert.convert` rewrites such a declaration as
+the three documents of a library:
+
+- one type per knowledge-base class: the platform's `metadata.class_name`,
+  else the Python class the component was read from, else a type of its
+  own named after the instance when the class is the bare `ObjFlow`;
+- values that differ between the instances of a class become type
+  parameters, and a class whose instances differ in structure (another
+  set of flows, a mode with other effects) splits into variant types,
+  which the conversion's `notes` report;
+- each two-state mode becomes a mode of its target's type, its laws and
+  condition an activation in the study; each event becomes a feared event.
+
+```python
+from pyraichu.muscadet.convert import compare_routes, convert
+
+def flow_out(name, cond=None, produced=False):
+    spec = {"cls": "FlowOut", "name": name, "var_prod_default": produced}
+    if cond is not None:
+        spec["var_prod_cond"] = cond
+    return spec
+
+declaration = {
+    "version": "1.0.0",
+    "name": "feeder",
+    "components": {
+        "grid": {"name": "grid", "cls": "ObjFlow", "flows": [flow_out("power", produced=True)]},
+        "load": {"name": "load", "cls": "ObjFlow", "flows": [{"cls": "FlowIn", "name": "power"}]},
+        "grid__outage": {
+            "name": "grid__outage", "kind": "two_state_mode", "cls": "ObjFMExp",
+            "fm_name": "outage", "targets": ["grid"], "target_name": "grid",
+            "failure_effects": {"power_fed_available_out": False},
+            "failure_param_name": ["lambda"], "failure_param": [0.01],
+            "repair_param_name": ["mu"], "repair_param": [0.5],
+        },
+    },
+    "connections": [
+        {"source": "grid", "source_box": "power_out", "target": "load", "target_box": "power_in"}
+    ],
+}
+
+conversion = convert(declaration)
+assert conversion.converted
+assert conversion.study["study"]["modes"][0]["occurrence"] == {"distrib": "exp", "rate": 0.01}
+
+comparison = compare_routes(declaration, conversion, t_max=1000.0, seeds=range(5))
+assert comparison.identical and comparison.level == "replay"
+```
+
+What the format cannot express is refused per component, naming the
+construct, and never dropped: a conversion with one refusal yields no
+documents. In this version the converter carries discrete flows, gates
+fed by outputs, single-target timed modes (several targets only when every
+common-cause order above one is empty) and events. It refuses continuous
+flows and capacities, temporised and triggered outputs, negated outputs,
+structured production operands, common-cause orders, on-demand laws,
+repair conditions, pulse and repair effects, and controllers.
+
+`compare_routes` runs the declaration through both routes, the
+declaration reader and the converted library, and says whether they agree.
+A study with no random date compares one trajectory exactly. A stochastic
+study cannot share a seed between the routes, since they draw in a
+different order, so one trajectory is drawn on the declaration route and
+replayed on both in deferred mode (see
+[interactive simulation](interactive-simulation.md)): each recorded draw
+is fired at its date on both routes and, after every firing, the observed
+attributes and every armed transition's law and age must agree. Checking
+the law is what catches a wrongly converted rate, which a forced date
+would fire anyway. A random transition the drawn trajectories never fire
+is then forced once, so every mode's effects are observed; one that is
+never armed leaves the comparison at `level="replay-partial"`, not
+identical, and names it in `unexercised`. `method="statistical"` compares
+means over at least 30 independent runs per route instead and says so in
+`level`: it only shows that no difference was detected at that sample
+size.
+
+Both routes read the same declaration, so they cannot see behaviour a
+Python class holds outside it. `conversion.unverified` names the
+components whose class is not in `AUDITED_CLASSES`, the classes of models
+proved against the reference engine.

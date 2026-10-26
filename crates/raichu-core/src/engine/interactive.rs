@@ -918,7 +918,7 @@ impl<'m> Engine<'m> {
 
     /// Resolve a qualified transition name to its index, or
     /// [`EngineError::UnknownTransition`].
-    fn transition_index(&self, name: &str) -> Result<TransIdx, EngineError> {
+    pub(super) fn transition_index(&self, name: &str) -> Result<TransIdx, EngineError> {
         self.model
             .transitions
             .iter()
