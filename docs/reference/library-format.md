@@ -160,8 +160,10 @@ the engine's, and the expanded model records it. A library imports it with
 | `bool_flow_in` | `name`, `logic` (`and`, `or`, `k`), `k`, `default` | in port `<name>_in`, attribute `<name>_fed_in` true while the connected sources feed it under `logic`; an input nothing feeds reads `default` |
 | `bool_flow_out` | `name`, `prod_cond`, `fed_available_init` | out port `<name>_out` exporting `<name>_fed_out`, true while the production condition holds and `<name>_fed_available_out` is true |
 | `bool_source_out` | `name`, `prod_init`, `fed_available_init` | the same output with no production condition: a constant source, or a dormant function when `prod_init` is false |
+| `bool_flow_out_tempo` | `name`, `prod_cond`, `conditioned`, `prod_init`, `fed_available_init`, `init_enable`, `enable_law` (`delay`, `exp`), `enable_value`, `disable_law`, `disable_value` | a temporised output (muscadet `FlowOutTempo`): `<name>_fed_out` is true while the automaton `<name>_tempo` is `enabled` and `<name>_fed_available_out` holds; the transitions `<name>_enable` and `<name>_disable` wait on their law once the production condition holds or fails, and restart when it changes again first. `conditioned: false` leaves `<name>_prod_available` at `prod_init` |
 | `logic_gate` | `name`, `logic`, `k`, `default` | a boolean input re-exported on the out port `<name>_out` |
 | `state_out` | `name`, `automaton`, `states`, `init` | whether `automaton` is in one of `states`, as the boolean `<name>` on the out port `<name>_out`: how a neighbour reads a state (`any`, `all`, or `sum` to count) |
+| `bool_not` | `of`, `init` | the attribute `<of>_not`, the negation of the boolean attribute `<of>` of the instance: how a production condition, which reads attributes only, reads a flow being absent (`[["ctrl_fed_in_not"]]`) |
 
 The continuous fragments build a conservative flow network out of
 component-local declarations: each output publishes, on every connection,

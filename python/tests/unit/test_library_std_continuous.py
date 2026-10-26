@@ -389,7 +389,15 @@ def test_the_fragment_agrees_with_its_plugin_counterpart(bench):
 
 
 #: The fragments of `std` that are not continuous, left out of the guard below.
-BOOLEAN_FRAGMENTS = {"bool_flow_in", "bool_flow_out", "bool_source_out", "logic_gate", "state_out"}
+BOOLEAN_FRAGMENTS = {
+    "bool_flow_in",
+    "bool_flow_out",
+    "bool_source_out",
+    "bool_flow_out_tempo",
+    "bool_not",
+    "logic_gate",
+    "state_out",
+}
 
 
 def test_the_benches_exercise_every_continuous_fragment():

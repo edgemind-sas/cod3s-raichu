@@ -209,11 +209,12 @@ fn the_standard_library_parses_checks_and_carries_the_engine_version() {
     // (`std_continuous.rs`).
     let names: Vec<&str> = std.fragments.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(
-        names[..4],
+        names[..5],
         [
             "bool_flow_in",
             "bool_flow_out",
             "bool_source_out",
+            "bool_flow_out_tempo",
             "logic_gate"
         ]
     );
@@ -408,4 +409,137 @@ fn same_date_failures_and_the_vote_keep_their_order() {
     let flat = events(&flat_voting([2.0, 2.0, 9.0], false), 20.0);
     let lib = events(&library_voting([2.0, 2.0, 9.0], false), 20.0);
     assert_eq!(lib, flat);
+}
+
+fn tempo_library(with: Value) -> Library {
+    library(
+        json!({"name": "demo", "version": "1.0.0", "imports": ["std"], "types": [
+            {"name": "Source",
+             "uses": [{"fragment": "std.bool_source_out", "with": {"name": "x"}}],
+             "modes": [{"name": "fail", "nature": "failure", "effects": [{"attribute": "x_fed_available_out", "value": false}]}]},
+            {"name": "Backup",
+             "uses": [
+                {"fragment": "std.bool_flow_in", "with": {"name": "x"}},
+                {"fragment": "std.bool_flow_out_tempo", "with": with}
+             ]}
+        ]}),
+    )
+}
+
+#[test]
+fn a_temporised_output_enables_and_disables_after_its_delays() {
+    let lib = tempo_library(json!({"name": "y", "prod_cond": [["x_fed_in"]],
+        "enable_value": 3.0, "disable_value": 2.0}));
+    let s = system(json!({"name": "s", "library": binding(),
+        "instances": [{"name": "S", "type": "Source"}, {"name": "B", "type": "Backup"}],
+        "connections": [{"from": "S.x_out", "to": "B.x_in"}],
+        "indicators": [watch("y", "B", "y_fed_out")]}));
+    let st = study(json!({"name": "st", "system": "s",
+        "modes": [{"mode": "fail", "instances": ["S"], "occurrence": delay(10.0)}]}));
+    let result = run(&expand(&[lib], &s, Some(&st)).unwrap().model, 20.0);
+    // Produced from 0, enabled after 3; the source fails at 10 and the
+    // output keeps feeding until the disable delay ends at 12.
+    assert_eq!(
+        series(&result, "y"),
+        vec![
+            (0.0, V::Bool(false)),
+            (3.0, V::Bool(true)),
+            (12.0, V::Bool(false))
+        ]
+    );
+}
+
+#[test]
+fn a_temporised_output_may_start_enabled_and_draw_its_waits() {
+    let lib = tempo_library(
+        json!({"name": "y", "prod_cond": [["x_fed_in"]], "init_enable": true,
+        "disable_law": "exp", "disable_value": 0.5}),
+    );
+    let s = system(json!({"name": "s", "library": binding(),
+        "instances": [{"name": "S", "type": "Source"}, {"name": "B", "type": "Backup"}],
+        "connections": [{"from": "S.x_out", "to": "B.x_in"}]}));
+    let model = expand(&[lib], &s, None).unwrap().model;
+    let backup = model.components.iter().find(|c| c.name == "B").unwrap();
+    let tempo = backup
+        .automata
+        .iter()
+        .find(|a| a.name == "y_tempo")
+        .unwrap();
+    assert_eq!(tempo.init, "enabled");
+    let names: Vec<_> = tempo.transitions.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["y_enable", "y_disable"]);
+    assert!(matches!(
+        tempo.transitions[1].distrib,
+        raichu_model::Distrib::Exp { rate: Some(rate), .. } if rate == 0.5
+    ));
+}
+
+#[test]
+fn a_negation_feeds_a_production_condition_while_its_source_is_false() {
+    // A backup produces only while the command does NOT arrive.
+    let lib = library(
+        json!({"name": "demo", "version": "1.0.0", "imports": ["std"], "types": [
+            {"name": "Command",
+             "uses": [{"fragment": "std.bool_source_out", "with": {"name": "ctrl"}}],
+             "modes": [{"name": "fail", "nature": "failure", "effects": [{"attribute": "ctrl_fed_available_out", "value": false}]}]},
+            {"name": "Backup",
+             "uses": [
+                {"fragment": "std.bool_flow_in", "with": {"name": "ctrl"}},
+                {"fragment": "std.bool_not", "with": {"of": "ctrl_fed_in"}},
+                {"fragment": "std.bool_flow_out", "with": {"name": "elec", "prod_cond": [["ctrl_fed_in_not"]]}}
+             ]}
+        ]}),
+    );
+    let s = system(json!({"name": "s", "library": binding(),
+        "instances": [{"name": "C", "type": "Command"}, {"name": "B", "type": "Backup"}],
+        "connections": [{"from": "C.ctrl_out", "to": "B.ctrl_in"}],
+        "indicators": [watch("elec", "B", "elec_fed_out")]}));
+    let st = study(json!({"name": "st", "system": "s",
+        "modes": [{"mode": "fail", "instances": ["C"], "occurrence": delay(4.0), "repair": delay(2.0)}]}));
+    // The command fails at 4, is repaired at 6 (and would fail again at 10).
+    let result = run(&expand(&[lib], &s, Some(&st)).unwrap().model, 9.0);
+    assert_eq!(
+        series(&result, "elec"),
+        vec![
+            (0.0, V::Bool(false)),
+            (4.0, V::Bool(true)),
+            (6.0, V::Bool(false))
+        ]
+    );
+}
+
+#[test]
+fn a_temporised_wait_restarts_when_the_condition_fails_before_it_ends() {
+    // The source is up on [0, 2), [3, 5), [6, 8): windows of 2, shorter
+    // than the 3-unit enable wait. A wait that restarts on each
+    // interruption never ends; one that kept its age would end at 4.
+    let lib = tempo_library(json!({"name": "y", "prod_cond": [["x_fed_in"]], "enable_value": 3.0}));
+    let s = system(json!({"name": "s", "library": binding(),
+        "instances": [{"name": "S", "type": "Source"}, {"name": "B", "type": "Backup"}],
+        "connections": [{"from": "S.x_out", "to": "B.x_in"}],
+        "indicators": [watch("y", "B", "y_fed_out")]}));
+    let st = study(json!({"name": "st", "system": "s",
+        "modes": [{"mode": "fail", "instances": ["S"], "occurrence": delay(2.0), "repair": delay(1.0)}]}));
+    let result = run(&expand(&[lib], &s, Some(&st)).unwrap().model, 8.0);
+    assert_eq!(series(&result, "y"), vec![(0.0, V::Bool(false))]);
+}
+
+#[test]
+fn a_never_ending_wait_builds_no_transition() {
+    let lib = tempo_library(
+        json!({"name": "y", "prod_cond": [["x_fed_in"]], "init_enable": true,
+        "disable_law": "never"}),
+    );
+    let s = system(json!({"name": "s", "library": binding(),
+        "instances": [{"name": "S", "type": "Source"}, {"name": "B", "type": "Backup"}],
+        "connections": [{"from": "S.x_out", "to": "B.x_in"}]}));
+    let model = expand(&[lib], &s, None).unwrap().model;
+    let backup = model.components.iter().find(|c| c.name == "B").unwrap();
+    let tempo = backup
+        .automata
+        .iter()
+        .find(|a| a.name == "y_tempo")
+        .unwrap();
+    let names: Vec<_> = tempo.transitions.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["y_enable"]);
 }

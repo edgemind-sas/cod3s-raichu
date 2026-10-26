@@ -482,3 +482,169 @@ def test_a_condition_on_a_repair_state_named_not_occ_keeps_its_meaning():
     assert '"state": "rep"' in json.dumps(feared["up"]["condition"])
     comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(4))
     assert comparison.identical, comparison.detail
+
+
+# --- temporised outputs (FlowOutTempo) -------------------------------------
+
+
+def tempo_out(name: str, cond=None, enable=None, disable=None, init_enable=False, produced=False) -> dict:
+    spec = flow_out(name, cond, produced=produced)
+    spec["cls"] = "FlowOutTempo"
+    spec["init_enable"] = init_enable
+    if enable is not None:
+        spec["occ_enable_flow"] = enable
+    if disable is not None:
+        spec["occ_disable_flow"] = disable
+    return spec
+
+
+def backup_plant(enable, disable, rate=1e-2) -> dict:
+    """A source feeding a backup whose output switches on and off with
+    delays, the source failing and being repaired."""
+    return document(
+        [
+            component("src", [flow_out("power", produced=True)], class_name="Source"),
+            component(
+                "backup",
+                [flow_in("power"), tempo_out("relief", [["power"]], enable=enable, disable=disable)],
+                class_name="Backup",
+            ),
+            component("load", [flow_in("relief")], class_name="Load"),
+            exp_mode("lost", ["src"], {"power_fed_available_out": False}, rate=rate, repair=0.2),
+            event("starved", [[{"obj": "load", "attr": "relief_fed_in", "ope": "==", "value": False}]]),
+        ],
+        [link("src", "backup", "power"), link("backup", "load", "relief")],
+    )
+
+
+def test_a_temporised_output_converts_to_the_tempo_fragment():
+    declaration = backup_plant({"cls": "DelayOccDistribution", "time": 3.0}, {"cls": "DelayOccDistribution", "time": 0.5})
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    (use,) = [u for u in types_of(conversion)["Backup"]["uses"] if u["fragment"] == "std.bool_flow_out_tempo"]
+    assert use["with"] == {
+        "name": "relief",
+        "prod_cond": [["power_fed_in"]],
+        "fed_available_init": True,
+        "init_enable": False,
+        "enable_law": "delay",
+        "enable_value": 3.0,
+        "disable_law": "delay",
+        "disable_value": 0.5,
+    }
+    comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(6))
+    assert comparison.identical, comparison.detail
+    assert comparison.level == "replay"
+
+
+def test_a_temporised_output_drawing_its_waits_matches_by_replay():
+    declaration = backup_plant({"cls": "ExpOccDistribution", "rate": 0.5}, {"cls": "ExpOccDistribution", "rate": 2.0})
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(6))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_wrong_enable_delay_is_reported_divergent():
+    declaration = backup_plant({"cls": "DelayOccDistribution", "time": 3.0}, {"cls": "DelayOccDistribution", "time": 0.5})
+    wrong = copy.deepcopy(convert(declaration))
+    for use in types_of(wrong)["Backup"]["uses"]:
+        if use["fragment"] == "std.bool_flow_out_tempo":
+            use["with"]["enable_value"] = 3.5
+    assert not compare_routes(declaration, wrong, t_max=2000.0, seeds=range(4)).identical
+
+
+def test_every_blocking_construct_of_a_component_is_named():
+    triggered = {"cls": "FlowOutOnTrigger", "name": "relay"}
+    inverter = component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True), triggered])
+    refusals = convert(document([inverter], [])).refusals
+    assert [(r.component, r.construct) for r in refusals] == [
+        ("inv", "negated output (`negate`)"),
+        ("inv", "flow class `FlowOutOnTrigger`"),
+    ]
+
+
+def test_a_negated_operand_reads_a_std_negation_and_matches():
+    # A backup produces only while its command does NOT arrive.
+    negated = flow_out("elec", [[{"name": "ctrl", "port": "in", "negate": True}]])
+    declaration = document(
+        [
+            component("cmd", [flow_out("ctrl", produced=True)], class_name="Command"),
+            component("backup", [flow_in("ctrl"), negated], class_name="Backup"),
+            component("load", [flow_in("elec")], class_name="Load"),
+            exp_mode("lost", ["cmd"], {"ctrl_fed_available_out": False}, rate=1e-2, repair=0.3),
+        ],
+        [link("cmd", "backup", "ctrl"), link("backup", "load", "elec")],
+    )
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    uses = types_of(conversion)["Backup"]["uses"]
+    assert {"fragment": "std.bool_not", "with": {"of": "ctrl_fed_in"}} in uses
+    assert uses[1]["with"]["prod_cond"] == [["ctrl_fed_in_not"]]
+    comparison = compare_routes(declaration, conversion, t_max=1000.0, seeds=range(6))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_compared_operand_is_still_refused():
+    compared = flow_out("elec", [[{"name": "ctrl", "op": ">=", "value": 1.0}]])
+    (refusal,) = convert(document([component("b", [flow_in("ctrl"), compared])], [])).refusals
+    assert refusal.construct == "structured production operand"
+
+
+def test_a_mode_on_a_component_with_a_negated_operand_converts():
+    negated = flow_out("elec", [[{"name": "ctrl", "port": "in", "negate": True}]])
+    declaration = document(
+        [
+            component("cmd", [flow_out("ctrl", produced=True)], class_name="Command"),
+            component("backup", [flow_in("ctrl"), negated], class_name="Backup"),
+            exp_mode("trip", ["backup"], {"elec_fed_available_out": False}, rate=1e-2),
+        ],
+        [link("cmd", "backup", "ctrl")],
+    )
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    assert compare_routes(declaration, conversion, t_max=500.0, seeds=range(3)).identical
+
+
+def test_an_unconditioned_temporised_output_starting_enabled_matches():
+    # No production condition: the production keeps its default, and the
+    # output starts enabled with a disable wait that never ends.
+    plain = tempo_out("relief", produced=True, init_enable=True,
+                      disable={"cls": "ExpOccDistribution", "rate": 0.0})
+    declaration = document(
+        [
+            component("backup", [plain], class_name="Backup"),
+            component("load", [flow_in("relief")], class_name="Load"),
+            exp_mode("trip", ["backup"], {"relief_fed_available_out": False}, rate=1e-2),
+        ],
+        [link("backup", "load", "relief")],
+    )
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    (use,) = types_of(conversion)["Backup"]["uses"]
+    assert (use["with"]["conditioned"], use["with"]["init_enable"], use["with"]["disable_law"]) == (
+        False,
+        True,
+        "never",
+    )
+    assert compare_routes(declaration, conversion, t_max=500.0, seeds=range(4)).identical
+
+
+def test_a_temporised_output_reading_a_negated_input_matches():
+    relief = tempo_out(
+        "relief",
+        [[{"name": "power", "port": "in", "negate": True}]],
+        enable={"cls": "DelayOccDistribution", "time": 2.0},
+    )
+    declaration = document(
+        [
+            component("src", [flow_out("power", produced=True)], class_name="Source"),
+            component("backup", [flow_in("power"), relief], class_name="Backup"),
+            component("load", [flow_in("relief")], class_name="Load"),
+            exp_mode("lost", ["src"], {"power_fed_available_out": False}, rate=1e-2, repair=0.2),
+        ],
+        [link("src", "backup", "power"), link("backup", "load", "relief")],
+    )
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    assert compare_routes(declaration, conversion, t_max=2000.0, seeds=range(6)).identical

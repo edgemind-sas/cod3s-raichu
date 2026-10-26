@@ -169,6 +169,14 @@ class Conversion:
         return load_system(self.system, [self.library], self.study)
 
 
+class _RefusedAll(Exception):
+    """Every construct of one component the converter cannot express."""
+
+    def __init__(self, refusals: list[_Refused]):
+        super().__init__("; ".join(str(r) for r in refusals))
+        self.refusals = refusals
+
+
 class _Refused(Exception):
     """A component the converter cannot express; carries the refusal."""
 
@@ -200,20 +208,42 @@ def _flow_in_use(name: str, keywords: dict) -> dict:
 
 def _operand_attribute(output: str, operand: Any, inputs: set[str], outputs: set[str]) -> str:
     """The attribute a production operand reads, resolved as the authoring
-    layer resolves it: an input of that name first, else an output."""
-    port = None
+    layer resolves it: an input of that name first, else an output. A
+    negated operand reads the attribute `std.bool_not` publishes,
+    `<attribute>_not` (:data:`_NEGATION_SUFFIX`)."""
+    port, negated = None, False
     if isinstance(operand, dict):
-        if set(operand) - {"name", "port"}:
+        if set(operand) - {"name", "port", "negate"}:
             raise _Refused(
                 "structured production operand",
-                f"output `{output}` reads {operand!r}; the std output reads flow states only",
+                f"output `{output}` reads {operand!r}; the std output reads flow states and their negation only",
             )
-        port, operand = operand.get("port"), operand["name"]
+        port, negated, operand = operand.get("port"), bool(operand.get("negate")), operand["name"]
     if port != "out" and operand in inputs:
-        return f"{operand}_fed_in"
-    if operand in outputs:
-        return f"{operand}_fed_out"
-    raise _Refused("production operand", f"output `{output}` reads `{operand}`, no discrete flow")
+        attribute = f"{operand}_fed_in"
+    elif operand in outputs:
+        attribute = f"{operand}_fed_out"
+    else:
+        raise _Refused("production operand", f"output `{output}` reads `{operand}`, no discrete flow")
+    return f"{attribute}{_NEGATION_SUFFIX}" if negated else attribute
+
+
+#: Suffix of the attribute `std.bool_not` publishes for a negated operand.
+_NEGATION_SUFFIX = "_not"
+
+
+def _negations(uses: list[dict]) -> list[dict]:
+    """The `std.bool_not` uses the production conditions of `uses` read."""
+    negated = sorted(
+        {
+            operand[: -len(_NEGATION_SUFFIX)]
+            for use in uses
+            for group in use["with"].get("prod_cond", [])
+            for operand in group
+            if operand.endswith(_NEGATION_SUFFIX)
+        }
+    )
+    return [{"fragment": "std.bool_not", "with": {"of": attribute}} for attribute in negated]
 
 
 def _flow_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]) -> dict:
@@ -242,6 +272,43 @@ def _flow_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]
     }
 
 
+def _tempo_law(output: str, direction: str, law: dict) -> dict[str, Any]:
+    """A temporised output's wait as the fragment's two parameters."""
+    kind = law.get("distrib")
+    if kind == "delay":
+        return {f"{direction}_law": "delay", f"{direction}_value": float(law["time"])}
+    if kind == "exp":
+        rate = float(law.get("rate", 0.0))
+        if rate == 0.0:
+            # A wait at rate zero never ends: the authoring layer builds no
+            # transition, and neither does the fragment's `never` law.
+            return {f"{direction}_law": "never"}
+        if rate > 0.0:
+            return {f"{direction}_law": "exp", f"{direction}_value": rate}
+    raise _Refused("temporised output law", f"output `{output}` waits on {law!r} to {direction}")
+
+
+def _tempo_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]) -> dict:
+    """muscadet `FlowOutTempo`: the output feeds while its tempo automaton is
+    enabled, which waits on its own laws once the production condition holds
+    or fails."""
+    enable = _tempo_law(name, "enable", keywords.pop("enable_law", {"distrib": "delay", "time": 0.0}))
+    disable = _tempo_law(name, "disable", keywords.pop("disable_law", {"distrib": "delay", "time": 0.0}))
+    init_enable = bool(keywords.pop("init_enable", False))
+    plain = _flow_out_use(name, keywords, inputs, outputs)
+    with_: dict[str, Any] = {"name": name}
+    if plain["fragment"] == "std.bool_flow_out":
+        with_["prod_cond"] = plain["with"]["prod_cond"]
+    else:
+        with_["conditioned"] = False
+        with_["prod_init"] = plain["with"]["prod_init"]
+    with_["fed_available_init"] = plain["with"]["fed_available_init"]
+    with_["init_enable"] = init_enable
+    with_.update(enable)
+    with_.update(disable)
+    return {"fragment": "std.bool_flow_out_tempo", "with": with_}
+
+
 def _flow_uses(spec: dict, name: str) -> tuple[list[dict], list[tuple[str, dict]]]:
     """The std fragments a flow component's declaration means, in order, and
     the failure modes it declares in its own `failure_modes` section."""
@@ -250,32 +317,45 @@ def _flow_uses(spec: dict, name: str) -> tuple[list[dict], list[tuple[str, dict]
     except declare.ComponentSpecError as error:
         raise _Refused("declaration refused by the reader", str(error)) from error
     inputs = {c.keywords.get("name", c.entry) for c in calls if c.method == "add_flow_in"}
-    outputs = {c.keywords.get("name", c.entry) for c in calls if c.method == "add_flow_out"}
-    uses, embedded = [], []
+    outputs = {
+        c.keywords.get("name", c.entry)
+        for c in calls
+        if c.method in ("add_flow_out", "add_flow_out_tempo")
+    }
+    uses, embedded, refused = [], [], []
     for call in calls:
         if call.section == "failure_modes" and call.method in _EMBEDDED_LAWS:
             embedded.append((call.method, dict(call.keywords)))
             continue
-        if call.section != "flows":
-            raise _Refused(f"section `{call.section}`", f"entry {call.entry!r}")
-        keywords = dict(call.keywords)
-        flow = keywords.pop("name", call.entry)
-        if call.method == "add_flow_in":
-            uses.append(_flow_in_use(flow, keywords))
-        elif call.method == "add_flow_out":
-            uses.append(_flow_out_use(flow, keywords, inputs, outputs))
-        else:
-            entry = next(
-                (e for e in spec.get("flows") or [] if e.get("name") == flow), {}
-            )
-            raise _Refused(
-                f"flow class `{entry.get('cls', call.method)}`", f"flow `{flow}`"
-            )
-        if keywords:
-            raise _Refused(
-                "flow keyword", f"flow `{flow}` declares {sorted(keywords)}"
-            )
-    return uses, embedded
+        try:
+            uses.append(_flow_call_use(spec, call, inputs, outputs))
+        except _Refused as error:
+            refused.append(error)
+    if refused:
+        # Every blocking construct of the component, not only the first:
+        # the coverage matrix counts what blocks a model alone.
+        raise _RefusedAll(refused)
+    return uses + _negations(uses), embedded
+
+
+def _flow_call_use(spec: dict, call: Any, inputs: set[str], outputs: set[str]) -> dict:
+    """The std fragment one `flows` entry means."""
+    if call.section != "flows":
+        raise _Refused(f"section `{call.section}`", f"entry {call.entry!r}")
+    keywords = dict(call.keywords)
+    flow = keywords.pop("name", call.entry)
+    if call.method == "add_flow_in":
+        use = _flow_in_use(flow, keywords)
+    elif call.method == "add_flow_out":
+        use = _flow_out_use(flow, keywords, inputs, outputs)
+    elif call.method == "add_flow_out_tempo":
+        use = _tempo_out_use(flow, keywords, inputs, outputs)
+    else:
+        entry = next((e for e in spec.get("flows") or [] if e.get("name") == flow), {})
+        raise _Refused(f"flow class `{entry.get('cls', call.method)}`", f"flow `{flow}`")
+    if keywords:
+        raise _Refused("flow keyword", f"flow `{flow}` declares {sorted(keywords)}")
+    return use
 
 
 #: The authoring calls of a `failure_modes` entry and the law each builds.
@@ -321,7 +401,7 @@ def _embedded_mode(component: str, method: str, keywords: dict, uses: list[dict]
     outputs = {
         use["with"]["name"]: use["with"].get("fed_available_init", True)
         for use in uses
-        if use["fragment"] in ("std.bool_flow_out", "std.bool_source_out")
+        if use["fragment"] in _OUTPUT_FRAGMENTS
     }
     for target in targets:
         if target not in outputs:
@@ -403,17 +483,31 @@ _VALUE_PARAMETERS = {
     "std.bool_flow_out": ("fed_available_init",),
     "std.bool_source_out": ("prod_init", "fed_available_init"),
     "std.logic_gate": ("k",),
+    "std.bool_flow_out_tempo": (
+        "prod_init",
+        "fed_available_init",
+        "init_enable",
+        "enable_value",
+        "disable_value",
+    ),
 }
+
+#: The fragments carrying a discrete output.
+_OUTPUT_FRAGMENTS = ("std.bool_flow_out", "std.bool_source_out", "std.bool_flow_out_tempo")
 
 
 def _targetable(uses: list[dict]) -> set[str]:
     """The attributes a mode may write on an instance using `uses`."""
     attributes = set()
     for use in uses:
+        if use["fragment"] not in _OUTPUT_FRAGMENTS:
+            continue
         name = use["with"]["name"]
-        if use["fragment"] in ("std.bool_flow_out", "std.bool_source_out"):
-            attributes.add(f"{name}_fed_available_out")
-        if use["fragment"] == "std.bool_source_out":
+        attributes.add(f"{name}_fed_available_out")
+        # The production is a mode's to write only where no condition writes it.
+        if use["fragment"] == "std.bool_source_out" or (
+            use["fragment"] == "std.bool_flow_out_tempo" and use["with"].get("conditioned") is False
+        ):
             attributes.add(f"{name}_prod_available")
     return attributes
 
@@ -758,12 +852,30 @@ def convert(
                 connections.extend(feeds)
             else:
                 uses, embedded = _flow_uses(spec, name)
+                own, refused = [], []
                 for method, keywords in embedded:
-                    embedded_modes.append(_embedded_mode(name, method, keywords, uses))
+                    try:
+                        own.append(_embedded_mode(name, method, keywords, uses))
+                    except _Refused as error:
+                        refused.append(error)
+                if refused:
+                    raise _RefusedAll(refused)
+                embedded_modes.extend(own)
         except _Refused as error:
             refuse(name, error)
             continue
+        except _RefusedAll as errors:
+            for error in errors.refusals:
+                refuse(name, error)
+            continue
         instances[name] = {"key": _type_key(spec, name), "uses": uses, "modes": {}}
+        for use in uses:
+            if use["fragment"] == "std.bool_flow_out_tempo":
+                # Both routes name the tempo automaton and its waits alike.
+                flow = use["with"]["name"]
+                for direction in ("enable", "disable"):
+                    qualified = f"{name}.{flow}_tempo.{flow}_{direction}"
+                    rename[qualified] = qualified
     if any(spec.get(declare.DERIVED_OUT_AUTOMATA_KEY) for spec in components.values()):
         notes.append(
             "`create_default_out_automata` is observation only (the ok/nok state "
