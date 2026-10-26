@@ -1793,10 +1793,36 @@ impl Interactive {
     }
 }
 
+/// A compiled occurrence law as the model schema spells it, for reading a
+/// deferred transition back.
+fn law_json(law: &raichu::raichu_core::compile::CLaw) -> serde_json::Value {
+    use raichu::raichu_core::compile::CLaw;
+    match law {
+        CLaw::Delay(time) => serde_json::json!({"distrib": "delay", "time": time}),
+        CLaw::Inst(probs) => serde_json::json!({"distrib": "inst", "probs": probs}),
+        CLaw::Watched { .. } => serde_json::json!({"distrib": "watched"}),
+        CLaw::Exp(rate) => serde_json::json!({"distrib": "exp", "rate": rate}),
+        CLaw::ExpVar { .. } => serde_json::json!({"distrib": "exp", "rate_expr": true}),
+        CLaw::Weibull(shape, scale) => {
+            serde_json::json!({"distrib": "weibull", "shape": shape, "scale": scale})
+        }
+        CLaw::Lognormal(mu, sigma) => {
+            serde_json::json!({"distrib": "lognormal", "mu": mu, "sigma": sigma})
+        }
+        CLaw::Gamma(shape, scale) => {
+            serde_json::json!({"distrib": "gamma", "shape": shape, "scale": scale})
+        }
+        CLaw::Uniform(low, high) => {
+            serde_json::json!({"distrib": "uniform", "low": low, "high": high})
+        }
+        CLaw::Empirical(points) => serde_json::json!({"distrib": "empirical", "points": points}),
+    }
+}
+
 #[pymethods]
 impl Interactive {
     #[new]
-    #[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, seed = 0, rng_stream = 0, flow = None, allow_fmu_import = false, fmu_base_dir = None, operator_control = false))]
+    #[pyo3(signature = (model_json, t_max, journal = false, confluence_check = false, seed = 0, rng_stream = 0, flow = None, allow_fmu_import = false, fmu_base_dir = None, operator_control = false, deferred_draws = false))]
     #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
     fn new(
         model_json: &str,
@@ -1809,7 +1835,15 @@ impl Interactive {
         allow_fmu_import: bool,
         fmu_base_dir: Option<&str>,
         operator_control: bool,
+        deferred_draws: bool,
     ) -> PyResult<Self> {
+        if operator_control && deferred_draws {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "deferred_draws and operator_control exclude each other: a deferred \
+                 session arms stochastic transitions without a date for the caller to \
+                 fire, an operator session lets the operator choose among armed ones",
+            ));
+        }
         let model = parse_and_compile(model_json)?;
         let config = EngineConfig {
             t_max,
@@ -1821,6 +1855,8 @@ impl Interactive {
             allow_fmu_import,
             stochastic_dates: if operator_control {
                 StochasticDates::Operator
+            } else if deferred_draws {
+                StochasticDates::Deferred
             } else {
                 StochasticDates::Drawn
             },
@@ -1934,6 +1970,54 @@ impl Interactive {
         };
         self.snap = snap;
         event.map(|e| Self::json(&e)).transpose()
+    }
+
+    /// JSON array of the stochastic transitions armed without a date in a
+    /// session opened with `deferred_draws=True`
+    /// (`{index, transition, law, armed_at, age, paused, hazard}`); empty in
+    /// any other session. `law` restates the compiled occurrence law with
+    /// its parameters, so a caller can check the law it is about to fire.
+    fn deferred(&mut self) -> PyResult<String> {
+        let armed: Vec<serde_json::Value> = self
+            .engine()?
+            .deferred()
+            .into_iter()
+            .map(|d| {
+                serde_json::json!({
+                    "index": d.index,
+                    "transition": d.transition,
+                    "law": law_json(&d.law),
+                    "armed_at": d.armed_at,
+                    "age": d.age,
+                    "paused": d.paused,
+                    "hazard": d.hazard,
+                })
+            })
+            .collect();
+        Self::json(&armed)
+    }
+
+    /// Fire the deferred transition `name` at `date` (`>=` the current
+    /// time), the deterministic events before it firing on the way;
+    /// `branch` forces the destination branch of a multi-target law.
+    /// Returns the fired event as JSON.
+    #[pyo3(signature = (name, date, branch = None))]
+    fn fire_deferred_at(
+        &mut self,
+        name: &str,
+        date: f64,
+        branch: Option<usize>,
+    ) -> PyResult<String> {
+        let (event, snap) = {
+            let mut engine = self.engine()?;
+            let event = engine
+                .fire_deferred_named_at(name, date, branch)
+                .map_err(engine_error)?;
+            let snap = engine.try_snapshot().map_err(engine_error)?;
+            (event, snap)
+        };
+        self.snap = snap;
+        Self::json(&event)
     }
 
     /// Advance through all events at or before `date` and stop at that date.
