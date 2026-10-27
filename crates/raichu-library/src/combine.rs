@@ -10,9 +10,12 @@ use crate::instantiate::CombineRule;
 use crate::modes::occurred;
 use raichu_expr::{BoolOp, Expr, Value};
 
-/// One mode's held value on the attribute.
+/// One mode's held value on the attribute, held while the automaton
+/// `automaton` of the instance (the mode's own, or its effect step) is in
+/// `occ`.
 pub(crate) struct Holder {
     pub mode: String,
+    pub automaton: String,
     pub value: Value,
 }
 
@@ -23,7 +26,7 @@ fn constant(value: Value) -> Expr {
 fn any_active(instance: &str, holders: &[Holder]) -> Expr {
     let mut args: Vec<Expr> = holders
         .iter()
-        .map(|h| occurred(instance, &h.mode))
+        .map(|h| occurred(instance, &h.automaton))
         .collect();
     if args.len() == 1 {
         args.remove(0)
@@ -67,7 +70,7 @@ pub(crate) fn combined(instance: &str, rule: CombineRule, holders: &[Holder], in
                 let args = holders
                     .iter()
                     .map(|h| Expr::If {
-                        cond: Box::new(occurred(instance, &h.mode)),
+                        cond: Box::new(occurred(instance, &h.automaton)),
                         then: Box::new(constant(h.value)),
                         otherwise: Box::new(constant(neutral)),
                     })

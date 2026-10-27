@@ -15,6 +15,17 @@
           ],
           "description": "An extra activation condition, ANDed with the catalogue condition;\na core expression that may also use `{\"op\": \"mode_active\", \"mode\":\n\"Instance.mode\"}`."
         },
+        "effect_step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EffectStep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the mode's effects follow its state: absent, at once; with\n`zero_delay` or `instant`, one step later, through an automaton\n`<mode>__effect` whose transition follows the mode's occurred state\nwith a zero delay or an instantaneous law of probability one. The\nstep is what a PyCATSHOO external mode does: its effects ride on a\nmirror automaton one zero-delay step behind the mode."
+        },
         "instances": {
           "description": "The instances it applies to; exclusive with `type`.",
           "items": {
@@ -57,6 +68,17 @@
             }
           ],
           "description": "Repair law; absent means the mode, once occurred, stays occurred."
+        },
+        "repair_condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A repair condition: the repair cannot complete while it is false\n(a guard on the repair edge only, never on the occurrence or an\non-demand re-arm). Same grammar as `condition`; requires `repair`."
         },
         "type": {
           "description": "Every instance of this type; exclusive with `instances`.",
@@ -820,6 +842,21 @@
       ],
       "type": "object"
     },
+    "EffectStep": {
+      "description": "The step a mode's effects take after its state (`effect_step`).",
+      "oneOf": [
+        {
+          "const": "zero_delay",
+          "description": "A deterministic transition with a zero delay.",
+          "type": "string"
+        },
+        {
+          "const": "instant",
+          "description": "An instantaneous transition of probability one.",
+          "type": "string"
+        }
+      ]
+    },
     "Expr": {
       "description": "A serializable expression tree (M0 subset).\n\nThe serde representation is tag-based (`op` field), so adding variants\nin later milestones (arithmetic, math functions, ODE right-hand sides)\nkeeps old model files loadable.",
       "oneOf": [
@@ -1380,6 +1417,17 @@
           ],
           "description": "Activation condition (core expression, `mode_active` allowed)."
         },
+        "effect_step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EffectStep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the mode's effects follow its state: absent, at once; with\n`zero_delay` or `instant`, one step later, through an automaton\n`<mode>__effect` whose transition follows the mode's occurred state\nwith a zero delay or an instantaneous law of probability one. The\nstep is what a PyCATSHOO external mode does: its effects ride on a\nmirror automaton one zero-delay step behind the mode."
+        },
         "effects": {
           "default": [],
           "description": "Effects on targetable attributes of the instance.",
@@ -1428,6 +1476,17 @@
             }
           ],
           "description": "Repair law; absent means absorbing."
+        },
+        "repair_condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A repair condition: the repair cannot complete while it is false\n(a guard on the repair edge only, never on the occurrence or an\non-demand re-arm). Same grammar as `condition`; requires `repair`."
         }
       },
       "required": [

@@ -116,9 +116,14 @@ def _on_demand() -> dict:
 def test_a_branch_choice_waits_and_takes_the_branch_the_caller_forces():
     session = pyraichu.interactive(_on_demand(), t_max=5.0, deferred_draws=True)
     session.advance_to(3.0)
+    # The advance stops before the choice, at its instant, where a free run
+    # would draw it.
+    assert session.time == 1.0
     (armed,) = session.deferred()
     assert (armed["transition"], armed["armed_at"]) == ("B.start.draw", 1.0)
     assert armed["law"]["distrib"] == "inst"
     assert session.state("B.start") == "ready"
-    event = session.fire_deferred_at("B.start.draw", 3.0, branch=1)
-    assert (event.time, event.to_state) == (3.0, "refused")
+    event = session.fire_deferred_at("B.start.draw", 1.0, branch=1)
+    assert (event.time, event.to_state) == (1.0, "refused")
+    session.advance_to(3.0)
+    assert session.time == 3.0

@@ -233,11 +233,23 @@ impl<'m> Engine<'m> {
             None => true,
             Some(guard) => eval_bool(self.model, &self.vars, &self.states, self.time, guard)?,
         };
-        let deferred_choice = self.config.stochastic_dates == StochasticDates::Deferred
-            && self.config.deferred_choices
-            && self.operator_choice(trans_idx);
+        let deferred_choice = self.held_choice(trans_idx);
+        if deferred_choice {
+            // Held, never fired by itself, but kept at its place among the
+            // instant's events (date, arming wave, rank): an automatic
+            // advance stops before it, where a free run would draw it.
+            self.refresh_deferred(trans_idx, in_source, guard_ok)?;
+            if in_source && guard_ok {
+                if self.pending[trans_idx].is_none() {
+                    self.arm(trans_idx, self.time);
+                }
+            } else {
+                self.pending[trans_idx] = None;
+            }
+            return Ok(());
+        }
         if self.config.stochastic_dates != StochasticDates::Drawn
-            && (is_stochastic(&transition.distrib) || deferred_choice)
+            && is_stochastic(&transition.distrib)
         {
             self.refresh_deferred(trans_idx, in_source, guard_ok)?;
             self.refresh_operator_date(trans_idx, in_source, guard_ok);

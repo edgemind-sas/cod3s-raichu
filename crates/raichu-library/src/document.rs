@@ -320,6 +320,23 @@ pub struct Activation {
         schemars(with = "Option<crate::schema::Condition>")
     )]
     pub condition: Option<Value>,
+    /// A repair condition: the repair cannot complete while it is false
+    /// (a guard on the repair edge only, never on the occurrence or an
+    /// on-demand re-arm). Same grammar as `condition`; requires `repair`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::schema::Condition>")
+    )]
+    pub repair_condition: Option<Value>,
+    /// How the mode's effects follow its state: absent, at once; with
+    /// `zero_delay` or `instant`, one step later, through an automaton
+    /// `<mode>__effect` whose transition follows the mode's occurred state
+    /// with a zero delay or an instantaneous law of probability one. The
+    /// step is what a PyCATSHOO external mode does: its effects ride on a
+    /// mirror automaton one zero-delay step behind the mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_step: Option<EffectStep>,
     /// Free editor data, never read by the expander.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
@@ -356,9 +373,37 @@ pub struct OneOffMode {
     /// Interruption policy (default `reset`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_interruption: Option<InterruptionPolicy>,
+    /// A repair condition: the repair cannot complete while it is false
+    /// (a guard on the repair edge only, never on the occurrence or an
+    /// on-demand re-arm). Same grammar as `condition`; requires `repair`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::schema::Condition>")
+    )]
+    pub repair_condition: Option<Value>,
+    /// How the mode's effects follow its state: absent, at once; with
+    /// `zero_delay` or `instant`, one step later, through an automaton
+    /// `<mode>__effect` whose transition follows the mode's occurred state
+    /// with a zero delay or an instantaneous law of probability one. The
+    /// step is what a PyCATSHOO external mode does: its effects ride on a
+    /// mirror automaton one zero-delay step behind the mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_step: Option<EffectStep>,
     /// Free editor data, never read by the expander.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+}
+
+/// The step a mode's effects take after its state (`effect_step`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum EffectStep {
+    /// A deterministic transition with a zero delay.
+    ZeroDelay,
+    /// An instantaneous transition of probability one.
+    Instant,
 }
 
 /// The nature of a mode. It serves selection and reporting and changes

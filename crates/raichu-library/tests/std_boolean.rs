@@ -543,3 +543,53 @@ fn a_never_ending_wait_builds_no_transition() {
     let names: Vec<_> = tempo.transitions.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, vec!["y_enable"]);
 }
+
+/// A negated output delivers the negation of its whole delivery: a source
+/// whose gate a mode cuts feeds `true` while cut, and a negated relay feeds
+/// `false` while its input is fed. Production and availability are unchanged.
+#[test]
+fn a_negated_output_delivers_the_negation_of_its_delivery() {
+    let lib = library(json!({
+        "name": "neg", "version": "1.0.0", "imports": ["std"],
+        "types": [
+            {"name": "Source",
+             "uses": [{"fragment": "std.bool_source_out", "with": {"name": "x", "negate": true}}],
+             "modes": [{"name": "fail", "nature": "failure", "effects": [{"attribute": "x_fed_available_out", "value": false}]}]},
+            {"name": "Plain",
+             "uses": [{"fragment": "std.bool_source_out", "with": {"name": "y"}}],
+             "modes": [{"name": "fail", "nature": "failure", "effects": [{"attribute": "y_fed_available_out", "value": false}]}]},
+            {"name": "Relay",
+             "uses": [
+                {"fragment": "std.bool_flow_in", "with": {"name": "y"}},
+                {"fragment": "std.bool_flow_out", "with": {"name": "z", "prod_cond": [["y_fed_in"]], "negate": true}}
+             ]}
+        ]
+    }));
+    let s = system(
+        json!({"name": "s", "library": {"name": "neg", "version": "1.0.0"},
+        "instances": [{"name": "S", "type": "Source"}, {"name": "P", "type": "Plain"}, {"name": "R", "type": "Relay"}],
+        "connections": [{"from": "P.y_out", "to": "R.y_in"}],
+        "indicators": [watch("x", "S", "x_fed_out"), watch("x_av", "S", "x_fed_available_out"),
+                       watch("z", "R", "z_fed_out")]}),
+    );
+    let st = study(json!({"name": "st", "system": "s", "modes": [
+        {"mode": "fail", "instances": ["S"], "occurrence": delay(1.0), "repair": delay(10.0)},
+        {"mode": "fail", "instances": ["P"], "occurrence": delay(5.0), "repair": delay(1.0)}]}));
+    let result = run(&expand(&[lib], &s, Some(&st)).unwrap().model, 7.0);
+    assert_eq!(
+        series(&result, "x"),
+        vec![(0.0, V::Bool(false)), (1.0, V::Bool(true))]
+    );
+    assert_eq!(
+        series(&result, "x_av"),
+        vec![(0.0, V::Bool(true)), (1.0, V::Bool(false))]
+    );
+    assert_eq!(
+        series(&result, "z"),
+        vec![
+            (0.0, V::Bool(false)),
+            (5.0, V::Bool(true)),
+            (6.0, V::Bool(false))
+        ]
+    );
+}

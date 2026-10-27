@@ -6,6 +6,7 @@
 //! `Instance.mode.occ` and every analysis that keys on `monitored`,
 //! `kind` and `cycle_group` keeps working.
 
+use crate::document::EffectStep;
 use crate::error::{DocumentKind, ExpandError};
 use crate::names::split_public;
 use crate::strict::typed;
@@ -164,9 +165,13 @@ pub(crate) fn law(
 /// re-arm `parked` returns to `rep` once the condition falls, and is no
 /// event. Parking a lost draw is what stops it from being drawn again
 /// within the same solicitation.
+///
+/// `repair_guard` (a repair condition) guards the repair edge only: the
+/// re-arm of an on-demand mode keeps the negated occurrence guard.
 pub(crate) fn mode_automaton(
     name: &str,
     guard: Option<Expr>,
+    repair_guard: Option<Expr>,
     occurrence: Distrib,
     repair: Option<Distrib>,
     on_interruption: InterruptionPolicy,
@@ -222,13 +227,72 @@ pub(crate) fn mode_automaton(
         transitions.push(edge(OCC, REP, TransitionKind::Failure, occurrence, guard));
     }
     if let Some(repair) = repair {
-        transitions.push(edge(REP, OCC, TransitionKind::Repair, repair, None));
+        transitions.push(edge(REP, OCC, TransitionKind::Repair, repair, repair_guard));
     }
     Automaton {
         name: name.to_owned(),
         states,
         init: REP.to_owned(),
         transitions,
+    }
+}
+
+/// The automaton carrying the effects of `mode` one step behind it.
+pub(crate) fn effect_automaton_name(mode: &str) -> String {
+    format!("{mode}__effect")
+}
+
+/// The effect step of `mode` on `instance`: states `rep` and `occ`, an
+/// `occ` transition taken once the mode is occurred and a `rep` one once it
+/// is not, each a zero delay or an instantaneous law of probability one.
+/// It is no sequence event and no failure or repair: the mode's own
+/// automaton carries those.
+pub(crate) fn effect_step_automaton(instance: &str, mode: &str, step: EffectStep) -> Automaton {
+    let distrib = || match step {
+        EffectStep::ZeroDelay => Distrib::Delay { time: 0.0 },
+        EffectStep::Instant => Distrib::Inst { probs: Vec::new() },
+    };
+    let follows = occurred(instance, mode);
+    let edge = |name: &str, source: &str, guard: Expr| Transition {
+        name: name.to_owned(),
+        source: source.to_owned(),
+        guard: Some(guard),
+        targets: vec![name.to_owned()],
+        on_interruption: InterruptionPolicy::Reset,
+        monitored: false,
+        monitored_states: None,
+        cycle_group: None,
+        cycle_cancellation: CycleCancellation::Auto,
+        kind: None,
+        effects: Vec::new(),
+        distrib: distrib(),
+    };
+    Automaton {
+        name: effect_automaton_name(mode),
+        states: vec![REP.to_owned(), OCC.to_owned()],
+        init: REP.to_owned(),
+        transitions: vec![
+            edge(OCC, REP, follows.clone()),
+            edge(
+                REP,
+                OCC,
+                Expr::Bool {
+                    bool_op: BoolOp::Not,
+                    args: vec![follows],
+                },
+            ),
+        ],
+    }
+}
+
+/// True while the effect step of `instance.mode` is in `state`.
+pub(crate) fn effect_state(instance: &str, mode: &str, state: &str) -> Expr {
+    Expr::StateActive {
+        state: StateRef {
+            component: instance.to_owned(),
+            automaton: effect_automaton_name(mode),
+            state: state.to_owned(),
+        },
     }
 }
 

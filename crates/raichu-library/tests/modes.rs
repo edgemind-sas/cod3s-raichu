@@ -628,3 +628,188 @@ fn a_lost_draw_parks_for_the_solicitation_and_re_arms_when_it_falls() {
     }
     assert_eq!(seen, vec!["rep", "parked", "rep", "parked"]);
 }
+
+fn not_active(mode: &str) -> Value {
+    json!({"op": "bool", "bool_op": "not", "args": [{"op": "mode_active", "mode": mode}]})
+}
+
+/// A repair condition holds the repair back while it is false: `alim`
+/// would repair at 2, but `low` occurs at 1.5 and blocks it until its own
+/// repair at 4.5; the repair delay then runs again (reset policy).
+#[test]
+fn a_repair_condition_holds_the_repair_until_it_becomes_true() {
+    let s = study(json!({"name": "s", "system": "fire", "modes": [
+        {"mode": "mdd_actionneur_alim", "instances": ["Act"], "occurrence": delay(1.0),
+         "repair": delay(1.0), "repair_condition": not_active("Act.low")},
+        {"mode": "low", "instances": ["Act"], "occurrence": delay(1.5), "repair": delay(3.0)}
+    ]}));
+    let expansion = expand(&[actuator_library()], &actuator_system(), Some(&s)).unwrap();
+    let result = run(&expansion.model, 5.9);
+    assert_eq!(
+        events(&result),
+        vec![
+            ("Act.mdd_actionneur_alim.occ".to_owned(), 1.0),
+            ("Act.low.occ".to_owned(), 1.5),
+            ("Act.low.rep".to_owned(), 4.5),
+            ("Act.mdd_actionneur_alim.rep".to_owned(), 5.5),
+        ]
+    );
+    let alim = expansion.model.components[0]
+        .automata
+        .iter()
+        .find(|a| a.name == "mdd_actionneur_alim")
+        .unwrap();
+    let occurrence = alim.transitions.iter().find(|t| t.name == "occ").unwrap();
+    assert_eq!(occurrence.guard, None, "the occurrence edge is unchanged");
+}
+
+#[test]
+fn a_repair_condition_never_reaches_the_on_demand_rearm() {
+    let mut s = on_demand_study(0.3);
+    s.modes[1].repair_condition = Some(not_active("C.lost"));
+    let model = expand(&[backup_library()], &backup_system(), Some(&s))
+        .unwrap()
+        .model;
+    let backup = model.components.iter().find(|c| c.name == "B").unwrap();
+    let mode = backup
+        .automata
+        .iter()
+        .find(|a| a.name == "refusal")
+        .unwrap();
+    let draw = &mode.transitions[0];
+    let rearm = &mode.transitions[1];
+    let repair = &mode.transitions[2];
+    assert_eq!(
+        rearm.guard,
+        Some(raichu_expr::Expr::Bool {
+            bool_op: raichu_expr::BoolOp::Not,
+            args: vec![draw.guard.clone().unwrap()],
+        }),
+        "the re-arm is guarded by the negated occurrence condition only"
+    );
+    assert!(repair.guard.is_some());
+}
+
+#[test]
+fn a_repair_condition_naming_an_unactivated_mode_is_refused() {
+    let s = study(json!({"name": "s", "system": "fire", "modes": [
+        {"mode": "mdd_actionneur_alim", "instances": ["Act"], "occurrence": delay(1.0),
+         "repair": delay(1.0), "repair_condition": not_active("Act.low")}
+    ]}));
+    let error = expand(&[actuator_library()], &actuator_system(), Some(&s)).unwrap_err();
+    assert!(error.to_string().contains("Act.low"), "{error}");
+    assert!(
+        error.pointer.contains("/repair_condition"),
+        "{}",
+        error.pointer
+    );
+}
+
+#[test]
+fn a_repair_condition_without_a_repair_law_is_refused() {
+    let s = study(json!({"name": "s", "system": "fire", "modes": [
+        {"mode": "mdd_actionneur_alim", "instances": ["Act"], "occurrence": delay(1.0),
+         "repair_condition": not_active("Act.mdd_actionneur_alim")}
+    ]}));
+    let error = expand(&[actuator_library()], &actuator_system(), Some(&s)).unwrap_err();
+    assert!(error.to_string().contains("repair condition"), "{error}");
+}
+
+/// A pulse: occurs at 1 and is repaired at once (delay 0). With its effects
+/// carried through a zero-delay step, the cut is held for that step, which
+/// an on-demand detector reads; without it, the zero-delay repair withdraws
+/// the cut before any draw.
+fn pulse_library() -> Library {
+    library(json!({
+        "name": "pulse", "version": "1.0.0", "imports": ["std"],
+        "types": [
+            {"name": "Train",
+             "uses": [{"fragment": "std.bool_source_out", "with": {"name": "present", "fed_available_init": false}}],
+             "modes": [{"name": "passage", "nature": "failure", "effects": [{"attribute": "present_fed_available_out", "value": true}]}]},
+            {"name": "Detector",
+             "uses": [
+                {"fragment": "std.bool_flow_in", "with": {"name": "present"}},
+                {"fragment": "std.bool_source_out", "with": {"name": "seen", "fed_available_init": false}}
+             ],
+             "modes": [{"name": "detection", "nature": "failure", "effects": [{"attribute": "seen_fed_available_out", "value": true}]}]}
+        ]
+    }))
+}
+
+fn pulse_run(step: Option<&str>) -> (Model, raichu_core::SimulationResult) {
+    let s = system(
+        json!({"name": "s", "library": {"name": "pulse", "version": "1.0.0"},
+        "instances": [{"name": "T", "type": "Train"}, {"name": "D", "type": "Detector"}],
+        "connections": [{"from": "T.present_out", "to": "D.present_in"}],
+        "indicators": [{"name": "seen", "target": "attribute", "attr": {"component": "D", "attribute": "seen_fed_out"}}]}),
+    );
+    let mut passage = json!({"mode": "passage", "instances": ["T"], "occurrence": delay(1.0), "repair": delay(0.0)});
+    if let Some(step) = step {
+        passage["effect_step"] = json!(step);
+    }
+    let solicited = json!({"op": "cmp", "cmp": "eq", "lhs": attr("D", "present_fed_in"),
+                           "rhs": {"op": "const", "value": boolean(true)}});
+    let st = study(json!({"name": "st", "system": "s", "modes": [
+        passage,
+        {"mode": "detection", "instances": ["D"], "occurrence": {"distrib": "inst", "probs": [1.0]},
+         "condition": solicited}
+    ]}));
+    let model = expand(&[pulse_library()], &s, Some(&st)).unwrap().model;
+    let result = run(&model, 1.5);
+    (model, result)
+}
+
+#[test]
+fn an_effect_carried_through_a_zero_delay_step_is_seen_for_that_step() {
+    let (_, immediate) = pulse_run(None);
+    assert_eq!(series(&immediate, "seen"), vec![(0.0, V::Bool(false))]);
+    let (model, stepped) = pulse_run(Some("zero_delay"));
+    assert_eq!(
+        series(&stepped, "seen"),
+        vec![(0.0, V::Bool(false)), (1.0, V::Bool(true))]
+    );
+    let train = model.components.iter().find(|c| c.name == "T").unwrap();
+    let step = train
+        .automata
+        .iter()
+        .find(|a| a.name == "passage__effect")
+        .unwrap();
+    assert_eq!(step.states, vec!["rep", "occ"]);
+    assert!(step
+        .transitions
+        .iter()
+        .all(|t| !t.monitored && t.kind.is_none()));
+    assert_eq!(
+        step.transitions[0].distrib,
+        raichu_model::Distrib::Delay { time: 0.0 }
+    );
+    // The sequence events stay on the mode's own automaton.
+    assert!(events(&stepped)
+        .iter()
+        .all(|(name, _)| !name.contains("__effect")));
+    // The mutual lock of a mirror: the mode occurs again only with its
+    // effects at rest, and is repaired only once they have taken hold.
+    let passage = train.automata.iter().find(|a| a.name == "passage").unwrap();
+    let guard = |name: &str| {
+        let transition = passage.transitions.iter().find(|t| t.name == name).unwrap();
+        serde_json::to_string(&transition.guard).unwrap()
+    };
+    assert!(guard("occ").contains("passage__effect") && guard("occ").contains("\"rep\""));
+    assert!(guard("rep").contains("passage__effect") && guard("rep").contains("\"occ\""));
+}
+
+#[test]
+fn an_instant_step_is_an_instantaneous_transition_of_probability_one() {
+    let (model, stepped) = pulse_run(Some("instant"));
+    let train = model.components.iter().find(|c| c.name == "T").unwrap();
+    let step = train
+        .automata
+        .iter()
+        .find(|a| a.name == "passage__effect")
+        .unwrap();
+    assert_eq!(
+        step.transitions[0].distrib,
+        raichu_model::Distrib::Inst { probs: Vec::new() }
+    );
+    assert_eq!(series(&stepped, "seen")[0], (0.0, V::Bool(false)));
+}

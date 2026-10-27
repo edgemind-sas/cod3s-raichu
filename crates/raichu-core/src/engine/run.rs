@@ -117,7 +117,13 @@ impl<'m> Engine<'m> {
     /// `t_max`. Scheduled transitions are ordered by date, arming wave,
     /// observer priority within that wave, then transition index. Watched
     /// transitions already past their boundary fire immediately.
+    ///
+    /// With held choices ([`EngineConfig::deferred_choices`]), a held
+    /// choice next in that order is not fired: `step` moves the clock to
+    /// its instant and returns `None`, and the caller fires it with a
+    /// forced branch ([`Engine::fire_deferred_at`]).
     pub fn step(&mut self) -> Result<Option<Event>, EngineError> {
+        self.held_choice_due = false;
         if self.config.stochastic_dates == StochasticDates::Operator {
             return Err(EngineError::InteractivePolicy {
                 operation: "step",
@@ -166,6 +172,10 @@ impl<'m> Engine<'m> {
                     self.time = t_new;
                     self.note_time_change();
                     self.watched_streak = (t_new, 0);
+                    if self.held_choice(trans_idx) {
+                        self.held_choice_due = true;
+                        return Ok(None);
+                    }
                     return self.fire(trans_idx, None).map(Some);
                 }
                 _ => {
