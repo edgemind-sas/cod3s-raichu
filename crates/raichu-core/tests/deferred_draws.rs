@@ -1066,17 +1066,27 @@ fn a_deferred_choice_waits_for_the_caller_and_takes_the_forced_branch() {
     };
     let mut engine = Engine::new(&compiled, config).unwrap();
     engine.advance_to(2.0).unwrap();
-    // The solicitation rose at 1; the draw is armed, not fired.
+    // The solicitation rose at 1: the advance stops there, before the
+    // draw, which is armed and not fired.
+    assert_eq!(engine.current_time(), 1.0);
     let armed: Vec<DeferredTransition> = engine.deferred();
     assert_eq!(armed.len(), 1);
     assert_eq!(armed[0].transition, "B.start.draw");
     assert_eq!(armed[0].armed_at, 1.0);
     assert!(matches!(armed[0].law, CLaw::Inst(_)));
     assert_eq!(engine.state("B.start"), Some("ready"));
-    let event = engine
+    // It cannot be passed by: drawn at its instant or not at all.
+    engine.advance_to(2.0).unwrap();
+    assert_eq!(engine.current_time(), 1.0);
+    assert!(engine
         .fire_deferred_named_at("B.start.draw", 2.0, Some(1))
+        .is_err());
+    let event = engine
+        .fire_deferred_named_at("B.start.draw", 1.0, Some(1))
         .unwrap();
-    assert_eq!((event.time, event.to.as_str()), (2.0, "refused"));
+    assert_eq!((event.time, event.to.as_str()), (1.0, "refused"));
+    engine.advance_to(2.0).unwrap();
+    assert_eq!(engine.current_time(), 2.0);
 }
 
 #[test]
@@ -1115,14 +1125,16 @@ fn a_held_choice_fired_without_a_branch_is_refused() {
 }
 
 #[test]
-fn a_held_choice_is_dropped_when_its_solicitation_falls() {
-    // The demand rises at 1 and falls at 3: the held draw goes with it.
+fn a_held_choice_whose_solicitation_falls_first_in_its_instant_is_never_due() {
+    // The demand rises at 1 and falls at once (delay 0), armed in an
+    // earlier wave than the draw: as in a free run, the fall comes first
+    // and the held draw goes with it, so the advance does not stop.
     let model = Model::from_json(
         &json!({"name": "on_demand", "components": [{"name": "B", "automata": [
             {"name": "demand", "states": ["idle", "asked", "done"], "init": "idle",
              "transitions": [
                 tr("ask", "idle", &["asked"], json!({"distrib": "delay", "time": 1.0})),
-                tr("stop", "asked", &["done"], json!({"distrib": "delay", "time": 2.0}))]},
+                tr("stop", "asked", &["done"], json!({"distrib": "delay", "time": 0.0}))]},
             {"name": "start", "states": ["ready", "running", "refused"], "init": "ready",
              "transitions": [with(
                 tr("draw", "ready", &["running", "refused"], json!({"distrib": "inst", "probs": [0.9]})),
@@ -1139,9 +1151,57 @@ fn a_held_choice_is_dropped_when_its_solicitation_falls() {
         ..EngineConfig::default()
     };
     let mut engine = Engine::new(&compiled, config).unwrap();
-    engine.advance_to(2.0).unwrap();
-    assert_eq!(engine.deferred().len(), 1);
     engine.advance_to(4.0).unwrap();
+    assert_eq!(engine.current_time(), 4.0);
     assert!(engine.deferred().is_empty());
     assert_eq!(engine.state("B.start"), Some("ready"));
+    assert_eq!(engine.state("B.demand"), Some("done"));
+}
+
+#[test]
+fn a_held_choice_is_never_drawn_by_the_rng_nor_passed_by_another_firing() {
+    // A second automaton fires on its own at 2: firing it explicitly while
+    // the draw is held at 1 would leave the draw out of its instant.
+    let model = Model::from_json(
+        &json!({"name": "on_demand", "components": [{"name": "B", "automata": [
+            {"name": "demand", "states": ["idle", "asked"], "init": "idle",
+             "transitions": [tr("ask", "idle", &["asked"], json!({"distrib": "delay", "time": 1.0}))]},
+            {"name": "other", "states": ["a", "b"], "init": "a",
+             "transitions": [tr("go", "a", &["b"], json!({"distrib": "delay", "time": 2.0}))]},
+            {"name": "start", "states": ["ready", "running", "refused"], "init": "ready",
+             "transitions": [with(
+                tr("draw", "ready", &["running", "refused"], json!({"distrib": "inst", "probs": [0.5]})),
+                "guard", active("B", "demand", "asked"))]}
+        ]}]})
+        .to_string(),
+    )
+    .unwrap();
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let config = EngineConfig {
+        t_max: 5.0,
+        stochastic_dates: StochasticDates::Deferred,
+        deferred_choices: true,
+        ..EngineConfig::default()
+    };
+    let mut engine = Engine::new(&compiled, config).unwrap();
+    assert_eq!(engine.step_until(4.0).unwrap().map(|e| e.time), Some(1.0));
+    assert!(engine.step_until(4.0).unwrap().is_none());
+    assert_eq!(
+        engine.current_time(),
+        1.0,
+        "step_until stops before the held choice"
+    );
+    assert!(matches!(
+        engine.fire_named("B.start.draw"),
+        Err(EngineError::HeldChoiceNeedsBranch { .. })
+    ));
+    assert!(matches!(
+        engine.fire_named("B.other.go"),
+        Err(EngineError::DeferredFiringTooLate { .. })
+    ));
+    assert_eq!(engine.current_time(), 1.0);
+    engine
+        .fire_deferred_named_at("B.start.draw", 1.0, Some(0))
+        .unwrap();
+    assert_eq!(engine.fire_named("B.other.go").unwrap().time, 2.0);
 }

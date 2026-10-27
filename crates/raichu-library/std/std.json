@@ -296,7 +296,7 @@
       },
       {
         "name": "bool_flow_out",
-        "description": "A boolean output flow `<name>` produced under a condition: `<name>_fed_out` is true while the production condition holds and the output is available. The condition is a disjunction of conjunctions: a list of groups, each a list of attribute names of the instance, and the output is produced while every attribute of at least one group is true. `<name>_fed_available_out` is written by the modes only: a mode cuts it when it starts available, and wakes it when it starts unavailable.",
+        "description": "A boolean output flow `<name>` produced under a condition: `<name>_fed_out` is true while the production condition holds and the output is available. The condition is a disjunction of conjunctions: a list of groups, each a list of attribute names of the instance, and the output is produced while every attribute of at least one group is true. `<name>_fed_available_out` is written by the modes only: a mode cuts it when it starts available, and wakes it when it starts unavailable. With `negate`, it delivers the negation of that delivery.",
         "parameters": [
           {
             "name": "name",
@@ -314,6 +314,12 @@
             "kind": "bool",
             "default": true,
             "description": "Whether the output starts available. A dormant service output starts unavailable and a compromise mode wakes it."
+          },
+          {
+            "name": "negate",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the output delivers the negation of its delivery (production and availability), as a muscadet `negate` output does. Production and availability are unchanged."
           }
         ],
         "body": {
@@ -404,24 +410,55 @@
                     "attribute": "${name}_fed_out"
                   },
                   "value": {
-                    "op": "bool",
-                    "bool_op": "and",
-                    "args": [
-                      {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${name}_prod_available"
-                        }
+                    "$choose": "negate",
+                    "cases": {
+                      "false": {
+                        "op": "bool",
+                        "bool_op": "and",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_prod_available"
+                            }
+                          },
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_fed_available_out"
+                            }
+                          }
+                        ]
                       },
-                      {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${name}_fed_available_out"
-                        }
+                      "true": {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "bool",
+                            "bool_op": "and",
+                            "args": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_prod_available"
+                                }
+                              },
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_fed_available_out"
+                                }
+                              }
+                            ]
+                          }
+                        ]
                       }
-                    ]
+                    }
                   }
                 }
               ]
@@ -443,7 +480,7 @@
       },
       {
         "name": "bool_source_out",
-        "description": "A boolean output flow `<name>` with no production condition: a constant source, or a dormant function when `prod_init` is false. Nothing in the type writes `<name>_prod_available`, so a mode may activate (or cut) it.",
+        "description": "A boolean output flow `<name>` with no production condition: a constant source, or a dormant function when `prod_init` is false. Nothing in the type writes `<name>_prod_available`, so a mode may activate (or cut) it. With `negate`, it delivers the negation of that delivery.",
         "parameters": [
           {
             "name": "name",
@@ -461,6 +498,12 @@
             "kind": "bool",
             "default": true,
             "description": "Whether the output starts available."
+          },
+          {
+            "name": "negate",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the output delivers the negation of its delivery (production and availability), as a muscadet `negate` output does. Production and availability are unchanged."
           }
         ],
         "body": {
@@ -511,24 +554,55 @@
                     "attribute": "${name}_fed_out"
                   },
                   "value": {
-                    "op": "bool",
-                    "bool_op": "and",
-                    "args": [
-                      {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${name}_prod_available"
-                        }
+                    "$choose": "negate",
+                    "cases": {
+                      "false": {
+                        "op": "bool",
+                        "bool_op": "and",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_prod_available"
+                            }
+                          },
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_fed_available_out"
+                            }
+                          }
+                        ]
                       },
-                      {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${name}_fed_available_out"
-                        }
+                      "true": {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "bool",
+                            "bool_op": "and",
+                            "args": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_prod_available"
+                                }
+                              },
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_fed_available_out"
+                                }
+                              }
+                            ]
+                          }
+                        ]
                       }
-                    ]
+                    }
                   }
                 }
               ]

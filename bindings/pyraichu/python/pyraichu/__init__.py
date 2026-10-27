@@ -2378,7 +2378,9 @@ class Interactive:
     ``advance_operator_to`` stops before unresolved probabilistic choices.
     With ``deferred_draws=True``, stochastic transitions arm without a date
     and never fire by themselves, and an instantaneous transition with
-    several random branches waits likewise instead of drawing one:
+    several random branches waits likewise instead of drawing one, keeping
+    its place among its instant's events: :meth:`step` and
+    :meth:`advance_to` stop before it, where a free run would draw it;
     :meth:`deferred` reports each with its law and age, and
     :meth:`fire_deferred_at` fires one at a chosen instant (with a chosen
     branch), which is how a trajectory drawn elsewhere is replayed.

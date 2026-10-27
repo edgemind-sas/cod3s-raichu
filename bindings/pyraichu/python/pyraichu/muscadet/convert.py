@@ -28,6 +28,7 @@ different model.
 from __future__ import annotations
 
 import copy
+import collections
 import functools
 import json
 from dataclasses import dataclass, field
@@ -144,8 +145,12 @@ class Conversion:
     not empty. ``rename`` maps each transition of the declaration route that
     the library route carries under another name (``"Srv__mdc_a.fm.failure"``
     -> ``"Srv.mdc_a.occ"``); feared events keep their names and map to
-    themselves. ``unverified`` names the components whose class may carry
-    behaviour outside the declaration (see :data:`AUDITED_CLASSES`).
+    themselves. An external mode's mirror automaton, which the declaration
+    route grafts on each target one zero-delay step behind the mode and
+    which carries its effects, maps onto the library mode's effect step
+    (``effect_step``). A comparison counts every fired transition. ``unverified`` names the components whose
+    class may carry behaviour outside the declaration (see
+    :data:`AUDITED_CLASSES`).
     """
 
     library: dict | None
@@ -250,8 +255,10 @@ def _negations(uses: list[dict]) -> list[dict]:
 
 
 def _flow_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]) -> dict:
-    if keywords.pop("negate", False):
-        raise _Refused("negated output (`negate`)", f"output `{name}`")
+    # A negated output delivers the negation of its whole delivery (the
+    # declaration route wraps it in `not`); production and availability are
+    # unchanged.
+    negate = bool(keywords.pop("negate", False))
     if not keywords.pop("var_fed_available_out_reset", True):
         raise _Refused(
             "availability not reset (`var_fed_available_out_reset` false)",
@@ -264,14 +271,24 @@ def _flow_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]
     if not condition:
         return {
             "fragment": "std.bool_source_out",
-            "with": {"name": name, "prod_init": produced, "fed_available_init": available},
+            "with": {
+                "name": name,
+                "prod_init": produced,
+                "fed_available_init": available,
+                "negate": negate,
+            },
         }
     groups = []
     for group in condition:
         groups.append([_operand_attribute(name, o, inputs, outputs) for o in group])
     return {
         "fragment": "std.bool_flow_out",
-        "with": {"name": name, "prod_cond": groups, "fed_available_init": available},
+        "with": {
+            "name": name,
+            "prod_cond": groups,
+            "fed_available_init": available,
+            "negate": negate,
+        },
     }
 
 
@@ -483,8 +500,8 @@ def _gate_use(
 #: differs between instances); every other parameter is structure.
 _VALUE_PARAMETERS = {
     "std.bool_flow_in": ("default", "k"),
-    "std.bool_flow_out": ("fed_available_init",),
-    "std.bool_source_out": ("prod_init", "fed_available_init"),
+    "std.bool_flow_out": ("fed_available_init", "negate"),
+    "std.bool_source_out": ("prod_init", "fed_available_init", "negate"),
     "std.logic_gate": ("k",),
     "std.bool_flow_out_tempo": (
         "prod_init",
@@ -528,14 +545,17 @@ class _ModeRef:
     mode: str
     failure_state: str
     repair_state: str
+    #: An external mode, whose mirror is the library mode's effect step.
+    external: bool = False
 
 
 def _rewrite_leaves(cond: Any, modes: dict[str, _ModeRef], gates: dict[str, str]) -> Any:
     """Point every leaf of a condition at what the library route holds.
 
-    A state leaf on a declared mode (its own ``fm`` automaton, or the mirror
-    an external mode grafts on its target) reads the mode automaton of the
-    target instance; a leaf on a gate's ``result`` reads the gate input.
+    A state leaf on a declared mode reads the mode automaton of the target
+    instance for its own ``fm`` automaton, and the mode's effect step for the
+    mirror an external mode grafts on its target, which moves one step
+    later; a leaf on a gate's ``result`` reads the gate input.
     """
     if isinstance(cond, bool):
         return cond
@@ -559,6 +579,7 @@ def _rewrite_leaves(cond: Any, modes: dict[str, _ModeRef], gates: dict[str, str]
                     # The mode's own automaton names its states exactly; the
                     # mirror an external mode grafts on its target prefixes
                     # them with `<mode>__`.
+                    mirror = "__" in leaf["state"]
                     state = leaf["state"].rsplit("__", 1)[-1]
                     if state == ref.failure_state:
                         state = _OCC
@@ -568,7 +589,10 @@ def _rewrite_leaves(cond: Any, modes: dict[str, _ModeRef], gates: dict[str, str]
                         raise _Refused(
                             "condition on a mode state", f"state `{leaf['state']}` of `{obj}`"
                         )
-                    leaf.update(obj=ref.target, automaton=ref.mode, state=state)
+                    automaton = ref.mode
+                    if mirror and ref.external:
+                        automaton = f"{ref.mode}__effect"
+                    leaf.update(obj=ref.target, automaton=automaton, state=state)
                 elif leaf.get("automaton") != _EVENT_AUTOMATON:
                     raise _Refused(
                         "condition on an automaton", f"`{obj}.{leaf['automaton']}`"
@@ -629,12 +653,18 @@ def _law(spec: Any, what: str, *, occurrence: bool = False) -> dict:
         raise _Refused("mode law", f"{what}: {error}") from error
 
 
-def _check_keys(obj: dict, known: frozenset, what: str) -> None:
+def _unknown_keys(obj: dict, known: frozenset, what: str) -> list[_Refused]:
+    """One refusal per key this converter does not read."""
     extra = sorted(
         key for key, value in obj.items() if key not in known and value not in (None, {}, [], False)
     )
-    if extra:
-        raise _Refused(f"{what} key `{extra[0]}`", f"declares {extra}")
+    return [_Refused(f"{what} key `{key}`", f"declares {extra}") for key in extra]
+
+
+def _check_keys(obj: dict, known: frozenset, what: str) -> None:
+    unknown = _unknown_keys(obj, known, what)
+    if unknown:
+        raise unknown[0]
 
 
 def _order_laws(laws: list, targets: list[str], key: str) -> Any:
@@ -970,7 +1000,12 @@ def convert(
             used.setdefault(target, set()).add(chosen)
         mode_names[name] = chosen
         if len(mode_targets) == 1:
-            mode_refs[name] = _ModeRef(mode_targets[0], chosen, *_mode_states(obj))
+            mode_refs[name] = _ModeRef(
+                mode_targets[0],
+                chosen,
+                *_mode_states(obj),
+                external=obj.get("behaviour") == "external",
+            )
 
     for name, obj in mode_objects.items():
         try:
@@ -981,6 +1016,9 @@ def convert(
             )
         except _Refused as error:
             refuse(name, error)
+        except _RefusedAll as errors:
+            for error in errors.refusals:
+                refuse(name, error)
 
     # --- feared events --------------------------------------------------
     feared = []
@@ -1088,52 +1126,69 @@ def _convert_mode(
     notes: list[str],
 ) -> list[dict]:
     """A declared mode as a catalogue entry on each target and one study
-    activation per target."""
-    _check_keys(obj, _MODE_KEYS, "mode")
+    activation per target. Every construct that blocks the mode is named
+    (:class:`_RefusedAll`), not only the first met."""
+    problems = _unknown_keys(obj, _MODE_KEYS, "mode")
     behaviour = obj.get("behaviour")
     if behaviour not in (None, "internal", "external"):
-        raise _Refused(f"mode behaviour `{behaviour}`", "only internal and external modes")
+        problems.append(
+            _Refused(f"mode behaviour `{behaviour}`", "only internal and external modes")
+        )
     targets = obj.get("targets") or []
     if not targets:
-        raise _Refused("mode with no target", "a mode acts on at least one component")
+        raise _RefusedAll([*problems, _Refused("mode with no target", "a mode acts on at least one component")])
     missing = [t for t in targets if t not in instances]
     if missing:
-        raise _Refused("mode on a refused component", f"targets {missing}")
+        # Nothing more can be read off a refused target.
+        raise _RefusedAll([*problems, _Refused("mode on a refused component", f"targets {missing}")])
 
     inst_object = obj.get("type") == "ObjFMInst"
     failures, repairs = _declared_laws(obj, targets)
-    failure = _order_laws(failures, targets, "failure")
-    if failure is None:
+    failure = repair_law = None
+    try:
+        failure = _order_laws(failures, targets, "failure")
+    except _Refused as error:
+        problems.append(error)
+    repair_cond = obj.get("repair_cond", True)
+    if repair_cond is not False:
+        try:
+            repair_law = _order_laws(repairs, targets, "repair")
+        except _Refused as error:
+            if all(p.construct != error.construct for p in problems):
+                problems.append(error)
+    if failure is None and not problems:
         # No order carries a law (a zero rate reads as none): the declaration
         # route builds no automaton either, so the mode is not activated.
         notes.append(f"mode `{name}` declares no active occurrence law and is not activated")
         return []
-    occurrence = _law(failure, "occurrence", occurrence=True)
-    repair_cond = obj.get("repair_cond", True)
-    repair = None
-    if repair_cond is False:
-        repair = None
-    elif repair_cond in (True, None):
-        repair_law = _order_laws(repairs, targets, "repair")
+    occurrence = repair = None
+    try:
+        occurrence = None if failure is None else _law(failure, "occurrence", occurrence=True)
+    except _Refused as error:
+        problems.append(error)
+    try:
         repair = None if repair_law is None else _law(repair_law, "repair")
-        if repair is not None and repair["distrib"] == "exp" and float(repair.get("rate", 0.0)) == 0.0:
-            # An exponential repair at rate zero never fires: no repair.
-            repair = None
-    else:
-        raise _Refused("repair condition", "the study format has no repair condition")
+    except _Refused as error:
+        problems.append(error)
+    if repair is not None and repair["distrib"] == "exp" and float(repair.get("rate", 0.0)) == 0.0:
+        # An exponential repair at rate zero never fires: no repair.
+        repair = None
 
     effects = []
     for attribute, value in sorted((obj.get("failure_effects") or {}).items()):
         if not isinstance(value, bool):
-            raise _Refused("non-boolean mode effect", f"`{attribute}` = {value!r}")
+            problems.append(_Refused("non-boolean mode effect", f"`{attribute}` = {value!r}"))
+            continue
         effects.append({"attribute": attribute, "value": value})
     for target in targets:
         allowed = _targetable(instances[target]["uses"])
         for effect in effects:
             if effect["attribute"] not in allowed:
-                raise _Refused(
-                    "effect on a non-targetable attribute",
-                    f"`{target}.{effect['attribute']}`",
+                problems.append(
+                    _Refused(
+                        "effect on a non-targetable attribute",
+                        f"`{target}.{effect['attribute']}`",
+                    )
                 )
     entry: dict[str, Any] = {"name": mode, "nature": "failure"}
     if effects:
@@ -1141,10 +1196,16 @@ def _convert_mode(
     for target in targets:
         known = instances[target]["modes"].get(mode)
         if known is not None and known != entry:
-            raise _Refused("mode name clash", f"`{mode}` on `{target}`")
-        instances[target]["modes"][mode] = entry
+            problems.append(_Refused("mode name clash", f"`{mode}` on `{target}`"))
 
     cond = obj.get("failure_cond", True)
+    conditioned_repair = repair is not None and repair_cond not in (True, None)
+    logic = {
+        "modes": mode_refs,
+        "gates": gates,
+        "inner": obj.get("cond_inner_logic", "all"),
+        "outer": obj.get("cond_outer_logic", "any"),
+    }
     activations = []
     for target in targets:
         activation: dict[str, Any] = {
@@ -1156,20 +1217,37 @@ def _convert_mode(
             activation["repair"] = repair
         if cond is not True and cond is not None:
             try:
-                activation["condition"] = _condition(
-                    cond,
-                    carrier=target,
-                    modes=mode_refs,
-                    gates=gates,
-                    inner=obj.get("cond_inner_logic", "all"),
-                    outer=obj.get("cond_outer_logic", "any"),
-                )
+                activation["condition"] = _condition(cond, carrier=target, **logic)
             except (ValueError, KeyError) as error:
-                raise _Refused("mode condition", str(error)) from error
+                problems.append(_Refused("mode condition", str(error)))
+        if conditioned_repair:
+            # Read like the occurrence condition: leaves with no `obj` on the
+            # target, the same inner and outer logic (plugin `_expand_objfm`).
+            try:
+                activation["repair_condition"] = _condition(repair_cond, carrier=target, **logic)
+            except (ValueError, KeyError) as error:
+                problems.append(_Refused("repair condition", str(error)))
+        if behaviour == "external":
+            # Its effects ride one zero-delay step behind it, as on the
+            # declaration route.
+            activation["effect_step"] = "zero_delay"
         activations.append(activation)
+    if problems:
+        raise _RefusedAll(problems)
+    for target in targets:
+        instances[target]["modes"][mode] = entry
     on_demand = occurrence["distrib"] == "inst"
     for declared, target, which in _mode_transitions(name, obj, targets, on_demand, inst_object):
         rename[declared] = f"{target}.{mode}.{which}"
+    if behaviour == "external":
+        # The mirror automaton the plugin grafts on each target, named after
+        # the mode object, its states after the mode (`plugin._expand_objfm`),
+        # is the library mode's effect step.
+        failure_state, repair_state = _mode_states(obj)
+        mode_name = obj.get("mode_name") or name
+        for target in targets:
+            for state, which in ((failure_state, _OCC), (repair_state, _REP)):
+                rename[f"{target}.{name}.{mode_name}__{state}"] = f"{target}.{mode}__effect.{which}"
     return activations
 
 
@@ -1216,6 +1294,21 @@ class RouteComparison:
 
 class _Divergence(Exception):
     pass
+
+
+class _Unordered(Exception):
+    """A draw the replay cannot place within its instant: its law's mean
+    delay is below the floating-point resolution of its date, so the drawn
+    trajectory ordered it among same-date events by arming wave, not by date,
+    which deferred mode does not record."""
+
+
+def _within_the_instant(law_json: str, date: float) -> bool:
+    import math
+
+    law = json.loads(law_json)
+    rate = law.get("rate") if law.get("distrib") == "exp" else None
+    return rate is not None and float(rate) > 0.0 and 1.0 / float(rate) < math.ulp(max(date, 1.0))
 
 
 def declaration_model(declaration: dict):
@@ -1319,8 +1412,12 @@ def _replay_covers(model) -> bool:
     )
 
 
-def _armed(session, rename: dict[str, str] | None) -> dict[str, tuple]:
+def _armed(session, rename: dict[str, str] | None, date: float | None = None) -> dict[str, tuple]:
+    """The armed random transitions of `session`, by library name; with
+    `date`, each running age is read at that date, so two sessions whose
+    clocks stand at different instants of the same span compare alike."""
     armed = {}
+    shift = 0.0 if date is None else date - session.time
     for entry in session.deferred():
         name = entry["transition"]
         if rename is not None:
@@ -1330,11 +1427,60 @@ def _armed(session, rename: dict[str, str] | None) -> dict[str, tuple]:
         armed[name] = (
             json.dumps(entry["law"], sort_keys=True),
             entry["armed_at"],
-            entry["age"],
+            round(entry["age"] + (0.0 if entry["paused"] else shift), 9),
             entry["paused"],
             entry["hazard"],
         )
     return armed
+
+
+def _armed_by_stepping(session, name: str, date: float, limit: int = 10_000) -> bool:
+    """Fire the events due by `date`, one at a time, until `name` is armed.
+    False when it is still not armed once none is left by then."""
+    for _ in range(limit):
+        if any(d["transition"] == name for d in session.deferred()):
+            return True
+        dates = [f.date for f in session.fireable() if f.date is not None and f.date == f.date]
+        if not dates or min(dates) > date:
+            return False
+        if session.step() is None:
+            # Stopped before a held choice, or nothing left by then.
+            return any(d["transition"] == name for d in session.deferred())
+    raise RuntimeError(f"`{name}` still unarmed after {limit} same-date events at {date}")
+
+
+def _follow(session, wanted, date: float) -> None:
+    """Fire, at `date` and in the order of `wanted`, the transitions of
+    `wanted` that `session` has not fired yet at that date, while each is
+    armed and due; stop at the first that is not."""
+    remaining = list(wanted)
+    for e in session.history():
+        if e.time == date and e.transition in remaining:
+            remaining.remove(e.transition)
+    for name in remaining:
+        due = any(
+            f.transition == name and f.date is not None and f.date <= date
+            for f in session.fireable()
+        )
+        if not due:
+            return
+        session.fire(name)
+
+
+def _net_changes(history, names: dict[str, str]) -> list[tuple[float, str]]:
+    """`(date, last transition)` of every automaton whose state differs at
+    the end of a date from its state at its start, transitions read through
+    `names`."""
+    spans: dict[tuple[float, str], list] = {}
+    for e in history:
+        if e.transition in names:
+            automaton = names[e.transition].rsplit(".", 1)[0]
+            spans.setdefault((e.time, automaton), []).append(e)
+    return sorted(
+        (date, names[events[-1].transition])
+        for (date, _), events in spans.items()
+        if events[0].from_state != events[-1].to_state
+    )
 
 
 def _drawn_trajectory(declared_model, seed: int, t_max: float) -> list[tuple[float, str, str]]:
@@ -1358,6 +1504,7 @@ def _replay(
     states: list[str],
     *,
     recorded: bool,
+    prefer: frozenset[str] = frozenset(),
 ) -> set[str]:
     """Replay `plan` on both routes in deferred mode and return the
     declaration transitions fired.
@@ -1367,7 +1514,10 @@ def _replay(
     state the trajectory entered. Otherwise the plan lists only random
     transitions to force: each is fired at its date once both routes have
     advanced there (a branch taking its first destination), and skipped
-    when the declaration route does not have it armed then."""
+    when the declaration route does not have it armed then. A forced entry
+    naming no transition fires one of the random transitions armed then on
+    the declaration route: one of `prefer` if any, else the least fired so
+    far, so that successive entries explore the model."""
     from .. import interactive
 
     sessions = [
@@ -1389,38 +1539,97 @@ def _replay(
                 f"{armed[0].get(differing)}, library {armed[1].get(differing)}"
             )
 
+    def held(session) -> str | None:
+        """The held choice `session` stopped before, if any."""
+        due = {f.transition for f in session.fireable() if f.date is not None and f.date <= session.time}
+        return next((d["transition"] for d in session.deferred() if d["transition"] in due), None)
+
+    def advance(target: float) -> None:
+        """Advance both routes to `target`. An advance stops before a held
+        choice, at the place a free run would draw it: a recorded plan draws
+        them itself, so a stop is a draw one route makes and the other does
+        not; a forced plan draws each, first branch, on both routes."""
+        while True:
+            for session in sessions:
+                session.advance_to(target)
+            stopped = [held(session) for session in sessions]
+            if stopped == [None, None]:
+                return
+            if recorded or stopped[0] is None or rename.get(stopped[0]) != stopped[1]:
+                where = "declaration" if stopped[0] is not None else "library"
+                raise _Divergence(
+                    f"at t={sessions[0].time if stopped[0] else sessions[1].time}: the {where} "
+                    f"route holds a draw the other does not make at that point: "
+                    f"declaration {stopped[0]}, library {stopped[1]}"
+                )
+            sessions[0].fire_deferred_at(stopped[0], sessions[0].time, 0)
+            sessions[1].fire_deferred_at(stopped[1], sessions[1].time, 0)
+
     # Observe between two distinct event dates, where every route has
     # settled; fire each draw once the events before it have fired, then let
     # the same-date consequences (zero delays) fire before reading.
     previous = 0.0
     compare("at t=0")
     branches = [_targets(declared_model), _targets(library_model)]
+    recorded_here: list[str] = []
+    explored: collections.Counter = collections.Counter()
     for date, transition, entered in plan:
         if date > previous:
             middle = (previous + date) / 2.0
-            for session in sessions:
-                session.advance_to(middle)
+            advance(middle)
             compare(f"at t={middle}")
             previous = date
+            recorded_here = []
+        if transition is None:
+            advance(date)
+            candidates = sorted(
+                d["transition"]
+                for d in sessions[0].deferred()
+                if d["transition"] in stochastic and d["transition"] in rename
+            )
+            if not candidates:
+                continue
+            transition = min(candidates, key=lambda c: (c not in prefer, explored[c], c))
+            explored[transition] += 1
         if transition not in stochastic:
+            recorded_here.append(transition)
             continue
-        armed = {d["transition"] for d in sessions[0].deferred()}
-        if transition not in armed:
-            # Armed by a same-date consequence (a zero delay) of an earlier
-            # draw: let the events due at this date fire first.
-            for session in sessions:
-                session.advance_to(date)
-            armed = {d["transition"] for d in sessions[0].deferred()}
-        if not recorded and transition not in armed:
-            continue
+        if recorded:
+            # Reproduce, at this date, what the drawn trajectory fired before
+            # this draw, in its order.
+            _follow(sessions[0], recorded_here, date)
+        recorded_here.append(transition)
         mapped = rename.get(transition)
+        # Armed by a same-date consequence (a zero delay) of an earlier draw:
+        # step each route through the events due at this date until the draw
+        # is armed. Stepping, not advancing over the whole date: a later
+        # consequence in the same instant (a zero-delay repair) may disarm it
+        # again, as the drawn trajectory resolved it in between.
+        armed = any(d["transition"] == transition for d in sessions[0].deferred())
+        if not armed and not recorded:
+            armed = _armed_by_stepping(sessions[0], transition, date)
+        if not recorded and not armed:
+            continue
         if mapped is None:
             raise _Divergence(f"fired transition `{transition}` has no library counterpart")
+        # The library route resolves the date on its own first, as a free
+        # run does: its effects need no mirror hop, so a same-date consequence
+        # (a zero-delay repair withdrawing a solicitation) may come before the
+        # draw there and after it on the declaration route. Imposing the
+        # declaration's order would hide exactly that difference.
+        sessions[1].advance_to(date)
         # The law each route is about to resolve: a branch choice is armed
         # only within its instant, so the observations between dates
         # never see it.
-        left = _armed(sessions[0], rename).get(mapped)
-        right = _armed(sessions[1], None).get(mapped)
+        left = _armed(sessions[0], rename, date).get(mapped)
+        right = _armed(sessions[1], None, date).get(mapped)
+        if left != right and (left is None or right is None):
+            law = (left or right)[0]
+            if _within_the_instant(law, date):
+                raise _Unordered(
+                    f"at t={date}: `{mapped}` draws within its instant ({law}): "
+                    "its place among the same-date events is not replayable"
+                )
         if left != right:
             raise _Divergence(
                 f"at t={date}: armed transition `{mapped}` differs: declaration {left}, library {right}"
@@ -1440,18 +1649,30 @@ def _replay(
         except Exception as error:
             raise _Divergence(f"the library route cannot fire `{mapped}` at {date}: {error}") from error
     if t_max > previous:
-        for session in sessions:
-            session.advance_to((previous + t_max) / 2.0)
+        advance((previous + t_max) / 2.0)
         compare(f"at t={(previous + t_max) / 2.0}")
-        for session in sessions:
-            session.advance_to(t_max)
+        advance(t_max)
 
-    # Same-date events are compared as a set: the contract is the converged
-    # states and the event dates, not the propagation order inside a date.
+    # Every fired transition is accounted for, renamed onto the other route.
+    # Otherwise the comparison below, which reads the renamed transitions
+    # only, would not see it.
     renamed = set(rename.values())
+    unaccounted = [
+        ("declaration route", sorted({e.transition for e in sessions[0].history()} - set(rename))),
+        ("library route", sorted({e.transition for e in sessions[1].history()} - renamed)),
+    ]
+    for route, names in unaccounted:
+        if names:
+            listed = ", ".join(f"`{n}`" for n in names[:5])
+            raise _Divergence(f"the {route} fired transitions with no counterpart: {listed}")
+
+    # The contract is the converged states and the event dates, not the
+    # propagation order inside a date: each route's history is reduced to
+    # the net change of each automaton at each date, an automaton that left
+    # a state and came back within one date counting for nothing.
     histories = [
-        sorted((e.time, rename[e.transition]) for e in sessions[0].history() if e.transition in rename),
-        sorted((e.time, e.transition) for e in sessions[1].history() if e.transition in renamed),
+        _net_changes(sessions[0].history(), rename),
+        _net_changes(sessions[1].history(), {name: name for name in renamed}),
     ]
     if histories[0] != histories[1]:
         diverging = next(
@@ -1590,6 +1811,8 @@ def compare_routes(
             fired |= replay(_drawn_trajectory(declared_model, seed, t_max), recorded=True)
         except _Divergence as divergence:
             return RouteComparison(False, level, f"seed {seed}: {divergence}", len(seeds))
+        except _Unordered as unordered:
+            return RouteComparison(False, "replay-partial", f"seed {seed}: {unordered}", len(seeds))
         except RuntimeError as unfaithful:
             # The declaration route could not replay its own draw: the
             # replay proves nothing for this trajectory, which is no proof.
@@ -1615,6 +1838,30 @@ def compare_routes(
         except _Divergence as divergence:
             return RouteComparison(
                 False, level, f"forcing `{transition}`: {divergence}", len(seeds)
+            )
+        except _Unordered as unordered:
+            return RouteComparison(
+                False, "replay-partial", f"forcing `{transition}`: {unordered}", len(seeds)
+            )
+        except RuntimeError as unfaithful:
+            return RouteComparison(
+                False, "replay-partial", f"forcing `{transition}`: replay not faithful: {unfaithful}", len(seeds)
+            )
+    remaining = declared_draws & set(conversion.rename) - fired
+    if remaining:
+        # Some draws need others first (a condition only a rare draw makes
+        # true): explore, firing one armed draw at each of evenly spaced
+        # dates, the ones still unfired first.
+        plan = [(t_max * k / 41.0, None, None) for k in range(1, 41)]
+        try:
+            fired |= replay(plan, recorded=False, prefer=frozenset(remaining))
+        except _Divergence as divergence:
+            return RouteComparison(False, level, f"exploring: {divergence}", len(seeds))
+        except _Unordered as unordered:
+            return RouteComparison(False, "replay-partial", f"exploring: {unordered}", len(seeds))
+        except RuntimeError as unfaithful:
+            return RouteComparison(
+                False, "replay-partial", f"exploring: replay not faithful: {unfaithful}", len(seeds)
             )
     unexercised = tuple(sorted(declared_draws & set(conversion.rename) - fired))
     observed = f"{len(attributes)} attributes and {len(states)} event states"

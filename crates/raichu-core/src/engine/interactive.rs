@@ -33,6 +33,12 @@ impl<'m> Engine<'m> {
         self.config.t_max = date;
         let result = (|| {
             let event = self.step()?;
+            if event.is_none() && self.held_choice_due {
+                // Stopped before a held choice: the clock stays at its instant.
+                self.flush_samples_through(self.time);
+                self.record_indicators();
+                return Ok(None);
+            }
             if event.is_none() {
                 // `step` already integrated to its temporary horizon. Pure
                 // discrete trajectories still need their clock moved there.
@@ -53,7 +59,9 @@ impl<'m> Engine<'m> {
 
     /// Advance an interactive trajectory through every event dated at or
     /// before `date`, then leave its clock at `date`. The caller may split
-    /// continuous evolution at arbitrary communication points.
+    /// continuous evolution at arbitrary communication points. A held
+    /// choice due on the way ([`EngineConfig::deferred_choices`]) stops the
+    /// advance at its instant, before it.
     pub fn advance_to(&mut self, date: f64) -> Result<(), EngineError> {
         if self.config.stochastic_dates == StochasticDates::Operator {
             return Err(EngineError::InteractivePolicy {
@@ -72,6 +80,11 @@ impl<'m> Engine<'m> {
         self.config.t_max = date;
         let result = (|| {
             while self.step()?.is_some() {}
+            if self.held_choice_due {
+                self.flush_samples_through(self.time);
+                self.record_indicators();
+                return Ok(());
+            }
             if self.time < date {
                 if self.needs_integration() {
                     if let Some(trans_idx) = self.advance_continuous(date)? {
@@ -846,6 +859,10 @@ impl<'m> Engine<'m> {
             });
         };
         let name = transition.name.clone();
+        if forced.is_none() && self.held_choice(trans_idx) {
+            // A held choice is drawn by its caller, never by the RNG.
+            return Err(EngineError::HeldChoiceNeedsBranch { transition: name });
+        }
         let operator = match self.operator_dates.get(trans_idx).copied().flatten() {
             Some(OperatorDate::Active(date)) => Some(date),
             _ => None,
@@ -868,6 +885,16 @@ impl<'m> Engine<'m> {
             // because an earlier `fire_idx` skipped ahead) fires at the
             // current instant.
             let t_new = date.max(self.time);
+            if let Some((held, due)) = self.held_choice_due_before(t_new, trans_idx) {
+                // A free run draws the held choice first: firing past it
+                // would leave it overdue, out of its instant.
+                return Err(EngineError::DeferredFiringTooLate {
+                    transition: name,
+                    date: t_new,
+                    limit: due,
+                    cause: format!("the held choice `{}`", self.model.transitions[held].name),
+                });
+            }
             if self.needs_integration() && t_new > self.time {
                 // A located observer's countdown can be interrupted (or
                 // restarted, later) on the way; the refusal then leaves the
@@ -990,6 +1017,28 @@ impl<'m> Engine<'m> {
 }
 
 impl<'m> Engine<'m> {
+    /// The earliest held choice due strictly before `date`, other than
+    /// `except`, with its instant.
+    pub(super) fn held_choice_due_before(
+        &self,
+        date: f64,
+        except: TransIdx,
+    ) -> Option<(TransIdx, f64)> {
+        (0..self.pending.len())
+            .filter(|&idx| idx != except && self.held_choice(idx))
+            .filter_map(|idx| self.pending[idx].map(|due| (idx, due)))
+            .filter(|&(_, due)| due < date)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// A random branch choice held for the caller in deferred mode
+    /// ([`EngineConfig::deferred_choices`]).
+    pub(super) fn held_choice(&self, idx: TransIdx) -> bool {
+        self.config.stochastic_dates == StochasticDates::Deferred
+            && self.config.deferred_choices
+            && self.operator_choice(idx)
+    }
+
     pub(super) fn operator_choice(&self, idx: TransIdx) -> bool {
         matches!(&self.model.transitions[idx].distrib, CLaw::Inst(probs)
             if probs.iter().filter(|prob| **prob > 0.0).count() > 1)

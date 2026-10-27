@@ -178,6 +178,9 @@ pub struct Engine<'m> {
     sample_cursor: usize,
     /// Consecutive watched firings without time advancing (Zeno guard).
     watched_streak: (f64, usize),
+    /// Set by [`Engine::step`] when it stopped before a held choice
+    /// ([`EngineConfig::deferred_choices`]) instead of firing it.
+    held_choice_due: bool,
     /// Per transition: how many times it has fired, and when it first
     /// did. The pair is what turns a runaway count into a diagnosis, the
     /// span being what says a cycle is numerical rather than physical.
@@ -463,6 +466,7 @@ impl<'m> Engine<'m> {
                 .collect(),
             sample_cursor: 0,
             watched_streak: (0.0, 0),
+            held_choice_due: false,
             firings: vec![0; model.transitions.len()],
             first_firing: vec![f64::NAN; model.transitions.len()],
             flow_restarts: 0,

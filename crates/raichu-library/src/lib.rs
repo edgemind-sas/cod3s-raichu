@@ -39,10 +39,10 @@ mod template;
 
 pub use check::{check_library, TypeCheck};
 pub use document::{
-    parse_library, parse_study, parse_system, Activation, Effect, FearedEvent, Fragment, Header,
-    Instance, ItemKind, Library, LibraryRef, Method, Nature, OneOffMode, ParamKind, Parameter,
-    Simulation, StudyDocument, SystemConnection, SystemModel, TypeDef, Use, FORMAT_REVISION,
-    LIBRARY_KEY, STUDY_KEY, SYSTEM_KEY,
+    parse_library, parse_study, parse_system, Activation, Effect, EffectStep, FearedEvent,
+    Fragment, Header, Instance, ItemKind, Library, LibraryRef, Method, Nature, OneOffMode,
+    ParamKind, Parameter, Simulation, StudyDocument, SystemConnection, SystemModel, TypeDef, Use,
+    FORMAT_REVISION, LIBRARY_KEY, STUDY_KEY, SYSTEM_KEY,
 };
 pub use error::{DocumentKind, ExpandError};
 pub use expand::{expand, Expansion};

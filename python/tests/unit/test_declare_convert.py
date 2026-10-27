@@ -205,10 +205,72 @@ def test_a_continuous_flow_is_refused_naming_its_class_and_component():
     assert refusal.construct == "flow class `FlowContinuousIn`"
 
 
-def test_a_negated_output_is_refused_by_name():
-    doc = document([component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True)])], [])
+def _inverter_chain() -> dict:
+    """A source feeding an inverter (a negated output), feeding a sink; the
+    inverter can fail, which cuts its gate."""
+    return document(
+        [
+            component("src", [flow_out("x", produced=True)], class_name="Source"),
+            component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True)], class_name="Inverter"),
+            component("snk", [flow_in("y")], class_name="Sink"),
+            exp_mode("fail", ["src"], {"x_fed_available_out": False}, rate=2e-3),
+            exp_mode("fail", ["inv"], {"y_fed_available_out": False}, rate=1e-3),
+            event("fed", [[{"obj": "snk", "attr": "y_fed_in", "ope": "==", "value": True}]]),
+        ],
+        [link("src", "inv", "x"), link("inv", "snk", "y")],
+    )
+
+
+def test_a_negated_output_converts_and_matches_by_replay():
+    declaration = _inverter_chain()
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    (use,) = [u for u in conversion.library["library"]["types"] if u["name"] == "Inverter"][0]["uses"][1:]
+    assert use["with"]["negate"] is True
+    comparison = compare_routes(declaration, conversion, t_max=5000.0, seeds=range(6))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_downed_negated_output_feeds_true_on_both_routes():
+    """Cutting a negated output's gate makes it deliver `true`: the inverter's
+    own failure feeds the sink, as on the declaration route."""
+    declaration = _inverter_chain()
+    del declaration["components"]["src__fail"]
+    comparison = compare_routes(declaration, convert(declaration), t_max=5000.0, seeds=range(4))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_negated_source_with_no_production_condition_matches():
+    doc = document(
+        [
+            component("src", [flow_out("x", produced=True, negate=True)], class_name="Source"),
+            component("snk", [flow_in("x")], class_name="Sink"),
+            exp_mode("fail", ["src"], {"x_fed_available_out": False}, rate=2e-3),
+        ],
+        [link("src", "snk", "x")],
+    )
+    conversion = convert(doc)
+    assert conversion.library["library"]["types"][0]["uses"][0]["fragment"] == "std.bool_source_out"
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(4))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_negated_temporised_output_is_refused_by_the_reader():
+    tempo = {**flow_out("y", [["x"]], negate=True), "cls": "FlowOutTempo"}
+    doc = document([component("inv", [flow_in("x"), tempo])], [])
     (refusal,) = convert(doc).refusals
-    assert (refusal.component, refusal.construct) == ("inv", "negated output (`negate`)")
+    assert refusal.construct == "declaration refused by the reader"
+
+
+def test_a_negation_lost_in_conversion_is_reported_divergent():
+    declaration = _inverter_chain()
+    conversion = convert(declaration)
+    for kind in conversion.library["library"]["types"]:
+        for use in kind["uses"]:
+            if "negate" in use["with"]:
+                use["with"]["negate"] = False
+    comparison = compare_routes(declaration, conversion, t_max=5000.0, seeds=range(2))
+    assert not comparison.identical
 
 
 def test_an_operand_naming_an_output_reads_that_output():
@@ -426,8 +488,8 @@ def test_an_unaudited_class_is_flagged_even_when_both_routes_agree():
 
 
 def test_loading_a_refused_conversion_names_the_refusals():
-    doc = document([component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True)])], [])
-    with pytest.raises(ValueError, match="negated output"):
+    doc = document([component("inv", [flow_in("x"), {"cls": "FlowOutOnTrigger", "name": "relay"}])], [])
+    with pytest.raises(ValueError, match="FlowOutOnTrigger"):
         convert(doc).load()
 
 
@@ -617,7 +679,6 @@ def test_every_blocking_construct_of_a_component_is_named():
     inverter = component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True), triggered])
     refusals = convert(document([inverter], [])).refusals
     assert [(r.component, r.construct) for r in refusals] == [
-        ("inv", "negated output (`negate`)"),
         ("inv", "flow class `FlowOutOnTrigger`"),
     ]
 
@@ -717,4 +778,264 @@ def test_an_internal_on_demand_mode_converts_and_matches():
     assert conversion.converted, conversion.refusals
     assert conversion.rename["backup__refusal.fm.rep"] == "backup.refusal.rep"
     comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(6))
+    assert comparison.identical, comparison.detail
+
+
+# --- a complete comparison, and every blocking construct of a mode -----------
+
+
+def _watched_pump() -> dict:
+    """`two_pumps` with an event that does fire: the loss of P1's output."""
+    doc = two_pumps()
+    lost = event("p1_down", [[{"obj": "P1", "attr": "water_fed_out", "ope": "==", "value": False}]])
+    doc["components"]["p1_down"] = lost
+    return doc
+
+
+def test_a_fired_declaration_transition_left_out_of_the_rename_fails_the_comparison():
+    """The event histories are compared over the renamed transitions, so a
+    fired transition missing from the rename used to drop out of the
+    comparison without a word."""
+    declaration = _watched_pump()
+    conversion = convert(declaration)
+    for state in ("occ", "not_occ"):
+        del conversion.rename[f"p1_down.ev.{state}"]
+    comparison = compare_routes(declaration, conversion, t_max=5000.0, seeds=range(6))
+    assert not comparison.identical
+    assert "`p1_down.ev." in comparison.detail and "declaration route" in comparison.detail
+
+
+def test_a_library_transition_with_no_declaration_counterpart_fails_the_comparison():
+    declaration = _watched_pump()
+    conversion = convert(declaration)
+    feared = conversion.study["study"]["feared_events"]
+    (watched,) = [e for e in feared if e["name"] == "p1_down"]
+    feared.append({**watched, "name": "p1_twin"})
+    comparison = compare_routes(declaration, conversion, t_max=5000.0, seeds=range(6))
+    assert not comparison.identical
+    assert "`p1_twin.ev." in comparison.detail and "library route" in comparison.detail
+
+
+def test_an_external_mode_carries_its_effects_through_a_zero_delay_step():
+    """On the declaration route an external mode's effects ride on a mirror
+    automaton one zero-delay step behind the mode; the library activation
+    asks for the same step, and the mirror maps onto it."""
+    conversion = convert(two_pumps())
+    (p1,) = [a for a in conversion.study["study"]["modes"] if a["instances"] == ["P1"]]
+    assert p1["effect_step"] == "zero_delay"
+    assert conversion.rename["P1.P1__fail.fail__occ"] == "P1.fail__effect.occ"
+    assert conversion.rename["P1.P1__fail.fail__rep"] == "P1.fail__effect.rep"
+
+
+def test_every_blocking_construct_of_a_mode_is_named():
+    spec = exp_mode(
+        "fail", ["P1", "P2"], {"water_fed_available_out": False}, rate=[1e-3, 5e-4], group="pumps"
+    )
+    spec["repair_effects"] = {"water_fed_available_out": False}
+    spec["behaviour"] = "external_rep_indep"
+    spec["failure_effects"] = {"water_fed_available_out": 0.5}
+    doc = with_mode(two_pumps(), "P1__fail", spec)
+    del doc["components"]["P2__fail"]
+    constructs = {r.construct for r in convert(doc).refusals}
+    assert {
+        "mode key `repair_effects`",
+        "common-cause order 2",
+        "mode behaviour `external_rep_indep`",
+        "non-boolean mode effect",
+    } <= constructs
+
+
+
+# --- repair conditions -----------------------------------------------------
+
+
+def _leaf(attr: str, value: bool) -> dict:
+    return {"attr": attr, "ope": "==", "value": value}
+
+
+def detection_plant(prob=0.5, repair_cond=None) -> dict:
+    """A detector solicited while its watch input and its trigger are fed:
+    it fails to detect on demand with probability `prob`, and a missed
+    detection clears at once (delay 0) when the trigger falls or the reset
+    is fed. Each input comes from a source with its own random losses."""
+    det_out = flow_out("alarm", [["watch"]])
+    sources = [("W", "watch", 3e-2), ("T", "trig", 5e-2), ("R", "reset", 4e-2)]
+    components = [
+        component(name, [flow_out(flow, produced=True)], class_name="Source")
+        for name, flow, _ in sources
+    ]
+    components.append(
+        component(
+            "det",
+            [flow_in("watch"), flow_in("trig"), flow_in("reset"), det_out],
+            class_name="Detector",
+        )
+    )
+    components.extend(
+        exp_mode("loss", [name], {f"{flow}_fed_available_out": False}, rate=rate, repair=0.2)
+        for name, flow, rate in sources
+    )
+    miss = {
+        "name": "det__miss",
+        "kind": "two_state_mode",
+        "cls": "ObjMode2S",
+        "mode_name": "miss",
+        "targets": ["det"],
+        "target_name": "det",
+        "behaviour": "external",
+        "occ_law": {"cls": "inst", "prob": [prob]},
+        "not_occ_law": {"cls": "delay", "time": [0.0]},
+        "occ_effects": {"alarm_fed_available_out": False},
+        "occ_cond": [[_leaf("watch_fed_in", True), _leaf("trig_fed_in", True)]],
+        "not_occ_cond": repair_cond
+        if repair_cond is not None
+        else [[_leaf("trig_fed_in", False)], [_leaf("reset_fed_in", True)]],
+    }
+    components.append(miss)
+    return document(
+        components,
+        [link(name, "det", flow) for name, flow, _ in sources],
+    )
+
+
+def test_a_repair_condition_converts_onto_the_activation_and_matches_by_replay():
+    declaration = detection_plant()
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    (miss,) = [a for a in conversion.study["study"]["modes"] if a["mode"] == "miss"]
+    assert "repair_condition" in miss
+    comparison = compare_routes(declaration, conversion, t_max=400.0, seeds=range(8))
+    assert comparison.identical, comparison.detail
+    assert comparison.level == "replay"
+
+
+def test_a_two_leaf_repair_condition_on_the_target_inputs_matches():
+    declaration = detection_plant(
+        repair_cond=[[_leaf("trig_fed_in", False), _leaf("reset_fed_in", True)]]
+    )
+    comparison = compare_routes(declaration, convert(declaration), t_max=400.0, seeds=range(8))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_flipped_repair_condition_leaf_is_reported_divergent():
+    declaration = detection_plant()
+    wrong = copy.deepcopy(convert(declaration))
+    flipped = detection_plant(repair_cond=[[_leaf("trig_fed_in", True)], [_leaf("reset_fed_in", True)]])
+    (miss,) = [a for a in wrong.study["study"]["modes"] if a["mode"] == "miss"]
+    (right,) = [a for a in convert(flipped).study["study"]["modes"] if a["mode"] == "miss"]
+    miss["repair_condition"] = right["repair_condition"]
+    comparison = compare_routes(declaration, wrong, t_max=400.0, seeds=range(8))
+    assert not comparison.identical
+
+
+def test_a_certain_draw_cleared_at_once_chatters_alike_on_both_routes():
+    """At probability 1, a missed detection cleared at once (delay 0) while
+    still solicited is drawn again in the same instant, forever: both routes
+    stop on the engine's chattering guard, on the same transition."""
+    from pyraichu import interactive
+    from pyraichu.muscadet.convert import declaration_model
+
+    declaration = detection_plant(prob=1.0)
+    conversion = convert(declaration)
+    messages = []
+    for model in (declaration_model(declaration), conversion.load()):
+        with pytest.raises(Exception, match="chattering") as caught:
+            interactive(model, t_max=400.0, seed=0).advance_to(400.0)
+        messages.append(str(caught.value))
+    assert "det__miss.fm.occ" in messages[0]
+    assert "det.miss." in messages[1]
+
+
+def pulse_detection_plant() -> dict:
+    """A passing train is a pulse: its mode occurs at a random date and is
+    repaired at once (delay 0), so its output is fed for one instant only.
+    A detector solicited during that instant draws once (on demand) and
+    holds its detection; all modes are external, as the platform writes
+    them."""
+    def mode2s(name, target, occ_law, occ_effects, occ_cond=None, not_occ_law=None, not_occ_cond=None):
+        spec = {
+            "name": f"{target}__{name}", "kind": "two_state_mode", "cls": "ObjMode2S",
+            "mode_name": name, "targets": [target], "target_name": target,
+            "behaviour": "external", "occ_law": occ_law, "occ_effects": occ_effects,
+            "not_occ_state": "rep", "not_occ_law": not_occ_law or {"cls": "delay", "time": [0.0]},
+        }
+        if occ_cond is not None:
+            spec["occ_cond"] = occ_cond
+        if not_occ_cond is not None:
+            spec["not_occ_cond"] = not_occ_cond
+        return spec
+
+    return document(
+        [
+            component("rail", [flow_out("k", produced=True)], class_name="Rail"),
+            component("train", [flow_in("k"), flow_out("present", produced=True, available=False)],
+                      class_name="Train"),
+            component("det", [flow_in("k"), flow_in("present"),
+                              flow_out("detection", produced=True, available=False)], class_name="Detector"),
+            component("ops", [flow_in("detection")], class_name="Ops"),
+            mode2s("passage", "train", {"cls": "exp", "rate": [0.5]},
+                   {"present_fed_available_out": True},
+                   occ_cond=[[_leaf("k_fed_in", True)]]),
+            mode2s("detection", "det", {"cls": "inst", "prob": [0.5]},
+                   {"detection_fed_available_out": True},
+                   occ_cond=[[_leaf("present_fed_in", True), _leaf("k_fed_in", True)]],
+                   not_occ_cond=[[_leaf("k_fed_in", False)]]),
+            event("alert", [[{"obj": "ops", "attr": "detection_fed_in", "ope": "==", "value": True}]]),
+        ],
+        [link("rail", "train", "k"), link("rail", "det", "k"),
+         link("train", "det", "present"), link("det", "ops", "detection")],
+    )
+
+
+def test_a_draw_solicited_by_a_one_instant_pulse_matches_through_the_effect_step():
+    """On the declaration route an external mode acts through a mirror that
+    moves one zero-delay step after the mode: a pulse repaired at once still
+    solicits the detector for that step, and the detector draws. The library
+    route reproduces it through the mode's effect step; without it, the
+    zero-delay repair withdraws the solicitation first and the detector never
+    draws, which the comparison reports at the draw."""
+    declaration = pulse_detection_plant()
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    comparison = compare_routes(declaration, conversion, t_max=40.0, seeds=range(10))
+    assert comparison.identical, comparison.detail
+    assert comparison.level == "replay"
+    immediate = copy.deepcopy(conversion)
+    for activation in immediate.study["study"]["modes"]:
+        activation.pop("effect_step", None)
+    immediate.rename = {
+        declared: library
+        for declared, library in conversion.rename.items()
+        if "__effect." not in library
+    }
+    comparison = compare_routes(declaration, immediate, t_max=40.0, seeds=range(10))
+    assert not comparison.identical
+
+
+def test_a_draw_within_its_instant_is_told_apart_from_a_timed_one():
+    """A repair at rate 1e100 draws a date the floating clock cannot tell
+    from its instant: the drawn trajectory placed it among the same-date
+    events by arming wave, which deferred mode does not record. The replay
+    reports such a draw as not replayable (`replay-partial`) instead of a
+    divergence it cannot establish; a timed draw stays comparable."""
+    from pyraichu.muscadet.convert import _within_the_instant
+
+    instant = json.dumps({"distrib": "exp", "rate": 1e100})
+    assert _within_the_instant(instant, 76352.68)
+    assert _within_the_instant(instant, 0.0)
+    assert not _within_the_instant(json.dumps({"distrib": "exp", "rate": 2.0}), 76352.68)
+    assert not _within_the_instant(json.dumps({"distrib": "delay", "time": 0.0}), 1.0)
+
+
+def test_a_condition_on_an_external_mode_mirror_reads_its_effect_step():
+    """The mirror an external mode grafts on its target moves one step after
+    the mode: a condition on the mirror's state reads the library mode's
+    effect step, not the mode's own automaton."""
+    declaration = two_pumps(rate_b=5e-3)
+    leaf = {"obj": "P2", "automaton": "P2__fail", "state": "fail__occ", "ope": "==", "value": True}
+    declaration["components"]["mirror"] = event("mirror", [[leaf]])
+    conversion = convert(declaration)
+    feared = {e["name"]: e for e in conversion.study["study"]["feared_events"]}
+    assert '"automaton": "fail__effect"' in json.dumps(feared["mirror"]["condition"])
+    comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(4))
     assert comparison.identical, comparison.detail

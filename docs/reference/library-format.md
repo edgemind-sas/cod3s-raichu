@@ -158,8 +158,8 @@ the engine's, and the expanded model records it. A library imports it with
 | Fragment | Parameters | Builds |
 |---|---|---|
 | `bool_flow_in` | `name`, `logic` (`and`, `or`, `k`), `k`, `default` | in port `<name>_in`, attribute `<name>_fed_in` true while the connected sources feed it under `logic`; an input nothing feeds reads `default` |
-| `bool_flow_out` | `name`, `prod_cond`, `fed_available_init` | out port `<name>_out` exporting `<name>_fed_out`, true while the production condition holds and `<name>_fed_available_out` is true |
-| `bool_source_out` | `name`, `prod_init`, `fed_available_init` | the same output with no production condition: a constant source, or a dormant function when `prod_init` is false |
+| `bool_flow_out` | `name`, `prod_cond`, `fed_available_init`, `negate` | out port `<name>_out` exporting `<name>_fed_out`, true while the production condition holds and `<name>_fed_available_out` is true; with `negate`, the negation of that delivery |
+| `bool_source_out` | `name`, `prod_init`, `fed_available_init`, `negate` | the same output with no production condition: a constant source, or a dormant function when `prod_init` is false |
 | `bool_flow_out_tempo` | `name`, `prod_cond`, `conditioned`, `prod_init`, `fed_available_init`, `init_enable`, `enable_law` (`delay`, `exp`), `enable_value`, `disable_law`, `disable_value` | a temporised output (muscadet `FlowOutTempo`): `<name>_fed_out` is true while the automaton `<name>_tempo` is `enabled` and `<name>_fed_available_out` holds; the transitions `<name>_enable` and `<name>_disable` wait on their law once the production condition holds or fails, and restart when it changes again first. `conditioned: false` leaves `<name>_prod_available` at `prod_init` |
 | `logic_gate` | `name`, `logic`, `k`, `default` | a boolean input re-exported on the out port `<name>_out` |
 | `state_out` | `name`, `automaton`, `states`, `init` | whether `automaton` is in one of `states`, as the boolean `<name>` on the out port `<name>_out`: how a neighbour reads a state (`any`, `all`, or `sum` to count) |
@@ -226,7 +226,7 @@ Each instance becomes a component named after it.
 | `name` | study name; the expanded model is named `<system>/<study>` |
 | `system` | the system the study applies to |
 | `modes` | activations of catalogued modes |
-| `one_off_modes` | modes declared on one instance only: `instance`, `name`, `nature`, `effects`, `condition`, laws |
+| `one_off_modes` | modes declared on one instance only: `instance`, `name`, `nature`, `effects`, `condition`, laws, `repair_condition`, `effect_step` |
 | `feared_events` | `name`, `condition`, `tempo_occ`, `tempo_not_occ`, `target` |
 | `indicators`, `targets` | added to the system's; a name the system already uses is refused |
 | `simulation` | `method` (`monte_carlo` or `sequences`), `nb_runs`, `horizon`, `instants`, `seed`, `stop_at_targets` |
@@ -235,8 +235,22 @@ An activation names a catalogued `mode`, then either `instances` (a list of
 instance names) or `type` (every instance of that type), an `occurrence`
 law (required; a timed law, or on demand: `{"distrib": "inst", "probs": [p]}`),
 a timed `repair` law (absent: the mode stays occurred once it has
-occurred), an `on_interruption` policy (default `reset`) and an optional
-`condition`. An activation on named instances wins over an activation on
+occurred), an `on_interruption` policy (default `reset`), an optional
+`condition` and an optional `repair_condition`. A repair condition holds
+the repair back while it is false: it guards the repair transition only,
+never the occurrence nor the re-arm of an on-demand mode, and it needs a
+`repair` law. The `on_interruption` policy applies to both transitions, so
+a repair whose condition falls is interrupted under that policy.
+`effect_step` (`"zero_delay"` or `"instant"`) carries the mode's effects one
+step behind its state, through an automaton `<mode>__effect` whose
+transitions follow the mode's `occ` state with a zero delay or an
+instantaneous law of probability one; it fires no sequence event. The
+mode then occurs again only with that step at rest and is repaired only
+once the step has taken hold. This is how a PyCATSHOO external mode
+behaves (its effects ride on a mirror automaton one zero-delay step behind
+the mode): a pulse repaired at once is still seen for that step by an
+on-demand draw it solicits. `mode_active` keeps reading the mode's own
+state. An activation on named instances wins over an activation on
 their type; two activations of one mode on one instance at the same level
 are refused. A mode the type does not catalogue is refused, naming the
 catalogue.

@@ -3,12 +3,14 @@
 //! and run settings.
 
 use crate::combine::{combined, Holder};
+use crate::document::EffectStep;
 use crate::document::{Effect, StudyDocument, SystemModel};
 use crate::error::{pointer_index, pointer_key, DocumentKind, ExpandError};
 use crate::expand::Expansion;
 use crate::instantiate::{CombineRule, ExpandedInstance};
 use crate::modes::{
-    all_of, condition_expr, law, mode_automaton, rewrite_mode_leaves, EVENT_AUTOMATON, NOT_OCC, OCC,
+    all_of, condition_expr, effect_automaton_name, effect_state, effect_step_automaton, law,
+    mode_automaton, rewrite_mode_leaves, EVENT_AUTOMATON, NOT_OCC, OCC, REP,
 };
 use crate::names::check_name;
 use crate::provenance::Origin;
@@ -38,6 +40,10 @@ struct Active {
     conditions: Vec<(Json, DocumentKind, String)>,
     occurrence: (Json, String),
     repair: Option<(Json, String)>,
+    /// The repair condition and its pointer.
+    repair_condition: Option<(Json, String)>,
+    /// The step the effects take after the mode's state, if any.
+    effect_step: Option<EffectStep>,
     on_interruption: InterruptionPolicy,
     level: ActivationLevel,
     origin: Origin,
@@ -231,6 +237,11 @@ fn resolve_activations(
                     .repair
                     .clone()
                     .map(|r| (r, pointer_key(&pointer, "repair"))),
+                repair_condition: activation
+                    .repair_condition
+                    .clone()
+                    .map(|c| (c, pointer_key(&pointer, "repair_condition"))),
+                effect_step: activation.effect_step,
                 on_interruption: activation.on_interruption.unwrap_or_default(),
                 level,
                 origin: Origin::study(pointer.clone())
@@ -294,6 +305,11 @@ fn resolve_activations(
                 .repair
                 .clone()
                 .map(|r| (r, pointer_key(&pointer, "repair"))),
+            repair_condition: one_off
+                .repair_condition
+                .clone()
+                .map(|c| (c, pointer_key(&pointer, "repair_condition"))),
+            effect_step: one_off.effect_step,
             on_interruption: one_off.on_interruption.unwrap_or_default(),
             level: ActivationLevel::Instance,
             effects_origin: origin.at(pointer_key(&pointer, "effects")),
@@ -379,9 +395,54 @@ fn emit_mode(
         Some((value, pointer)) => Some(law(value, DocumentKind::Study, pointer, &context, false)?),
         None => None,
     };
+    if active.effect_step.is_some() {
+        // The step's mutual lock, as a PyCATSHOO mirror's: the mode occurs
+        // again only once its effects have returned to rest, and is repaired
+        // only once they have taken hold.
+        guards.push(effect_state(&instance_name, &active.name, REP));
+    }
+    let repair_guard = match &active.repair_condition {
+        Some((_, pointer)) if repair.is_none() => {
+            return Err(err(
+                pointer.clone(),
+                format!("{context}: a repair condition needs a repair law"),
+            ));
+        }
+        Some((condition, pointer)) => {
+            let rewritten = rewrite_mode_leaves(
+                condition,
+                active_names,
+                DocumentKind::Study,
+                pointer,
+                &context,
+            )?;
+            Some(condition_expr(
+                &rewritten,
+                DocumentKind::Study,
+                pointer,
+                &context,
+            )?)
+        }
+        None => None,
+    };
+    let repair_guard = if active.effect_step.is_some() {
+        all_of(
+            repair_guard
+                .into_iter()
+                .chain(std::iter::once(effect_state(
+                    &instance_name,
+                    &active.name,
+                    OCC,
+                )))
+                .collect(),
+        )
+    } else {
+        repair_guard
+    };
     let automaton = mode_automaton(
         &active.name,
         all_of(guards),
+        repair_guard,
         occurrence,
         repair,
         active.on_interruption,
@@ -399,6 +460,32 @@ fn emit_mode(
         ));
     }
     instance.component.automata.push(automaton);
+    if let Some(step) = active.effect_step {
+        let name = effect_automaton_name(&active.name);
+        if instance.component.automata.iter().any(|a| a.name == name) {
+            return Err(ExpandError::new(
+                active.origin.document,
+                active.origin.pointer.clone(),
+                format!(
+                    "{context}: type `{}` already has an automaton `{name}`, the name the effect step of the mode takes",
+                    instance.type_name
+                ),
+            ));
+        }
+        instance.provenance.push((
+            format!("automaton:{instance_name}.{name}"),
+            active.origin.clone(),
+        ));
+        // Before the mode's own automaton: at a shared date the step is
+        // taken ahead of the mode's zero-delay consequences (a repair at
+        // once), as a PyCATSHOO mirror on the target is taken ahead of the
+        // mode component's.
+        let position = instance.component.automata.len() - 1;
+        instance.component.automata.insert(
+            position,
+            effect_step_automaton(&instance_name, &active.name, step),
+        );
+    }
     Ok(())
 }
 
@@ -537,6 +624,11 @@ fn combine_effects(
                 }
                 let holder = Holder {
                     mode: active.name.clone(),
+                    automaton: if active.effect_step.is_some() {
+                        effect_automaton_name(&active.name)
+                    } else {
+                        active.name.clone()
+                    },
                     value,
                 };
                 match groups.iter_mut().find(|g| g.attribute == effect.attribute) {

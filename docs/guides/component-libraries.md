@@ -309,19 +309,27 @@ comparison = compare_routes(declaration, conversion, t_max=1000.0, seeds=range(5
 assert comparison.identical and comparison.level == "replay"
 ```
 
-What the format cannot express is refused per component, naming the
-construct, and never dropped: a conversion with one refusal yields no
-documents. In this version the converter carries discrete flows,
-temporised outputs (`std.bool_flow_out_tempo`), gates fed by outputs,
-single-target timed and on-demand modes (several targets only when every
-common-cause order above one is empty) and events. It refuses continuous flows and
-capacities, triggered outputs, negated outputs, production operands that
-compare a quantity (a negated operand converts through `std.bool_not`),
-common-cause orders, on-demand repair laws, repair conditions, pulse
-and repair effects, and controllers.
+What the format cannot express is refused per component, naming every
+blocking construct of a component and of a mode, and never dropped: a
+conversion with one refusal yields no documents. In this version the
+converter carries discrete flows, negated outputs (the `negate` parameter
+of `std.bool_flow_out` and `std.bool_source_out`), temporised outputs
+(`std.bool_flow_out_tempo`), gates fed by outputs, single-target timed and
+on-demand modes with their occurrence and repair conditions (several
+targets only when every common-cause order above one is empty) and events.
+It refuses continuous flows and capacities, triggered outputs, production
+operands that compare a quantity (a negated operand converts through
+`std.bool_not`), common-cause orders, on-demand repair laws, pulse and
+repair effects, and controllers.
 
 `compare_routes` runs the declaration through both routes, the
 declaration reader and the converted library, and says whether they agree.
+Every transition that fires on a route must be renamed onto the other
+(`conversion.rename`); one that is not fails the comparison, naming it.
+An external mode's effects ride, on the declaration route, on a mirror
+automaton one zero-delay step behind the mode: the converted activation
+asks for the same step (`effect_step: "zero_delay"`), and the mirror's
+transitions map onto the step's.
 A study with no random date compares one trajectory exactly. A stochastic
 study cannot share a seed between the routes, since they draw in a
 different order, so one trajectory is drawn on the declaration route and
@@ -331,11 +339,20 @@ is fired at its date on both routes and, after every firing, the observed
 attributes and every armed transition's law and age must agree. Checking
 the law is what catches a wrongly converted rate, which a forced date
 would fire anyway; the branch of an on-demand draw is the one the drawn
-trajectory took, and its law is compared at the draw itself. A random
-transition the drawn trajectories never fire
-is then forced once, so every mode's effects are observed; one that is
-never armed leaves the comparison at `level="replay-partial"`, not
-identical, and names it in `unexercised`. `method="statistical"` compares
+trajectory took, and its law is compared at the draw itself. Within an
+instant, the declaration route replays the order its drawn trajectory
+recorded, while the library route resolves the instant as a free run
+does (a held branch choice keeps its place among the instant's events), so
+a difference of order between the routes shows at the draw rather than
+being imposed away. Event histories are compared as the net change of
+each automaton at each date. A random transition the drawn trajectories
+never fire is then forced once, and the draws that need others first are
+reached by firing armed draws at evenly spaced dates, so every mode's
+effects are observed; one that is never armed leaves the comparison at
+`level="replay-partial"`, not identical, and names it in `unexercised`. So
+does a draw whose mean delay is below the clock's resolution at its date
+(an exponential law at rate `1e100`): its place among the same-date
+events is not replayable. `method="statistical"` compares
 means over at least 30 independent runs per route instead and says so in
 `level`: it only shows that no difference was detected at that sample
 size.
