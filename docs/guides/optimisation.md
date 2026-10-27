@@ -118,7 +118,10 @@ order after the primary objective. `tie_break: none` disables that guarantee;
 results list these programs in `provenance.non_unique_programs`. A declared
 `tie_break: {"objectives": [{"sense": "minimize", "expr": ...}]}` applies
 secondary objectives before the decision-order rule. The HiGHS backend uses
-one thread, a fixed seed and a deterministic node cap. Replay is bit-identical
+one thread, a fixed seed and a deterministic node cap. A run HiGHS does not
+stand behind, either a solve error or an optimum that misses its own dual
+bound, is retried under a fixed sequence of configurations (MIP restart off
+first, then presolve off) before it is reported as a solver fault. Replay is bit-identical
 on the same platform and engine build; continuous decision values may differ
 in their last bits across platforms. Exact numeric inputs are cached per
 worker, and journal solve records expose `cached`.
