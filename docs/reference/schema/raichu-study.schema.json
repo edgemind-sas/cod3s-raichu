@@ -203,6 +203,55 @@
         }
       ]
     },
+    "CommonCauseGroup": {
+      "additionalProperties": false,
+      "description": "A common-cause group: a mode catalogued on every member's type, failing\nthe members together by combination. Each active order `k` gives one\nautomaton per combination of `k` members, named after their 1-based\npositions in `instances` (`cc_1_2`), in a component named after the\ngroup; a combination holds every member it covers with the catalogued\neffects.",
+      "properties": {
+        "effect_step": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EffectStep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "With a step, each member's effects follow the combinations covering\nit one step behind, through an automaton `<group>__effect` on the\nmember, and a combination occurs only with its members' steps at\nrest and is repaired only once they have taken hold: a PyCATSHOO\nexternal common-cause mode. Without, effects are immediate."
+        },
+        "instances": {
+          "description": "The members, in order: their positions name the combinations.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "description": "Free editor data, never read by the expander."
+        },
+        "mode": {
+          "description": "The catalogued mode it fails its members with.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Group name, also the name of its generated component.",
+          "type": "string"
+        },
+        "orders": {
+          "description": "One entry per active order; an absent order builds no combination.",
+          "items": {
+            "$ref": "#/$defs/GroupOrder"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "mode",
+        "instances",
+        "orders"
+      ],
+      "type": "object"
+    },
     "Condition": {
       "description": "A condition: a core expression in which `mode_active` names an activated mode as `Instance.mode`.",
       "oneOf": [
@@ -1262,6 +1311,38 @@
       ],
       "type": "object"
     },
+    "GroupOrder": {
+      "additionalProperties": false,
+      "description": "The laws of one order of a common-cause group.",
+      "properties": {
+        "occurrence": {
+          "$ref": "#/$defs/Distrib",
+          "description": "Occurrence law of each combination."
+        },
+        "order": {
+          "description": "How many members a combination of this order fails together.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repair": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Distrib"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Repair law; absent means a combination, once occurred, stays so."
+        }
+      },
+      "required": [
+        "order",
+        "occurrence"
+      ],
+      "type": "object"
+    },
     "Indicator": {
       "description": "A quantity recorded during simulation.",
       "oneOf": [
@@ -1594,6 +1675,14 @@
       "additionalProperties": false,
       "description": "A study: which modes run, with which laws, and what is observed.",
       "properties": {
+        "common_cause_groups": {
+          "default": [],
+          "description": "Common-cause groups: a catalogued mode failing several instances\ntogether, one law per order.",
+          "items": {
+            "$ref": "#/$defs/CommonCauseGroup"
+          },
+          "type": "array"
+        },
         "description": {
           "description": "Free text.",
           "type": [

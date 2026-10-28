@@ -143,15 +143,20 @@ pub fn expand(
         simulation: None,
         warnings: Vec::new(),
     };
-    if let Some(study) = study {
-        crate::study::apply(study, system, &mut instances, &mut expansion)?;
-    }
+    let groups = match study {
+        Some(study) => crate::study::apply(study, system, &mut instances, &mut expansion)?,
+        None => Vec::new(),
+    };
     for instance in instances {
         for (key, origin) in instance.provenance {
             expansion.provenance.insert(key, origin);
         }
         expansion.model.components.push(instance.component);
     }
+    // After the instances: a group's combinations rank after its members'
+    // effect steps at a shared date, as PyCATSHOO's mode components after
+    // the targets carrying their mirrors.
+    expansion.model.components.extend(groups);
     // The sweep order is derived, never authored (KTD14). A model the
     // derivation cannot read is structurally invalid, and validation below
     // reports it with its origin.

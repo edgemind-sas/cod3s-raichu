@@ -30,7 +30,9 @@ from __future__ import annotations
 import copy
 import collections
 import functools
+import itertools
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -150,7 +152,10 @@ class Conversion:
     which carries its effects, maps onto the library mode's effect step
     (``effect_step``). A comparison counts every fired transition. ``unverified`` names the components whose
     class may carry behaviour outside the declaration (see
-    :data:`AUDITED_CLASSES`).
+    :data:`AUDITED_CLASSES`). ``inert`` names the declaration route's
+    transitions that can never fire because nothing drives them (the mirror
+    of an external mode with no occurrence law), which the library route
+    does not build.
     """
 
     library: dict | None
@@ -160,6 +165,7 @@ class Conversion:
     rename: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     unverified: list[str] = field(default_factory=list)
+    inert: list[str] = field(default_factory=list)
 
     @property
     def converted(self) -> bool:
@@ -690,8 +696,11 @@ def _declared_laws(obj: dict, targets: list[str]) -> tuple[list, list]:
     other modes as law objects."""
     failures = obj.get("failure") or []
     repairs = obj.get("repair") or []
+    # The declaration route builds the orders 1 to n of n targets only, and
+    # ignores laws listed past them.
+    n = len(targets)
     if obj.get("type") != "ObjFMInst":
-        return list(failures), list(repairs)
+        return list(failures)[:n], list(repairs)[:n]
     failures = failures if isinstance(failures, list) else [failures]
     failures = [
         {"law": "inst", "prob": f} if isinstance(f, (int, float)) and not isinstance(f, bool) else f
@@ -703,36 +712,138 @@ def _declared_laws(obj: dict, targets: list[str]) -> tuple[list, list]:
         {"law": "exp", "rate": float(r)} if isinstance(r, (int, float)) and not isinstance(r, bool) else r
         for r in repairs
     ]
-    return failures, repairs
+    return failures[:n], repairs[:n]
+
+
+def _mode_effects(obj: dict, mode: str, targets: list[str], instances: dict[str, dict], problems: list) -> dict:
+    """The catalogue entry of a mode on its targets, checking its effects."""
+    effects = []
+    for attribute, value in sorted((obj.get("failure_effects") or {}).items()):
+        if not isinstance(value, bool):
+            problems.append(_Refused("non-boolean mode effect", f"`{attribute}` = {value!r}"))
+            continue
+        effects.append({"attribute": attribute, "value": value})
+    for target in targets:
+        allowed = _targetable(instances[target]["uses"])
+        for effect in effects:
+            if effect["attribute"] not in allowed:
+                problems.append(
+                    _Refused("effect on a non-targetable attribute", f"`{target}.{effect['attribute']}`")
+                )
+    entry: dict[str, Any] = {"name": mode, "nature": "failure"}
+    if effects:
+        entry["effects"] = effects
+    for target in targets:
+        known = instances[target]["modes"].get(mode)
+        if known is not None and known != entry:
+            problems.append(_Refused("mode name clash", f"`{mode}` on `{target}`"))
+    return entry
+
+
+def _convert_group(
+    name: str,
+    obj: dict,
+    mode: str,
+    targets: list[str],
+    failures: list,
+    repairs: list,
+    instances: dict[str, dict],
+    rename: dict[str, str],
+    problems: list,
+) -> dict:
+    """A mode with an active order above one, as a study common-cause group:
+    one combination per active order, the mirror an external mode grafts on
+    each target mapped onto the member's effect step."""
+    group = _clean_name(name)
+    for key in ("failure_cond", "repair_cond"):
+        if obj.get(key) not in (True, None) and not (key == "repair_cond" and obj[key] is False):
+            problems.append(
+                _Refused("common-cause group condition", f"`{key}` on a mode of {len(targets)} targets")
+            )
+    orders = []
+    for index, law in enumerate(failures):
+        if law is None:
+            continue
+        entry: dict[str, Any] = {"order": index + 1}
+        try:
+            entry["occurrence"] = _law(law, "occurrence", occurrence=True)
+        except _Refused as error:
+            problems.append(error)
+            continue
+        repair_law = repairs[index] if index < len(repairs) and obj.get("repair_cond") is not False else None
+        if repair_law is not None:
+            try:
+                repair = _law(repair_law, "repair")
+            except _Refused as error:
+                problems.append(error)
+                repair = None
+            if repair is not None and not (repair["distrib"] == "exp" and float(repair.get("rate", 0.0)) == 0.0):
+                entry["repair"] = repair
+        orders.append(entry)
+    entry = _mode_effects(obj, mode, targets, instances, problems)
+    if problems:
+        raise _RefusedAll(problems)
+    for target in targets:
+        instances[target]["modes"][mode] = entry
+    spec: dict[str, Any] = {"name": group, "mode": mode, "instances": list(targets), "orders": orders}
+    if obj.get("behaviour") == "external":
+        spec["effect_step"] = "zero_delay"
+    inst_object = obj.get("type") == "ObjFMInst"
+    for order in orders:
+        k = order["order"]
+        on_demand = order["occurrence"]["distrib"] == "inst"
+        for comb in itertools.combinations(range(len(targets)), k):
+            library = f"{group}.cc_{'_'.join(str(i + 1) for i in comb)}"
+            for declared, which in _combination_transitions(name, obj, comb, len(targets), on_demand, inst_object):
+                rename[declared] = f"{library}.{which}"
+    if obj.get("behaviour") == "external":
+        failure_state, repair_state = _mode_states(obj)
+        mode_name = obj.get("mode_name") or name
+        for target in targets:
+            for state, which in ((failure_state, _OCC), (repair_state, _REP)):
+                rename[f"{target}.{name}.{mode_name}__{state}"] = f"{target}.{group}__effect.{which}"
+    return spec
+
+
+def _combination_transitions(
+    name: str, obj: dict, comb: tuple, order_max: int, on_demand: bool, inst_object: bool
+) -> list[tuple[str, str]]:
+    """(declaration transition, library transition) of one combination, as
+    the plugin names them (`_expand_objfm`, `plugin._ccf_suffix`)."""
+    failure_state, repair_state = _mode_states(obj)
+    default_parked = "not_occ" if inst_object else f"not_{failure_state}"
+    parked = obj.get("absorb_state") or default_parked
+    suffix = plugin._ccf_suffix(comb, order_max)
+    automaton = f"{name}.fm{suffix}"
+    names = []
+    if on_demand:
+        names.append((f"{automaton}.{failure_state}{suffix}", _OCC))
+        names.append((f"{automaton}.{parked}{suffix}", _PARKED))
+    elif suffix:
+        names.append((f"{automaton}.{failure_state}{suffix}", _OCC))
+    else:
+        names.append((f"{automaton}.failure", _OCC))
+    repair = f"{automaton}.{repair_state}{suffix}" if suffix or inst_object else f"{automaton}.repair"
+    names.append((repair, _REP))
+    return names
 
 
 def _mode_transitions(
     name: str, obj: dict, targets: list[str], on_demand: bool, inst_object: bool = False
 ) -> list[tuple[str, str, str]]:
-    """(declaration transition, target, library transition) of a mode, as
-    the plugin names them: `failure`/`repair` alone, `occ__cc_i` per target
-    otherwise; an on-demand draw is named after the state it enters, and
-    its re-arm after the state it parks in. An `ObjFMInst` names its repair
-    after the state it returns to, and parks in `not_occ` by default."""
-    failure_state, repair_state = _mode_states(obj)
-    default_parked = "not_occ" if inst_object else f"not_{failure_state}"
-    parked = obj.get("absorb_state") or default_parked
-    names = []
-    for index, target in enumerate(targets, start=1):
-        suffix = f"__cc_{index}" if len(targets) > 1 else ""
-        automaton = f"{name}.fm{suffix}"
-        if on_demand:
-            names.append((f"{automaton}.{failure_state}{suffix}", target, _OCC))
-            names.append((f"{automaton}.{parked}{suffix}", target, _PARKED))
-        elif suffix:
-            names.append((f"{automaton}.{failure_state}{suffix}", target, _OCC))
-        else:
-            names.append((f"{automaton}.failure", target, _OCC))
-        repair = (
-            f"{automaton}.{repair_state}{suffix}" if suffix or inst_object else f"{automaton}.repair"
+    """(declaration transition, target, library transition) of a mode with
+    order 1 only, as the plugin names them: `failure`/`repair` alone,
+    `occ__cc_i` per target otherwise; an on-demand draw is named after the
+    state it enters, and its re-arm after the state it parks in. An
+    `ObjFMInst` names its repair after the state it returns to, and parks in
+    `not_occ` by default."""
+    return [
+        (declared, target, which)
+        for index, target in enumerate(targets)
+        for declared, which in _combination_transitions(
+            name, obj, (index,), len(targets), on_demand, inst_object
         )
-        names.append((repair, target, _REP))
-    return names
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1007,11 +1118,13 @@ def convert(
                 external=obj.get("behaviour") == "external",
             )
 
+    groups: list[dict] = []
+    inert: list[str] = []
     for name, obj in mode_objects.items():
         try:
             activations.extend(
                 _convert_mode(
-                    name, obj, mode_names[name], instances, mode_refs, gates, rename, notes
+                    name, obj, mode_names[name], instances, mode_refs, gates, rename, notes, groups, inert
                 )
             )
         except _Refused as error:
@@ -1103,6 +1216,8 @@ def convert(
         "modes": activations,
         "feared_events": feared,
     }
+    if groups:
+        study_body["common_cause_groups"] = groups
     if schedule:
         study_body["simulation"] = {
             "method": "monte_carlo",
@@ -1112,7 +1227,7 @@ def convert(
             "seed": int(seed),
         }
     study = {"raichu_study": {"format": DOCUMENT_FORMAT}, "study": study_body}
-    return Conversion(library, system, study, [], rename, notes, unverified)
+    return Conversion(library, system, study, [], rename, notes, unverified, inert)
 
 
 def _convert_mode(
@@ -1124,9 +1239,12 @@ def _convert_mode(
     gates: dict[str, str],
     rename: dict[str, str],
     notes: list[str],
+    groups: list[dict],
+    inert: list[str],
 ) -> list[dict]:
     """A declared mode as a catalogue entry on each target and one study
-    activation per target. Every construct that blocks the mode is named
+    activation per target, or a common-cause group when an order above one
+    is active. Every construct that blocks the mode is named
     (:class:`_RefusedAll`), not only the first met."""
     problems = _unknown_keys(obj, _MODE_KEYS, "mode")
     behaviour = obj.get("behaviour")
@@ -1144,6 +1262,11 @@ def _convert_mode(
 
     inst_object = obj.get("type") == "ObjFMInst"
     failures, repairs = _declared_laws(obj, targets)
+    if any(law is not None for law in failures[1:]):
+        groups.append(
+            _convert_group(name, obj, mode, targets, failures, repairs, instances, rename, problems)
+        )
+        return []
     failure = repair_law = None
     try:
         failure = _order_laws(failures, targets, "failure")
@@ -1160,6 +1283,16 @@ def _convert_mode(
         # No order carries a law (a zero rate reads as none): the declaration
         # route builds no automaton either, so the mode is not activated.
         notes.append(f"mode `{name}` declares no active occurrence law and is not activated")
+        if behaviour == "external":
+            # The declaration route still grafts the mirror on each target,
+            # monitored; no automaton drives it.
+            failure_state, repair_state = _mode_states(obj)
+            mode_name = obj.get("mode_name") or name
+            inert.extend(
+                f"{target}.{name}.{mode_name}__{state}"
+                for target in targets
+                for state in (failure_state, repair_state)
+            )
         return []
     occurrence = repair = None
     try:
@@ -1174,29 +1307,7 @@ def _convert_mode(
         # An exponential repair at rate zero never fires: no repair.
         repair = None
 
-    effects = []
-    for attribute, value in sorted((obj.get("failure_effects") or {}).items()):
-        if not isinstance(value, bool):
-            problems.append(_Refused("non-boolean mode effect", f"`{attribute}` = {value!r}"))
-            continue
-        effects.append({"attribute": attribute, "value": value})
-    for target in targets:
-        allowed = _targetable(instances[target]["uses"])
-        for effect in effects:
-            if effect["attribute"] not in allowed:
-                problems.append(
-                    _Refused(
-                        "effect on a non-targetable attribute",
-                        f"`{target}.{effect['attribute']}`",
-                    )
-                )
-    entry: dict[str, Any] = {"name": mode, "nature": "failure"}
-    if effects:
-        entry["effects"] = effects
-    for target in targets:
-        known = instances[target]["modes"].get(mode)
-        if known is not None and known != entry:
-            problems.append(_Refused("mode name clash", f"`{mode}` on `{target}`"))
+    entry = _mode_effects(obj, mode, targets, instances, problems)
 
     cond = obj.get("failure_cond", True)
     conditioned_repair = repair is not None and repair_cond not in (True, None)
@@ -1277,7 +1388,10 @@ class RouteComparison:
     divergence, but the transitions in ``unexercised`` never fired, so their
     effects were never observed) or ``statistical`` (attribute means over
     independent runs, a two-sample z-test per observation, which only shows
-    that no difference was detected at that sample size).
+    that no difference was detected at that sample size). A comparison
+    stops at ``structure``, not identical, when both routes would not record
+    the same sequence events (monitored transitions, their kinds and cycle
+    groups), before any trajectory runs.
 
     ``identical`` says no difference was found. Only ``exact`` and
     ``replay`` make it a proof of equality: a partial replay is reported as
@@ -1427,11 +1541,39 @@ def _armed(session, rename: dict[str, str] | None, date: float | None = None) ->
         armed[name] = (
             json.dumps(entry["law"], sort_keys=True),
             entry["armed_at"],
-            round(entry["age"] + (0.0 if entry["paused"] else shift), 9),
+            entry["age"] + (0.0 if entry["paused"] else shift),
             entry["paused"],
             entry["hazard"],
         )
     return armed
+
+
+#: Positions of the times (armed date, age) in an :func:`_armed` entry.
+_ARMED_TIMES = (1, 2)
+
+
+def _same_value(a, b, *, time: bool) -> bool:
+    if isinstance(a, float) and isinstance(b, float):
+        # Deterministic float arithmetic done in another order (a running
+        # age read at a shifted date): equal up to the contract's 1e-12,
+        # relative. A time near zero also gets 1e-12 absolute; a cumulative
+        # hazard has no scale and gets none.
+        return math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-12 if time else 0.0)
+    return a == b
+
+
+def _same_entry(a: tuple | None, b: tuple | None) -> bool:
+    if a is None or b is None:
+        return a is b
+    return len(a) == len(b) and all(
+        _same_value(x, y, time=i in _ARMED_TIMES) for i, (x, y) in enumerate(zip(a, b))
+    )
+
+
+def _same_armed(left: dict[str, tuple], right: dict[str, tuple]) -> bool:
+    """Whether two routes arm the same transitions with the same laws,
+    dates and ages, floats compared within the float tolerance."""
+    return left.keys() == right.keys() and all(_same_entry(left[n], right[n]) for n in left)
 
 
 def _armed_by_stepping(session, name: str, date: float, limit: int = 10_000) -> bool:
@@ -1531,9 +1673,9 @@ def _replay(
         if left != right:
             raise _Divergence(f"{when}: {_first_difference(left, right)}")
         armed = [_armed(sessions[0], rename), _armed(sessions[1], None)]
-        if armed[0] != armed[1]:
+        if not _same_armed(armed[0], armed[1]):
             names = sorted(set(armed[0]) | set(armed[1]))
-            differing = next(n for n in names if armed[0].get(n) != armed[1].get(n))
+            differing = next(n for n in names if not _same_entry(armed[0].get(n), armed[1].get(n)))
             raise _Divergence(
                 f"{when}: armed transition `{differing}` differs: declaration "
                 f"{armed[0].get(differing)}, library {armed[1].get(differing)}"
@@ -1623,14 +1765,14 @@ def _replay(
         # never see it.
         left = _armed(sessions[0], rename, date).get(mapped)
         right = _armed(sessions[1], None, date).get(mapped)
-        if left != right and (left is None or right is None):
+        if not _same_entry(left, right) and (left is None or right is None):
             law = (left or right)[0]
             if _within_the_instant(law, date):
                 raise _Unordered(
                     f"at t={date}: `{mapped}` draws within its instant ({law}): "
                     "its place among the same-date events is not replayable"
                 )
-        if left != right:
+        if not _same_entry(left, right):
             raise _Divergence(
                 f"at t={date}: armed transition `{mapped}` differs: declaration {left}, library {right}"
             )
@@ -1743,6 +1885,82 @@ def _statistical(
 STATISTICAL_MIN_RUNS = 30
 
 
+def _can_fire(transition: dict) -> bool:
+    """False for a transition no trajectory can fire, which records no
+    event: a constant false guard, or an exponential law of rate zero."""
+    guard = transition.get("guard")
+    if guard == {"op": "const", "value": {"kind": "bool", "value": False}}:
+        return False
+    return not (
+        transition.get("distrib") == "exp"
+        and float(transition.get("rate", 0.0) or 0.0) == 0.0
+        and transition.get("rate_expr") is None
+    )
+
+
+def _sequence_events(model, *, every: bool = False) -> dict[str, tuple[str | None, tuple[str, str | None]]]:
+    """The monitored transitions of `model` (every transition that can fire
+    with `every`), `component.automaton.transition`, each with its declared
+    kind and its (component, cycle group) class."""
+    events = {}
+    for component in _body(model)["components"]:
+        for automaton in component.get("automata", []):
+            for transition in automaton["transitions"]:
+                if (every or transition.get("monitored")) and _can_fire(transition):
+                    name = f"{component['name']}.{automaton['name']}.{transition['name']}"
+                    events[name] = (
+                        transition.get("kind"),
+                        (component["name"], transition.get("cycle_group")),
+                    )
+    return events
+
+
+def _sequence_difference(
+    declared_model, library_model, rename: dict[str, str], inert: frozenset[str] = frozenset()
+) -> str | None:
+    """Why both routes would not record the same sequence events, or None.
+
+    Every monitored transition of the declaration, renamed, must be a
+    monitored transition of the library with the same kind, and the cycle
+    groups must split them into the same classes (their labels may differ,
+    as transition names do). The library may record a transition the
+    declaration route carries unmonitored (a mode of a component's own
+    section): PyCATSHOO records what the study's `monitorTransition`
+    patterns select, so that flag is a convention of the declaration route,
+    not of the reference; a library event with no declared counterpart at
+    all is a difference."""
+    declared = {
+        rename.get(name, name): event
+        for name, event in _sequence_events(declared_model).items()
+        if name not in inert
+    }
+    carried = {rename.get(name, name) for name in _sequence_events(declared_model, every=True)}
+    library = _sequence_events(library_model)
+    only_declared = sorted(set(declared) - set(library))
+    only_library = sorted(set(library) - carried)
+    if only_declared or only_library:
+        return (
+            "sequence events differ: recorded by the declaration route only "
+            f"{only_declared[:5]}, by the library route only {only_library[:5]}"
+        )
+    kinds = sorted(name for name in declared if declared[name][0] != library[name][0])
+    if kinds:
+        name = kinds[0]
+        return f"sequence events differ: `{name}` is a {declared[name][0]} on the declaration route, a {library[name][0]} on the library route"
+
+    def classes(events) -> set[frozenset[str]]:
+        grouped: dict[tuple, set[str]] = {}
+        for name, (_, key) in events.items():
+            if name in declared and key[1] is not None:
+                grouped.setdefault(key, set()).add(name)
+        return {frozenset(names) for names in grouped.values()}
+
+    split = classes(declared) ^ classes(library)
+    if split:
+        return f"sequence events differ: cycle groups split {sorted(sorted(c) for c in split)[:4]} differently"
+    return None
+
+
 def compare_routes(
     declaration: dict,
     conversion: Conversion,
@@ -1763,13 +1981,18 @@ def compare_routes(
 
     A replay fires, after the drawn trajectories, every converted random
     transition they never fired, once, at a third of the horizon (and its
-    return at two thirds), so each mode's effects are observed at least
-    once. One still unfired (not armed at that date) is listed in
+    return at two thirds; a repair at two thirds, after its occurrence at a
+    third), so each mode's effects are observed at least once. One still unfired (not armed at that date) is listed in
     ``unexercised`` and the level is ``replay-partial``.
     """
     declared_model = declaration_model(declaration)
     library_model = conversion.load()
     attributes, states = _observed(library_model, declared_model)
+    difference = _sequence_difference(
+        declared_model, library_model, conversion.rename, frozenset(conversion.inert)
+    )
+    if difference is not None:
+        return RouteComparison(False, "structure", difference, 0)
     if method == "auto":
         method = "replay" if _replay_covers(library_model) else "statistical"
     if method == "statistical":
@@ -1819,7 +2042,7 @@ def compare_routes(
             return RouteComparison(
                 False, "replay-partial", f"seed {seed}: replay not faithful: {unfaithful}", len(seeds)
             )
-    returns = {
+    by_library_name = {
         name: declared
         for declared, name in conversion.rename.items()
         if declared in declared_draws
@@ -1827,12 +2050,18 @@ def compare_routes(
     for transition in sorted(declared_draws & set(conversion.rename) - fired):
         if transition in fired:
             continue
-        plan = [(t_max / 3.0, transition, None)]
         target = conversion.rename[transition]
+        plan = [(t_max / 3.0, transition, None)]
         if target.endswith(f".{_OCC}"):
-            back = returns.get(f"{target[: -len(_OCC)]}{_REP}")
+            back = by_library_name.get(f"{target[: -len(_OCC)]}{_REP}")
             if back is not None:
                 plan.append((2.0 * t_max / 3.0, back, None))
+        elif target.endswith(f".{_REP}"):
+            # A repair is armed only once its mode has occurred, which this
+            # fresh trajectory has not: force the occurrence first.
+            first = by_library_name.get(f"{target[: -len(_REP)]}{_OCC}")
+            if first is not None:
+                plan = [(t_max / 3.0, first, None), (2.0 * t_max / 3.0, transition, None)]
         try:
             fired |= replay(plan, recorded=False)
         except _Divergence as divergence:

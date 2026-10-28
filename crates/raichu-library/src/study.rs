@@ -2,26 +2,27 @@
 //! combination on targeted attributes, feared events, indicators, targets
 //! and run settings.
 
-use crate::combine::{combined, Holder};
+use crate::combine::{combined, EffectSource, Holder};
 use crate::document::EffectStep;
 use crate::document::{Effect, StudyDocument, SystemModel};
 use crate::error::{pointer_index, pointer_key, DocumentKind, ExpandError};
 use crate::expand::Expansion;
+use crate::groups::Group;
 use crate::instantiate::{CombineRule, ExpandedInstance};
 use crate::modes::{
-    all_of, condition_expr, effect_automaton_name, effect_state, effect_step_automaton, law,
-    mode_automaton, rewrite_mode_leaves, EVENT_AUTOMATON, NOT_OCC, OCC, REP,
+    all_of, condition_expr, effect_automaton_name, effect_state, effect_step_automaton,
+    hand_events_to_step, law, mode_automaton, rewrite_mode_leaves, ActiveModes, EVENT_AUTOMATON,
+    NOT_OCC, OCC, REP,
 };
 use crate::names::check_name;
 use crate::provenance::Origin;
 use crate::strict::typed;
 use raichu_expr::{Assignment, AttrRef, BoolOp, Expr, Value};
 use raichu_model::{
-    AttrKind, Automaton, Component, CycleCancellation, Distrib, Indicator, InterruptionPolicy,
-    SensitiveFunction, Target, Transition, TransitionKind,
+    AttrKind, Automaton, Component, CycleCancellation, Distrib, Indicator, IndicatorTarget,
+    InterruptionPolicy, SensitiveFunction, Target, Transition, TransitionKind,
 };
 use serde_json::Value as Json;
-use std::collections::BTreeSet;
 
 /// How specifically an activation names its instance: an activation on
 /// named instances (or a one-off mode) wins over one on a whole type.
@@ -55,13 +56,14 @@ fn err(pointer: impl Into<String>, message: impl Into<String>) -> ExpandError {
     ExpandError::new(DocumentKind::Study, pointer, message)
 }
 
-/// Applies `study` to the expanded `instances` of `system`.
+/// Applies `study` to the expanded `instances` of `system`, and returns the
+/// components of its common-cause groups, to place after the instances.
 pub(crate) fn apply(
     study: &StudyDocument,
     system: &SystemModel,
     instances: &mut [ExpandedInstance],
     expansion: &mut Expansion,
-) -> Result<(), ExpandError> {
+) -> Result<Vec<Component>, ExpandError> {
     if study.system != system.name {
         return Err(err(
             "/study/system",
@@ -74,15 +76,53 @@ pub(crate) fn apply(
     expansion.model.name = format!("{}/{}", system.name, study.name);
 
     let actives = resolve_activations(study, instances, expansion)?;
-    let active_names: BTreeSet<(String, String)> = actives
+    let mut active_names: ActiveModes = actives
         .iter()
-        .map(|a| (instances[a.instance].component.name.clone(), a.name.clone()))
+        .map(|a| {
+            let instance = instances[a.instance].component.name.clone();
+            (
+                (instance.clone(), a.name.clone()),
+                vec![(instance, a.name.clone())],
+            )
+        })
         .collect();
+    let groups = crate::groups::resolve(study, instances, &active_names)?;
+    // Two groups may hold the same member's mode: a condition reads every
+    // combination covering it, whichever group owns it.
+    for group in &groups {
+        for (key, states) in group.mode_states(instances) {
+            active_names.entry(key).or_default().extend(states);
+        }
+    }
 
     for active in &actives {
         emit_mode(active, &active_names, instances)?;
     }
-    combine_effects(&actives, instances)?;
+    let mut sources: Vec<EffectSource> = actives
+        .iter()
+        .map(|active| EffectSource {
+            instance: active.instance,
+            mode: active.name.clone(),
+            effects: active.effects.clone(),
+            component: instances[active.instance].component.name.clone(),
+            automaton: if active.effect_step.is_some() {
+                effect_automaton_name(&active.name)
+            } else {
+                active.name.clone()
+            },
+            effects_origin: active.effects_origin.clone(),
+        })
+        .collect();
+    let mut components = Vec::with_capacity(groups.len());
+    for group in &groups {
+        let (component, group_sources) = group.emit(instances)?;
+        sources.extend(group_sources);
+        for (key, origin) in group.provenance() {
+            expansion.provenance.insert(key, origin);
+        }
+        components.push(component);
+    }
+    combine_effects(&sources, instances)?;
     emit_feared_events(study, instances, &active_names, expansion)?;
 
     for (i, raw) in study.indicators.iter().enumerate() {
@@ -108,6 +148,7 @@ pub(crate) fn apply(
         );
         expansion.model.indicators.push(indicator);
     }
+    refuse_group_held_references(study, &groups, instances, &expansion.model.indicators)?;
     for (i, target) in study.targets.iter().enumerate() {
         let pointer = pointer_index("/study/targets", i);
         if expansion
@@ -127,7 +168,7 @@ pub(crate) fn apply(
         expansion.model.targets.push(target.clone());
     }
     expansion.simulation.clone_from(&study.simulation);
-    Ok(())
+    Ok(components)
 }
 
 fn resolve_activations(
@@ -355,7 +396,7 @@ fn place(
 
 fn emit_mode(
     active: &Active,
-    active_names: &BTreeSet<(String, String)>,
+    active_names: &ActiveModes,
     instances: &mut [ExpandedInstance],
 ) -> Result<(), ExpandError> {
     let instance = &instances[active.instance];
@@ -439,7 +480,7 @@ fn emit_mode(
     } else {
         repair_guard
     };
-    let automaton = mode_automaton(
+    let mut automaton = mode_automaton(
         &active.name,
         all_of(guards),
         repair_guard,
@@ -447,6 +488,9 @@ fn emit_mode(
         repair,
         active.on_interruption,
     );
+    if active.effect_step.is_some() {
+        hand_events_to_step(&mut automaton);
+    }
     let instance = &mut instances[active.instance];
     let key = format!("automaton:{instance_name}.{}", active.name);
     instance.provenance.push((key, active.origin.clone()));
@@ -563,7 +607,7 @@ fn kind_name(kind: AttrKind) -> &'static str {
 }
 
 /// The effects active modes hold on one attribute of one instance.
-struct Group {
+struct AttributeGroup {
     attribute: String,
     rule: CombineRule,
     holders: Vec<Holder>,
@@ -572,13 +616,13 @@ struct Group {
 }
 
 fn combine_effects(
-    actives: &[Active],
+    sources: &[EffectSource],
     instances: &mut [ExpandedInstance],
 ) -> Result<(), ExpandError> {
     for (index, instance) in instances.iter_mut().enumerate() {
-        let mut groups: Vec<Group> = Vec::new();
+        let mut groups: Vec<AttributeGroup> = Vec::new();
         let written = writers(&instance.component);
-        for active in actives.iter().filter(|a| a.instance == index) {
+        for active in sources.iter().filter(|a| a.instance == index) {
             for (e, effect) in active.effects.iter().enumerate() {
                 let here = active
                     .effects_origin
@@ -589,7 +633,7 @@ fn combine_effects(
                         here.pointer.clone(),
                         format!(
                             "mode `{}` of type `{}` (instance `{}`): {message}",
-                            active.name, instance.type_name, instance.component.name
+                            active.mode, instance.type_name, instance.component.name
                         ),
                     )
                 };
@@ -623,17 +667,14 @@ fn combine_effects(
                     )));
                 }
                 let holder = Holder {
-                    mode: active.name.clone(),
-                    automaton: if active.effect_step.is_some() {
-                        effect_automaton_name(&active.name)
-                    } else {
-                        active.name.clone()
-                    },
+                    mode: active.mode.clone(),
+                    component: active.component.clone(),
+                    automaton: active.automaton.clone(),
                     value,
                 };
                 match groups.iter_mut().find(|g| g.attribute == effect.attribute) {
                     Some(group) => group.holders.push(holder),
-                    None => groups.push(Group {
+                    None => groups.push(AttributeGroup {
                         attribute: effect.attribute.clone(),
                         rule: target.rule,
                         holders: vec![holder],
@@ -643,7 +684,7 @@ fn combine_effects(
             }
         }
         let name = instance.component.name.clone();
-        for Group {
+        for AttributeGroup {
             attribute,
             rule,
             holders,
@@ -669,7 +710,7 @@ fn combine_effects(
                     format!("instance `{name}`: the type already has a sensitive function `{function_name}`, the name the mode combination of `{attribute}` takes"),
                 ));
             }
-            let value = combined(&name, rule, &holders, init);
+            let value = combined(rule, &holders, init);
             instance
                 .component
                 .sensitive_functions
@@ -703,7 +744,7 @@ fn combine_effects(
 fn emit_feared_events(
     study: &StudyDocument,
     instances: &[ExpandedInstance],
-    active_names: &BTreeSet<(String, String)>,
+    active_names: &ActiveModes,
     expansion: &mut Expansion,
 ) -> Result<(), ExpandError> {
     for (i, event) in study.feared_events.iter().enumerate() {
@@ -804,6 +845,64 @@ fn emit_feared_events(
                 .insert(format!("target:{}", event.name), origin);
         }
         expansion.model.components.push(component);
+    }
+    Ok(())
+}
+
+/// Refuses a study target naming a group-held mode as `Member.mode.occ`:
+/// the member carries no automaton of that name, its combinations live in
+/// the group's component.
+fn refuse_group_held_references(
+    study: &StudyDocument,
+    groups: &[Group],
+    instances: &[ExpandedInstance],
+    indicators: &[Indicator],
+) -> Result<(), ExpandError> {
+    let held = |component: &str, automaton: &str| {
+        groups.iter().any(|g| {
+            g.mode_states(instances)
+                .iter()
+                .any(|((member, mode), _)| member == component && mode == automaton)
+        })
+    };
+    for (i, target) in study.targets.iter().enumerate() {
+        if held(&target.component, &target.automaton) {
+            return Err(err(
+                pointer_index("/study/targets", i),
+                format!(
+                    "target `{}` names `{}.{}`, a mode a common-cause group holds: its combinations live in the group's component",
+                    target.name, target.component, target.automaton
+                ),
+            ));
+        }
+    }
+    for indicator in indicators {
+        if let IndicatorTarget::State {
+            component,
+            automaton,
+            ..
+        } = &indicator.target
+        {
+            if held(component, automaton) {
+                let pointer = study
+                    .indicators
+                    .iter()
+                    .position(|raw| {
+                        raw.get("name").and_then(|n| n.as_str()) == Some(&indicator.name)
+                    })
+                    .map_or_else(
+                        || "/system/indicators".to_owned(),
+                        |i| pointer_index("/study/indicators", i),
+                    );
+                return Err(err(
+                    pointer,
+                    format!(
+                        "indicator `{}` observes `{component}.{automaton}`, a mode a common-cause group holds: its combinations live in the group's component",
+                        indicator.name
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }

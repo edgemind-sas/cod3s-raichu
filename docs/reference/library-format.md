@@ -228,6 +228,7 @@ Each instance becomes a component named after it.
 | `modes` | activations of catalogued modes |
 | `one_off_modes` | modes declared on one instance only: `instance`, `name`, `nature`, `effects`, `condition`, laws, `repair_condition`, `effect_step` |
 | `feared_events` | `name`, `condition`, `tempo_occ`, `tempo_not_occ`, `target` |
+| `common_cause_groups` | `name`, `mode`, `instances`, `orders` (`order`, `occurrence`, `repair`), `effect_step` |
 | `indicators`, `targets` | added to the system's; a name the system already uses is refused |
 | `simulation` | `method` (`monte_carlo` or `sequences`), `nb_runs`, `horizon`, `instants`, `seed`, `stop_at_targets` |
 
@@ -244,7 +245,9 @@ a repair whose condition falls is interrupted under that policy.
 `effect_step` (`"zero_delay"` or `"instant"`) carries the mode's effects one
 step behind its state, through an automaton `<mode>__effect` whose
 transitions follow the mode's `occ` state with a zero delay or an
-instantaneous law of probability one; it fires no sequence event. The
+instantaneous law of probability one. The step carries the mode's
+sequence events and its `failure` and `repair` kinds, in the mode's cycle
+group (`Srv.mdc_a__effect.occ`); the mode's own automaton records none. The
 mode then occurs again only with that step at rest and is repaired only
 once the step has taken hold. This is how a PyCATSHOO external mode
 behaves (its effects ride on a mirror automaton one zero-delay step behind
@@ -254,6 +257,27 @@ state. An activation on named instances wins over an activation on
 their type; two activations of one mode on one instance at the same level
 are refused. A mode the type does not catalogue is refused, naming the
 catalogue.
+
+A common-cause group fails several instances together with a mode
+catalogued on each member's type (a mode with a catalogue condition is
+refused). Each declared `order` `k` builds one automaton per combination of
+`k` members, in a component named after the group; a combination is named
+after its members' 1-based positions in `instances` (`cc_1_2`), fails and
+repairs on its order's laws, and holds every member it covers with the
+catalogued effects. An order left out builds nothing. With `effect_step`,
+each member gets an automaton `<group>__effect` following the combinations
+that cover it one step behind, and a combination occurs only with its
+members' steps at rest and is repaired only once they have all taken hold:
+the behaviour of a PyCATSHOO external common-cause mode. The members' steps
+then carry the sequence events and kinds, in the group's cycle group, so a
+combination of two members records two events (`P1.Group__effect.occ`,
+`P2.Group__effect.occ`), as the declaration route's mirrors do. Without
+`effect_step`, the combinations carry them (`Group.cc_1_2.occ`). A member may
+not also have an individual activation of the same mode, and a study target
+or a state indicator naming `Member.mode` for a group-held mode is refused:
+the combinations live in the group's component. `mode_active` on a member
+reads true while any combination covering it is occurred, whichever group
+holds it.
 
 A condition is a core expression over instance attributes, plus the leaf
 
@@ -270,7 +294,8 @@ AND its activation condition.
 - Each activated mode is an automaton named after it inside its instance,
   with states `rep` (initial) and `occ`, transitions named after the state
   they enter (`occ`, `rep`), monitored, of kind `failure` and `repair`,
-  with the mode as cycle group. A sequence event reads `Srv.mdc_b.occ`.
+  with the mode as cycle group. A sequence event reads `Srv.mdc_b.occ`
+  (`Srv.mdc_b__effect.occ` when the activation has an `effect_step`).
 - An on-demand mode (occurrence `inst` with probability `p`) adds a state
   `parked`: on each rising edge of its condition the transition `occ`
   draws `occ` with probability `p` or `parked` otherwise (a start
