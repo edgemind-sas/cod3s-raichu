@@ -1,7 +1,7 @@
 //! Instantiation: from a type, its applied fragments and an instance's
 //! parameter values to one core component.
 
-use crate::document::{Effect, Instance, Library, Nature, Parameter, TypeDef, Use};
+use crate::document::{EdgeEffect, Effect, Instance, Library, Nature, Parameter, TypeDef, Use};
 use crate::error::{pointer_index, pointer_key, DocumentKind, ExpandError};
 use crate::provenance::Origin;
 use crate::strict::{located, typed};
@@ -68,6 +68,9 @@ pub(crate) struct CatalogueMode {
     pub nature: Nature,
     #[serde(default)]
     pub effects: Vec<Effect>,
+    /// One-shot writes on the mode's occurrence or repair edge.
+    #[serde(default)]
+    pub edge_effects: Vec<EdgeEffect>,
     #[serde(default)]
     #[cfg_attr(
         feature = "schema",

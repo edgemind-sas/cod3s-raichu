@@ -126,7 +126,24 @@ A catalogued mode declares what it does, never its law:
 | `name` | mode name, unique on the type |
 | `nature` | `failure` or `compromise`; it serves selection and reporting and changes no semantics |
 | `effects` | `[{"attribute": "COCOFE_fed_available_out", "value": false}]`: the value held on a targetable attribute while the mode is occurred (a plain JSON boolean or number) |
+| `edge_effects` | `[{"attribute": "detected_fed_available_out", "value": true, "on": "occurrence"}]`: a value written once on a targetable attribute when the mode occurs (`occurrence`) or is repaired (`repair`), then kept (below) |
 | `condition` | the shape of its activation condition: a core expression over the instance (`$self`), which may also use `mode_active` (below) |
+
+An edge effect is a one-shot write, the way a gate that memorises (a
+detection, an alarm) is modelled: the attribute keeps the written value
+until another edge writes it, and nothing restores it on the other edge. It
+is written on the transition that carries the mode's effects: the mode's
+own `occ` or `rep`, its effect step's when the activation has an
+`effect_step`, and for a common-cause group the edges of every combination
+covering the member (each member's step when the group has one). On an
+on-demand draw the write lands only when the draw enters `occ`, never when
+it parks. Refused by name: an attribute that is not targetable, a value the
+attribute's kind cannot take, an attribute a held effect or the type's own
+behaviour also writes (an attribute written on an edge is written by edges
+only), a repair write on a mode with no repair law, and writes on both
+edges of one attribute by overlapping combinations of a group without an
+effect step (one combination's repair would undo what another, still
+occurred, wrote). Several modes may write one attribute on their edges.
 
 ### Combination rules
 
@@ -305,7 +322,8 @@ AND its activation condition.
   event; parking is what stops a lost draw from being drawn again within
   one solicitation.
 - Each targeted attribute gets one sensitive function `modes__<attribute>`
-  holding the combined value.
+  holding the combined value. An attribute written by edge effects gets
+  none: its writes are the `effects` of the transitions that carry them.
 - Each feared event is a component named after it, with an automaton `ev`
   (`not_occ`, `occ`) of observation transitions delayed by `tempo_occ` and
   `tempo_not_occ`; `target: true` adds a sequence target.

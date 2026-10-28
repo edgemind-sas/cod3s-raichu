@@ -477,6 +477,34 @@ pub struct Effect {
     pub value: Value,
 }
 
+/// A one-shot write a catalogued mode makes on one edge of its lifecycle:
+/// written once when the edge fires, then kept until something else writes
+/// the attribute (a gate that memorises). On an on-demand draw the write
+/// lands only on the branch that enters `occ`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct EdgeEffect {
+    /// Targetable attribute of the instance, written by no held effect.
+    pub attribute: String,
+    /// Written value: a plain JSON boolean or number.
+    #[cfg_attr(feature = "schema", schemars(with = "crate::schema::EffectValue"))]
+    pub value: Value,
+    /// The edge that writes it.
+    pub on: Edge,
+}
+
+/// An edge of a mode's lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Edge {
+    /// The mode occurs (`occ`).
+    Occurrence,
+    /// The mode is repaired (`rep`).
+    Repair,
+}
+
 /// A feared event: a generated component watching a condition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

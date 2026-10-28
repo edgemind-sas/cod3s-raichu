@@ -6,7 +6,7 @@
 //! nominal value takes no part in `min` or `max`: only the active modes'
 //! values compete.
 
-use crate::document::Effect;
+use crate::document::{EdgeEffect, Effect};
 use crate::instantiate::CombineRule;
 use crate::modes::occurred;
 use crate::provenance::Origin;
@@ -19,6 +19,8 @@ pub(crate) struct EffectSource {
     /// Name for messages and provenance.
     pub mode: String,
     pub effects: Vec<Effect>,
+    /// One-shot writes on the edges of `component.automaton`.
+    pub edge_effects: Vec<EdgeEffect>,
     pub component: String,
     pub automaton: String,
     /// Where the effects were declared.
