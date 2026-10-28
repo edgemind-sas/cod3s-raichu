@@ -308,12 +308,12 @@ impl Group<'_> {
             let covering = self.covering(m);
             let instance = &mut instances[index];
             let member = instance.component.name.clone();
-            let (effects, effects_origin) = instance
+            let (effects, edge_effects, effects_origin) = instance
                 .catalogue
                 .iter()
                 .find(|(c, _)| c.name == spec.mode)
-                .map(|(c, o)| (c.effects.clone(), o.clone()))
-                .unwrap_or_else(|| (Vec::new(), origin.clone()));
+                .map(|(c, o)| (c.effects.clone(), c.edge_effects.clone(), o.clone()))
+                .unwrap_or_else(|| (Vec::new(), Vec::new(), origin.clone()));
             let readers: Vec<(String, String)> = match spec.effect_step {
                 Some(step) => {
                     if instance
@@ -354,6 +354,7 @@ impl Group<'_> {
                     instance: index,
                     mode: format!("{}.{}", spec.name, automaton),
                     effects: effects.clone(),
+                    edge_effects: edge_effects.clone(),
                     component,
                     automaton,
                     effects_origin: effects_origin.clone(),

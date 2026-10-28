@@ -4,7 +4,7 @@
 
 use crate::combine::{combined, EffectSource, Holder};
 use crate::document::EffectStep;
-use crate::document::{Effect, StudyDocument, SystemModel};
+use crate::document::{EdgeEffect, Effect, StudyDocument, SystemModel};
 use crate::error::{pointer_index, pointer_key, DocumentKind, ExpandError};
 use crate::expand::Expansion;
 use crate::groups::Group;
@@ -37,6 +37,7 @@ struct Active {
     instance: usize,
     name: String,
     effects: Vec<Effect>,
+    edge_effects: Vec<EdgeEffect>,
     /// (condition, document, pointer) of the catalogue and study conditions.
     conditions: Vec<(Json, DocumentKind, String)>,
     occurrence: (Json, String),
@@ -104,6 +105,7 @@ pub(crate) fn apply(
             instance: active.instance,
             mode: active.name.clone(),
             effects: active.effects.clone(),
+            edge_effects: active.edge_effects.clone(),
             component: instances[active.instance].component.name.clone(),
             automaton: if active.effect_step.is_some() {
                 effect_automaton_name(&active.name)
@@ -123,6 +125,7 @@ pub(crate) fn apply(
         components.push(component);
     }
     combine_effects(&sources, instances)?;
+    crate::edges::apply_edge_effects(&sources, instances, &mut components)?;
     emit_feared_events(study, instances, &active_names, expansion)?;
 
     for (i, raw) in study.indicators.iter().enumerate() {
@@ -269,6 +272,7 @@ fn resolve_activations(
                 instance: index,
                 name: mode.name.clone(),
                 effects: mode.effects.clone(),
+                edge_effects: mode.edge_effects.clone(),
                 conditions,
                 occurrence: (
                     activation.occurrence.clone(),
@@ -327,6 +331,7 @@ fn resolve_activations(
             instance: index,
             name: one_off.name.clone(),
             effects: one_off.effects.clone(),
+            edge_effects: Vec::new(),
             conditions: one_off
                 .condition
                 .iter()
@@ -534,7 +539,7 @@ fn emit_mode(
 }
 
 /// Every attribute some element of `component` writes, with the writer.
-fn writers(component: &Component) -> Vec<(String, String)> {
+pub(crate) fn writers(component: &Component) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for equation in &component.equations {
         out.push((

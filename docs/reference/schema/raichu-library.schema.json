@@ -1229,6 +1229,70 @@
               "$ref": "#/$defs/Template_string_or_null",
               "default": null
             },
+            "edge_effects": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/EdgeEffect"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_EdgeEffect"
+                      },
+                      {
+                        "$ref": "#/$defs/When_EdgeEffect"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/EdgeEffect"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_EdgeEffect"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_EdgeEffect"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": [],
+              "description": "One-shot writes on the mode's occurrence or repair edge."
+            },
             "effects": {
               "anyOf": [
                 {
@@ -2298,6 +2362,97 @@
       ],
       "description": "Whether the minimal-sequence reduction may cancel a cycle group, that\nis drop a failure repaired before the feared event on the hypothesis\nthat a repaired component no longer contributes\n([`Transition::cycle_cancellation`])."
     },
+    "Edge": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "const": "occurrence",
+              "description": "The mode occurs (`occ`).",
+              "type": "string"
+            },
+            {
+              "const": "repair",
+              "description": "The mode is repaired (`rep`).",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Edge"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "An edge of a mode's lifecycle."
+    },
+    "EdgeEffect": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attribute": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Targetable attribute of the instance, written by no held effect."
+            },
+            "on": {
+              "$ref": "#/$defs/Edge",
+              "description": "The edge that writes it."
+            },
+            "value": {
+              "$ref": "#/$defs/Template_boolean_or_number",
+              "description": "Written value: a plain JSON boolean or number."
+            }
+          },
+          "required": [
+            "attribute",
+            "value",
+            "on"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "$ref": "#/$defs/EdgeEffect"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A one-shot write a catalogued mode makes on one edge of its lifecycle:\nwritten once when the edge fires, then kept until something else writes\nthe attribute (a gate that memorises). On an on-demand draw the write\nlands only on the branch that enters `occ`."
+    },
     "Effect": {
       "anyOf": [
         {
@@ -3362,6 +3517,40 @@
               },
               {
                 "$ref": "#/$defs/When_ConsumerParam"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_EdgeEffect": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EdgeEffect"
+              },
+              {
+                "$ref": "#/$defs/ForEach_EdgeEffect"
+              },
+              {
+                "$ref": "#/$defs/When_EdgeEffect"
               }
             ]
           },
@@ -6500,6 +6689,57 @@
               },
               {
                 "$ref": "#/$defs/When_ConsumerParam"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_EdgeEffect": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EdgeEffect"
+              },
+              {
+                "$ref": "#/$defs/ForEach_EdgeEffect"
+              },
+              {
+                "$ref": "#/$defs/When_EdgeEffect"
               }
             ]
           },

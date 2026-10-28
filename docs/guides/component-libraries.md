@@ -321,13 +321,32 @@ and repair conditions, common-cause modes as study groups
 (`common_cause_groups`, an external mode with its effect step) and events.
 A repair effect holding an attribute's initial value is the rest the library
 already has; a mode effect holding the initial value is a no-op and is
-dropped, unless another mode writes that attribute; an availability that is
-never reset (`var_fed_available_out_reset: false`) converts while no mode
-writes it. It refuses continuous flows and capacities, production operands
-that compare a quantity (a negated operand converts through
-`std.bool_not`), conditions on a common-cause group, on-demand repair laws,
-pulse effects, a repair effect holding another value than the initial one,
-a mode writing a persistent availability, and controllers.
+dropped, unless another mode writes that attribute.
+
+An availability that is never reset (`var_fed_available_out_reset: false`)
+memorises what is written to it. One-shot writes on it
+(`failure_effects_trans`, `repair_effects_trans`) become the catalogue's
+`edge_effects`. A held effect on it with no rest value latches on the
+declaration route, which is an occurrence edge effect here. With a rest
+value equal to the initial value, it alternates with the mode, which is the
+held effect itself. Two shapes the declaration route folds into a held
+effect are held effects here: held while failed and handed back once at
+the repair, and held at rest and written once entering the failure.
+
+The converter refuses continuous flows and capacities, and production
+operands that compare a quantity (a negated operand converts through
+`std.bool_not`). It also refuses conditions on a common-cause group,
+on-demand repair laws, a rest value other than the initial one, and
+controllers. On persistent availabilities it refuses what the declaration
+route refuses:
+
+- a one-shot write on an availability reset every step;
+- a held and a one-shot write on one face;
+- a held write beside another mode's one-shot write;
+- a gate held by several modes;
+- one-shot writes on both faces, or a held write, over overlapping
+  combinations of an internal common cause;
+- a latch on an on-demand draw that may park.
 
 `compare_routes` runs the declaration through both routes, the
 declaration reader and the converted library, and says whether they agree.

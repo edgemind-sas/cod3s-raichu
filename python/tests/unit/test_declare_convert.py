@@ -1036,7 +1036,7 @@ def test_every_blocking_construct_of_a_mode_is_named():
     del doc["components"]["P2__fail"]
     constructs = {r.construct for r in convert(doc).refusals}
     assert {
-        "mode key `failure_effects_trans`",
+        "effect on a non-targetable attribute",
         "mode behaviour `external_rep_indep`",
         "non-boolean mode effect",
     } <= constructs
@@ -1327,13 +1327,38 @@ def test_a_persistent_gate_no_mode_writes_converts_and_matches():
     assert compare_routes(doc, conversion, t_max=5000.0, seeds=range(5)).identical
 
 
-def test_a_persistent_gate_a_mode_writes_stays_refused_by_name():
-    doc = _persistent(two_pumps(), "P1")
-    refusals = convert(doc).refusals
-    assert any(
-        r.construct == "availability not reset (`var_fed_available_out_reset` false)" and "P1__fail" in r.detail
-        for r in refusals
-    ), refusals
+def _persistent_pumps(behaviour: str = "external") -> dict:
+    """`two_pumps` with both pump outputs persistent, each mode cutting its
+    own pump with no rest value: a latch on the declaration route."""
+    doc = _persistent(_persistent(two_pumps(), "P1"), "P2")
+    for mode in ("P1__fail", "P2__fail"):
+        doc["components"][mode]["behaviour"] = behaviour
+    return doc
+
+
+@pytest.mark.parametrize("behaviour", ["external", "internal"])
+def test_a_held_write_on_a_persistent_gate_latches_as_an_occurrence_edge_effect(behaviour):
+    doc = _persistent_pumps(behaviour)
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    fail = modes_of(conversion, "P1")["fail"]
+    assert "effects" not in fail
+    assert fail["edge_effects"] == [
+        {"attribute": "water_fed_available_out", "value": False, "on": "occurrence"}
+    ]
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(5))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_latch_written_on_the_wrong_edge_is_reported_divergent():
+    """Negative control: the same latch written on the repair edge."""
+    doc = _persistent_pumps()
+    conversion = convert(doc)
+    for pump in types_of(conversion).values():
+        for mode in pump.get("modes", []):
+            for edge in mode.get("edge_effects", []):
+                edge["on"] = "repair"
+    assert not compare_routes(doc, conversion, t_max=5000.0, seeds=range(5)).identical
 
 
 def test_an_own_section_mode_cutting_a_persistent_gate_stays_refused_by_name():
@@ -1486,3 +1511,196 @@ def test_a_rest_value_on_a_persistent_gate_the_mode_does_not_hold_is_refused_by_
     assert any(
         r.construct == "availability not reset (`var_fed_available_out_reset` false)" for r in refusals
     ), refusals
+
+
+# --- M4 U14: one-shot writes and latched gates -----------------------------
+
+
+def modes_of(conversion, instance: str) -> dict:
+    """The catalogue of the type `instance` was given, by mode name."""
+    (type_name,) = [i["type"] for i in conversion.system["system"]["instances"] if i["name"] == instance]
+    return {m["name"]: m for m in types_of(conversion)[type_name].get("modes", [])}
+
+
+def alarmed_pumps() -> dict:
+    """`two_pumps` whose pumps also raise an `alarm` output, persistent and
+    initially down, which a `spot` mode raises once and the pump's repair
+    clears once."""
+    doc = two_pumps()
+    for name in ("P1", "P2"):
+        doc["components"][name]["flows"].append(flow_out("alarm", produced=True, available=False))
+        _persistent(doc, name, "alarm")
+    spot = exp_mode("spot", ["P1"], {}, rate=5e-3)
+    spot["failure_effects_trans"] = {"alarm_fed_available_out": True}
+    doc["components"][spot["name"]] = spot
+    doc["components"]["P1__fail"]["repair_effects_trans"] = {"alarm_fed_available_out": False}
+    return doc
+
+
+@pytest.mark.parametrize("behaviour", ["external", "internal"])
+def test_one_shot_writes_on_both_edges_convert_and_match(behaviour):
+    doc = alarmed_pumps()
+    for mode in ("P1__fail", "P1__spot"):
+        doc["components"][mode]["behaviour"] = behaviour
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    modes = modes_of(conversion, "P1")
+    assert modes["spot"]["edge_effects"] == [
+        {"attribute": "alarm_fed_available_out", "value": True, "on": "occurrence"}
+    ]
+    assert {"attribute": "alarm_fed_available_out", "value": False, "on": "repair"} in modes["fail"]["edge_effects"]
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(5))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_hand_back_at_the_repair_is_the_held_effect():
+    doc = two_pumps()
+    doc["components"]["P1__fail"]["repair_effects_trans"] = {"water_fed_available_out": True}
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert "edge_effects" not in modes_of(conversion, "P1")["fail"]
+    assert compare_routes(doc, conversion, t_max=5000.0, seeds=range(5)).identical
+
+
+def test_a_rest_held_gate_written_once_over_overlapping_combinations_converts_and_matches():
+    """Held at rest and written once entering the failure, on a persistent
+    gate, by an internal common cause whose orders overlap: a level on the
+    declaration route, the held effect here."""
+    doc = _persistent(_persistent(two_pumps(), "P1"), "P2")
+    del doc["components"]["P2__fail"]
+    spec = exp_mode("fail", ["P1", "P2"], {}, rate=[1e-3, 5e-4], group="pumps")
+    spec["behaviour"] = "internal"
+    spec["repair_effects"] = {"water_fed_available_out": True}
+    spec["failure_effects_trans"] = {"water_fed_available_out": False}
+    doc = with_mode(doc, "P1__fail", spec)
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(5))
+    assert comparison.identical, comparison.detail
+
+
+def _constructs(doc: dict) -> set[str]:
+    return {r.construct for r in convert(doc).refusals}
+
+
+def test_a_one_shot_write_on_a_gate_reset_every_step_is_refused_by_name():
+    doc = alarmed_pumps()
+    for entry in doc["components"]["P1"]["flows"]:
+        if entry["name"] == "alarm":
+            entry["var_fed_available_out_reset"] = True
+    assert "one-shot write on an availability reset every step" in _constructs(doc)
+
+
+def test_a_held_and_a_one_shot_write_on_one_face_are_refused_by_name():
+    doc = two_pumps()
+    doc["components"]["P1__fail"]["failure_effects_trans"] = {"water_fed_available_out": False}
+    assert "held and one-shot write on the same face" in _constructs(doc)
+
+
+def test_a_held_gate_beside_another_mode_s_one_shot_write_is_refused_by_name():
+    doc = alarmed_pumps()
+    fail = doc["components"]["P1__fail"]
+    del fail["repair_effects_trans"]
+    fail["failure_effects"] = {"water_fed_available_out": False, "alarm_fed_available_out": True}
+    fail["repair_effects"] = {"alarm_fed_available_out": False}
+    assert "held and one-shot writes on one persistent gate" in _constructs(doc)
+
+
+def test_a_persistent_gate_latched_by_two_modes_is_refused_by_name():
+    doc = alarmed_pumps()
+    del doc["components"]["P1__fail"]["repair_effects_trans"]
+    spot = doc["components"]["P1__spot"]
+    del spot["failure_effects_trans"]
+    spot["failure_effects"] = {"alarm_fed_available_out": True}
+    doc["components"]["P1__fail"]["failure_effects"] = {
+        "water_fed_available_out": False,
+        "alarm_fed_available_out": True,
+    }
+    assert "persistent gate held by several modes" in _constructs(doc)
+
+
+def test_writes_on_both_faces_over_overlapping_combinations_are_refused_by_name():
+    doc = alarmed_pumps()
+    del doc["components"]["P2__fail"]
+    spec = exp_mode("fail", ["P1", "P2"], {"water_fed_available_out": False}, rate=[1e-3, 5e-4], group="pumps")
+    spec["behaviour"] = "internal"
+    spec["failure_effects_trans"] = {"alarm_fed_available_out": True}
+    spec["repair_effects_trans"] = {"alarm_fed_available_out": False}
+    doc = with_mode(doc, "P1__fail", spec)
+    assert "one-shot writes on both faces over overlapping combinations" in _constructs(doc)
+
+
+def test_an_external_common_cause_latches_and_writes_on_each_member_step():
+    """An external common cause carries every write on each member's step:
+    a latch and a repair write over overlapping combinations convert."""
+    doc = alarmed_pumps()
+    _persistent(_persistent(doc, "P1"), "P2")
+    del doc["components"]["P2__fail"]
+    del doc["components"]["P1__spot"]
+    spec = exp_mode("fail", ["P1", "P2"], {"water_fed_available_out": False}, rate=[1e-3, 5e-4], group="pumps")
+    spec["repair_effects_trans"] = {"alarm_fed_available_out": False}
+    spec["failure_effects_trans"] = {"alarm_fed_available_out": True}
+    doc = with_mode(doc, "P1__fail", spec)
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert conversion.study["study"]["common_cause_groups"][0]["effect_step"] == "zero_delay"
+    edges = modes_of(conversion, "P1")["fail"]["edge_effects"]
+    assert {"attribute": "water_fed_available_out", "value": False, "on": "occurrence"} in edges
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(5))
+    assert comparison.identical, comparison.detail
+
+
+# --- review findings: shapes the declaration route refuses -----------------
+
+
+@pytest.mark.parametrize("shape", ["held with a rest value", "rest held, written once entering"])
+def test_a_rest_valued_persistent_write_under_an_internal_draw_is_refused_by_name(shape):
+    doc = _persistent(standby_plant(), "backup", "elec")
+    mode = doc["components"]["backup__refusal"]
+    mode["behaviour"] = "internal"
+    mode["repair_effects"] = {"elec_fed_available_out": True}
+    if shape != "held with a rest value":
+        mode["failure_effects"] = {}
+        mode["failure_effects_trans"] = {"elec_fed_available_out": False}
+    assert "held write on a persistent gate under an on-demand draw" in _constructs(doc)
+
+
+def test_a_rest_held_write_on_a_gate_reset_every_step_is_refused_by_name():
+    doc = two_pumps()
+    mode = doc["components"]["P1__fail"]
+    mode["failure_effects"] = {}
+    mode["repair_effects"] = {"water_fed_available_out": True}
+    mode["failure_effects_trans"] = {"water_fed_available_out": False}
+    assert "one-shot write on an availability reset every step" in _constructs(doc)
+
+
+def _second_holder(doc: dict, value: bool = False) -> dict:
+    leak = exp_mode("leak", ["P1"], {"water_fed_available_out": value}, rate=3e-3)
+    doc["components"][leak["name"]] = leak
+    return doc
+
+
+def test_a_hand_back_beside_a_plain_holder_is_refused_by_name():
+    doc = _second_holder(two_pumps())
+    doc["components"]["P1__fail"]["repair_effects_trans"] = {"water_fed_available_out": True}
+    assert "ill-posed sharing of a handed-back attribute" in _constructs(doc)
+
+
+def test_hand_backs_beside_one_another_convert_and_match():
+    doc = _second_holder(two_pumps())
+    for mode in ("P1__fail", "P1__leak"):
+        doc["components"][mode]["repair_effects_trans"] = {"water_fed_available_out": True}
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert compare_routes(doc, conversion, t_max=5000.0, seeds=range(5)).identical
+
+
+def test_a_rest_held_writer_beside_another_writer_is_refused_by_name():
+    doc = _second_holder(two_pumps(), value=False)
+    for name in ("P1", "P2"):
+        _persistent(doc, name)
+    mode = doc["components"]["P1__fail"]
+    mode["failure_effects"] = {}
+    mode["repair_effects"] = {"water_fed_available_out": True}
+    mode["failure_effects_trans"] = {"water_fed_available_out": False}
+    assert "ill-posed sharing of a handed-back attribute" in _constructs(doc)

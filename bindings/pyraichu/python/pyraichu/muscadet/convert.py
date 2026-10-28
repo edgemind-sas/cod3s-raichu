@@ -92,6 +92,8 @@ _MODE_KEYS = frozenset(
         "repair",
         "failure_effects",
         "repair_effects",
+        "failure_effects_trans",
+        "repair_effects_trans",
         "failure_cond",
         "repair_cond",
         "failure_state",
@@ -829,14 +831,100 @@ def _declared_laws(obj: dict, targets: list[str]) -> tuple[list, list]:
     return failures[:n], repairs[:n]
 
 
-def _mode_effects(obj: dict, mode: str, targets: list[str], instances: dict[str, dict], problems: list) -> dict:
-    """The catalogue entry of a mode on its targets, checking its effects."""
+def _mode_effects(
+    obj: dict,
+    mode: str,
+    targets: list[str],
+    instances: dict[str, dict],
+    problems: list,
+    *,
+    stepped: bool = False,
+    on_demand: bool = False,
+    overlapping: bool = False,
+    repaired: bool = True,
+    common_cause: bool = False,
+    notes: list[str] | None = None,
+) -> dict:
+    """The catalogue entry of a mode on its targets, checking its effects.
+
+    Held effects (`failure_effects`, rest values in `repair_effects`) become
+    the entry's `effects`; one-shot writes (`failure_effects_trans`,
+    `repair_effects_trans`) its `edge_effects`, as the declaration route
+    writes them on the mode's edges (plugin `_check_one_shot_effects`,
+    `_edge_effects`). Two shapes the declaration route absorbs into the held
+    effect are held here too (`plugin._absorbed_pulses`): held while failed
+    and handed back once at the repair, and held at rest and written once
+    entering the failure. A held effect on a persistent gate (never reset)
+    with no rest value latches on the declaration route: it is written once
+    entering the failure and never restored, which is an occurrence edge
+    effect (`plugin._latch_held_writes_on_persistent_gates`); with a rest
+    value equal to the initial value it alternates with the mode, which is
+    the held effect itself.
+
+    `stepped` says the effects ride on an effect step (an external mode),
+    `on_demand` that the occurrence is a draw, `overlapping` that several
+    combinations of a common cause cover one target without a step, and
+    `repaired` that every automaton of the mode has a repair edge, and
+    `common_cause` that the mode becomes a group of combinations."""
+    name = obj.get("name")
+    failure = dict(obj.get("failure_effects") or {})
+    rest_values = dict(obj.get("repair_effects") or {})
+    pulse_on = dict(obj.get("failure_effects_trans") or {})
+    pulse_off = dict(obj.get("repair_effects_trans") or {})
+    same_face = sorted((set(failure) & set(pulse_on)) | (set(rest_values) & set(pulse_off)))
+    if same_face:
+        problems.append(
+            _Refused(
+                "held and one-shot write on the same face",
+                f"mode `{name}` holds and writes once {same_face} on one face",
+            )
+        )
+    # Held at rest and written once entering the failure: the write is the
+    # failure value of a held effect whose rest is the rest value.
+    rest_shape = sorted((set(pulse_on) & set(rest_values)) - set(failure))
+    for attribute in rest_shape:
+        failure[attribute] = pulse_on.pop(attribute)
+        # The declaration route exempts only the hand-back from its refusal of
+        # a one-shot write on a gate reset every step.
+        reset = [t for t in targets if attribute not in instances[t].get("persistent", ())]
+        if reset:
+            problems.append(
+                _Refused(
+                    "one-shot write on an availability reset every step",
+                    f"mode `{name}` writes `{attribute}` once on {reset}; the declaration route undoes it at the next step",
+                )
+            )
+    # Held while failed and handed back once at the repair: the hand-back is
+    # the held effect's return to its initial value, which it must be.
+    handback = sorted(set(pulse_off) & set(failure))
+    for attribute in handback:
+        value = pulse_off.pop(attribute)
+        for target in targets:
+            initial = _initial_values(instances[target]["uses"]).get(attribute)
+            if initial is not None and initial != value:
+                problems.append(
+                    _Refused(
+                        "hand-back value different from the initial value",
+                        f"`{target}.{attribute}` is handed back at {value!r}, starts at {initial!r}",
+                    )
+                )
     effects = []
-    for attribute, value in sorted((obj.get("failure_effects") or {}).items()):
+    for attribute, value in sorted(failure.items()):
         if not isinstance(value, bool):
             problems.append(_Refused("non-boolean mode effect", f"`{attribute}` = {value!r}"))
             continue
         effects.append({"attribute": attribute, "value": value})
+    edge_effects = []
+    for face, pulses in (("occurrence", pulse_on), ("repair", pulse_off)):
+        for attribute, value in sorted(pulses.items()):
+            if not isinstance(value, bool):
+                problems.append(_Refused("non-boolean mode effect", f"`{attribute}` = {value!r}"))
+                continue
+            edge_effects.append({"attribute": attribute, "value": value, "on": face})
+
+    def persistent(attribute: str) -> bool:
+        return all(attribute in instances[t].get("persistent", ()) for t in targets)
+
     # An effect holding the attribute's initial value on every target is a
     # no-op on the declaration route (held at that value while failed, at
     # rest at it too). The library has no such effect: it is dropped, and
@@ -851,30 +939,96 @@ def _mode_effects(obj: dict, mode: str, targets: list[str], instances: dict[str,
     for effect in no_ops:
         effects.remove(effect)
         for target in targets:
-            instances[target].setdefault("no_ops", []).append((effect["attribute"], effect["value"], obj.get("name")))
+            instances[target].setdefault("no_ops", []).append((effect["attribute"], effect["value"], name))
     held = {effect["attribute"] for effect in effects} | {effect["attribute"] for effect in no_ops}
+    latched: set[str] = set()
+    for effect in list(effects):
+        attribute = effect["attribute"]
+        if not persistent(attribute):
+            if any(attribute in instances[t].get("persistent", ()) for t in targets):
+                problems.append(
+                    _Refused(_PERSISTENT, f"mode `{name}` writes `{attribute}`, persistent on some targets only")
+                )
+            continue
+        absorbed = attribute in rest_shape or attribute in handback
+        if overlapping and not absorbed:
+            problems.append(
+                _Refused(
+                    "held write on a persistent gate over overlapping combinations",
+                    f"mode `{name}` holds `{attribute}` while any of several combinations is failed",
+                )
+            )
+        elif (absorbed or attribute in rest_values) and on_demand and not stepped and attribute not in handback:
+            # The declaration route writes it on the edges entering and
+            # leaving `occ`, and a draw that may park enters it on a branch.
+            problems.append(
+                _Refused(
+                    "held write on a persistent gate under an on-demand draw",
+                    f"mode `{name}` holds `{attribute}` on a state a draw that may park enters",
+                )
+            )
+        elif absorbed or attribute in rest_values:
+            # Alternates with the mode: the held effect, its rest checked below.
+            continue
+        elif on_demand and not stepped:
+            problems.append(
+                _Refused(
+                    "latched write on an on-demand draw",
+                    f"mode `{name}` latches `{attribute}` on a draw that may park",
+                )
+            )
+        else:
+            effects.remove(effect)
+            latched.add(attribute)
+            edge_effects.append({"attribute": attribute, "value": effect["value"], "on": "occurrence"})
+    # Writes on a persistent gate, for the check across modes
+    # (`_refuse_shared_persistent_writes`); a dropped no-op still holds.
+    for target in targets:
+        shared = instances[target].setdefault("held_writers", [])
+        for effect in effects + no_ops:
+            attribute = effect["attribute"]
+            shape = "handback" if attribute in handback else "rest" if attribute in rest_shape else None
+            shared.append((attribute, shape, effect["value"], name))
+        for edge in edge_effects:
+            if edge["attribute"] in latched:
+                # A latch is a held write on the declaration route.
+                shared.append((edge["attribute"], None, edge["value"], name))
+        record = instances[target].setdefault("persistent_writers", [])
+        for effect in effects + no_ops:
+            if effect["attribute"] in instances[target].get("persistent", ()):
+                record.append(
+                    (effect["attribute"], "handback" if effect["attribute"] in handback else "held", name)
+                )
+        for edge in edge_effects:
+            # A latch is a held write on the declaration route.
+            record.append((edge["attribute"], "held" if edge["attribute"] in latched else "edge", name))
+    pulsed = {e["attribute"] for e in edge_effects}
     for target in targets:
         allowed = _targetable(instances[target]["uses"])
-        for effect in effects:
+        for effect in effects + edge_effects:
             if effect["attribute"] not in allowed:
                 problems.append(
                     _Refused("effect on a non-targetable attribute", f"`{target}.{effect['attribute']}`")
                 )
-            if effect["attribute"] in instances[target].get("persistent", ()):
+        for attribute in sorted(pulsed):
+            if attribute in allowed and attribute not in instances[target].get("persistent", ()):
                 problems.append(
-                    _Refused(_PERSISTENT, f"mode `{obj.get('name')}` writes `{target}.{effect['attribute']}`")
+                    _Refused(
+                        "one-shot write on an availability reset every step",
+                        f"mode `{name}` writes `{target}.{attribute}` once; the declaration route undoes it at the next step",
+                    )
                 )
         # The declaration route holds a failure effect's attribute at its
         # `repair_effects` value at rest, else at its initial value; the
         # library holds it at its initial value. A rest value on an
         # attribute the mode does not hold is never written there.
         initial = _initial_values(instances[target]["uses"])
-        for attribute, value in sorted((obj.get("repair_effects") or {}).items()):
+        for attribute, value in sorted(rest_values.items()):
             if attribute not in held and attribute in instances[target].get("persistent", ()):
                 # The declaration route refuses a repair effect on a gate
                 # that memorises with no failure counterpart.
                 problems.append(
-                    _Refused(_PERSISTENT, f"mode `{obj.get('name')}` rests `{target}.{attribute}`, holding no failure on it")
+                    _Refused(_PERSISTENT, f"mode `{name}` rests `{target}.{attribute}`, holding no failure on it")
                 )
             if attribute in held and initial.get(attribute) != value:
                 problems.append(
@@ -883,14 +1037,110 @@ def _mode_effects(obj: dict, mode: str, targets: list[str], instances: dict[str,
                         f"`{target}.{attribute}` rests at {value!r}, starts at {initial.get(attribute)!r}",
                     )
                 )
+    if overlapping:
+        both = sorted(
+            {e["attribute"] for e in edge_effects if e["on"] == "occurrence"}
+            & {e["attribute"] for e in edge_effects if e["on"] == "repair"}
+        )
+        if both:
+            problems.append(
+                _Refused(
+                    "one-shot writes on both faces over overlapping combinations",
+                    f"mode `{name}` writes {both} on both faces",
+                )
+            )
+    dropped = [e for e in edge_effects if e["on"] == "repair"] if not (repaired or stepped) else []
+    if dropped:
+        # An effect step always has its repair edge; without one, a mode's
+        # repair write lands on its own repair edge.
+        if not common_cause:
+            # No repair edge: the write never happens on either route.
+            for edge in dropped:
+                edge_effects.remove(edge)
+            if notes is not None:
+                notes.append(f"mode `{name}` has no repair: its repair writes never fire")
+        else:
+            problems.append(
+                _Refused(
+                    "repair write on a common-cause order without repair",
+                    f"mode `{name}` writes {sorted(e['attribute'] for e in dropped)} at a repair some order lacks",
+                )
+            )
     entry: dict[str, Any] = {"name": mode, "nature": "failure"}
     if effects:
         entry["effects"] = effects
+    if edge_effects:
+        entry["edge_effects"] = sorted(edge_effects, key=lambda e: (e["on"], e["attribute"]))
     for target in targets:
         known = instances[target]["modes"].get(mode)
         if known is not None and known != entry:
             problems.append(_Refused("mode name clash", f"`{mode}` on `{target}`"))
     return entry
+
+
+def _refuse_ill_posed_sharing(instances: dict[str, dict], refuse) -> None:
+    """Several modes holding one attribute, one of them through a one-shot
+    write it absorbs, have no answer on the declaration route
+    (`plugin._refuse_ill_posed_one_shot_sharing`, persistent or not): a mode
+    holding it at rest and writing it once entering the failure beside any
+    other writer, a hand-back beside a holder without one, and hand-backs of
+    different clamp values."""
+    for target, instance in instances.items():
+        by_attribute: dict[str, list[tuple[str | None, Any, str]]] = {}
+        for attribute, shape, value, mode in instance.get("held_writers", []):
+            by_attribute.setdefault(attribute, []).append((shape, value, mode))
+        for attribute, writers in sorted(by_attribute.items()):
+            modes = sorted({mode for _, _, mode in writers})
+            shapes = [shape for shape, _, _ in writers]
+            if len(modes) < 2 or not any(shapes):
+                continue
+            if "rest" in shapes:
+                reason = "one holds it at rest and writes it once entering the failure"
+            elif None in shapes:
+                reason = "some hand it back at their repair, others hold it without handing it back"
+            elif len({json.dumps(value) for _, value, _ in writers}) > 1:
+                reason = "they hand it back with different clamp values"
+            else:
+                continue
+            for mode in modes:
+                refuse(
+                    mode,
+                    _Refused(
+                        "ill-posed sharing of a handed-back attribute",
+                        f"`{target}.{attribute}` is written by {modes}: {reason}",
+                    ),
+                )
+
+
+def _refuse_shared_persistent_writes(instances: dict[str, dict], refuse) -> None:
+    """A persistent gate memorises, so the declaration route refuses two of
+    its sharings (`plugin._latch_held_writes_on_persistent_gates`): a held
+    write beside a one-shot write, and several modes holding it, unless
+    each holds it and hands it back at its repair."""
+    for target, instance in instances.items():
+        by_attribute: dict[str, list[tuple[str, str]]] = {}
+        for attribute, kind, mode in instance.get("persistent_writers", []):
+            by_attribute.setdefault(attribute, []).append((kind, mode))
+        for attribute, writers in sorted(by_attribute.items()):
+            holders = sorted({mode for kind, mode in writers if kind != "edge"})
+            if any(kind == "edge" for kind, _ in writers) and holders:
+                for mode in holders:
+                    refuse(
+                        mode,
+                        _Refused(
+                            "held and one-shot writes on one persistent gate",
+                            f"`{target}.{attribute}` is held by {holders} and written once by another mode",
+                        ),
+                    )
+            elif len(holders) > 1 and any(kind == "held" for kind, _ in writers):
+                for mode in holders:
+                    refuse(
+                        mode,
+                        _Refused(
+                            "persistent gate held by several modes",
+                            f"`{target}.{attribute}` is held by {holders}",
+                        ),
+                    )
 
 
 def _convert_group(
@@ -933,7 +1183,20 @@ def _convert_group(
             if repair is not None and not (repair["distrib"] == "exp" and float(repair.get("rate", 0.0)) == 0.0):
                 entry["repair"] = repair
         orders.append(entry)
-    entry = _mode_effects(obj, mode, targets, instances, problems)
+    built = [order["order"] for order in orders]
+    entry = _mode_effects(
+        obj,
+        mode,
+        targets,
+        instances,
+        problems,
+        stepped=obj.get("behaviour") == "external",
+        on_demand=any(order["occurrence"]["distrib"] == "inst" for order in orders),
+        overlapping=obj.get("behaviour") != "external"
+        and sum(math.comb(len(targets) - 1, k - 1) for k in built) > 1,
+        repaired=all("repair" in order for order in orders),
+        common_cause=True,
+    )
     if problems:
         raise _RefusedAll(problems)
     for target in targets:
@@ -1300,6 +1563,8 @@ def convert(
                 refuse(name, error)
 
     _refuse_shared_no_ops(instances, embedded_modes, refuse, notes)
+    _refuse_ill_posed_sharing(instances, refuse)
+    _refuse_shared_persistent_writes(instances, refuse)
 
     # --- feared events --------------------------------------------------
     feared = []
@@ -1477,7 +1742,17 @@ def _convert_mode(
         # An exponential repair at rate zero never fires: no repair.
         repair = None
 
-    entry = _mode_effects(obj, mode, targets, instances, problems)
+    entry = _mode_effects(
+        obj,
+        mode,
+        targets,
+        instances,
+        problems,
+        stepped=behaviour == "external",
+        on_demand=occurrence is not None and occurrence["distrib"] == "inst",
+        repaired=repair is not None,
+        notes=notes,
+    )
 
     cond = obj.get("failure_cond", True)
     conditioned_repair = repair is not None and repair_cond not in (True, None)
