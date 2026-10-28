@@ -315,12 +315,12 @@ conversion with one refusal yields no documents. In this version the
 converter carries discrete flows, negated outputs (the `negate` parameter
 of `std.bool_flow_out` and `std.bool_source_out`), temporised outputs
 (`std.bool_flow_out_tempo`), gates fed by outputs, single-target timed and
-on-demand modes with their occurrence and repair conditions (several
-targets only when every common-cause order above one is empty) and events.
-It refuses continuous flows and capacities, triggered outputs, production
-operands that compare a quantity (a negated operand converts through
-`std.bool_not`), common-cause orders, on-demand repair laws, pulse and
-repair effects, and controllers.
+on-demand modes with their occurrence and repair conditions, common-cause
+modes as study groups (`common_cause_groups`, an external mode with its
+effect step) and events. It refuses continuous flows and capacities,
+triggered outputs, production operands that compare a quantity (a negated
+operand converts through `std.bool_not`), conditions on a common-cause
+group, on-demand repair laws, pulse and repair effects, and controllers.
 
 `compare_routes` runs the declaration through both routes, the
 declaration reader and the converted library, and says whether they agree.
@@ -329,7 +329,16 @@ Every transition that fires on a route must be renamed onto the other
 An external mode's effects ride, on the declaration route, on a mirror
 automaton one zero-delay step behind the mode: the converted activation
 asks for the same step (`effect_step: "zero_delay"`), and the mirror's
-transitions map onto the step's.
+transitions map onto the step's, which carries the sequence events as the
+mirror does.
+Before any trajectory, both routes must record the same sequence events:
+every monitored transition of the declaration, renamed, is a monitored
+transition of the library with the same kind, and the cycle groups split
+them alike. The library may also record a transition the declaration
+route carries unmonitored (a mode of a component's own section), since
+PyCATSHOO records what a study's `monitorTransition` patterns select. A
+transition that cannot fire (a constant false guard, a zero rate) is left
+out. A difference stops the comparison at the level `structure`.
 A study with no random date compares one trajectory exactly. A stochastic
 study cannot share a seed between the routes, since they draw in a
 different order, so one trajectory is drawn on the declaration route and

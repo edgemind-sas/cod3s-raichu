@@ -775,21 +775,32 @@ fn an_effect_carried_through_a_zero_delay_step_is_seen_for_that_step() {
         .find(|a| a.name == "passage__effect")
         .unwrap();
     assert_eq!(step.states, vec!["rep", "occ"]);
+    // As a PyCATSHOO mirror, the step carries the sequence events and the
+    // kinds, in the mode's cycle group; the mode's own automaton none.
     assert!(step
         .transitions
         .iter()
-        .all(|t| !t.monitored && t.kind.is_none()));
+        .all(|t| t.monitored && t.kind.is_some() && t.cycle_group.as_deref() == Some("passage")));
     assert_eq!(
         step.transitions[0].distrib,
         raichu_model::Distrib::Delay { time: 0.0 }
     );
-    // The sequence events stay on the mode's own automaton.
-    assert!(events(&stepped)
+    let passage = train.automata.iter().find(|a| a.name == "passage").unwrap();
+    assert!(passage
+        .transitions
         .iter()
-        .all(|(name, _)| !name.contains("__effect")));
+        .all(|t| !t.monitored && t.kind.is_none() && t.cycle_group.is_none()));
+    let fired: Vec<String> = events(&stepped).into_iter().map(|(n, _)| n).collect();
+    assert!(
+        fired.contains(&"T.passage__effect.occ".to_owned()),
+        "{fired:?}"
+    );
+    assert!(
+        fired.iter().all(|n| !n.starts_with("T.passage.")),
+        "{fired:?}"
+    );
     // The mutual lock of a mirror: the mode occurs again only with its
     // effects at rest, and is repaired only once they have taken hold.
-    let passage = train.automata.iter().find(|a| a.name == "passage").unwrap();
     let guard = |name: &str| {
         let transition = passage.transitions.iter().find(|t| t.name == name).unwrap();
         serde_json::to_string(&transition.guard).unwrap()

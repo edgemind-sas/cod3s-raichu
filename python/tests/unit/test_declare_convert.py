@@ -294,13 +294,211 @@ def test_cyber_3comp_converts_and_matches_the_declaration_route_exactly():
     assert comparison.level == "exact"
 
 
-def test_a_common_cause_order_is_refused_naming_the_order():
-    doc = with_mode(two_pumps(), "P1__fail", exp_mode(
-        "fail", ["P1", "P2"], {"water_fed_available_out": False}, rate=[1e-3, 5e-4], group="pumps"
-    ))
-    del doc["components"]["P2__fail"]
-    (refusal,) = convert(doc).refusals
-    assert refusal.construct == "common-cause order 2"
+def three_pumps() -> dict:
+    """A tank feeding three pumps of one class, a sink fed by any of them."""
+    pump = lambda name: component(
+        name, [flow_in("water"), flow_out("water", [["water"]])], class_name="Pump"
+    )
+    return document(
+        [
+            component("tank", [flow_out("water", produced=True)], class_name="Tank"),
+            pump("P1"), pump("P2"), pump("P3"),
+            component("sink", [flow_in("water", logic="or")], class_name="Sink"),
+            event("dry", [[{"obj": "sink", "attr": "water_fed_in", "ope": "==", "value": False}]]),
+        ],
+        [link("tank", p, "water") for p in ("P1", "P2", "P3")]
+        + [link(p, "sink", "water") for p in ("P1", "P2", "P3")],
+    )
+
+
+def with_group(doc: dict, spec: dict) -> dict:
+    doc["components"][spec["name"]] = spec
+    return doc
+
+
+def ccf(targets, rate, repair, behaviour="external", group="pumps", cls="ObjFMExp") -> dict:
+    spec = exp_mode("fail", targets, {"water_fed_available_out": False}, rate=rate,
+                    repair=repair, group=group, cls=cls)
+    spec["behaviour"] = behaviour
+    spec["repair_param"] = repair if isinstance(repair, list) else [repair]
+    return spec
+
+
+def test_a_common_cause_mode_converts_to_a_study_group():
+    doc = with_group(three_pumps(), ccf(["P1", "P2"], [1e-3, 5e-4], [0.1, 0.05]))
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    (group,) = conversion.study["study"]["common_cause_groups"]
+    assert group["name"] == "pumps__fail" and group["instances"] == ["P1", "P2"]
+    assert [o["order"] for o in group["orders"]] == [1, 2]
+    assert group["effect_step"] == "zero_delay"
+    assert conversion.rename["pumps__fail.fm__cc_1_2.occ__cc_1_2"] == "pumps__fail.cc_1_2.occ"
+    assert conversion.rename["P1.pumps__fail.fail__occ"] == "P1.pumps__fail__effect.occ"
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(10))
+    assert comparison.identical, comparison.detail
+    assert comparison.level == "replay"
+
+
+def test_an_internal_group_of_every_order_matches():
+    doc = with_group(
+        three_pumps(),
+        ccf(["P1", "P2", "P3"], [2e-3, 1e-3, 5e-4], [0.1, 0.1, 0.1], behaviour="internal"),
+    )
+    conversion = convert(doc)
+    assert "effect_step" not in conversion.study["study"]["common_cause_groups"][0]
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(10))
+    assert comparison.identical, comparison.detail
+
+
+def test_an_absorbing_order_two_with_a_repaired_order_one_matches():
+    """The dominant shape: order 1 repaired, order 2 absorbing."""
+    doc = with_group(three_pumps(), ccf(["P1", "P2"], [2e-3, 1e-3], [0.1, 0.0]))
+    conversion = convert(doc)
+    orders = conversion.study["study"]["common_cause_groups"][0]["orders"]
+    assert "repair" in orders[0] and "repair" not in orders[1]
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(10))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_group_of_the_highest_order_only_matches():
+    doc = with_group(three_pumps(), ccf(["P1", "P2", "P3"], [None, None, 1e-3], [0.0, 0.0, 0.1]))
+    conversion = convert(doc)
+    assert conversion.study["study"]["common_cause_groups"][0]["orders"] == [
+        {"order": 3, "occurrence": {"distrib": "exp", "rate": 1e-3},
+         "repair": {"distrib": "exp", "rate": 0.1}}
+    ]
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(10))
+    assert comparison.identical, comparison.detail
+
+
+def test_two_groups_sharing_a_member_match():
+    doc = three_pumps()
+    with_group(doc, ccf(["P1", "P2"], [2e-3, 1e-3], [0.1, 0.1], group="ga"))
+    with_group(doc, ccf(["P1", "P3"], [2e-3, 1e-3], [0.1, 0.1], group="gb"))
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(10))
+    assert comparison.identical, comparison.detail
+
+
+def test_an_on_demand_internal_group_matches():
+    doc = with_group(
+        three_pumps(),
+        ccf(["P1", "P2"], [0.2, 0.1], [0.5, 0.5], behaviour="internal", cls="ObjFMInst"),
+    )
+    doc["components"]["pumps__fail"]["failure_cond"] = True
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    (group,) = conversion.study["study"]["common_cause_groups"]
+    assert group["orders"][1]["occurrence"] == {"distrib": "inst", "probs": [0.1]}
+    comparison = compare_routes(doc, conversion, t_max=200.0, seeds=range(10))
+    assert comparison.identical, comparison.detail
+
+
+def test_a_group_condition_is_refused_by_name():
+    doc = with_group(three_pumps(), ccf(["P1", "P2"], [1e-3, 5e-4], [0.1, 0.05]))
+    doc["components"]["pumps__fail"]["failure_cond"] = [[{"attr": "water_fed_in", "ope": "==", "value": True}]]
+    assert "common-cause group condition" in {r.construct for r in convert(doc).refusals}
+
+
+def test_a_wrong_group_rate_is_reported_divergent():
+    doc = with_group(three_pumps(), ccf(["P1", "P2"], [1e-3, 5e-4], [0.1, 0.05]))
+    wrong = copy.deepcopy(convert(doc))
+    wrong.study["study"]["common_cause_groups"][0]["orders"][1]["occurrence"]["rate"] *= 1.0 + 1e-9
+    comparison = compare_routes(doc, wrong, t_max=5000.0, seeds=range(4))
+    assert not comparison.identical
+    assert "pumps__fail.cc_1_2.occ" in comparison.detail
+
+
+def test_laws_listed_past_the_last_order_are_ignored_as_on_the_declaration_route():
+    doc = with_group(three_pumps(), ccf(["P1", "P2"], [1e-3, 5e-4, 1e-4], [0.1, 0.05, 0.01]))
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert [o["order"] for o in conversion.study["study"]["common_cause_groups"][0]["orders"]] == [1, 2]
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(4))
+    assert comparison.identical, comparison.detail
+    single = with_group(three_pumps(), ccf(["P1"], [1e-3, 5e-4], [0.1, 0.05]))
+    conversion = convert(single)
+    assert conversion.converted, conversion.refusals
+    assert not conversion.study["study"].get("common_cause_groups")
+    assert compare_routes(single, conversion, t_max=5000.0, seeds=range(4)).identical
+
+
+def test_an_external_mode_with_no_law_is_inert_on_both_routes():
+    """The declaration route grafts a monitored mirror even for a mode with
+    no occurrence law; nothing ever drives it, and the library builds no
+    automaton for it: the comparison must leave it out, not call it a
+    missing event."""
+    doc = two_pumps()
+    spare = exp_mode("spare", ["P1"], {"water_fed_available_out": False}, rate=0.0, repair=0.0)
+    spare["behaviour"] = "external"
+    doc["components"][spare["name"]] = spare
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert any("spare" in name for name in conversion.inert), conversion.inert
+    comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(3))
+    assert comparison.identical, comparison.detail
+
+
+def _with_library_model(conversion, edit):
+    """`conversion` whose library model is the converted one, edited."""
+    import pyraichu
+
+    model = json.loads(conversion.load().json)
+    edit(model.get("model", model))
+    edited = copy.deepcopy(conversion)
+    edited.load = lambda: pyraichu.load_model(json.dumps(model))
+    return edited
+
+
+def _monitored(model: dict):
+    for component in model["components"]:
+        for automaton in component.get("automata", []):
+            for transition in automaton["transitions"]:
+                yield component["name"], automaton["name"], transition
+
+
+def test_an_external_group_records_one_event_per_member():
+    """The declaration route's mirrors record a combination once per
+    target: the library's member steps must too, with the kinds."""
+    doc = with_group(three_pumps(), ccf(["P1", "P2"], [1e-3, 5e-4], [0.1, 0.05]))
+    model = json.loads(convert(doc).load().json)
+    events = sorted(
+        (c, a, t["name"], t.get("kind"))
+        for c, a, t in _monitored(model.get("model", model))
+        if t.get("monitored") and c != "dry"
+    )
+    assert events == [
+        ("P1", "pumps__fail__effect", "occ", "failure"),
+        ("P1", "pumps__fail__effect", "rep", "repair"),
+        ("P2", "pumps__fail__effect", "occ", "failure"),
+        ("P2", "pumps__fail__effect", "rep", "repair"),
+    ]
+
+
+def test_different_sequence_events_are_reported_divergent():
+    doc = with_group(three_pumps(), ccf(["P1", "P2"], [1e-3, 5e-4], [0.1, 0.05]))
+    conversion = convert(doc)
+
+    def silence_p2(model):
+        for c, _, t in _monitored(model):
+            if c == "P2":
+                t["monitored"] = False
+
+    def rekind(model):
+        for c, _, t in _monitored(model):
+            if c == "P1" and t["name"] == "occ" and t.get("kind"):
+                t["kind"] = "repair"
+
+    def regroup(model):
+        for c, _, t in _monitored(model):
+            if c == "P1" and t["name"] == "rep" and t.get("cycle_group"):
+                t["cycle_group"] = "elsewhere"
+
+    for edit in (silence_p2, rekind, regroup):
+        comparison = compare_routes(doc, _with_library_model(conversion, edit), t_max=5000.0, seeds=range(2))
+        assert not comparison.identical, edit.__name__
+        assert "sequence events" in comparison.detail, (edit.__name__, comparison.detail)
 
 
 def test_a_multi_target_mode_with_independent_orders_only_converts_per_target():
@@ -813,7 +1011,7 @@ def test_a_library_transition_with_no_declaration_counterpart_fails_the_comparis
     feared.append({**watched, "name": "p1_twin"})
     comparison = compare_routes(declaration, conversion, t_max=5000.0, seeds=range(6))
     assert not comparison.identical
-    assert "`p1_twin.ev." in comparison.detail and "library route" in comparison.detail
+    assert "p1_twin.ev." in comparison.detail and "library route" in comparison.detail
 
 
 def test_an_external_mode_carries_its_effects_through_a_zero_delay_step():
@@ -839,7 +1037,6 @@ def test_every_blocking_construct_of_a_mode_is_named():
     constructs = {r.construct for r in convert(doc).refusals}
     assert {
         "mode key `repair_effects`",
-        "common-cause order 2",
         "mode behaviour `external_rep_indep`",
         "non-boolean mode effect",
     } <= constructs
@@ -1039,3 +1236,47 @@ def test_a_condition_on_an_external_mode_mirror_reads_its_effect_step():
     assert '"automaton": "fail__effect"' in json.dumps(feared["mirror"]["condition"])
     comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(4))
     assert comparison.identical, comparison.detail
+
+
+def test_armed_ages_compare_within_the_float_tolerance_not_by_rounding():
+    """Two ages a few ulps apart, on either side of a rounding boundary, are
+    the same age; a difference of a millionth is not."""
+    from pyraichu.muscadet.convert import _same_armed
+
+    law = '{"distrib": "exp", "rate": 1e-06}'
+    left = {"t": (law, 4939.201538691293, 10148.0938288525000001, False, None)}
+    near = {"t": (law, 4939.201538691293, 10148.0938288524999, False, None)}
+    assert _same_armed(left, near)
+    far = {"t": (law, 4939.201538691293, 10148.093829853, False, None)}
+    assert not _same_armed(left, far)
+    assert not _same_armed(left, {})
+    other_law = {"t": ('{"distrib": "exp", "rate": 2e-06}', *left["t"][1:])}
+    assert not _same_armed(left, other_law)
+    # A cumulative hazard has no time scale: rare rates make it tiny, and
+    # twice as large is a different hazard however small.
+    hazard = {"t": (law, 0.0, 1.0, False, 2e-10)}
+    assert not _same_armed(hazard, {"t": (law, 0.0, 1.0, False, 4e-10)})
+    assert _same_armed(hazard, {"t": (law, 0.0, 1.0, False, 2e-10 * (1 + 1e-14))})
+
+
+def test_a_repair_the_draws_never_reach_is_forced_after_its_occurrence(monkeypatch):
+    """The draws fail the pump but never repair it: forcing the repair alone
+    finds it unarmed, so the replay forces the occurrence first."""
+    import pyraichu.muscadet.convert as module
+
+    doc = with_mode(two_pumps(), "P1__fail", exp_mode(
+        "fail", ["P1"], {"water_fed_available_out": False}, rate=0.5, repair=1e-12
+    ))
+    conversion = convert(doc)
+    plans = []
+    replay = module._replay
+
+    def spy(*args, **kwargs):
+        if not kwargs.get("recorded", True):
+            plans.append([name for _, name, _ in args[4]])
+        return replay(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_replay", spy)
+    comparison = compare_routes(doc, conversion, t_max=30.0, seeds=range(3))
+    assert comparison.identical, comparison.detail
+    assert ["P1__fail.fm.failure", "P1__fail.fm.repair"] in plans, plans

@@ -395,6 +395,52 @@ pub struct OneOffMode {
     pub metadata: Option<Value>,
 }
 
+/// A common-cause group: a mode catalogued on every member's type, failing
+/// the members together by combination. Each active order `k` gives one
+/// automaton per combination of `k` members, named after their 1-based
+/// positions in `instances` (`cc_1_2`), in a component named after the
+/// group; a combination holds every member it covers with the catalogued
+/// effects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct CommonCauseGroup {
+    /// Group name, also the name of its generated component.
+    pub name: String,
+    /// The catalogued mode it fails its members with.
+    pub mode: String,
+    /// The members, in order: their positions name the combinations.
+    pub instances: Vec<String>,
+    /// One entry per active order; an absent order builds no combination.
+    pub orders: Vec<GroupOrder>,
+    /// With a step, each member's effects follow the combinations covering
+    /// it one step behind, through an automaton `<group>__effect` on the
+    /// member, and a combination occurs only with its members' steps at
+    /// rest and is repaired only once they have taken hold: a PyCATSHOO
+    /// external common-cause mode. Without, effects are immediate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_step: Option<EffectStep>,
+    /// Free editor data, never read by the expander.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+/// The laws of one order of a common-cause group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GroupOrder {
+    /// How many members a combination of this order fails together.
+    pub order: usize,
+    /// Occurrence law of each combination.
+    #[cfg_attr(feature = "schema", schemars(with = "raichu_model::Distrib"))]
+    pub occurrence: Value,
+    /// Repair law; absent means a combination, once occurred, stays so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<raichu_model::Distrib>"))]
+    pub repair: Option<Value>,
+}
+
 /// The step a mode's effects take after its state (`effect_step`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -507,6 +553,10 @@ pub struct StudyDocument {
     /// Feared events.
     #[serde(default)]
     pub feared_events: Vec<FearedEvent>,
+    /// Common-cause groups: a catalogued mode failing several instances
+    /// together, one law per order.
+    #[serde(default)]
+    pub common_cause_groups: Vec<CommonCauseGroup>,
     /// Indicators, in the core form.
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(with = "Vec<raichu_model::Indicator>"))]

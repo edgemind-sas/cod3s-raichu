@@ -15,7 +15,7 @@ use raichu_model::{
     Automaton, CycleCancellation, Distrib, InterruptionPolicy, Transition, TransitionKind,
 };
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 /// State of a mode that has not occurred (initial).
 pub const REP: &str = "rep";
@@ -29,12 +29,18 @@ pub const NOT_OCC: &str = "not_occ";
 /// solicitation falls.
 pub const PARKED: &str = "parked";
 
+/// The modes a study activates, `(instance, mode)`, with the occurred
+/// states a `mode_active` leaf on each reads: the mode's own automaton, or
+/// the combinations of the common-cause groups covering the instance.
+pub(crate) type ActiveModes = BTreeMap<(String, String), Vec<(String, String)>>;
+
 /// Rewrites every `{"op": "mode_active", "mode": "Instance.mode"}` leaf of
-/// `condition` into the core `state_active` on the mode's `occ` state,
-/// refusing a mode the study does not activate.
+/// `condition` into the core `state_active` on the mode's `occ` state (an
+/// OR over the covering combinations for a group member), refusing a mode
+/// the study does not activate.
 pub(crate) fn rewrite_mode_leaves(
     condition: &Value,
-    active: &BTreeSet<(String, String)>,
+    active: &ActiveModes,
     document: DocumentKind,
     pointer: &str,
     context: &str,
@@ -64,16 +70,23 @@ pub(crate) fn rewrite_mode_leaves(
                     ),
                 )
             })?;
-            if !active.contains(&(instance.to_owned(), mode.to_owned())) {
+            let Some(states) = active.get(&(instance.to_owned(), mode.to_owned())) else {
                 return Err(ExpandError::new(
                     document,
                     pointer,
                     format!("{context}: the condition names mode `{written}`, which the study does not activate"),
                 ));
-            }
-            Ok(
-                json!({"op": "state_active", "state": {"component": instance, "automaton": mode, "state": OCC}}),
-            )
+            };
+            let leaves: Vec<Value> = states
+                .iter()
+                .map(|(component, automaton)| {
+                    json!({"op": "state_active", "state": {"component": component, "automaton": automaton, "state": OCC}})
+                })
+                .collect();
+            Ok(match leaves.len() {
+                1 => leaves.into_iter().next().unwrap_or(Value::Null),
+                _ => json!({"op": "bool", "bool_op": "or", "args": leaves}),
+            })
         }
         Value::Object(map) => {
             let mut out = Map::with_capacity(map.len());
@@ -245,30 +258,67 @@ pub(crate) fn effect_automaton_name(mode: &str) -> String {
 /// The effect step of `mode` on `instance`: states `rep` and `occ`, an
 /// `occ` transition taken once the mode is occurred and a `rep` one once it
 /// is not, each a zero delay or an instantaneous law of probability one.
-/// It is no sequence event and no failure or repair: the mode's own
-/// automaton carries those.
+/// Like a PyCATSHOO mirror, it carries the mode's sequence events and its
+/// failure and repair kinds, in the mode's cycle group (see
+/// [`hand_events_to_step`]).
 pub(crate) fn effect_step_automaton(instance: &str, mode: &str, step: EffectStep) -> Automaton {
+    step_automaton(
+        effect_automaton_name(mode),
+        occurred(instance, mode),
+        step,
+        Some(mode),
+    )
+}
+
+/// Strips the sequence events, kinds and cycle group off a mode automaton
+/// whose effects an effect step carries (the cycle group is the step's
+/// alone, as it is the mirror's alone on the declaration route): the step records them, once per instance it
+/// holds, as the declaration route's mirrors do.
+pub(crate) fn hand_events_to_step(automaton: &mut Automaton) {
+    for transition in &mut automaton.transitions {
+        transition.monitored = false;
+        transition.monitored_states = None;
+        transition.kind = None;
+        transition.cycle_group = None;
+    }
+}
+
+/// An effect step named `name`: states `rep` and `occ`, taken to `occ`
+/// once `follows` holds and back to `rep` once it does not. With
+/// `events`, the step carries the sequence events and the failure and
+/// repair kinds, in that cycle group, instead of the automata it follows.
+pub(crate) fn step_automaton(
+    name: String,
+    follows: Expr,
+    step: EffectStep,
+    events: Option<&str>,
+) -> Automaton {
     let distrib = || match step {
         EffectStep::ZeroDelay => Distrib::Delay { time: 0.0 },
         EffectStep::Instant => Distrib::Inst { probs: Vec::new() },
     };
-    let follows = occurred(instance, mode);
-    let edge = |name: &str, source: &str, guard: Expr| Transition {
-        name: name.to_owned(),
+    let edge = |edge_name: &str, source: &str, guard: Expr| Transition {
+        name: edge_name.to_owned(),
         source: source.to_owned(),
         guard: Some(guard),
-        targets: vec![name.to_owned()],
+        targets: vec![edge_name.to_owned()],
         on_interruption: InterruptionPolicy::Reset,
-        monitored: false,
+        monitored: events.is_some(),
         monitored_states: None,
-        cycle_group: None,
+        cycle_group: events.map(str::to_owned),
         cycle_cancellation: CycleCancellation::Auto,
-        kind: None,
+        kind: events.map(|_| {
+            if edge_name == OCC {
+                TransitionKind::Failure
+            } else {
+                TransitionKind::Repair
+            }
+        }),
         effects: Vec::new(),
         distrib: distrib(),
     };
     Automaton {
-        name: effect_automaton_name(mode),
+        name,
         states: vec![REP.to_owned(), OCC.to_owned()],
         init: REP.to_owned(),
         transitions: vec![
