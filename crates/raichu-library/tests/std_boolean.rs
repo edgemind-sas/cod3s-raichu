@@ -209,12 +209,13 @@ fn the_standard_library_parses_checks_and_carries_the_engine_version() {
     // (`std_continuous.rs`).
     let names: Vec<&str> = std.fragments.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(
-        names[..5],
+        names[..6],
         [
             "bool_flow_in",
             "bool_flow_out",
             "bool_source_out",
             "bool_flow_out_tempo",
+            "bool_flow_out_trigger",
             "logic_gate"
         ]
     );
@@ -592,4 +593,101 @@ fn a_negated_output_delivers_the_negation_of_its_delivery() {
             (6.0, V::Bool(false))
         ]
     );
+}
+
+fn trigger_library(with: Value) -> Library {
+    library(
+        json!({"name": "demo", "version": "1.0.0", "imports": ["std"], "types": [
+            {"name": "Source",
+             "uses": [{"fragment": "std.bool_source_out", "with": {"name": "x"}}],
+             "modes": [{"name": "fail", "nature": "failure", "effects": [{"attribute": "x_fed_available_out", "value": false}]}]},
+            {"name": "Backup",
+             "uses": [{"fragment": "std.bool_flow_out_trigger", "with": with}]}
+        ]}),
+    )
+}
+
+fn trigger_run(
+    with: Value,
+    sources: usize,
+    wired: usize,
+    modes: Value,
+    t_max: f64,
+) -> Vec<(f64, V)> {
+    let lib = trigger_library(with);
+    let mut instances: Vec<Value> = (1..=sources)
+        .map(|i| json!({"name": format!("S{i}"), "type": "Source"}))
+        .collect();
+    instances.push(json!({"name": "B", "type": "Backup"}));
+    let connections: Vec<Value> = (1..=wired)
+        .map(|i| json!({"from": format!("S{i}.x_out"), "to": "B.y_trigger_in"}))
+        .collect();
+    let s = system(
+        json!({"name": "s", "library": binding(), "instances": instances,
+        "connections": connections, "indicators": [watch("y", "B", "y_fed_out")]}),
+    );
+    let st = study(json!({"name": "st", "system": "s", "modes": modes}));
+    series(
+        &run(&expand(&[lib], &s, Some(&st)).unwrap().model, t_max),
+        "y",
+    )
+}
+
+#[test]
+fn a_triggered_output_feeds_while_its_trigger_has_been_absent_for_time_up() {
+    // The trigger inhibits: fed while the source does NOT feed it. The
+    // source fails at 5 (up after 2, at 7) and is repaired at 8 (down
+    // after 1, at 9).
+    let y = trigger_run(
+        json!({"name": "y", "conditioned": false, "prod_init": true, "logic": "or", "time_up": 2.0, "time_down": 1.0}),
+        1,
+        1,
+        json!([{"mode": "fail", "instances": ["S1"], "occurrence": delay(5.0), "repair": delay(3.0)}]),
+        9.5,
+    );
+    assert_eq!(
+        y,
+        vec![
+            (0.0, V::Bool(false)),
+            (7.0, V::Bool(true)),
+            (9.0, V::Bool(false))
+        ]
+    );
+}
+
+#[test]
+fn an_armed_trigger_starts_up_and_an_unarmed_one_rises_after_time_up() {
+    let armed = trigger_run(
+        json!({"name": "y", "conditioned": false, "prod_init": true, "logic": "and", "armed": true}),
+        0,
+        0,
+        json!([]),
+        3.0,
+    );
+    assert_eq!(armed, vec![(0.0, V::Bool(true))]);
+    // `and` over an unconnected port inhibits nothing.
+    let rising = trigger_run(
+        json!({"name": "y", "conditioned": false, "prod_init": true, "logic": "and", "time_up": 2.0}),
+        0,
+        0,
+        json!([]),
+        3.0,
+    );
+    assert_eq!(rising, vec![(0.0, V::Bool(false)), (2.0, V::Bool(true))]);
+}
+
+#[test]
+fn a_k_out_of_n_trigger_inhibits_while_k_inputs_feed() {
+    // Two of three sources inhibit; the first failure at 4 leaves two.
+    let y = trigger_run(
+        json!({"name": "y", "conditioned": false, "prod_init": true, "logic": "k", "k": 2}),
+        3,
+        3,
+        json!([
+            {"mode": "fail", "instances": ["S1"], "occurrence": delay(4.0)},
+            {"mode": "fail", "instances": ["S2"], "occurrence": delay(6.0)}
+        ]),
+        8.0,
+    );
+    assert_eq!(y, vec![(0.0, V::Bool(false)), (6.0, V::Bool(true))]);
 }

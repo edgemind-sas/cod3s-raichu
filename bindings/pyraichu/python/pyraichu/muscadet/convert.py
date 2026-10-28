@@ -91,6 +91,7 @@ _MODE_KEYS = frozenset(
         "failure",
         "repair",
         "failure_effects",
+        "repair_effects",
         "failure_cond",
         "repair_cond",
         "failure_state",
@@ -265,11 +266,10 @@ def _flow_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]
     # declaration route wraps it in `not`); production and availability are
     # unchanged.
     negate = bool(keywords.pop("negate", False))
-    if not keywords.pop("var_fed_available_out_reset", True):
-        raise _Refused(
-            "availability not reset (`var_fed_available_out_reset` false)",
-            f"output `{name}`",
-        )
+    # A persistent availability (not reset every step) is the same document
+    # as long as no mode writes it: `_persistent_outputs` keeps the list and
+    # `_mode_effects` refuses a mode writing one.
+    keywords.pop("var_fed_available_out_reset", None)
     available = bool(keywords.pop("var_fed_available_out_init", True))
     produced = bool(keywords.pop("var_prod_default", False))
     keywords.pop("var_prod_cond_inner_mode", None)
@@ -335,6 +335,51 @@ def _tempo_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str
     return {"fragment": "std.bool_flow_out_tempo", "with": with_}
 
 
+def _trigger_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]) -> dict:
+    """muscadet `FlowOutOnTrigger`: the output feeds while its trigger
+    automaton is `up`, which it reaches once the trigger aggregate has been
+    false for `time_up`. Whether it starts `up` is a system fact (nothing
+    feeds the trigger port), set by :func:`_arm_triggers` once the
+    connections are known."""
+    time_up = float(keywords.pop("trigger_time_up", 0.0) or 0.0)
+    time_down = float(keywords.pop("trigger_time_down", 0.0) or 0.0)
+    logic = keywords.pop("trigger_logic", "or")
+    plain = _flow_out_use(name, keywords, inputs, outputs)
+    if plain["with"].get("negate"):
+        raise _Refused("negated triggered output", f"output `{name}`")
+    with_: dict[str, Any] = {"name": name}
+    if plain["fragment"] == "std.bool_flow_out":
+        with_["prod_cond"] = plain["with"]["prod_cond"]
+    else:
+        with_["conditioned"] = False
+        with_["prod_init"] = plain["with"]["prod_init"]
+    with_["fed_available_init"] = plain["with"]["fed_available_init"]
+    if logic in ("and", "or"):
+        with_["logic"] = logic
+    elif isinstance(logic, int) and not isinstance(logic, bool) and logic >= 1:
+        with_["logic"] = "k"
+        with_["k"] = logic
+    else:
+        raise _Refused("trigger logic", f"output `{name}` aggregates its trigger with {logic!r}")
+    with_["time_up"] = time_up
+    with_["time_down"] = time_down
+    with_["armed"] = False
+    return {"fragment": "std.bool_flow_out_trigger", "with": with_}
+
+
+def _arm_triggers(instances: dict[str, dict], connections: list[dict]) -> None:
+    """A triggered output whose trigger port nothing feeds and whose
+    `time_up` is zero starts `up` on the declaration route (the trigger is
+    absent for ever): the library states it with `armed`."""
+    fed = {connection["to"] for connection in connections}
+    for name, instance in instances.items():
+        for use in instance["uses"]:
+            if use["fragment"] == "std.bool_flow_out_trigger":
+                with_ = use["with"]
+                wired = f"{name}.{with_['name']}_trigger_in" in fed
+                with_["armed"] = not wired and with_["time_up"] == 0.0
+
+
 def _flow_uses(spec: dict, name: str) -> tuple[list[dict], list[tuple[str, dict]]]:
     """The std fragments a flow component's declaration means, in order, and
     the failure modes it declares in its own `failure_modes` section."""
@@ -376,6 +421,8 @@ def _flow_call_use(spec: dict, call: Any, inputs: set[str], outputs: set[str]) -
         use = _flow_out_use(flow, keywords, inputs, outputs)
     elif call.method == "add_flow_out_tempo":
         use = _tempo_out_use(flow, keywords, inputs, outputs)
+    elif call.method == "add_flow_out_on_trigger":
+        use = _trigger_out_use(flow, keywords, inputs, outputs)
     else:
         entry = next((e for e in spec.get("flows") or [] if e.get("name") == flow), {})
         raise _Refused(f"flow class `{entry.get('cls', call.method)}`", f"flow `{flow}`")
@@ -402,7 +449,9 @@ class _EmbeddedMode:
     rename: dict[str, str]
 
 
-def _embedded_mode(component: str, method: str, keywords: dict, uses: list[dict]) -> _EmbeddedMode:
+def _embedded_mode(
+    component: str, method: str, keywords: dict, uses: list[dict], persistent: frozenset[str] = frozenset()
+) -> _EmbeddedMode:
     """A mode of a component's own `failure_modes` section: its catalogue
     entry, its activation and its transition renames.
 
@@ -437,6 +486,8 @@ def _embedded_mode(component: str, method: str, keywords: dict, uses: list[dict]
                 "failure mode on an output initially unavailable",
                 f"mode `{mode}` cuts `{target}`",
             )
+        if f"{target}_fed_available_out" in persistent:
+            raise _Refused(_PERSISTENT, f"mode `{mode}` writes `{component}.{target}_fed_available_out`")
     entry: dict[str, Any] = {"name": mode, "nature": "failure"}
     if targets:
         entry["effects"] = [
@@ -519,7 +570,70 @@ _VALUE_PARAMETERS = {
 }
 
 #: The fragments carrying a discrete output.
-_OUTPUT_FRAGMENTS = ("std.bool_flow_out", "std.bool_source_out", "std.bool_flow_out_tempo")
+_OUTPUT_FRAGMENTS = (
+    "std.bool_flow_out",
+    "std.bool_source_out",
+    "std.bool_flow_out_tempo",
+    "std.bool_flow_out_trigger",
+)
+#: The output fragments whose production a flag `conditioned` may leave to a mode.
+_CONDITIONED_FRAGMENTS = ("std.bool_flow_out_tempo", "std.bool_flow_out_trigger")
+
+
+def _persistent_outputs(spec: dict) -> set[str]:
+    """The availabilities of `spec`'s outputs that the declaration route
+    never resets (`var_fed_available_out_reset` false)."""
+    return {
+        f"{entry.get('name')}_fed_available_out"
+        for entry in spec.get("flows") or []
+        if entry.get("var_fed_available_out_reset") is False
+    }
+
+
+_PERSISTENT = "availability not reset (`var_fed_available_out_reset` false)"
+
+
+def _initial_values(uses: list[dict]) -> dict[str, bool]:
+    """The initial value of each output availability, as the std fragments
+    seed it from the declaration's `var_fed_available_out_init`. Only the
+    availability: a production is written by its condition or seeded from
+    `var_prod_default`, which no fragment parameter of a conditioned output
+    carries, so no rest or no-op is ever read off it."""
+    return {
+        f"{use['with']['name']}_fed_available_out": bool(use["with"].get("fed_available_init", True))
+        for use in uses
+        if use["fragment"] in _OUTPUT_FRAGMENTS
+    }
+
+
+def _refuse_shared_no_ops(instances: dict[str, dict], embedded: list, refuse, notes: list[str]) -> None:
+    """A dropped no-op effect is exact only while no other mode writes the
+    attribute another value: the declaration route then chains the writers
+    in declaration order, the no-op among them."""
+    for target, instance in instances.items():
+        for attribute, value, mode in instance.get("no_ops", []):
+            writers = [
+                effect
+                for entry in instance["modes"].values()
+                for effect in entry.get("effects", [])
+                if effect["attribute"] == attribute and effect["value"] != value
+            ] + [
+                effect
+                for own in embedded
+                if own.component == target
+                for effect in own.entry.get("effects", [])
+                if effect["attribute"] == attribute and effect["value"] != value
+            ]
+            if writers:
+                refuse(
+                    mode,
+                    _Refused(
+                        "no-op mode effect on a shared attribute",
+                        f"mode `{mode}` holds `{target}.{attribute}` at its initial value, another mode writes it",
+                    ),
+                )
+            else:
+                notes.append(f"mode `{mode}`: the effect on `{target}.{attribute}` holds its initial value, a no-op")
 
 
 def _targetable(uses: list[dict]) -> set[str]:
@@ -532,7 +646,7 @@ def _targetable(uses: list[dict]) -> set[str]:
         attributes.add(f"{name}_fed_available_out")
         # The production is a mode's to write only where no condition writes it.
         if use["fragment"] == "std.bool_source_out" or (
-            use["fragment"] == "std.bool_flow_out_tempo" and use["with"].get("conditioned") is False
+            use["fragment"] in _CONDITIONED_FRAGMENTS and use["with"].get("conditioned") is False
         ):
             attributes.add(f"{name}_prod_available")
     return attributes
@@ -723,12 +837,51 @@ def _mode_effects(obj: dict, mode: str, targets: list[str], instances: dict[str,
             problems.append(_Refused("non-boolean mode effect", f"`{attribute}` = {value!r}"))
             continue
         effects.append({"attribute": attribute, "value": value})
+    # An effect holding the attribute's initial value on every target is a
+    # no-op on the declaration route (held at that value while failed, at
+    # rest at it too). The library has no such effect: it is dropped, and
+    # `_refuse_shared_no_ops` refuses it if another mode writes there.
+    no_ops = [
+        effect
+        for effect in effects
+        if all(
+            _initial_values(instances[t]["uses"]).get(effect["attribute"]) == effect["value"] for t in targets
+        )
+    ]
+    for effect in no_ops:
+        effects.remove(effect)
+        for target in targets:
+            instances[target].setdefault("no_ops", []).append((effect["attribute"], effect["value"], obj.get("name")))
+    held = {effect["attribute"] for effect in effects} | {effect["attribute"] for effect in no_ops}
     for target in targets:
         allowed = _targetable(instances[target]["uses"])
         for effect in effects:
             if effect["attribute"] not in allowed:
                 problems.append(
                     _Refused("effect on a non-targetable attribute", f"`{target}.{effect['attribute']}`")
+                )
+            if effect["attribute"] in instances[target].get("persistent", ()):
+                problems.append(
+                    _Refused(_PERSISTENT, f"mode `{obj.get('name')}` writes `{target}.{effect['attribute']}`")
+                )
+        # The declaration route holds a failure effect's attribute at its
+        # `repair_effects` value at rest, else at its initial value; the
+        # library holds it at its initial value. A rest value on an
+        # attribute the mode does not hold is never written there.
+        initial = _initial_values(instances[target]["uses"])
+        for attribute, value in sorted((obj.get("repair_effects") or {}).items()):
+            if attribute not in held and attribute in instances[target].get("persistent", ()):
+                # The declaration route refuses a repair effect on a gate
+                # that memorises with no failure counterpart.
+                problems.append(
+                    _Refused(_PERSISTENT, f"mode `{obj.get('name')}` rests `{target}.{attribute}`, holding no failure on it")
+                )
+            if attribute in held and initial.get(attribute) != value:
+                problems.append(
+                    _Refused(
+                        "held rest value different from the initial value",
+                        f"`{target}.{attribute}` rests at {value!r}, starts at {initial.get(attribute)!r}",
+                    )
                 )
     entry: dict[str, Any] = {"name": mode, "nature": "failure"}
     if effects:
@@ -1042,7 +1195,9 @@ def convert(
                 own, refused = [], []
                 for method, keywords in embedded:
                     try:
-                        own.append(_embedded_mode(name, method, keywords, uses))
+                        own.append(
+                            _embedded_mode(name, method, keywords, uses, frozenset(_persistent_outputs(spec)))
+                        )
                     except _Refused as error:
                         refused.append(error)
                 if refused:
@@ -1055,13 +1210,24 @@ def convert(
             for error in errors.refusals:
                 refuse(name, error)
             continue
-        instances[name] = {"key": _type_key(spec, name), "uses": uses, "modes": {}}
+        instances[name] = {
+            "key": _type_key(spec, name),
+            "uses": uses,
+            "modes": {},
+            "persistent": _persistent_outputs(spec),
+        }
         for use in uses:
             if use["fragment"] == "std.bool_flow_out_tempo":
                 # Both routes name the tempo automaton and its waits alike.
                 flow = use["with"]["name"]
                 for direction in ("enable", "disable"):
                     qualified = f"{name}.{flow}_tempo.{flow}_{direction}"
+                    rename[qualified] = qualified
+            if use["fragment"] == "std.bool_flow_out_trigger":
+                # And the trigger automaton and its two delays.
+                flow = use["with"]["name"]
+                for direction in ("up", "down"):
+                    qualified = f"{name}.{flow}_trigger.{flow}_trigger_{direction}"
                     rename[qualified] = qualified
     if any(spec.get(declare.DERIVED_OUT_AUTOMATA_KEY) for spec in components.values()):
         notes.append(
@@ -1133,6 +1299,8 @@ def convert(
             for error in errors.refusals:
                 refuse(name, error)
 
+    _refuse_shared_no_ops(instances, embedded_modes, refuse, notes)
+
     # --- feared events --------------------------------------------------
     feared = []
     target_set = set(targets)
@@ -1185,6 +1353,8 @@ def convert(
 
     if refusals:
         return Conversion(None, None, None, refusals, {}, notes, unverified)
+
+    _arm_triggers(instances, connections)
 
     # --- documents ------------------------------------------------------
     types, system_instances = _build_types(instances, notes)

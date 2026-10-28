@@ -686,8 +686,8 @@ def test_an_unaudited_class_is_flagged_even_when_both_routes_agree():
 
 
 def test_loading_a_refused_conversion_names_the_refusals():
-    doc = document([component("inv", [flow_in("x"), {"cls": "FlowOutOnTrigger", "name": "relay"}])], [])
-    with pytest.raises(ValueError, match="FlowOutOnTrigger"):
+    doc = document([component("inv", [flow_in("x"), {"cls": "FlowContinuousOut", "name": "relay"}])], [])
+    with pytest.raises(ValueError, match="FlowContinuousOut"):
         convert(doc).load()
 
 
@@ -873,11 +873,11 @@ def test_a_wrong_enable_delay_is_reported_divergent():
 
 
 def test_every_blocking_construct_of_a_component_is_named():
-    triggered = {"cls": "FlowOutOnTrigger", "name": "relay"}
-    inverter = component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True), triggered])
+    continuous = {"cls": "FlowContinuousOut", "name": "relay"}
+    inverter = component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True), continuous])
     refusals = convert(document([inverter], [])).refusals
     assert [(r.component, r.construct) for r in refusals] == [
-        ("inv", "flow class `FlowOutOnTrigger`"),
+        ("inv", "flow class `FlowContinuousOut`"),
     ]
 
 
@@ -1029,14 +1029,14 @@ def test_every_blocking_construct_of_a_mode_is_named():
     spec = exp_mode(
         "fail", ["P1", "P2"], {"water_fed_available_out": False}, rate=[1e-3, 5e-4], group="pumps"
     )
-    spec["repair_effects"] = {"water_fed_available_out": False}
+    spec["failure_effects_trans"] = {"water_prod_available": False}
     spec["behaviour"] = "external_rep_indep"
     spec["failure_effects"] = {"water_fed_available_out": 0.5}
     doc = with_mode(two_pumps(), "P1__fail", spec)
     del doc["components"]["P2__fail"]
     constructs = {r.construct for r in convert(doc).refusals}
     assert {
-        "mode key `repair_effects`",
+        "mode key `failure_effects_trans`",
         "mode behaviour `external_rep_indep`",
         "non-boolean mode effect",
     } <= constructs
@@ -1280,3 +1280,209 @@ def test_a_repair_the_draws_never_reach_is_forced_after_its_occurrence(monkeypat
     comparison = compare_routes(doc, conversion, t_max=30.0, seeds=range(3))
     assert comparison.identical, comparison.detail
     assert ["P1__fail.fm.failure", "P1__fail.fm.repair"] in plans, plans
+
+
+# --- M4 U12: converter-only slices ------------------------------------------
+
+
+def test_a_rest_value_equal_to_the_initial_value_converts_and_matches():
+    """`repair_effects` holding the initial value at rest is the rest branch
+    the library already has."""
+    doc = two_pumps()
+    doc["components"]["P1__fail"]["repair_effects"] = {"water_fed_available_out": True}
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert compare_routes(doc, conversion, t_max=5000.0, seeds=range(5)).identical
+
+
+def test_a_rest_value_different_from_the_initial_value_is_refused_by_name():
+    doc = two_pumps()
+    doc["components"]["P1__fail"]["failure_effects"] = {"water_fed_available_out": True}
+    doc["components"]["P1__fail"]["repair_effects"] = {"water_fed_available_out": False}
+    constructs = {r.construct for r in convert(doc).refusals}
+    assert "held rest value different from the initial value" in constructs, constructs
+
+
+def test_a_rest_value_on_an_attribute_the_mode_does_not_hold_is_ignored_as_on_the_declaration_route():
+    doc = two_pumps()
+    leak = exp_mode("leak", ["tank"], {"water_fed_available_out": False})
+    leak["repair_effects"] = {"water_prod_available": True}
+    doc["components"][leak["name"]] = leak
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert compare_routes(doc, conversion, t_max=5000.0, seeds=range(5)).identical
+
+
+def _persistent(doc: dict, component: str, flow: str = "water") -> dict:
+    for entry in doc["components"][component]["flows"]:
+        if entry["name"] == flow and entry["cls"] == "FlowOut":
+            entry["var_fed_available_out_reset"] = False
+    return doc
+
+
+def test_a_persistent_gate_no_mode_writes_converts_and_matches():
+    doc = _persistent(two_pumps(), "tank")
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert compare_routes(doc, conversion, t_max=5000.0, seeds=range(5)).identical
+
+
+def test_a_persistent_gate_a_mode_writes_stays_refused_by_name():
+    doc = _persistent(two_pumps(), "P1")
+    refusals = convert(doc).refusals
+    assert any(
+        r.construct == "availability not reset (`var_fed_available_out_reset` false)" and "P1__fail" in r.detail
+        for r in refusals
+    ), refusals
+
+
+def test_an_own_section_mode_cutting_a_persistent_gate_stays_refused_by_name():
+    source = component("S", [flow_out("power", produced=True)], source_cls="Source")
+    source["flows"][0]["var_fed_available_out_reset"] = False
+    source["failure_modes"] = [own_failure_mode("wear", "power")]
+    declaration = document(
+        [source, component("T", [flow_in("power")], source_cls="Target")],
+        [link("S", "T", "power")],
+    )
+    refusals = convert(declaration).refusals
+    assert any(
+        r.construct == "availability not reset (`var_fed_available_out_reset` false)" and "wear" in r.detail
+        for r in refusals
+    ), refusals
+
+
+def _dormant_p1(doc: dict) -> dict:
+    """`doc` with P1's output starting unavailable."""
+    for entry in doc["components"]["P1"]["flows"]:
+        if entry["cls"] == "FlowOut":
+            entry["var_fed_available_out_init"] = False
+    return doc
+
+
+def test_an_effect_holding_the_initial_value_is_dropped_as_a_no_op():
+    """Held at its initial value while failed and at rest, the attribute
+    never moves on the declaration route; the library has no such effect."""
+    doc = _dormant_p1(two_pumps())
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    assert any("no-op" in note for note in conversion.notes), conversion.notes
+    assert compare_routes(doc, conversion, t_max=5000.0, seeds=range(5)).identical
+
+
+def test_a_no_op_effect_on_an_attribute_another_mode_writes_is_refused_by_name():
+    doc = _dormant_p1(two_pumps())
+    wake = exp_mode("wake", ["P1"], {"water_fed_available_out": True}, rate=1e-3)
+    doc["components"][wake["name"]] = wake
+    refusals = convert(doc).refusals
+    assert any(
+        r.construct == "no-op mode effect on a shared attribute" and "P1__fail" in r.detail for r in refusals
+    ), refusals
+
+
+# --- M4 U13: triggered outputs ----------------------------------------------
+
+
+def trigger_out(name: str, logic="or", up=0.0, down=0.0, produced=True, cond=None) -> dict:
+    spec = flow_out(name, cond=cond, produced=produced)
+    spec.update(cls="FlowOutOnTrigger", trigger_logic=logic, trigger_time_up=up, trigger_time_down=down)
+    return spec
+
+
+def trigger_plant(logic="or", up=2.0, down=1.0, wired=1, sources=1, cond=None, backup_mode=False) -> dict:
+    """Sources feeding the trigger of a backup, and the backup's triggered
+    output to a sink: the backup feeds while its trigger is absent."""
+    components = [
+        component(f"S{i}", [flow_out("power", produced=True)], class_name="Signal") for i in range(1, sources + 1)
+    ]
+    backup_flows = [flow_in("sig"), trigger_out("power", logic=logic, up=up, down=down, cond=cond)]
+    components += [
+        component("B", backup_flows, class_name="Backup"),
+        component("sink", [flow_in("power")], class_name="Sink"),
+        event("fed", [[{"obj": "sink", "attr": "power_fed_in", "ope": "==", "value": True}]]),
+    ]
+    components += [
+        exp_mode("fail", [f"S{i}"], {"power_fed_available_out": False}, rate=0.3, repair=0.5)
+        for i in range(1, sources + 1)
+    ]
+    if backup_mode:
+        components.append(exp_mode("fail", ["B"], {"power_fed_available_out": False}, rate=0.2, repair=0.4))
+    connections = [
+        {"source": f"S{i}", "source_box": "power_out", "target": "B", "target_box": "power_trigger_in"}
+        for i in range(1, wired + 1)
+    ] + [link("B", "sink", "power")]
+    return document(components, connections)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        dict(),
+        dict(logic="and"),
+        dict(logic=2, sources=3, wired=3),
+        dict(backup_mode=True),
+        dict(cond=[["sig"]]),
+    ],
+    ids=["or", "and", "k_of_n", "backup_mode", "conditioned"],
+)
+def test_a_triggered_output_converts_and_matches(shape):
+    doc = trigger_plant(**shape)
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    (use,) = [u for t in types_of(conversion).values() for u in t["uses"] if u["fragment"] == "std.bool_flow_out_trigger"]
+    assert conversion.rename["B.power_trigger.power_trigger_up"] == "B.power_trigger.power_trigger_up"
+    comparison = compare_routes(doc, conversion, t_max=40.0, seeds=range(10))
+    assert comparison.identical, comparison.detail
+    assert comparison.level == "replay"
+
+
+@pytest.mark.parametrize("up", [0.0, 2.0])
+def test_an_unwired_trigger_is_armed_only_without_a_wait(up):
+    doc = trigger_plant(logic="and", up=up, wired=0)
+    conversion = convert(doc)
+    assert conversion.converted, conversion.refusals
+    backup = next(i for i in conversion.system["system"]["instances"] if i["name"] == "B")
+    (use,) = [u for u in types_of(conversion)[backup["type"]]["uses"] if u["fragment"] == "std.bool_flow_out_trigger"]
+    armed = {**use["with"], **backup.get("with", {})}.get("armed")
+    assert armed is (up == 0.0), (use, backup)
+    assert compare_routes(doc, conversion, t_max=10.0, seeds=range(3)).identical
+
+
+def test_a_wrongly_armed_trigger_is_reported_divergent():
+    doc = trigger_plant(logic="and", up=0.0, wired=0)
+    wrong = copy.deepcopy(convert(doc))
+    for ty in wrong.library["library"]["types"]:
+        for use in ty["uses"]:
+            if use["fragment"] == "std.bool_flow_out_trigger":
+                use["with"]["armed"] = False
+    comparison = compare_routes(doc, wrong, t_max=10.0, seeds=range(3))
+    assert not comparison.identical
+
+
+def test_a_negated_triggered_output_is_refused_by_name():
+    doc = trigger_plant()
+    for entry in doc["components"]["B"]["flows"]:
+        if entry["cls"] == "FlowOutOnTrigger":
+            entry["negate"] = True
+    # The declaration reader refuses it already; the converter would too.
+    assert not convert(doc).converted
+
+
+def test_a_held_production_write_is_never_dropped_as_a_no_op():
+    """A conditioned output's production is the condition's to write: a mode
+    holding it stays refused, whatever value it holds."""
+    doc = two_pumps()
+    doc["components"]["P1__fail"]["failure_effects"] = {"water_prod_available": True}
+    constructs = {r.construct for r in convert(doc).refusals}
+    assert "effect on a non-targetable attribute" in constructs, constructs
+
+
+def test_a_rest_value_on_a_persistent_gate_the_mode_does_not_hold_is_refused_by_name():
+    """The declaration route refuses a repair effect on a persistent gate
+    with no failure counterpart."""
+    doc = _persistent(two_pumps(), "P1")
+    doc["components"]["P1__fail"]["failure_effects"] = {"water_prod_available": False}
+    doc["components"]["P1__fail"]["repair_effects"] = {"water_fed_available_out": True}
+    refusals = convert(doc).refusals
+    assert any(
+        r.construct == "availability not reset (`var_fed_available_out_reset` false)" for r in refusals
+    ), refusals

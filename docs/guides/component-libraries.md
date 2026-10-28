@@ -314,13 +314,20 @@ blocking construct of a component and of a mode, and never dropped: a
 conversion with one refusal yields no documents. In this version the
 converter carries discrete flows, negated outputs (the `negate` parameter
 of `std.bool_flow_out` and `std.bool_source_out`), temporised outputs
-(`std.bool_flow_out_tempo`), gates fed by outputs, single-target timed and
-on-demand modes with their occurrence and repair conditions, common-cause
-modes as study groups (`common_cause_groups`, an external mode with its
-effect step) and events. It refuses continuous flows and capacities,
-triggered outputs, production operands that compare a quantity (a negated
-operand converts through `std.bool_not`), conditions on a common-cause
-group, on-demand repair laws, pulse and repair effects, and controllers.
+(`std.bool_flow_out_tempo`), triggered outputs (`std.bool_flow_out_trigger`,
+armed when nothing feeds the trigger port and `time_up` is zero), gates fed
+by outputs, single-target timed and on-demand modes with their occurrence
+and repair conditions, common-cause modes as study groups
+(`common_cause_groups`, an external mode with its effect step) and events.
+A repair effect holding an attribute's initial value is the rest the library
+already has; a mode effect holding the initial value is a no-op and is
+dropped, unless another mode writes that attribute; an availability that is
+never reset (`var_fed_available_out_reset: false`) converts while no mode
+writes it. It refuses continuous flows and capacities, production operands
+that compare a quantity (a negated operand converts through
+`std.bool_not`), conditions on a common-cause group, on-demand repair laws,
+pulse effects, a repair effect holding another value than the initial one,
+a mode writing a persistent availability, and controllers.
 
 `compare_routes` runs the declaration through both routes, the
 declaration reader and the converted library, and says whether they agree.
