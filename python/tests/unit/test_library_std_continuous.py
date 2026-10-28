@@ -394,6 +394,7 @@ BOOLEAN_FRAGMENTS = {
     "bool_flow_out",
     "bool_source_out",
     "bool_flow_out_tempo",
+    "bool_flow_out_trigger",
     "bool_not",
     "logic_gate",
     "state_out",
