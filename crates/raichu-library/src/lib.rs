@@ -52,4 +52,4 @@ pub use expand::{expand, Expansion};
 pub use instantiate::CombineRule;
 pub use order::derive_evaluation_order;
 pub use provenance::{Origin, Provenance};
-pub use std_library::{standard_library, STD};
+pub use std_library::{standard_library, STD, STD_UNBOUNDED_RATE};

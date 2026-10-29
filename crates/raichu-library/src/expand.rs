@@ -6,6 +6,7 @@ use crate::error::{pointer_index, pointer_key, DocumentKind, ExpandError};
 use crate::instantiate::{instantiate, ExpandedInstance, LibrarySet};
 use crate::names::split_public;
 use crate::provenance::{Origin, Provenance};
+use crate::std_library::{CONTINUOUS_FLOW_FRAGMENTS, STD_UNBOUNDED_RATE};
 use crate::strict::typed;
 use raichu_expr::PortRef;
 use raichu_model::{Connection, Indicator, Model, ModelSource, PortDir};
@@ -157,6 +158,7 @@ pub fn expand(
     // effect steps at a shared date, as PyCATSHOO's mode components after
     // the targets carrying their mirrors.
     expansion.model.components.extend(groups);
+    expansion.model.unbounded_rate = unbounded_rate(system, &expansion.provenance)?;
     // The sweep order is derived, never authored (KTD14). A model the
     // derivation cannot read is structurally invalid, and validation below
     // reports it with its origin.
@@ -191,6 +193,43 @@ fn restate(message: &str, provenance: &Provenance) -> ExpandError {
             "",
             format!("the expanded model is invalid: {message}"),
         ),
+    }
+}
+
+/// The `unbounded_rate` of the expanded model.
+///
+/// An instance applying a standard continuous flow fragment makes the model
+/// a continuous network, which carries the magnitude the standard fragments
+/// write for "unbounded" ([`STD_UNBOUNDED_RATE`]), as the muscadet plugin
+/// declares it on every system with a continuous flow: without it the
+/// engine would integrate that magnitude as a rate instead of refusing it
+/// by name. Such a system may state only that magnitude; another system
+/// declares the one it states, or none.
+fn unbounded_rate(
+    system: &SystemModel,
+    provenance: &Provenance,
+) -> Result<Option<f64>, ExpandError> {
+    let continuous = provenance.elements.values().any(|origin| {
+        origin
+            .fragment
+            .as_deref()
+            .is_some_and(|f| CONTINUOUS_FLOW_FRAGMENTS.contains(&f))
+    });
+    match (continuous, system.unbounded_rate) {
+        (false, stated) => Ok(stated),
+        (true, None) => Ok(Some(STD_UNBOUNDED_RATE)),
+        #[allow(clippy::float_cmp)] // the same constant, not a computed value
+        (true, Some(stated)) if stated == STD_UNBOUNDED_RATE => Ok(Some(stated)),
+        (true, Some(stated)) => Err(ExpandError::new(
+            DocumentKind::System,
+            "/system/unbounded_rate",
+            format!(
+                "system `{}` states unbounded_rate {stated:e}, but it applies the standard \
+                 continuous flow fragments, whose unbounded magnitude is {STD_UNBOUNDED_RATE:e}: \
+                 state that one or none",
+                system.name
+            ),
+        )),
     }
 }
 

@@ -280,6 +280,12 @@ pub struct SystemModel {
     /// Sequence-analysis targets, in the core form.
     #[serde(default)]
     pub targets: Vec<Target>,
+    /// The model's `unbounded_rate`: the magnitude no integrated rate may
+    /// reach. A system applying the standard continuous flow fragments
+    /// gets the standard one without stating it, and may state only that
+    /// one; any other system declares none unless it states it here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unbounded_rate: Option<f64>,
     /// Free text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
