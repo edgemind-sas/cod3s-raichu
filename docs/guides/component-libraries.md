@@ -387,7 +387,11 @@ effects are observed; one that is never armed leaves the comparison at
 `level="replay-partial"`, not identical, and names it in `unexercised`. So
 does a draw whose mean delay is below the clock's resolution at its date
 (an exponential law at rate `1e100`): its place among the same-date
-events is not replayable. `method="statistical"` compares
+events is not replayable. Both routes run the same engine, so values and
+event dates must agree exactly; a difference within `1e-12` (relative, or
+absolute near zero), which only float arithmetic done in another order
+produces, is accepted and reported as `level="tolerance"`, naming what
+needed it, never as `exact`. `method="statistical"` compares
 means over at least 30 independent runs per route instead and says so in
 `level`: it only shows that no difference was detected at that sample
 size.
