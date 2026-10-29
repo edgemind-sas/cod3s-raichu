@@ -380,6 +380,10 @@ def test_the_fragment_agrees_with_its_plugin_counterpart(bench):
     objects, instances, connections, modes, t_max = BENCHES[bench]
     plugin = plugin_model(bench, objects, connections)
     library = library_model(bench, instances, connections, modes, plugin["indicators"])
+    # The same guard on both: without it the library-built network would
+    # integrate the "unbounded" magnitude where the plugin's refuses it.
+    guards = [pyraichu.model_body(m).get("unbounded_rate") for m in (library, plugin)]
+    assert guards[0] == guards[1] is not None
     plugin_events, plugin_samples = run(plugin, t_max)
     library_events, library_samples = run(library, t_max)
     assert library_events == plugin_events

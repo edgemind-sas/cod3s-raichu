@@ -67,6 +67,7 @@ pub fn check_library(library: &Library, libraries: &[Library]) -> Vec<(String, T
                         connections: Vec::new(),
                         indicators: Vec::new(),
                         targets: Vec::new(),
+                        unbounded_rate: None,
                         description: None,
                         metadata: None,
                     };

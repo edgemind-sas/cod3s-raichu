@@ -234,8 +234,18 @@ a compromise mode starts a dormant service function.
 | `instances` | `[{"name": "B1", "type": "Battery", "parameters": {"capacity": 100}}]` |
 | `connections` | `[{"from": "Srv.f_service_out", "to": "Proc.f_service_in"}]`, from an out port to an in port, with an optional edge `name` |
 | `indicators`, `targets` | core indicators and sequence targets, referencing instances by name |
+| `unbounded_rate` | the model's [unbounded rate](model-schema.md#unbounded-rate), optional; see below |
 
 Each instance becomes a component named after it.
+
+A system with an instance applying `std.continuous_flow_out`,
+`std.continuous_flow_in` or `std.volume_flow` is a continuous network, and its model declares
+`unbounded_rate` at 1e30, the magnitude the standard fragments write for a
+ceiling nobody set (a volume's `serve_rate`), as the muscadet plugin does on
+every system with a continuous flow. The engine then refuses by name any
+integrated rate reaching it, instead of draining a stock at that magnitude.
+Such a system may state `unbounded_rate` only at that value; any other
+system declares none unless it states one.
 
 ## Study
 
