@@ -1704,3 +1704,60 @@ def test_a_rest_held_writer_beside_another_writer_is_refused_by_name():
     mode["repair_effects"] = {"water_fed_available_out": True}
     mode["failure_effects_trans"] = {"water_fed_available_out": False}
     assert "ill-posed sharing of a handed-back attribute" in _constructs(doc)
+
+
+# --- M6 U17: the tolerance level of the comparison --------------------------
+
+
+def _shifted_trip(scale: float):
+    """The own-section delay mode declaration, its converted trip delay
+    multiplied by `scale` on the library route only."""
+    source = component("S", [flow_out("power", produced=True)], source_cls="Source")
+    source["failure_modes"] = [own_failure_mode("wear", "power")]
+    block = component("B", [flow_in("power"), flow_out("power", [["power"]])], source_cls="Block")
+    block["failure_modes"] = [own_failure_mode("trip", "power", law="delay", failure=7.0, repair=2.0)]
+    declaration = document(
+        [source, block, component("T", [flow_in("power")], source_cls="Target")],
+        [link("S", "B", "power"), link("B", "T", "power")],
+    )
+    conversion = copy.deepcopy(convert(declaration))
+    for activation in conversion.study["study"]["modes"]:
+        if activation["mode"] == "trip":
+            activation["occurrence"]["time"] *= scale
+    return declaration, conversion
+
+
+def test_an_event_date_within_float_reordering_is_reported_at_the_tolerance_level():
+    declaration, conversion = _shifted_trip(1.0 + 1e-14)
+    comparison = compare_routes(declaration, conversion, t_max=200.0, seeds=range(3))
+    assert comparison.identical, comparison.detail
+    assert comparison.level == "tolerance"
+    assert "B.trip" in comparison.detail
+
+
+def test_an_event_date_beyond_float_reordering_is_divergent():
+    declaration, conversion = _shifted_trip(1.0 + 1e-8)
+    assert not compare_routes(declaration, conversion, t_max=200.0, seeds=range(3)).identical
+
+
+def test_observed_values_match_exactly_within_float_reordering_only():
+    from pyraichu.muscadet.convert import _tolerated
+
+    assert _tolerated({"a": True, "x": 1.0}, {"a": True, "x": 1.0}) == set()
+    assert _tolerated({"x": 3.0, "y": 0.0}, {"x": 3.0 * (1.0 + 1e-14), "y": 1e-15}) == {"x", "y"}
+    with pytest.raises(ValueError, match="`x`"):
+        _tolerated({"x": 3.0}, {"x": 3.0 * (1.0 + 1e-8)})
+    with pytest.raises(ValueError, match="`a`"):
+        _tolerated({"a": True}, {"a": False})
+
+
+def test_an_armed_schedule_within_float_reordering_is_named_but_not_its_shifted_age():
+    from pyraichu.muscadet.convert import _armed_tolerated
+
+    law = '{"law": "exp"}'
+    exact = {"B.trip": (law, 2.0, 1.0, False, 0.5)}
+    assert _armed_tolerated(exact, dict(exact)) == set()
+    shifted_age = {"B.trip": (law, 2.0, 1.0 * (1.0 + 1e-14), False, 0.5)}
+    assert _armed_tolerated(exact, shifted_age) == set()
+    near = {"B.trip": (law, 2.0 * (1.0 + 1e-14), 1.0, False, 0.5 * (1.0 + 1e-14))}
+    assert _armed_tolerated(exact, near) == {"armed B.trip"}

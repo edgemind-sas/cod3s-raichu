@@ -1831,17 +1831,20 @@ class RouteComparison:
     trajectories replayed in deferred mode, every converted random
     transition fired at least once), ``replay-partial`` (the replay found no
     divergence, but the transitions in ``unexercised`` never fired, so their
-    effects were never observed) or ``statistical`` (attribute means over
-    independent runs, a two-sample z-test per observation, which only shows
-    that no difference was detected at that sample size). A comparison
+    effects were never observed), ``tolerance`` (an exact or replayed
+    comparison in which some values or event dates agreed only within the
+    float-reordering tolerance of 1e-12, named in ``detail``) or
+    ``statistical`` (attribute means over independent runs, a two-sample
+    z-test per observation, which only shows that no difference was
+    detected at that sample size). A comparison
     stops at ``structure``, not identical, when both routes would not record
     the same sequence events (monitored transitions, their kinds and cycle
     groups), before any trajectory runs.
 
-    ``identical`` says no difference was found. Only ``exact`` and
-    ``replay`` make it a proof of equality: a partial replay is reported as
-    not identical, and a statistical pass only bounds the difference by the
-    test's power.
+    ``identical`` says no difference was found. Only ``exact``, ``replay``
+    and ``tolerance`` make it a proof of equality: a partial replay is
+    reported as not identical, and a statistical pass only bounds the
+    difference by the test's power.
     """
 
     identical: bool
@@ -1915,13 +1918,6 @@ def _snapshot(session, attributes: list[str], states: list[str]) -> dict[str, An
     values = {name: session.attribute(name) for name in attributes}
     values.update({name: session.state(name) for name in states})
     return values
-
-
-def _first_difference(left: dict, right: dict) -> str:
-    for key, value in left.items():
-        if value != right.get(key):
-            return f"`{key}`: declaration {value!r}, library {right.get(key)!r}"
-    return "values differ"
 
 
 #: Laws that fire without a random date.
@@ -2007,6 +2003,37 @@ def _same_value(a, b, *, time: bool) -> bool:
     return a == b
 
 
+#: Float-reordering tolerance of the comparison: both routes run the same
+#: engine and integrator, so a value or a date may differ only by the order
+#: in which deterministic arithmetic was done (the contract's 1e-12), never
+#: by the integrator tolerance meant for two different engines.
+_TOLERANCE = 1e-12
+
+
+def _within_tolerance(a: float, b: float) -> bool:
+    return math.isclose(a, b, rel_tol=_TOLERANCE, abs_tol=_TOLERANCE)
+
+
+def _tolerated(left: dict[str, Any], right: dict[str, Any]) -> set[str]:
+    """The keys of `left` whose value differs from `right`'s within float
+    reordering only (1e-12 relative, or absolute near zero). Raises
+    `ValueError` naming the first key that differs beyond it."""
+    tolerated = set()
+    for key, value in left.items():
+        other = right.get(key)
+        if value == other:
+            continue
+        if (
+            isinstance(value, float)
+            and isinstance(other, float)
+            and _within_tolerance(value, other)
+        ):
+            tolerated.add(key)
+            continue
+        raise ValueError(f"`{key}`: declaration {value!r}, library {other!r}")
+    return tolerated
+
+
 def _same_entry(a: tuple | None, b: tuple | None) -> bool:
     if a is None or b is None:
         return a is b
@@ -2019,6 +2046,24 @@ def _same_armed(left: dict[str, tuple], right: dict[str, tuple]) -> bool:
     """Whether two routes arm the same transitions with the same laws,
     dates and ages, floats compared within the float tolerance."""
     return left.keys() == right.keys() and all(_same_entry(left[n], right[n]) for n in left)
+
+
+#: Position of the running age in an :func:`_armed` entry: it is read at a
+#: shifted date on both routes, so its reordering is the reading's, not a
+#: difference between the routes.
+_ARMED_AGE = 2
+
+
+def _armed_tolerated(left: dict[str, tuple], right: dict[str, tuple]) -> set[str]:
+    """`armed <name>` for every transition both routes arm alike only within
+    the float tolerance on its armed date or hazard (entries already found
+    the same by :func:`_same_entry`)."""
+    return {
+        f"armed {name}"
+        for name, entry in left.items()
+        if (other := right.get(name)) is not None
+        and any(i != _ARMED_AGE and x != y for i, (x, y) in enumerate(zip(entry, other)))
+    }
 
 
 def _armed_by_stepping(session, name: str, date: float, limit: int = 10_000) -> bool:
@@ -2092,6 +2137,7 @@ def _replay(
     *,
     recorded: bool,
     prefer: frozenset[str] = frozenset(),
+    tolerated: set[str] | None = None,
 ) -> set[str]:
     """Replay `plan` on both routes in deferred mode and return the
     declaration transitions fired.
@@ -2116,7 +2162,12 @@ def _replay(
         left = _snapshot(sessions[0], attributes, states)
         right = _snapshot(sessions[1], attributes, states)
         if left != right:
-            raise _Divergence(f"{when}: {_first_difference(left, right)}")
+            try:
+                near = _tolerated(left, right)
+            except ValueError as difference:
+                raise _Divergence(f"{when}: {difference}") from None
+            if tolerated is not None:
+                tolerated.update(near)
         armed = [_armed(sessions[0], rename), _armed(sessions[1], None)]
         if not _same_armed(armed[0], armed[1]):
             names = sorted(set(armed[0]) | set(armed[1]))
@@ -2125,6 +2176,8 @@ def _replay(
                 f"{when}: armed transition `{differing}` differs: declaration "
                 f"{armed[0].get(differing)}, library {armed[1].get(differing)}"
             )
+        if tolerated is not None:
+            tolerated.update(_armed_tolerated(armed[0], armed[1]))
 
     def held(session) -> str | None:
         """The held choice `session` stopped before, if any."""
@@ -2221,6 +2274,8 @@ def _replay(
             raise _Divergence(
                 f"at t={date}: armed transition `{mapped}` differs: declaration {left}, library {right}"
             )
+        if tolerated is not None and left is not None:
+            tolerated.update(_armed_tolerated({mapped: left}, {mapped: right}))
         targets = branches[0].get(transition, [])
         branch = None
         if len(targets) > 1:
@@ -2262,10 +2317,21 @@ def _replay(
         _net_changes(sessions[1].history(), {name: name for name in renamed}),
     ]
     if histories[0] != histories[1]:
-        diverging = next(
-            (a, b) for a, b in zip(histories[0] + [None], histories[1] + [None]) if a != b
-        )
-        raise _Divergence(f"event histories part at {diverging}")
+        same_length = len(histories[0]) == len(histories[1])
+        for a, b in zip(histories[0] + [None], histories[1] + [None]):
+            if a == b:
+                continue
+            if (
+                same_length
+                and a is not None
+                and b is not None
+                and a[1] == b[1]
+                and _within_tolerance(a[0], b[0])
+            ):
+                if tolerated is not None:
+                    tolerated.add(f"date of {a[1]}")
+                continue
+            raise _Divergence(f"event histories part at {(a, b)}")
     return {e.transition for e in sessions[0].history() if e.transition in stochastic}
 
 
@@ -2463,6 +2529,7 @@ def compare_routes(
     stochastic = bool(declared_draws or _stochastic_names(library_model))
     seeds = list(range(10) if seeds is None else seeds) if stochastic else [0]
     level = "replay" if stochastic else "exact"
+    tolerated: set[str] = set()
     replay = functools.partial(
         _replay,
         declared_model,
@@ -2472,6 +2539,7 @@ def compare_routes(
         t_max=t_max,
         attributes=attributes,
         states=states,
+        tolerated=tolerated,
     )
     fired: set[str] = set()
     for seed in seeds:
@@ -2546,5 +2614,15 @@ def compare_routes(
             f"{observed} agree, but {len(unexercised)} transitions never fired: {list(unexercised)[:5]}",
             len(seeds),
             unexercised,
+        )
+    if tolerated:
+        # Agreement that needed the float-reordering tolerance is reported
+        # under its own level, never as exact.
+        named = ", ".join(f"`{name}`" for name in sorted(tolerated)[:5])
+        return RouteComparison(
+            True,
+            "tolerance",
+            f"{observed} agree on every trajectory ({level}), within {_TOLERANCE:g} on {named}",
+            len(seeds),
         )
     return RouteComparison(True, level, f"{observed} agree on every trajectory", len(seeds))
