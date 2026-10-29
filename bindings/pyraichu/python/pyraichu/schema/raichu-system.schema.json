@@ -1,5 +1,40 @@
 {
   "$defs": {
+    "AggOp": {
+      "description": "Aggregation over the values connected to an *in* port\n(sum, count, all, any, mean, median).",
+      "oneOf": [
+        {
+          "const": "sum",
+          "description": "Sum of connected numeric values.",
+          "type": "string"
+        },
+        {
+          "const": "count",
+          "description": "Number of connections.",
+          "type": "string"
+        },
+        {
+          "const": "all",
+          "description": "True iff all connected boolean values are true.",
+          "type": "string"
+        },
+        {
+          "const": "any",
+          "description": "True iff at least one connected boolean value is true.",
+          "type": "string"
+        },
+        {
+          "const": "mean",
+          "description": "Arithmetic mean of connected numeric values (M3: sensor\naveraging: cod3s `compute_reference_mean`). 0.0 with no\nconnection.",
+          "type": "string"
+        },
+        {
+          "const": "median",
+          "description": "Median of connected numeric values (M3: redundant-sensor\nmedian/vote). Even count averages the\ntwo central values; 0.0 with no connection.",
+          "type": "string"
+        }
+      ]
+    },
     "AttrRef": {
       "additionalProperties": false,
       "description": "Reference to an attribute by hierarchical name: the *authoring /\nserialized* form. Build-time validation resolves it to dense indices\n(typed errors on dangling references; no stringly-typed lookups at\nsimulation time).",
@@ -18,6 +53,26 @@
         "attribute"
       ],
       "type": "object"
+    },
+    "BoolOp": {
+      "description": "Boolean connectives.",
+      "oneOf": [
+        {
+          "const": "and",
+          "description": "Conjunction of all arguments.",
+          "type": "string"
+        },
+        {
+          "const": "or",
+          "description": "Disjunction of all arguments.",
+          "type": "string"
+        },
+        {
+          "const": "not",
+          "description": "Negation (exactly one argument; enforced by model validation).",
+          "type": "string"
+        }
+      ]
     },
     "CmpOp": {
       "description": "Comparison operators (guards on discrete state).",
@@ -53,6 +108,456 @@
           "type": "string"
         }
       ]
+    },
+    "Expr": {
+      "description": "A serializable expression tree (M0 subset).\n\nThe serde representation is tag-based (`op` field), so adding variants\nin later milestones (arithmetic, math functions, ODE right-hand sides)\nkeeps old model files loadable.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Literal constant.",
+          "properties": {
+            "op": {
+              "const": "const",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Value",
+              "description": "The constant value."
+            }
+          },
+          "required": [
+            "op",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read an attribute.",
+          "properties": {
+            "attr": {
+              "$ref": "#/$defs/AttrRef",
+              "description": "The referenced attribute."
+            },
+            "op": {
+              "const": "attr",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "attr"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Aggregate the values connected to an in-port.",
+          "properties": {
+            "agg": {
+              "$ref": "#/$defs/AggOp",
+              "description": "The aggregation operator."
+            },
+            "channel": {
+              "description": "Optional **channel selector**. Absent (the default) reads the\nattribute each connected out-port exports: its single, shared\nvalue. Present, it reads instead the per-connection quantity\nthe compiler materialises for that channel, so two consumers\non the same out-port receive different numbers (the\nconservative-flow shape). Every connected out-port must\ndeclare the named channel; validation refuses otherwise.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "const": "port_agg",
+              "type": "string"
+            },
+            "port": {
+              "$ref": "#/$defs/PortRef",
+              "description": "The referenced in-port."
+            }
+          },
+          "required": [
+            "op",
+            "port",
+            "agg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Compare two sub-expressions.",
+          "properties": {
+            "cmp": {
+              "$ref": "#/$defs/CmpOp",
+              "description": "The comparison operator."
+            },
+            "lhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Left operand."
+            },
+            "op": {
+              "const": "cmp",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Right operand."
+            }
+          },
+          "required": [
+            "op",
+            "cmp",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Combine boolean sub-expressions.",
+          "properties": {
+            "args": {
+              "description": "Operands (`Not` takes exactly one; validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "bool_op": {
+              "$ref": "#/$defs/BoolOp",
+              "description": "The boolean connective."
+            },
+            "op": {
+              "const": "bool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "bool_op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "True while the referenced automaton is in the given state:\nmuscadet links state changes to attribute changes through it.",
+          "properties": {
+            "op": {
+              "const": "state_active",
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/$defs/StateRef",
+              "description": "The referenced state."
+            }
+          },
+          "required": [
+            "op",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary sum (M1).",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "add",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Binary subtraction.",
+          "properties": {
+            "lhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Minuend."
+            },
+            "op": {
+              "const": "sub",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Subtrahend."
+            }
+          },
+          "required": [
+            "op",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary product.",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "mul",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Binary division (always evaluates as float).",
+          "properties": {
+            "lhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Dividend."
+            },
+            "op": {
+              "const": "div",
+              "type": "string"
+            },
+            "rhs": {
+              "$ref": "#/$defs/Expr",
+              "description": "Divisor."
+            }
+          },
+          "required": [
+            "op",
+            "lhs",
+            "rhs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary minimum (clamping: `min(max(lo, v), hi)` patterns).",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "min",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "N-ary maximum.",
+          "properties": {
+            "args": {
+              "description": "Operands (≥ 1, validated at model build).",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "max",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Conditional expression: with [`Expr::StateActive`] as condition\nit covers the piecewise-by-automaton-state right-hand sides of\nthe corpus (empty/full tank freezing `dv/dt`).",
+          "properties": {
+            "cond": {
+              "$ref": "#/$defs/Expr",
+              "description": "Boolean condition."
+            },
+            "op": {
+              "const": "if",
+              "type": "string"
+            },
+            "otherwise": {
+              "$ref": "#/$defs/Expr",
+              "description": "Value otherwise."
+            },
+            "then": {
+              "$ref": "#/$defs/Expr",
+              "description": "Value when the condition holds."
+            }
+          },
+          "required": [
+            "op",
+            "cond",
+            "then",
+            "otherwise"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sine (M4: sinusoidal sources, RLC generator).",
+          "properties": {
+            "arg": {
+              "$ref": "#/$defs/Expr",
+              "description": "Operand (radians)."
+            },
+            "op": {
+              "const": "sin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "arg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Natural exponential `e^arg` (state-dependent failure rates:\nthe heated-tank λ(T) of the Aldemir benchmark).",
+          "properties": {
+            "arg": {
+              "$ref": "#/$defs/Expr",
+              "description": "Operand."
+            },
+            "op": {
+              "const": "exp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "arg"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Current simulation time (M4). Meaningful in continuously\nevaluated expressions (equations, watched margins, guards);\nsensitive functions are *not* re-triggered by the passage of\ntime alone.",
+          "properties": {
+            "op": {
+              "const": "time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FmuBinding": {
+      "additionalProperties": false,
+      "description": "A binding between one model attribute and one variable in an imported FMU.\nThe FMU description resolves the variable name and type before execution.",
+      "properties": {
+        "attribute": {
+          "$ref": "#/$defs/AttrRef",
+          "description": "Attribute read for an input, or written by an output."
+        },
+        "variable": {
+          "description": "Variable name in the FMU description.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attribute",
+        "variable"
+      ],
+      "type": "object"
+    },
+    "FmuParameter": {
+      "additionalProperties": false,
+      "description": "An initial value assigned to an FMU parameter before simulation starts.",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/Value",
+          "description": "Typed initial value, checked against the FMU description at preparation."
+        },
+        "variable": {
+          "description": "Parameter name in the FMU description.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "variable",
+        "value"
+      ],
+      "type": "object"
+    },
+    "FmuUnit": {
+      "additionalProperties": false,
+      "description": "One imported FMI co-simulation unit and its model-facing bindings.\nLoading its native library requires a separate run-side permission.",
+      "properties": {
+        "inputs": {
+          "description": "Values sampled from model attributes and written to FMU inputs.",
+          "items": {
+            "$ref": "#/$defs/FmuBinding"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Name unique among the model's units.",
+          "type": "string"
+        },
+        "outputs": {
+          "description": "FMU outputs written to model attributes at communication points.",
+          "items": {
+            "$ref": "#/$defs/FmuBinding"
+          },
+          "type": "array"
+        },
+        "parameters": {
+          "description": "Start values for FMU parameters.",
+          "items": {
+            "$ref": "#/$defs/FmuParameter"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "FMU archive path, resolved by the loader against its base directory.",
+          "type": "string"
+        },
+        "step": {
+          "description": "Communication interval in model time units; finite and positive.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "step"
+      ],
+      "type": "object"
     },
     "Indicator": {
       "description": "A quantity recorded during simulation.",
@@ -190,6 +695,266 @@
       ],
       "type": "object"
     },
+    "PortRef": {
+      "additionalProperties": false,
+      "description": "Reference to a port by hierarchical name (authoring form).",
+      "properties": {
+        "component": {
+          "description": "Name of the component owning the port.",
+          "type": "string"
+        },
+        "port": {
+          "description": "Name of the port inside the component.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "port"
+      ],
+      "type": "object"
+    },
+    "Program": {
+      "additionalProperties": false,
+      "description": "A mixed-integer program solved when its discrete inputs change.",
+      "properties": {
+        "constraints": {
+          "default": [],
+          "description": "Ranged linear constraints.",
+          "items": {
+            "$ref": "#/$defs/ProgramConstraint"
+          },
+          "type": "array"
+        },
+        "feasible": {
+          "$ref": "#/$defs/AttrRef",
+          "description": "Boolean attribute receiving solve feasibility."
+        },
+        "name": {
+          "description": "Name unique within the model.",
+          "type": "string"
+        },
+        "node_limit": {
+          "description": "Maximum branch-and-bound nodes, defaulted by the solver.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "objective": {
+          "$ref": "#/$defs/Expr",
+          "description": "Primary affine objective."
+        },
+        "objective_value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttrRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional float attribute receiving the optimal objective."
+        },
+        "sense": {
+          "$ref": "#/$defs/ProgramSense",
+          "description": "Primary objective direction."
+        },
+        "tie_break": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProgramTieBreak"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent uses decision-order lexicographic minimisation."
+        },
+        "variables": {
+          "description": "Decision attributes in lexicographic default order.",
+          "items": {
+            "$ref": "#/$defs/ProgramVariable"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "variables",
+        "sense",
+        "objective",
+        "feasible"
+      ],
+      "type": "object"
+    },
+    "ProgramConstraint": {
+      "additionalProperties": false,
+      "description": "One ranged linear constraint on a program's decisions.",
+      "properties": {
+        "expr": {
+          "$ref": "#/$defs/Expr",
+          "description": "Affine expression in the program's decisions."
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expr"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional lower bound."
+        },
+        "name": {
+          "description": "Name unique within the program.",
+          "type": "string"
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expr"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional upper bound."
+        }
+      },
+      "required": [
+        "name",
+        "expr"
+      ],
+      "type": "object"
+    },
+    "ProgramSense": {
+      "description": "Objective direction of a model-level program.",
+      "oneOf": [
+        {
+          "const": "minimize",
+          "description": "Minimise the objective.",
+          "type": "string"
+        },
+        {
+          "const": "maximize",
+          "description": "Maximise the objective.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProgramTieBreak": {
+      "description": "How equal primary optima are separated.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Use the solver's arbitrary optimum without a uniqueness guarantee.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Optimise the declared secondary objectives in order.",
+          "properties": {
+            "objectives": {
+              "items": {
+                "$ref": "#/$defs/ProgramTieObjective"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "objectives"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProgramTieObjective": {
+      "additionalProperties": false,
+      "description": "An optional secondary objective for deterministic lexicographic solving.",
+      "properties": {
+        "expr": {
+          "$ref": "#/$defs/Expr",
+          "description": "Affine expression in the decisions."
+        },
+        "sense": {
+          "$ref": "#/$defs/ProgramSense",
+          "description": "Optimisation direction."
+        }
+      },
+      "required": [
+        "sense",
+        "expr"
+      ],
+      "type": "object"
+    },
+    "ProgramVariable": {
+      "additionalProperties": false,
+      "description": "One decision attribute and its optional numeric bounds.",
+      "properties": {
+        "attribute": {
+          "$ref": "#/$defs/AttrRef",
+          "description": "Attribute whose value receives the optimal decision."
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expr"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lower bound, evaluated at each discrete solve."
+        },
+        "on_infeasible": {
+          "$ref": "#/$defs/Value",
+          "description": "Value published when the program is infeasible."
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expr"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Upper bound, evaluated at each discrete solve."
+        }
+      },
+      "required": [
+        "attribute",
+        "on_infeasible"
+      ],
+      "type": "object"
+    },
+    "StateRef": {
+      "additionalProperties": false,
+      "description": "Reference to an automaton state by hierarchical name (authoring form).",
+      "properties": {
+        "automaton": {
+          "description": "Name of the automaton.",
+          "type": "string"
+        },
+        "component": {
+          "description": "Name of the component owning the automaton.",
+          "type": "string"
+        },
+        "state": {
+          "description": "Name of the state.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "automaton",
+        "state"
+      ],
+      "type": "object"
+    },
     "SystemConnection": {
       "additionalProperties": false,
       "description": "A connection between two instance ports, written `Instance.port`.",
@@ -207,6 +972,32 @@
         },
         "to": {
           "description": "In port, `Instance.port`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "SystemInterfaceConnection": {
+      "additionalProperties": false,
+      "description": "A connection between two interfaces, `Instance.interface` on each\nside: one port connection per port, paired by port name (the core\ninterface connection).",
+      "properties": {
+        "from": {
+          "description": "One side, `Instance.interface`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Optional name, given to every port connection it expands to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "The other side, `Instance.interface`.",
           "type": "string"
         }
       },
@@ -235,6 +1026,13 @@
             "null"
           ]
         },
+        "fmu_units": {
+          "description": "FMI co-simulation units, in the core form, naming instances where\nthe core names components. A relative `path` resolves at run time\nagainst the system document's directory.",
+          "items": {
+            "$ref": "#/$defs/FmuUnit"
+          },
+          "type": "array"
+        },
         "indicators": {
           "default": [],
           "description": "Indicators, in the core form, referencing instances by name.",
@@ -251,6 +1049,13 @@
           },
           "type": "array"
         },
+        "interface_connections": {
+          "description": "Interface-to-interface connections.",
+          "items": {
+            "$ref": "#/$defs/SystemInterfaceConnection"
+          },
+          "type": "array"
+        },
         "library": {
           "$ref": "#/$defs/LibraryRef",
           "description": "The library this system instantiates."
@@ -261,6 +1066,13 @@
         "name": {
           "description": "System name.",
           "type": "string"
+        },
+        "programs": {
+          "description": "Mixed-integer programs, in the core form, naming instances where\nthe core names components. A program reads and writes attributes\nof several instances, so no type body can carry it.",
+          "items": {
+            "$ref": "#/$defs/Program"
+          },
+          "type": "array"
         },
         "targets": {
           "default": [],

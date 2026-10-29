@@ -171,6 +171,10 @@ pub struct Provenance {
     pub elements: BTreeMap<String, Origin>,
 }
 
+/// Element kinds a core message names in words before the element's name,
+/// with the provenance key prefix each one is recorded under.
+const NAMED_KINDS: [(&str, &str); 2] = [("FMU unit ", "fmu_unit"), ("program ", "program")];
+
 impl Provenance {
     /// The origin of the component `name`, when the expansion produced it.
     #[must_use]
@@ -184,8 +188,27 @@ impl Provenance {
     /// Core validation errors name the elements they refuse this way
     /// (`automaton \`C.a\` has unknown initial state ...`), which is how an
     /// error on the flat model is traced back to the document node.
+    ///
+    /// When the message names the kind of the element just before its name
+    /// (`FMU unit \`plant\``, `program \`pick\``), that kind is looked up
+    /// first: a program or an FMU unit may carry the name of an instance,
+    /// and is then traced to the system node that declares it, not to that
+    /// instance's type.
     #[must_use]
     pub fn locate(&self, message: &str) -> Option<(&str, &Origin)> {
+        let parts: Vec<&str> = message.split('`').collect();
+        for (index, token) in parts.iter().enumerate().skip(1).step_by(2) {
+            let before = parts[index - 1];
+            for (phrase, kind) in NAMED_KINDS {
+                if before.ends_with(phrase) {
+                    if let Some((key, origin)) =
+                        self.elements.get_key_value(&format!("{kind}:{token}"))
+                    {
+                        return Some((key.as_str(), origin));
+                    }
+                }
+            }
+        }
         let quoted: Vec<&str> = message.split('`').skip(1).step_by(2).collect();
         let mut best: Option<(&str, &Origin)> = None;
         for token in quoted {

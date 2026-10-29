@@ -235,8 +235,18 @@ a compromise mode starts a dormant service function.
 | `connections` | `[{"from": "Srv.f_service_out", "to": "Proc.f_service_in"}]`, from an out port to an in port, with an optional edge `name` |
 | `indicators`, `targets` | core indicators and sequence targets, referencing instances by name |
 | `unbounded_rate` | the model's [unbounded rate](model-schema.md#unbounded-rate), optional; see below |
+| `interface_connections` | `[{"from": "Pump.hydraulic", "to": "Valve.hydraulic"}]`, one [interface connection](model-schema.md#interface-connection) per entry, `Instance.interface` on each side, with an optional `name` |
+| `programs` | [mixed-integer programs](model-schema.md#program) in the core form |
+| `fmu_units` | [FMU units](model-schema.md#fmu-unit) in the core form |
 
-Each instance becomes a component named after it.
+Each instance becomes a component named after it, so a program or an FMU
+unit written in the core form names instances where the core names
+components (`{"component": "Pump", "attribute": "flow"}`). These three
+constructs bind several instances, which is why a system declares them and
+no type body can. A relative FMU `path` resolves when the model runs,
+against the system file's directory (the working directory for a system
+given as a string or a dictionary), and loading a system that declares an
+FMU unit needs `allow_fmu_import=True`, as a flat model does.
 
 A system with an instance applying `std.continuous_flow_out`,
 `std.continuous_flow_in` or `std.volume_flow` is a continuous network, and its model declares

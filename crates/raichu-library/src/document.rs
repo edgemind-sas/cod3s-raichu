@@ -258,6 +258,22 @@ pub struct SystemConnection {
     pub name: Option<String>,
 }
 
+/// A connection between two interfaces, `Instance.interface` on each
+/// side: one port connection per port, paired by port name (the core
+/// interface connection).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SystemInterfaceConnection {
+    /// One side, `Instance.interface`.
+    pub from: String,
+    /// The other side, `Instance.interface`.
+    pub to: String,
+    /// Optional name, given to every port connection it expands to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 /// A system: instances of library types, connected by ports.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -280,6 +296,21 @@ pub struct SystemModel {
     /// Sequence-analysis targets, in the core form.
     #[serde(default)]
     pub targets: Vec<Target>,
+    /// Interface-to-interface connections.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interface_connections: Vec<SystemInterfaceConnection>,
+    /// Mixed-integer programs, in the core form, naming instances where
+    /// the core names components. A program reads and writes attributes
+    /// of several instances, so no type body can carry it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<raichu_model::Program>"))]
+    pub programs: Vec<Value>,
+    /// FMI co-simulation units, in the core form, naming instances where
+    /// the core names components. A relative `path` resolves at run time
+    /// against the system document's directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<raichu_model::FmuUnit>"))]
+    pub fmu_units: Vec<Value>,
     /// The model's `unbounded_rate`: the magnitude no integrated rate may
     /// reach. A system applying the standard continuous flow fragments
     /// gets the standard one without stating it, and may state only that

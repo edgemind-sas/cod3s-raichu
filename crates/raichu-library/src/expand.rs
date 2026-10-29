@@ -9,7 +9,10 @@ use crate::provenance::{Origin, Provenance};
 use crate::std_library::{CONTINUOUS_FLOW_FRAGMENTS, STD_UNBOUNDED_RATE};
 use crate::strict::typed;
 use raichu_expr::PortRef;
-use raichu_model::{Connection, Indicator, Model, ModelSource, PortDir};
+use raichu_model::{
+    Connection, FmuUnit, Indicator, InterfaceConnection, InterfaceRef, Model, ModelSource, PortDir,
+    Program,
+};
 
 /// The result of an expansion.
 #[derive(Debug, Clone)]
@@ -107,6 +110,21 @@ pub fn expand(
         );
         indicators.push(indicator);
     }
+    let interface_connections = connect_interfaces(system, &instances, &mut provenance)?;
+    let mut programs = Vec::new();
+    for (i, raw) in system.programs.iter().enumerate() {
+        let pointer = pointer_index("/system/programs", i);
+        let program: Program = typed(raw, DocumentKind::System, &pointer, "")?;
+        provenance.insert(format!("program:{}", program.name), Origin::system(pointer));
+        programs.push(program);
+    }
+    let mut fmu_units = Vec::new();
+    for (i, raw) in system.fmu_units.iter().enumerate() {
+        let pointer = pointer_index("/system/fmu_units", i);
+        let unit: FmuUnit = typed(raw, DocumentKind::System, &pointer, "")?;
+        provenance.insert(format!("fmu_unit:{}", unit.name), Origin::system(pointer));
+        fmu_units.push(unit);
+    }
     let mut targets = Vec::new();
     for (i, target) in system.targets.iter().enumerate() {
         provenance.insert(
@@ -121,13 +139,13 @@ pub fn expand(
             name: system.name.clone(),
             components: Vec::new(),
             connections,
-            interface_connections: Vec::new(),
+            interface_connections,
             indicators,
             targets,
-            programs: Vec::new(),
+            programs,
             evaluation_order: None,
             unbounded_rate: None,
-            fmu_units: Vec::new(),
+            fmu_units,
             source: Some(ModelSource {
                 library: library.name.clone(),
                 library_version: library.version.clone(),
@@ -291,6 +309,86 @@ fn connect(
         });
     }
     Ok(out)
+}
+
+/// The system's interface connections, each side resolved to an interface
+/// its instance declares. The core pairs the ports and checks their
+/// directions when the model is validated.
+fn connect_interfaces(
+    system: &SystemModel,
+    instances: &[ExpandedInstance],
+    provenance: &mut Provenance,
+) -> Result<Vec<InterfaceConnection>, ExpandError> {
+    let mut out = Vec::with_capacity(system.interface_connections.len());
+    for (i, connection) in system.interface_connections.iter().enumerate() {
+        let pointer = pointer_index("/system/interface_connections", i);
+        let from = interface_end(instances, &connection.from, &pointer_key(&pointer, "from"))?;
+        let to = interface_end(instances, &connection.to, &pointer_key(&pointer, "to"))?;
+        let key = connection
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("{}<->{}", connection.from, connection.to));
+        provenance.insert(
+            format!("interface_connection:{key}"),
+            Origin::system(pointer),
+        );
+        out.push(InterfaceConnection {
+            name: connection.name.clone(),
+            from,
+            to,
+        });
+    }
+    Ok(out)
+}
+
+fn interface_end(
+    instances: &[ExpandedInstance],
+    written: &str,
+    pointer: &str,
+) -> Result<InterfaceRef, ExpandError> {
+    let (instance_name, interface_name) = split_public(written).ok_or_else(|| {
+        ExpandError::new(
+            DocumentKind::System,
+            pointer,
+            format!("`{written}` is not an interface reference; write `Instance.interface`"),
+        )
+    })?;
+    let instance = instances
+        .iter()
+        .find(|i| i.component.name == instance_name)
+        .ok_or_else(|| {
+            ExpandError::new(
+                DocumentKind::System,
+                pointer,
+                format!("no instance `{instance_name}`"),
+            )
+        })?;
+    if !instance
+        .component
+        .interfaces
+        .iter()
+        .any(|f| f.name == interface_name)
+    {
+        let known: Vec<String> = instance
+            .component
+            .interfaces
+            .iter()
+            .map(|f| format!("`{}`", f.name))
+            .collect();
+        return Err(ExpandError::new(
+            DocumentKind::System,
+            pointer,
+            format!(
+                "instance `{instance_name}` (type `{}`) has no interface `{interface_name}` (interfaces: {})",
+                instance.type_name,
+                if known.is_empty() { "none".to_owned() } else { known.join(", ") }
+            ),
+        ));
+    }
+    Ok(InterfaceRef {
+        component: instance_name.to_owned(),
+        interface: interface_name.to_owned(),
+    })
 }
 
 fn endpoint(
