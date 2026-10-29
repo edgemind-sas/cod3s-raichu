@@ -210,6 +210,7 @@ pub struct Connection {
 
 /// Reference to an interface by hierarchical name (authoring form).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InterfaceRef {
     /// Name of the component owning the interface.
     pub component: String,
@@ -233,6 +234,7 @@ pub struct InterfaceRef {
 /// [`Model::connections`] and in declaration order, and every consumer
 /// (validation, compilation, diagnostics) reads that one list.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct InterfaceConnection {
     /// Optional name, given to every port connection it expands to (see
     /// [`Connection::name`]).
@@ -431,6 +433,7 @@ pub struct Equation {
 /// A binding between one model attribute and one variable in an imported FMU.
 /// The FMU description resolves the variable name and type before execution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FmuBinding {
     /// Attribute read for an input, or written by an output.
     pub attribute: AttrRef,
@@ -440,6 +443,7 @@ pub struct FmuBinding {
 
 /// An initial value assigned to an FMU parameter before simulation starts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FmuParameter {
     /// Parameter name in the FMU description.
     pub variable: String,
@@ -450,6 +454,7 @@ pub struct FmuParameter {
 /// One imported FMI co-simulation unit and its model-facing bindings.
 /// Loading its native library requires a separate run-side permission.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FmuUnit {
     /// Name unique among the model's units.
     pub name: String,
@@ -1135,6 +1140,7 @@ pub enum LoadError {
 
 /// Objective direction of a model-level program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProgramSense {
     /// Minimise the objective.
@@ -1145,6 +1151,7 @@ pub enum ProgramSense {
 
 /// One decision attribute and its optional numeric bounds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProgramVariable {
     /// Attribute whose value receives the optimal decision.
     pub attribute: AttrRef,
@@ -1160,6 +1167,7 @@ pub struct ProgramVariable {
 
 /// One ranged linear constraint on a program's decisions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProgramConstraint {
     /// Name unique within the program.
     pub name: String,
@@ -1175,6 +1183,7 @@ pub struct ProgramConstraint {
 
 /// An optional secondary objective for deterministic lexicographic solving.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProgramTieObjective {
     /// Optimisation direction.
     pub sense: ProgramSense,
@@ -1184,6 +1193,7 @@ pub struct ProgramTieObjective {
 
 /// How equal primary optima are separated.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProgramTieBreak {
     /// Use the solver's arbitrary optimum without a uniqueness guarantee.
@@ -1194,6 +1204,7 @@ pub enum ProgramTieBreak {
 
 /// A mixed-integer program solved when its discrete inputs change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Program {
     /// Name unique within the model.
     pub name: String,

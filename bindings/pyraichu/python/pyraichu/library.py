@@ -81,25 +81,47 @@ def load_system(
     system: Document,
     libraries: Iterable[Document] = (),
     study: Document | None = None,
+    *,
+    allow_fmu_import: bool = False,
+    base_dir: Path | None = None,
 ):
     """Expand and load a system, ready to simulate.
 
     The returned :class:`pyraichu.Model` carries the provenance of every
     element (``model.provenance``) and the study's run settings
     (``model.simulation``), which :func:`run_study` reads.
+
+    A system declaring FMU units needs ``allow_fmu_import=True``, as a flat
+    model does. Their relative paths resolve at run time against
+    ``base_dir``: the system file's directory when ``system`` is a path,
+    the working directory otherwise.
     """
     from . import Model, validate_model
 
+    if base_dir is None:
+        base_dir = Path.cwd()
+        if isinstance(system, Path) or (
+            isinstance(system, str) and not system.lstrip().startswith("{")
+        ):
+            base_dir = Path(system).resolve().parent
     expansion = expand_documents(system, libraries, study)
+    body = expansion["model"].get("model", expansion["model"])
+    units = body.get("fmu_units", [])
+    if units and not allow_fmu_import:
+        raise ModelError(
+            f"FMU import for unit {units[0].get('name', '<unnamed>')!r} "
+            "requires allow_fmu_import=True"
+        )
     model_json = json.dumps(expansion["model"])
     validate_model(model_json)
-    body = expansion["model"].get("model", expansion["model"])
     return Model(
         json=model_json,
         name=body.get("name", ""),
         provenance=expansion["provenance"],
         simulation=expansion["simulation"],
         warnings=tuple(expansion["warnings"]),
+        allow_fmu_import=allow_fmu_import,
+        base_dir=base_dir,
     )
 
 

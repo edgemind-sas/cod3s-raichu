@@ -357,7 +357,13 @@ def load_model(
     else:
         document = source
     if "raichu_system" in document:
-        return load_system(document, libraries, study)
+        return load_system(
+            document,
+            libraries,
+            study,
+            allow_fmu_import=allow_fmu_import,
+            base_dir=base_dir,
+        )
     if tuple(libraries) or study is not None:
         raise ModelError(
             "libraries and study apply to a component type library system "
