@@ -600,6 +600,85 @@ pub struct Simulation {
     pub stop_at_targets: bool,
 }
 
+/// A quantification method, by the name the quantification envelope
+/// records (`raichu-quantify`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum QuantificationMethodName {
+    /// Monte-Carlo simulation stopped at the targets.
+    MonteCarlo,
+    /// Exact exploration of the sequence tree (Markov family).
+    Exact,
+    /// Discretised exploration of the sequence tree.
+    Discretised,
+    /// Biased Monte-Carlo with factors fitted by cross-entropy.
+    CrossEntropy,
+    /// Adaptive multilevel splitting.
+    Splitting,
+}
+
+impl QuantificationMethodName {
+    /// Every method name, as serialized, in the order of the quantification
+    /// contract.
+    pub const NAMES: [&'static str; 5] = [
+        "monte_carlo",
+        "exact",
+        "discretised",
+        "cross_entropy",
+        "splitting",
+    ];
+
+    /// The name, as serialized.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MonteCarlo => "monte_carlo",
+            Self::Exact => "exact",
+            Self::Discretised => "discretised",
+            Self::CrossEntropy => "cross_entropy",
+            Self::Splitting => "splitting",
+        }
+    }
+}
+
+/// A quantification method and its settings, written as the
+/// quantification envelope records it. The expander types the name; the
+/// settings belong to the method and are checked against it by the
+/// quantification contract (`raichu_quantify::Method::from_parts`), which
+/// `pyraichu` applies when it loads the study.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct QuantificationMethod {
+    /// Method name.
+    pub name: QuantificationMethodName,
+    /// The method's settings; a setting left out takes its default.
+    #[serde(default)]
+    pub settings: Map<String, Value>,
+}
+
+/// One quantification of a study: the probability that `target` is the
+/// first declared target reached by `horizon`, answered by `method`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Quantification {
+    /// Name of a target the system or the study declares.
+    pub target: String,
+    /// Horizon, finite and nonnegative.
+    pub horizon: f64,
+    /// Reporting instants of the methods that draw at random, ascending,
+    /// within `[0, horizon]`. Default: the horizon alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instants: Option<Vec<f64>>,
+    /// Master seed of the methods that draw at random.
+    #[serde(default)]
+    pub seed: u64,
+    /// The method and its settings.
+    pub method: QuantificationMethod,
+}
+
 /// A study: which modes run, with which laws, and what is observed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -632,6 +711,9 @@ pub struct StudyDocument {
     /// Run settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub simulation: Option<Simulation>,
+    /// A quantification of a target by one of the quantification methods.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantification: Option<Quantification>,
     /// Free text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

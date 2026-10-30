@@ -1597,6 +1597,99 @@
       ],
       "type": "object"
     },
+    "Quantification": {
+      "additionalProperties": false,
+      "description": "One quantification of a study: the probability that `target` is the\nfirst declared target reached by `horizon`, answered by `method`.",
+      "properties": {
+        "horizon": {
+          "description": "Horizon, finite and nonnegative.",
+          "format": "double",
+          "type": "number"
+        },
+        "instants": {
+          "description": "Reporting instants of the methods that draw at random, ascending,\nwithin `[0, horizon]`. Default: the horizon alone.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/QuantificationMethod",
+          "description": "The method and its settings."
+        },
+        "seed": {
+          "default": 0,
+          "description": "Master seed of the methods that draw at random.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target": {
+          "description": "Name of a target the system or the study declares.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "horizon",
+        "method"
+      ],
+      "type": "object"
+    },
+    "QuantificationMethod": {
+      "additionalProperties": false,
+      "description": "A quantification method and its settings, written as the\nquantification envelope records it. The expander types the name; the\nsettings belong to the method and are checked against it by the\nquantification contract (`raichu_quantify::Method::from_parts`), which\n`pyraichu` applies when it loads the study.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/QuantificationMethodName",
+          "description": "Method name."
+        },
+        "settings": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "The method's settings; a setting left out takes its default.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "QuantificationMethodName": {
+      "description": "A quantification method, by the name the quantification envelope\nrecords (`raichu-quantify`).",
+      "oneOf": [
+        {
+          "const": "monte_carlo",
+          "description": "Monte-Carlo simulation stopped at the targets.",
+          "type": "string"
+        },
+        {
+          "const": "exact",
+          "description": "Exact exploration of the sequence tree (Markov family).",
+          "type": "string"
+        },
+        {
+          "const": "discretised",
+          "description": "Discretised exploration of the sequence tree.",
+          "type": "string"
+        },
+        {
+          "const": "cross_entropy",
+          "description": "Biased Monte-Carlo with factors fitted by cross-entropy.",
+          "type": "string"
+        },
+        {
+          "const": "splitting",
+          "description": "Adaptive multilevel splitting.",
+          "type": "string"
+        }
+      ]
+    },
     "Simulation": {
       "additionalProperties": false,
       "description": "Run settings of a study, plain data mapped onto the engine's runs by\nthe caller.",
@@ -1728,6 +1821,17 @@
             "$ref": "#/$defs/OneOffMode"
           },
           "type": "array"
+        },
+        "quantification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A quantification of a target by one of the quantification methods."
         },
         "simulation": {
           "anyOf": [
