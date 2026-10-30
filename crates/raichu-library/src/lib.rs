@@ -43,9 +43,10 @@ pub use check::{check_library, TypeCheck};
 pub use document::{
     parse_library, parse_study, parse_system, Activation, CommonCauseGroup, Edge, EdgeEffect,
     Effect, EffectStep, FearedEvent, Fragment, GroupOrder, Header, Instance, ItemKind, Library,
-    LibraryRef, Method, Nature, OneOffMode, ParamKind, Parameter, Simulation, StudyDocument,
-    SystemConnection, SystemInterfaceConnection, SystemModel, TypeDef, Use, FORMAT_REVISION,
-    LIBRARY_KEY, STUDY_KEY, SYSTEM_KEY,
+    LibraryRef, Method, Nature, OneOffMode, ParamKind, Parameter, Quantification,
+    QuantificationMethod, QuantificationMethodName, Simulation, StudyDocument, SystemConnection,
+    SystemInterfaceConnection, SystemModel, TypeDef, Use, FORMAT_REVISION, LIBRARY_KEY, STUDY_KEY,
+    SYSTEM_KEY,
 };
 pub use error::{DocumentKind, ExpandError};
 pub use expand::{expand, Expansion};

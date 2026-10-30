@@ -262,6 +262,8 @@ class Model:
     provenance: dict[str, Any] | None = field(default=None, compare=False)
     #: For a model expanded with a study: its run settings.
     simulation: dict[str, Any] | None = field(default=None, compare=False)
+    #: For a model expanded with a study: its quantification section.
+    quantification: dict[str, Any] | None = field(default=None, compare=False)
     #: Non-fatal observations of the expansion.
     warnings: tuple[str, ...] = field(default=(), compare=False)
 

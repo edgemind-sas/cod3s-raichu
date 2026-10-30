@@ -22,6 +22,7 @@ from typing import Any, Union
 from ._pyraichu import (
     ModelError,
     check_library_json,
+    check_quantification_method_json,
     derive_evaluation_order_json,
     expand_documents_json,
     standard_library_json,
@@ -112,6 +113,13 @@ def load_system(
             f"FMU import for unit {units[0].get('name', '<unnamed>')!r} "
             "requires allow_fmu_import=True"
         )
+    quantification = expansion.get("quantification")
+    if quantification is not None:
+        method = quantification["method"]
+        try:
+            check_quantification_method_json(method["name"], json.dumps(method.get("settings", {})))
+        except ModelError as error:
+            raise ModelError(f"study document, at `/study/quantification/method`: {error}") from None
     model_json = json.dumps(expansion["model"])
     validate_model(model_json)
     return Model(
@@ -119,6 +127,7 @@ def load_system(
         name=body.get("name", ""),
         provenance=expansion["provenance"],
         simulation=expansion["simulation"],
+        quantification=quantification,
         warnings=tuple(expansion["warnings"]),
         allow_fmu_import=allow_fmu_import,
         base_dir=base_dir,
@@ -166,21 +175,47 @@ def schema(kind: str) -> dict[str, Any]:
     return json.loads(resource.read_text(encoding="utf-8"))
 
 
-def run_study(model, *, threads: int | None = None):
-    """Run a model loaded from a study with the study's run settings.
+def run_study(model, *, section: str | None = None, threads: int | None = None):
+    """Run a model loaded from a study with the study's own settings.
 
-    ``method: monte_carlo`` returns the :func:`pyraichu.monte_carlo`
-    estimates, sampled at the study's ``instants`` (the horizon alone when
-    none are given); ``method: sequences`` returns the
-    :func:`pyraichu.run_sequences` campaign.
+    A study's ``simulation`` section runs as before: ``method:
+    monte_carlo`` returns the :func:`pyraichu.monte_carlo` estimates,
+    sampled at the study's ``instants`` (the horizon alone when none are
+    given); ``method: sequences`` returns the :func:`pyraichu.run_sequences`
+    campaign. Its ``quantification`` section returns the
+    :func:`pyraichu.quantify` envelope of its method. A study carrying both
+    runs the one ``section`` names (``"simulation"`` or
+    ``"quantification"``).
     """
     from . import monte_carlo, run_sequences
+    from ._quantification import Study, quantify
 
-    settings = model.simulation
-    if not settings:
+    available = [name for name in ("simulation", "quantification") if getattr(model, name, None)]
+    if not available:
         raise ModelError(
-            f"model {model.name!r} carries no run settings; load it with a study that has a `simulation` section"
+            f"model {model.name!r} carries no run settings; load it with a study that has a "
+            "`simulation` or a `quantification` section"
         )
+    if section is None:
+        if len(available) > 1:
+            raise ModelError(
+                f"model {model.name!r} carries both a `simulation` and a `quantification` "
+                "section; name the one to run with section=..."
+            )
+        section = available[0]
+    if section not in available:
+        raise ModelError(f"model {model.name!r} carries no `{section}` section")
+    if section == "quantification":
+        q = model.quantification
+        study = Study(
+            target=q["target"],
+            horizon=q["horizon"],
+            instants=tuple(q["instants"]) if q.get("instants") is not None else None,
+            seed=q.get("seed", 0),
+            threads=threads,
+        )
+        return quantify(model, study, method=q["method"]["name"], **q["method"].get("settings", {}))
+    settings = model.simulation
     if settings["method"] == "sequences":
         return run_sequences(
             model,

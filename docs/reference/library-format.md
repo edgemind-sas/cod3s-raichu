@@ -269,6 +269,24 @@ system declares none unless it states one.
 | `common_cause_groups` | `name`, `mode`, `instances`, `orders` (`order`, `occurrence`, `repair`), `effect_step` |
 | `indicators`, `targets` | added to the system's; a name the system already uses is refused |
 | `simulation` | `method` (`monte_carlo` or `sequences`), `nb_runs`, `horizon`, `instants`, `seed`, `stop_at_targets` |
+| `quantification` | `target`, `horizon`, `instants`, `seed`, `method` (`{"name": ..., "settings": {...}}`); see below |
+
+A `quantification` states one quantification of the study, as
+[`pyraichu.quantify`](../guides/quantification.md) takes it: the
+probability that `target` is the first declared target reached by
+`horizon`. `target` must name a target of the system or the study.
+`method.name` is one of `monte_carlo`, `exact`, `discretised`,
+`cross_entropy` and `splitting`, and `method.settings` carries that
+method's settings, written and checked as the quantification envelope
+records them: a setting of another method is refused, by name, when the
+study is loaded. `pyraichu.run_study` returns the quantification envelope.
+A study may carry `simulation`, `quantification` or both; with both,
+`run_study(model, section=...)` names the one to run.
+
+```json
+{"quantification": {"target": "down", "horizon": 8760, "seed": 1,
+  "method": {"name": "cross_entropy", "settings": {"nb_runs": 100000}}}}
+```
 
 An activation names a catalogued `mode`, then either `instances` (a list of
 instance names) or `type` (every instance of that type), an `occurrence`

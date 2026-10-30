@@ -1,7 +1,7 @@
 //! The expansion of a system (and optionally a study) into a flat core
 //! model.
 
-use crate::document::{Library, Simulation, StudyDocument, SystemModel};
+use crate::document::{Library, Quantification, Simulation, StudyDocument, SystemModel};
 use crate::error::{pointer_index, pointer_key, DocumentKind, ExpandError};
 use crate::instantiate::{instantiate, ExpandedInstance, LibrarySet};
 use crate::names::split_public;
@@ -23,6 +23,8 @@ pub struct Expansion {
     pub provenance: Provenance,
     /// The study's run settings, when a study with settings was expanded.
     pub simulation: Option<Simulation>,
+    /// The study's quantification, when it declares one.
+    pub quantification: Option<Quantification>,
     /// Non-fatal observations (for example a type-wide activation on a
     /// type with no instance).
     pub warnings: Vec<String>,
@@ -160,6 +162,7 @@ pub fn expand(
         },
         provenance,
         simulation: None,
+        quantification: None,
         warnings: Vec::new(),
     };
     let groups = match study {
@@ -177,6 +180,10 @@ pub fn expand(
     // the targets carrying their mirrors.
     expansion.model.components.extend(groups);
     expansion.model.unbounded_rate = unbounded_rate(system, &expansion.provenance)?;
+    if let Some(quantification) = study.and_then(|s| s.quantification.as_ref()) {
+        check_quantification(quantification, &expansion.model)?;
+        expansion.quantification = Some(quantification.clone());
+    }
     // The sweep order is derived, never authored (KTD14). A model the
     // derivation cannot read is structurally invalid, and validation below
     // reports it with its origin.
@@ -212,6 +219,70 @@ fn restate(message: &str, provenance: &Provenance) -> ExpandError {
             format!("the expanded model is invalid: {message}"),
         ),
     }
+}
+
+/// A study's quantification must name a target the expanded model
+/// declares, by a finite nonnegative horizon, with strictly ascending
+/// reporting instants inside it. Its method's settings belong to the
+/// quantification contract, which `pyraichu` applies when it loads the
+/// study.
+fn check_quantification(quantification: &Quantification, model: &Model) -> Result<(), ExpandError> {
+    if !model
+        .targets
+        .iter()
+        .any(|t| t.name == quantification.target)
+    {
+        let declared: Vec<String> = model
+            .targets
+            .iter()
+            .map(|t| format!("`{}`", t.name))
+            .collect();
+        return Err(ExpandError::new(
+            DocumentKind::Study,
+            "/study/quantification/target",
+            format!(
+                "the quantification names target `{}`, which the system and the study do not declare (targets: {})",
+                quantification.target,
+                if declared.is_empty() { "none".to_owned() } else { declared.join(", ") }
+            ),
+        ));
+    }
+    if !quantification.horizon.is_finite() || quantification.horizon < 0.0 {
+        return Err(ExpandError::new(
+            DocumentKind::Study,
+            "/study/quantification/horizon",
+            format!(
+                "the quantification horizon is {}, not a finite nonnegative number",
+                quantification.horizon
+            ),
+        ));
+    }
+    if let Some(instants) = &quantification.instants {
+        // The quantification contract's own rule (`Study::validate`),
+        // applied when the study is read rather than when it runs.
+        for (k, &instant) in instants.iter().enumerate() {
+            let detail =
+                if !(instant.is_finite() && (0.0..=quantification.horizon).contains(&instant)) {
+                    format!(
+                        "a reporting instant lies in [0, horizon = {}], got {instant}",
+                        quantification.horizon
+                    )
+                } else if k > 0 && instant <= instants[k - 1] {
+                    format!(
+                        "reporting instants are strictly ascending, got {} then {instant}",
+                        instants[k - 1]
+                    )
+                } else {
+                    continue;
+                };
+            return Err(ExpandError::new(
+                DocumentKind::Study,
+                format!("/study/quantification/instants/{k}"),
+                detail,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The `unbounded_rate` of the expanded model.

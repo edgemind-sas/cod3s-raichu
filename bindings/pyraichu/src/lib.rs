@@ -352,7 +352,8 @@ fn parse_libraries(texts: &[String]) -> PyResult<Vec<raichu::raichu_library::Lib
 /// Expand a component type library system (and optionally a study) into
 /// a flat core model, returned as JSON:
 /// `{"model": <sealed model document>, "provenance": {...},
-/// "simulation": {...} | null, "warnings": [...]}`.
+/// "simulation": {...} | null, "quantification": {...} | null,
+/// "warnings": [...]}`.
 ///
 /// `libraries_json` holds the library documents the system may draw on;
 /// the standard library is added when one of them imports it. A refused
@@ -384,6 +385,7 @@ fn expand_documents_json(
         "model": model,
         "provenance": expansion.provenance.elements,
         "simulation": expansion.simulation,
+        "quantification": expansion.quantification,
         "warnings": expansion.warnings,
     });
     Ok(result.to_string())
@@ -1731,6 +1733,19 @@ fn quantify_json(
     })
 }
 
+/// Check a quantification method and its settings as the quantification
+/// contract reads them (`Method::from_parts`): a study's quantification
+/// section is refused when it is loaded, naming the method or the setting
+/// that does not belong, rather than when it runs.
+#[pyfunction]
+fn check_quantification_method_json(method: &str, settings_json: &str) -> PyResult<()> {
+    let settings: serde_json::Value = serde_json::from_str(settings_json)
+        .map_err(|e| ModelError::new_err(format!("invalid method settings: {e}")))?;
+    Method::from_parts(method, &settings)
+        .map(|_| ())
+        .map_err(|e| ModelError::new_err(e.to_string()))
+}
+
 /// Check that `envelope_json` is a quantification envelope this engine
 /// reads (format, version, and a method, probability kind and detail that
 /// belong together); raise `SimulationError` naming what is wrong. The
@@ -2149,6 +2164,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validate_exploration, module)?)?;
     module.add_function(wrap_pyfunction!(quantify_json, module)?)?;
     module.add_function(wrap_pyfunction!(validate_quantification, module)?)?;
+    module.add_function(wrap_pyfunction!(check_quantification_method_json, module)?)?;
     module.add_function(wrap_pyfunction!(
         exploration_minimal_sequences_json,
         module

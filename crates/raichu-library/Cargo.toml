@@ -24,6 +24,9 @@ schema = ["dep:schemars", "raichu-model/schema", "raichu-expr/schema"]
 
 [dev-dependencies]
 raichu-core.workspace = true
+# The method names of the study's quantification section are checked
+# against the quantification contract's own list (tests only).
+raichu-quantify.workspace = true
 # Enables `schema` for this crate's own tests only, so default builds
 # (the umbrella crate, the Python wheel) never compile schemars.
 raichu-library = { path = ".", features = ["schema"] }
