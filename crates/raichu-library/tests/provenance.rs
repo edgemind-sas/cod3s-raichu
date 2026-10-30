@@ -196,7 +196,7 @@ fn the_expanded_model_records_its_source_through_a_save_and_reload() {
     assert_eq!(source.library_version, "2.0.0");
     assert_eq!(source.system, "room");
     assert_eq!(source.study.as_deref(), Some("s1"));
-    assert_eq!(source.std_version, None);
+    assert!(source.embedded.is_empty());
     let reloaded = Model::from_json(&model.to_json().unwrap()).unwrap();
     assert_eq!(reloaded.source, Some(source));
 }

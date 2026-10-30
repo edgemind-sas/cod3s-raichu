@@ -233,7 +233,12 @@ fn an_expansion_using_std_stamps_the_engine_version() {
     );
     let model = expand(&[witness_library()], &s, None).unwrap().model;
     assert_eq!(
-        model.source.unwrap().std_version.as_deref(),
+        model
+            .source
+            .unwrap()
+            .embedded
+            .get("std")
+            .map(String::as_str),
         Some(env!("CARGO_PKG_VERSION"))
     );
 }

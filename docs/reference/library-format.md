@@ -173,6 +173,13 @@ repair.
 the engine's, and the expanded model records it. A library imports it with
 `"imports": ["std"]`.
 
+`std` is the first library of the engine's registry of embedded libraries
+(`pyraichu.embedded_library(name)`). An embedded library is imported, never
+supplied: a library imported by another one comes with it (a library
+importing only a library that imports `std` gets `std`), a supplied library
+named after an embedded one is refused unless it is that very library, and
+libraries importing each other in a cycle are refused.
+
 | Fragment | Parameters | Builds |
 |---|---|---|
 | `bool_flow_in` | `name`, `logic` (`and`, `or`, `k`), `k`, `default` | in port `<name>_in`, attribute `<name>_fed_in` true while the connected sources feed it under `logic`; an input nothing feeds reads `default` |
@@ -409,7 +416,8 @@ AND its activation condition.
   `tempo_not_occ`, each a fixed delay or drawn from the timed law written
   there; `target: true` adds a sequence target.
 - The model's `source` names the library and its version, the system, the
-  study and the engine version that supplied `std`.
+  study, and under `embedded` each library shipped with the engine that the
+  library reaches through its imports, with its version (the engine's).
 - A model with explicit equations gets an `evaluation_order` derived from
   what each step reads: a step follows every step whose result it reads,
   independent steps keep their declaration order, and the steps of a cycle

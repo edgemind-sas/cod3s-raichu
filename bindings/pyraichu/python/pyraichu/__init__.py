@@ -61,6 +61,7 @@ from .library import (
     load_system,
     run_study,
     standard_library,
+    embedded_library,
 )
 
 __all__ = [
@@ -132,6 +133,7 @@ __all__ = [
     "derive_evaluation_order",
     "run_study",
     "standard_library",
+    "embedded_library",
     "model_body",
     "monte_carlo",
     "quantify",
