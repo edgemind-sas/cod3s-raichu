@@ -394,6 +394,47 @@ true while that mode is occurred. A condition naming a mode the study does
 not activate is refused. The guard of a mode is its catalogue condition
 AND its activation condition.
 
+## Coverage of the core model
+
+Every construct of the [core model](model-schema.md) has a home in the
+three documents. The entry points are named where a construct is a run
+rather than part of the model.
+
+| Core construct | Home |
+|---|---|
+| `name` | the system's `name`; the study renames the model `<system>/<study>` |
+| `components` | the system's `instances`, one component per instance, plus the components a study generates for feared events and common-cause groups |
+| `connections` | the system's `connections`, `Instance.port` on each side, with an optional edge `name` |
+| `interface_connections` | the system's `interface_connections`, `Instance.interface` on each side |
+| `indicators` | the system's or the study's `indicators`, in the core form |
+| `targets` | the system's or the study's `targets`, and feared events with `target: true` |
+| `programs` | the system's `programs`, in the core form |
+| `fmu_units` | the system's `fmu_units`, in the core form (loading needs `allow_fmu_import`) |
+| `unbounded_rate` | declared by the expander on a continuous network; the system's `unbounded_rate` otherwise |
+| `evaluation_order` | derived by the expander from what each step reads; not written (see below) |
+| `attributes`, `ports`, `interfaces`, `automata`, `sensitive_functions`, `equations`, `allocations` | a type's `body`, verbatim, or the fragments it applies; references to the instance itself are written `$self` |
+| transition laws (`delay`, `exp`, `weibull`, `lognormal`, `gamma`, `uniform`, `empirical`, `inst`, `watched`) | written on a transition of a type body, or taken from a `law` parameter with `$law`; in a study, the laws of catalogued modes, common-cause orders and feared-event confirmation times |
+| interruption policy (`on_interruption`) | a transition of a type body, or a mode activation |
+| run settings of `simulate` and `monte_carlo` | the study's `simulation` (`options` for confidence, quantiles, threads, solver tolerances and flow policy) |
+| sequence campaigns (`run_sequences`) | the study's `simulation` with `method: sequences` |
+| quantification (`quantify`: `monte_carlo`, `exact`, `discretised`, `cross_entropy`, `splitting`) | the study's `quantification` |
+| fault tree, importance measures, minimal sequences (`fault_tree`, `importance`, `analyse_sequences`) | the study's `analyses` |
+
+Left out on purpose:
+
+- **The evaluation order** is derived, never written: a library author
+  cannot order the steps of instances they do not know, and the derived
+  order is the one every expanded model shares.
+- **A composite type** (a type made of types) and **arithmetic at
+  expansion** do not exist: a type is flat, and a parameter replaces a
+  value, so what an instance computes is computed by the engine.
+- **A mode with more than two states**, or **effects written as
+  expressions**, are not catalogue features: a type-body automaton and its
+  sensitive functions express them.
+- **Interactive simulation, the causal journal and the confluence probe**
+  are tools run on a loaded model from Python (`interactive`, `simulate`
+  with `journal` or `confluence_check`), not study settings.
+
 ## What the expansion produces
 
 - Each activated mode is an automaton named after it inside its instance,
