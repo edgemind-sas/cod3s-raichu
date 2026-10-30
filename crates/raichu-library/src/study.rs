@@ -4,7 +4,7 @@
 
 use crate::combine::{combined, EffectSource, Holder};
 use crate::document::EffectStep;
-use crate::document::{EdgeEffect, Effect, StudyDocument, SystemModel};
+use crate::document::{EdgeEffect, Effect, StudyDocument, SystemModel, Tempo};
 use crate::error::{pointer_index, pointer_key, DocumentKind, ExpandError};
 use crate::expand::Expansion;
 use crate::groups::Group;
@@ -172,6 +172,41 @@ pub(crate) fn apply(
     }
     expansion.simulation.clone_from(&study.simulation);
     Ok(components)
+}
+
+/// The first attribute `expr` reads that an equation of an instance
+/// writes (a continuous attribute), as `Instance.attribute`.
+fn continuous_read(expr: &Expr, instances: &[ExpandedInstance]) -> Option<String> {
+    fn reads(value: &serde_json::Value, out: &mut Vec<(String, String)>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let (Some(serde_json::Value::String(c)), Some(serde_json::Value::String(a))) =
+                    (map.get("component"), map.get("attribute"))
+                {
+                    out.push((c.clone(), a.clone()));
+                }
+                for child in map.values() {
+                    reads(child, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    reads(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    reads(&serde_json::to_value(expr).ok()?, &mut found);
+    found.into_iter().find_map(|(component, attribute)| {
+        instances
+            .iter()
+            .filter(|i| i.component.name == component)
+            .flat_map(|i| &i.component.equations)
+            .any(|e| e.target == attribute)
+            .then(|| format!("{component}.{attribute}"))
+    })
 }
 
 fn resolve_activations(
@@ -436,9 +471,17 @@ fn emit_mode(
         &active.occurrence.1,
         &context,
         true,
+        !guards.is_empty(),
     )?;
     let repair = match &active.repair {
-        Some((value, pointer)) => Some(law(value, DocumentKind::Study, pointer, &context, false)?),
+        Some((value, pointer)) => Some(law(
+            value,
+            DocumentKind::Study,
+            pointer,
+            &context,
+            false,
+            active.repair_condition.is_some(),
+        )?),
         None => None,
     };
     if active.effect_step.is_some() {
@@ -471,6 +514,18 @@ fn emit_mode(
         }
         None => None,
     };
+    if let (Some(guard), Some(Distrib::Inst { .. }), Some((_, pointer))) =
+        (&repair_guard, &repair, &active.repair_condition)
+    {
+        if let Some(read) = continuous_read(guard, instances) {
+            return Err(err(
+                pointer.clone(),
+                format!(
+                    "{context}: a certain repair is taken when its repair condition is found true at a discrete event, and this condition reads `{read}`, which evolves continuously, so the repair would wait for an unrelated event; use `{{\"distrib\": \"watched\"}}` to repair on the boundary"
+                ),
+            ));
+        }
+    }
     let repair_guard = if active.effect_step.is_some() {
         all_of(
             repair_guard
@@ -782,7 +837,25 @@ fn emit_feared_events(
             &condition_pointer,
             &context,
         )?;
-        let edge = |name: &str, source: &str, guard: Expr, time: f64| Transition {
+        let tempo = |written: &Tempo, key: &str| -> Result<Distrib, ExpandError> {
+            match written {
+                Tempo::Delay(time) => Ok(Distrib::Delay { time: *time }),
+                Tempo::Law(value) => {
+                    let here = pointer_key(&pointer, key);
+                    let distrib: Distrib = typed(value, DocumentKind::Study, &here, &context)?;
+                    if matches!(distrib, Distrib::Inst { .. } | Distrib::Watched) {
+                        return Err(err(
+                            here,
+                            format!("{context}: a confirmation time is a delay or a timed law, not `inst` or `watched`"),
+                        ));
+                    }
+                    Ok(distrib)
+                }
+            }
+        };
+        let occ_law = tempo(&event.tempo_occ, "tempo_occ")?;
+        let not_occ_law = tempo(&event.tempo_not_occ, "tempo_not_occ")?;
+        let edge = |name: &str, source: &str, guard: Expr, distrib: Distrib| Transition {
             name: name.to_owned(),
             source: source.to_owned(),
             guard: Some(guard),
@@ -794,7 +867,7 @@ fn emit_feared_events(
             cycle_cancellation: CycleCancellation::Auto,
             kind: Some(TransitionKind::Observation),
             effects: Vec::new(),
-            distrib: Distrib::Delay { time },
+            distrib,
         };
         let not_condition = Expr::Bool {
             bool_op: BoolOp::Not,
@@ -810,8 +883,8 @@ fn emit_feared_events(
                 states: vec![NOT_OCC.to_owned(), OCC.to_owned()],
                 init: NOT_OCC.to_owned(),
                 transitions: vec![
-                    edge(OCC, NOT_OCC, condition, event.tempo_occ),
-                    edge(NOT_OCC, OCC, not_condition, event.tempo_not_occ),
+                    edge(OCC, NOT_OCC, condition, occ_law),
+                    edge(NOT_OCC, OCC, not_condition, not_occ_law),
                 ],
             }],
             sensitive_functions: Vec::new(),

@@ -192,6 +192,7 @@ fn document_schema<T: JsonSchema>(
                 }
             }
         }
+        spread_law_branch(&mut defs);
         defs.insert(
             PARAM_DEF.to_owned(),
             json!({
@@ -282,6 +283,43 @@ fn close_node(node: &mut Value, partial: bool) {
             _ => {}
         }
     }
+}
+
+/// A transition may take its law from a `law` parameter with
+/// `{"$law": "param", ...}` (the reader spreads the law's keys onto it), so
+/// its templated definition gains a branch: the transition's own keys
+/// beside `$law`, and none of the law's keys, which the parameter writes.
+fn spread_law_branch(defs: &mut BTreeMap<String, Value>) {
+    let Some(Value::Object(transition)) = defs.get_mut("Transition") else {
+        return;
+    };
+    let Some(Value::Array(branches)) = transition.get_mut("anyOf") else {
+        return;
+    };
+    let Some(Value::Object(own)) = branches.first().cloned() else {
+        return;
+    };
+    let mut properties = own
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    properties.insert(
+        "$law".to_owned(),
+        json!({"type": "string", "description": "A `law` parameter whose keys the reader writes onto the transition."}),
+    );
+    let mut required: Vec<Value> = own
+        .get("required")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    required.push(Value::String("$law".to_owned()));
+    branches.push(json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": false
+    }));
 }
 
 /// Builds the templated form of the library definitions.

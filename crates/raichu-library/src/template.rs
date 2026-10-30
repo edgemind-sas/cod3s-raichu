@@ -10,6 +10,9 @@
 //! - `{"$for_each": "list", "as": "var", "items": [...]}`, as an item of
 //!   an array, repeats `items` once per element of a list parameter, with
 //!   `var` bound to the element;
+//! - `{"$law": "law_param", ...}` writes the keys of a law parameter
+//!   (`distrib`, `rate`, ...) onto the object beside its other keys, the
+//!   way a transition carries its law;
 //! - `{"$choose": "enum", "cases": {"a": ..., "b": ...}}` selects the case
 //!   named by an enum (or string, or boolean) parameter;
 //! - `{"$when": "param", "is": [...], "items": [...]}`, as an item of an
@@ -288,6 +291,9 @@ pub(crate) fn substitute(
             if let Some(selector) = map.get("$choose") {
                 return choose(map, selector, env, ctx, pointer);
             }
+            if let Some(name) = map.get("$law") {
+                return spread_law(map, name, env, ctx, pointer);
+            }
             if map.contains_key("$for_each") {
                 return Err(ctx.err(pointer, "`$for_each` repeats items of an array; it cannot stand where a single value goes"));
             }
@@ -306,6 +312,52 @@ pub(crate) fn substitute(
         }
         other => Ok(other.clone()),
     }
+}
+
+/// `{"$law": "param", ...}`: the keys of a law parameter written onto the
+/// object that names it, beside its other keys, as a transition carries
+/// its law flattened (`"distrib": "exp", "rate": ...`). A key both the law
+/// and the object write is refused rather than silently overwritten.
+fn spread_law(
+    map: &Map<String, Value>,
+    name: &Value,
+    env: &Env,
+    ctx: &Ctx<'_>,
+    pointer: &str,
+) -> Result<Value, ExpandError> {
+    let name = name
+        .as_str()
+        .ok_or_else(|| ctx.err(pointer, "`$law` names a law parameter by a string"))?;
+    let law = env
+        .get(name)
+        .ok_or_else(|| ctx.err(pointer, format!("unknown parameter `{name}`")))?;
+    let Some(keys) = law.as_object().filter(|m| m.contains_key("distrib")) else {
+        return Err(ctx.err(
+            pointer,
+            format!("`$law` spreads a law parameter; `{name}` is not a law object"),
+        ));
+    };
+    let mut out = Map::with_capacity(map.len() + keys.len());
+    for (key, child) in map {
+        if key == "$law" {
+            continue;
+        }
+        let key_out = interpolate(key, env, ctx, pointer)?;
+        out.insert(
+            key_out,
+            substitute(child, env, ctx, &pointer_key(pointer, key))?,
+        );
+    }
+    for (key, value) in keys {
+        if out.contains_key(key) {
+            return Err(ctx.err(
+                pointer,
+                format!("`$law` spreads `{key}` from `{name}`, which the object already writes"),
+            ));
+        }
+        out.insert(key.clone(), value.clone());
+    }
+    Ok(Value::Object(out))
 }
 
 fn for_each(

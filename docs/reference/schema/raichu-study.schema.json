@@ -1324,16 +1324,14 @@
           "type": "boolean"
         },
         "tempo_not_occ": {
+          "$ref": "#/$defs/Tempo",
           "default": 0.0,
-          "description": "Delay the condition must fail before the event clears.",
-          "format": "double",
-          "type": "number"
+          "description": "How long the condition must fail before the event clears: a delay\n(a number) or a timed law."
         },
         "tempo_occ": {
+          "$ref": "#/$defs/Tempo",
           "default": 0.0,
-          "description": "Delay the condition must hold before the event occurs.",
-          "format": "double",
-          "type": "number"
+          "description": "How long the condition must hold before the event occurs: a delay\n(a number) or a timed law."
         }
       },
       "required": [
@@ -1938,6 +1936,20 @@
         "state"
       ],
       "type": "object"
+    },
+    "Tempo": {
+      "anyOf": [
+        {
+          "description": "A fixed delay.",
+          "format": "double",
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/Distrib",
+          "description": "A timed law (`exp`, `weibull`, `lognormal`, ...)."
+        }
+      ],
+      "description": "The confirmation time of a feared event: a fixed delay, or a timed law\nwritten as a core law object."
     },
     "Value": {
       "description": "A runtime value carried by attributes and expressions.\n\nM0 kinds only: booleans, integers, floats. `String` discrete state is\nreserved (a deliberate departure) and will extend this enum\nwithout breaking serialized models (tagged representation).",

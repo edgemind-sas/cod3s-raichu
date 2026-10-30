@@ -131,39 +131,58 @@ pub(crate) fn condition_expr(
     typed::<Expr>(condition, document, pointer, context)
 }
 
-/// Types a law object, refusing the shapes a mode cannot carry. An
-/// occurrence may be on demand (`inst` with one probability: the chance
-/// the mode occurs on each rising edge of its condition); a repair is
-/// timed.
+/// Types a law object, refusing the shapes a mode cannot carry.
+///
+/// A mode has two states (`rep` and `occ`, plus `parked` for an on-demand
+/// draw), so a law with several branches has nowhere to go: a type-body
+/// automaton expresses that. Otherwise every core law fits:
+///
+/// - an occurrence or a repair may be timed;
+/// - an occurrence may be on demand (`inst` with one probability: the
+///   chance the mode occurs on each rising edge of its condition);
+/// - a repair may be certain (`inst` with an empty `probs`), taken when its
+///   repair condition is found true at a discrete event (a condition on a
+///   continuous attribute is refused by the caller: `watched` repairs on
+///   the boundary);
+/// - either may be `watched`: it fires when the continuous boundary its
+///   condition states is crossed, so it needs that condition (`guarded`).
 pub(crate) fn law(
     value: &Value,
     document: DocumentKind,
     pointer: &str,
     context: &str,
     occurrence: bool,
+    guarded: bool,
 ) -> Result<Distrib, ExpandError> {
     let distrib: Distrib = typed(value, document, pointer, context)?;
+    let role = if occurrence { "occurrence" } else { "repair" };
+    let refuse = |detail: String| {
+        Err(ExpandError::new(
+            document,
+            pointer,
+            format!("{context}: {detail}"),
+        ))
+    };
     match distrib {
         Distrib::Inst { ref probs }
             if occurrence && probs.len() == 1 && (0.0..=1.0).contains(&probs[0]) =>
         {
             Ok(distrib)
         }
-        Distrib::Inst { .. } if occurrence => Err(ExpandError::new(
-            document,
-            pointer,
-            format!(
-                "{context}: an on-demand occurrence is `{{\"distrib\": \"inst\", \"probs\": [p]}}` with one probability p in [0, 1]: the chance the mode occurs when its condition rises"
-            ),
-        )),
-        Distrib::Inst { .. } | Distrib::Watched => Err(ExpandError::new(
-            document,
-            pointer,
-            format!(
-                "{context}: a mode law is timed (exp, delay, weibull, lognormal, gamma, uniform, empirical), and an occurrence may also be on demand (inst); `{}` is not supported for a {} in this version",
-                value.get("distrib").and_then(Value::as_str).unwrap_or("?"),
-                if occurrence { "occurrence" } else { "repair" }
-            ),
+        Distrib::Inst { .. } if occurrence => refuse(
+            "an on-demand occurrence is `{\"distrib\": \"inst\", \"probs\": [p]}` with one probability p in [0, 1]: the chance the mode occurs when its condition rises; a mode has two states, so a law with several branches belongs in a type-body automaton".to_owned(),
+        ),
+        Distrib::Inst { ref probs } if probs.is_empty() && guarded => Ok(distrib),
+        Distrib::Inst { ref probs } if probs.is_empty() => refuse(
+            "a certain repair (`{\"distrib\": \"inst\", \"probs\": []}`) happens once the repair condition holds, so it needs a `repair_condition`".to_owned(),
+        ),
+        Distrib::Inst { .. } => refuse(
+            "a repair is timed, watched or certain (`inst` with no probability); a mode has two states, so a repair drawn among branches belongs in a type-body automaton".to_owned(),
+        ),
+        Distrib::Watched if guarded => Ok(distrib),
+        Distrib::Watched => refuse(format!(
+            "a watched {role} fires when the continuous boundary its condition states is crossed, so it needs a {}",
+            if occurrence { "`condition`" } else { "`repair_condition`" }
         )),
         other => Ok(other),
     }
