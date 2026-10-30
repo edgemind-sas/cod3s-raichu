@@ -1018,6 +1018,12 @@ see [Running a COD3S-platform study](platform-import.md).
 
 ## Which to use
 
+- **Component type libraries** ([Component type libraries](component-libraries.md)):
+  a library of types, a system and a study, three data documents with a
+  published schema. Every construct of the core model has a home there
+  ([coverage table](../reference/library-format.md#coverage-of-the-core-model)),
+  and a muscadet declaration converts into them
+  (`pyraichu.muscadet.convert`).
 - **Native data** (the tutorial): full generality: any automaton, ODE
   or watched transition.
 - **muscadet builder**: flow/reliability networks in a fraction of the
