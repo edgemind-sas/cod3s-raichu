@@ -25,6 +25,7 @@ from ._pyraichu import (
     check_library_json,
     check_quantification_method_json,
     derive_evaluation_order_json,
+    embedded_library_json,
     expand_documents_json,
     standard_library_json,
 )
@@ -249,6 +250,13 @@ def derive_evaluation_order(model: Document) -> list[dict[str, str]] | None:
     look at an ``evaluation_order`` the model already carries.
     """
     return json.loads(derive_evaluation_order_json(_text(model)))
+
+
+def embedded_library(name: str) -> dict[str, Any]:
+    """A library shipped with this engine, by name (``"std"``), as a
+    library document; :class:`ModelError` naming the embedded libraries
+    for an unknown name."""
+    return json.loads(embedded_library_json(name))
 
 
 def standard_library() -> dict[str, Any]:

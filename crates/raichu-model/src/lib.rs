@@ -24,7 +24,7 @@
 use raichu_expr::{AggOp, Assignment, AttrRef, CmpOp, Expr, PortRef, Value};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use thiserror::Error;
 
 /// The type of an attribute (M0 kinds; `String` discrete state is reserved
@@ -1341,10 +1341,11 @@ pub struct ModelSource {
     /// Study name, when a study was applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub study: Option<String>,
-    /// Engine version that supplied the standard library, when the
-    /// library imports it (a standard fragment changes with the engine).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub std_version: Option<String>,
+    /// The libraries shipped with the engine that the library reaches
+    /// through its imports, each with its version (the engine's: an
+    /// embedded fragment changes with the engine).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub embedded: BTreeMap<String, String>,
 }
 
 /// Typed model-validation errors. Every invalid model is reported with a

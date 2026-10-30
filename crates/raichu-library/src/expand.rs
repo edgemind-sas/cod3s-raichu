@@ -42,7 +42,7 @@ pub fn expand(
     system: &SystemModel,
     study: Option<&StudyDocument>,
 ) -> Result<Expansion, ExpandError> {
-    let libraries = &crate::std_library::with_std(libraries)?;
+    let libraries = &crate::std_library::with_embedded(libraries)?;
     let set = LibrarySet { libraries };
     let library = bind_library(libraries, system)?;
     for import in &library.imports {
@@ -155,11 +155,7 @@ pub fn expand(
                 library_version: library.version.clone(),
                 system: system.name.clone(),
                 study: study.map(|s| s.name.clone()),
-                std_version: library
-                    .imports
-                    .iter()
-                    .any(|i| i == crate::std_library::STD)
-                    .then(|| crate::std_library::STD_VERSION.to_owned()),
+                embedded: crate::std_library::embedded_versions(library, libraries),
             }),
         },
         provenance,

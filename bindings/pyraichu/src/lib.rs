@@ -448,6 +448,21 @@ fn standard_library_json() -> PyResult<String> {
     Ok(library::document::library_document(&std).to_string())
 }
 
+/// A library shipped with the engine, by name, as a library document;
+/// `ModelError` naming the embedded libraries for an unknown name.
+#[pyfunction]
+fn embedded_library_json(name: &str) -> PyResult<String> {
+    use raichu::raichu_library as library;
+    let found = library::embedded_library(name).ok_or_else(|| {
+        ModelError::new_err(format!(
+            "no embedded library `{name}` (embedded: {})",
+            library::EMBEDDED.join(", ")
+        ))
+    })?;
+    let lib = found.map_err(|e| ModelError::new_err(e.to_string()))?;
+    Ok(library::document::library_document(&lib).to_string())
+}
+
 /// Run a deterministic simulation and return the full result
 /// (events, indicator series, dense samples, causal journal,
 /// provenance) as JSON.
@@ -2150,6 +2165,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(check_library_json, module)?)?;
     module.add_function(wrap_pyfunction!(derive_evaluation_order_json, module)?)?;
     module.add_function(wrap_pyfunction!(standard_library_json, module)?)?;
+    module.add_function(wrap_pyfunction!(embedded_library_json, module)?)?;
     module.add_function(wrap_pyfunction!(simulate_json, module)?)?;
     module.add_function(wrap_pyfunction!(monte_carlo_json, module)?)?;
     module.add_function(wrap_pyfunction!(analyse_sequences_json, module)?)?;
