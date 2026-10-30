@@ -542,6 +542,25 @@ pub enum Edge {
     Repair,
 }
 
+/// The confirmation time of a feared event: a fixed delay, or a timed law
+/// written as a core law object.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum Tempo {
+    /// A fixed delay.
+    Delay(f64),
+    /// A timed law (`exp`, `weibull`, `lognormal`, ...).
+    #[cfg_attr(feature = "schema", schemars(with = "raichu_model::Distrib"))]
+    Law(Value),
+}
+
+impl Default for Tempo {
+    fn default() -> Self {
+        Tempo::Delay(0.0)
+    }
+}
+
 /// A feared event: a generated component watching a condition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -552,12 +571,14 @@ pub struct FearedEvent {
     /// Condition (core expression over instance attributes).
     #[cfg_attr(feature = "schema", schemars(with = "crate::schema::Condition"))]
     pub condition: Value,
-    /// Delay the condition must hold before the event occurs.
+    /// How long the condition must hold before the event occurs: a delay
+    /// (a number) or a timed law.
     #[serde(default)]
-    pub tempo_occ: f64,
-    /// Delay the condition must fail before the event clears.
+    pub tempo_occ: Tempo,
+    /// How long the condition must fail before the event clears: a delay
+    /// (a number) or a timed law.
     #[serde(default)]
-    pub tempo_not_occ: f64,
+    pub tempo_not_occ: Tempo,
     /// Whether reaching the event ends and labels a sequence.
     #[serde(default)]
     pub target: bool,

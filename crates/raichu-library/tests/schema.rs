@@ -466,7 +466,8 @@ fn a_templated_library_the_reader_expands_validates() {
                     {"name": "rate", "kind": "number", "default": 0.1},
                     {"name": "level", "kind": "number", "default": 2.0},
                     {"name": "flows", "kind": "list", "items": "string", "default": ["water", "air"]},
-                    {"name": "vote", "kind": "enum", "values": ["any", "all"], "default": "any"}
+                    {"name": "vote", "kind": "enum", "values": ["any", "all"], "default": "any"},
+                    {"name": "wear", "kind": "law", "default": {"distrib": "weibull", "shape": 2.0, "scale": 50.0}}
                 ],
                 "body": {
                     "attributes": [
@@ -485,7 +486,8 @@ fn a_templated_library_the_reader_expands_validates() {
                              "guard": {"$choose": "vote", "cases": {
                                  "any": {"op": "const", "value": {"kind": "bool", "value": true}},
                                  "all": {"op": "attr", "attr": {"component": "$self", "attribute": "fed"}}
-                             }}}
+                             }}},
+                            {"name": "worn", "source": "ok", "targets": ["ko"], "$law": "wear"}
                         ]
                     }]
                 },

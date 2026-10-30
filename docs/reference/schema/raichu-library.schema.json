@@ -6058,6 +6058,344 @@
             "cases"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$law": {
+              "description": "A `law` parameter whose keys the reader writes onto the transition.",
+              "type": "string"
+            },
+            "cycle_cancellation": {
+              "$ref": "#/$defs/CycleCancellation",
+              "description": "**Sequence analysis**: whether the reduction may cancel this\ntransition's [`Transition::cycle_group`]\n([`CycleCancellation`]): `auto` (the default) lets the engine decide\nfrom the model, `never` and `always` override that decision. Every\ntransition of one `(component, cycle_group)` declares the same\nvalue, and a transition with no `cycle_group` declares none.\n\nNon-baseline construct when not `auto`: a document carrying it must\ndeclare [`Feature::CycleCancellation`]. An engine that ignored the\nfield would cancel a group the analyst declared `never`, which is\nexactly the silent collapse the declaration exists to prevent."
+            },
+            "cycle_group": {
+              "$ref": "#/$defs/Template_string_or_null",
+              "description": "**Sequence analysis**: cycle-pair group id: occ/rep (occ/not_occ)\npartner transitions of one failure mode share it, so the\ncycle-filtering step can drop transient failure→repair pairs that net\nout before the feared event. `None` = not part of a cycle pair."
+            },
+            "effects": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Assignment"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_Assignment"
+                      },
+                      {
+                        "$ref": "#/$defs/When_Assignment"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Assignment"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_Assignment"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_Assignment"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "**Edge effects**: assignments evaluated ONCE, when the transition\nfires, after its state change, in declaration order. Unlike a\nsensitive function's effects (a level, re-evaluated whenever what it\nreads changes), nothing re-applies them and nothing restores the\nvalue: the attribute keeps what was written until something else\nwrites it. That is a one-shot effect, and on an attribute nothing\nelse writes, a variable that memorises (a latched detection, an\nalarm). An interrupted transition writes nothing.\n\nOn the target of an ODE equation, an edge effect is a **reset\nmap**, the jump of a piecewise-deterministic Markov process: the\ncontinuous state takes the written value at the firing instant and\nthe integration restarts from it (the value must be a finite float).\n\nNon-baseline construct: a document carrying it must declare\n[`Feature::TransitionEffects`]. An effect on an attribute an explicit\nequation or a sensitive function writes is refused\n([`ModelError::TransitionEffectOverwritten`]): the next evaluation\nwould erase it."
+            },
+            "guard": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Expr"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/Expr"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "Guard: the transition is armed while the guard holds.\nAbsent means \"always true\"."
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TransitionKind"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/TransitionKind"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "**Declared reliability role** (see [`TransitionKind`]): `failure`,\n`repair`, or absent (the default, and the reading of every model\nwritten before the field existed). Applies to the first declared\ntarget only. The muscadet plugin sets it on the failure-mode edges\nit emits."
+            },
+            "monitored": {
+              "$ref": "#/$defs/Template_boolean",
+              "description": "**Sequence analysis**: when true, firing this transition records a\n`SeqEvent` (component, target state, time) into the per-trajectory\nsequence trace (zero cost unless sequence recording is enabled). The\nmuscadet plugin sets it on ObjFM occ/rep and ObjEvent occ transitions."
+            },
+            "monitored_states": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Template_string"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_string"
+                      },
+                      {
+                        "$ref": "#/$defs/When_string"
+                      }
+                    ]
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Template_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_string"
+                                }
+                              ]
+                            },
+                            "type": [
+                              "array",
+                              "null"
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "**Sequence analysis**: the targets whose entry a `monitored`\ntransition records, when not all of them. `None` (the default)\nrecords every target; a list records the entry into those targets\nonly, and a firing that realises another branch records nothing.\n\nThis is how a Bernoulli draw is monitored: its winning branch is\nthe event of the mission, while its losing branch only parks the\nautomaton until the solicitation falls, and recording that park\nwould break the strict failure/repair alternation the cycle filter\nrelies on. Each entry must name a target of the transition, the\nlist must not be empty, and the transition must be `monitored`.\n\nNon-baseline construct: a document carrying it must declare\n[`Feature::MonitoredStates`]. An engine that ignored the field\nwould record every branch, and the sequence and importance analyses\nwould read a lost draw as an event without a word."
+            },
+            "name": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Transition name, unique inside its automaton."
+            },
+            "on_interruption": {
+              "$ref": "#/$defs/InterruptionPolicy",
+              "default": "reset",
+              "description": "What happens to a pending countdown when the guard turns false\n(paper rule `drop_disabled`; see [`InterruptionPolicy`])."
+            },
+            "source": {
+              "$ref": "#/$defs/Template_string",
+              "description": "Source state (must exist in the automaton)."
+            },
+            "targets": {
+              "anyOf": [
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Template_string"
+                      },
+                      {
+                        "$ref": "#/$defs/ForEach_string"
+                      },
+                      {
+                        "$ref": "#/$defs/When_string"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/TemplateParam"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "$choose": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/Template_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/ForEach_string"
+                                },
+                                {
+                                  "$ref": "#/$defs/When_string"
+                                }
+                              ]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "$ref": "#/$defs/TemplateParam"
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "$choose",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "description": "Target states (exactly one for `Delay`; one per branch for\n`Inst`, with `probs.len() == targets.len() - 1`)."
+            }
+          },
+          "required": [
+            "name",
+            "source",
+            "targets",
+            "$law"
+          ],
+          "type": "object"
         }
       ],
       "description": "A transition of an automaton.\n\nMaps to the paper's deterministic transitions ⟨q_src, guard, delay,\ndest-distribution⟩; stochastic (`schedule_stochastic`) and watched (`schedule_boundary`)\ntransitions arrive in M2/M1 respectively."

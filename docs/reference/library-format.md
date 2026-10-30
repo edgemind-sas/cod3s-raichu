@@ -102,6 +102,7 @@ four forms are resolved against the instance's parameter values:
 | `{"$param": "capacity"}` | the parameter's value, anywhere a value goes |
 | `"${flow}_fed_out"` | interpolates a string, number or boolean parameter, or a `$for_each` variable, into a string; an integral number reads without a fraction (`2`, not `2.0`) |
 | `{"$for_each": "flow_types", "as": "f", "items": [...]}` | as an item of an array: repeats `items` once per element of a list (or of a loop variable that is itself a list) |
+| `{"$law": "failure", "name": "fail", "source": "ok", "targets": ["ko"]}` | the keys of a `law` parameter (`distrib`, `rate`, ...) written onto the object beside its other keys, the way a transition carries its law; a key both write is refused |
 | `{"$choose": "method", "cases": {"mean": ..., "median": ...}}` | the case named by an `enum`, `string` or `bool` parameter (`"true"`, `"false"`) |
 | `{"$when": "ccf", "items": [...]}`, `{"$when": "rule", "is": ["printed", "tables"], "items": [...]}` | as an item of an array: keeps `items` in place when the parameter's value is one of `is` (a value or a list), drops them otherwise; without `is`, the parameter is a `bool` and `items` are kept when it is true. `$choose` replaces a whole value; `$when` keeps or drops one item among its siblings (an optional transition). A value in `is` that an `enum` or `bool` parameter never takes is refused, and the items are expanded even when dropped, so a misspelling or an error in them is reported on every instance |
 
@@ -265,7 +266,7 @@ system declares none unless it states one.
 | `system` | the system the study applies to |
 | `modes` | activations of catalogued modes |
 | `one_off_modes` | modes declared on one instance only: `instance`, `name`, `nature`, `effects`, `condition`, laws, `repair_condition`, `effect_step` |
-| `feared_events` | `name`, `condition`, `tempo_occ`, `tempo_not_occ`, `target` |
+| `feared_events` | `name`, `condition`, `tempo_occ`, `tempo_not_occ` (a delay, or a timed law object), `target` |
 | `common_cause_groups` | `name`, `mode`, `instances`, `orders` (`order`, `occurrence`, `repair`), `effect_step` |
 | `indicators`, `targets` | added to the system's; a name the system already uses is refused |
 | `simulation` | `method` (`monte_carlo` or `sequences`), `nb_runs`, `horizon`, `instants`, `seed`, `stop_at_targets`, `options` |
@@ -318,9 +319,10 @@ A study may carry `simulation`, `quantification` or both; with both,
 
 An activation names a catalogued `mode`, then either `instances` (a list of
 instance names) or `type` (every instance of that type), an `occurrence`
-law (required; a timed law, or on demand: `{"distrib": "inst", "probs": [p]}`),
-a timed `repair` law (absent: the mode stays occurred once it has
-occurred), an `on_interruption` policy (default `reset`), an optional
+law (required; a timed law, on demand: `{"distrib": "inst", "probs": [p]}`,
+or `{"distrib": "watched"}`), a `repair` law (absent: the mode stays occurred
+once it has occurred; a timed law, `watched`, or certain:
+`{"distrib": "inst", "probs": []}`), an `on_interruption` policy (default `reset`), an optional
 `condition` and an optional `repair_condition`. A repair condition holds
 the repair back while it is false: it guards the repair transition only,
 never the occurrence nor the re-arm of an on-demand mode, and it needs a
@@ -341,6 +343,18 @@ state. An activation on named instances wins over an activation on
 their type; two activations of one mode on one instance at the same level
 are refused. A mode the type does not catalogue is refused, naming the
 catalogue.
+
+A mode has two states (`rep` and `occ`, plus `parked` for an on-demand
+draw). A `watched` law fires when the continuous boundary its condition
+states is crossed, so a watched occurrence needs a condition (catalogue or
+activation) and a watched repair a `repair_condition`. A watched law also
+fires on entry when its condition already holds, so a repaired mode whose
+watched occurrence condition still holds occurs again at once. A certain
+repair is taken when its `repair_condition` is found true at a discrete
+event, and needs one; a repair condition on a continuous attribute is
+refused for it (`watched` repairs on the boundary). A law with
+several branches has no second destination in a mode and is refused: a
+type-body automaton expresses it.
 
 A common-cause group fails several instances together with a mode
 catalogued on each member's type (a mode with a catalogue condition is
@@ -392,7 +406,8 @@ AND its activation condition.
   none: its writes are the `effects` of the transitions that carry them.
 - Each feared event is a component named after it, with an automaton `ev`
   (`not_occ`, `occ`) of observation transitions delayed by `tempo_occ` and
-  `tempo_not_occ`; `target: true` adds a sequence target.
+  `tempo_not_occ`, each a fixed delay or drawn from the timed law written
+  there; `target: true` adds a sequence target.
 - The model's `source` names the library and its version, the system, the
   study and the engine version that supplied `std`.
 - A model with explicit equations gets an `evaluation_order` derived from

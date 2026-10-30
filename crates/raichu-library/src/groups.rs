@@ -262,6 +262,7 @@ impl Group<'_> {
                 &pointer_key(&order_pointer, "occurrence"),
                 &context,
                 true,
+                false, // a group carries no condition
             )?;
             let repair = match &order.repair {
                 Some(value) => Some(law(
@@ -269,6 +270,7 @@ impl Group<'_> {
                     DocumentKind::Study,
                     &pointer_key(&order_pointer, "repair"),
                     &context,
+                    false,
                     false,
                 )?),
                 None => None,
