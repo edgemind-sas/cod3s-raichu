@@ -598,6 +598,31 @@ pub struct Simulation {
     /// Stop each replica at the first target reached.
     #[serde(default)]
     pub stop_at_targets: bool,
+    /// The run's other keywords, named as the Python entry point names
+    /// them (`pyraichu.monte_carlo` or `pyraichu.run_sequences`):
+    /// confidence, quantiles, thread count, solver tolerances, flow policy.
+    /// `pyraichu` checks them against that entry point when it loads the
+    /// study.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub options: Map<String, Value>,
+}
+
+/// Analyses a study requests, each written with the parameters of the
+/// Python function that runs it (the model aside), which `pyraichu` checks
+/// when it loads the study.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Analyses {
+    /// Fault-tree generation (`pyraichu.fault_tree`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fault_tree: Option<Map<String, Value>>,
+    /// Importance measures (`pyraichu.importance`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<Map<String, Value>>,
+    /// Minimal-sequence analysis (`pyraichu.analyse_sequences`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_analysis: Option<Map<String, Value>>,
 }
 
 /// A quantification method, by the name the quantification envelope
@@ -714,6 +739,9 @@ pub struct StudyDocument {
     /// A quantification of a target by one of the quantification methods.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantification: Option<Quantification>,
+    /// Analyses requested by the study.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyses: Option<Analyses>,
     /// Free text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

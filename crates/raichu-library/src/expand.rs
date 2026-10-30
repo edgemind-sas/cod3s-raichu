@@ -1,7 +1,7 @@
 //! The expansion of a system (and optionally a study) into a flat core
 //! model.
 
-use crate::document::{Library, Quantification, Simulation, StudyDocument, SystemModel};
+use crate::document::{Analyses, Library, Quantification, Simulation, StudyDocument, SystemModel};
 use crate::error::{pointer_index, pointer_key, DocumentKind, ExpandError};
 use crate::instantiate::{instantiate, ExpandedInstance, LibrarySet};
 use crate::names::split_public;
@@ -25,6 +25,8 @@ pub struct Expansion {
     pub simulation: Option<Simulation>,
     /// The study's quantification, when it declares one.
     pub quantification: Option<Quantification>,
+    /// The analyses the study requests, when it requests any.
+    pub analyses: Option<Analyses>,
     /// Non-fatal observations (for example a type-wide activation on a
     /// type with no instance).
     pub warnings: Vec<String>,
@@ -163,6 +165,7 @@ pub fn expand(
         provenance,
         simulation: None,
         quantification: None,
+        analyses: None,
         warnings: Vec::new(),
     };
     let groups = match study {
@@ -180,6 +183,7 @@ pub fn expand(
     // the targets carrying their mirrors.
     expansion.model.components.extend(groups);
     expansion.model.unbounded_rate = unbounded_rate(system, &expansion.provenance)?;
+    expansion.analyses = study.and_then(|s| s.analyses.clone());
     if let Some(quantification) = study.and_then(|s| s.quantification.as_ref()) {
         check_quantification(quantification, &expansion.model)?;
         expansion.quantification = Some(quantification.clone());
