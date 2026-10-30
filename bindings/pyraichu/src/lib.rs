@@ -353,6 +353,7 @@ fn parse_libraries(texts: &[String]) -> PyResult<Vec<raichu::raichu_library::Lib
 /// a flat core model, returned as JSON:
 /// `{"model": <sealed model document>, "provenance": {...},
 /// "simulation": {...} | null, "quantification": {...} | null,
+/// "analyses": {...} | null,
 /// "warnings": [...]}`.
 ///
 /// `libraries_json` holds the library documents the system may draw on;
@@ -386,6 +387,7 @@ fn expand_documents_json(
         "provenance": expansion.provenance.elements,
         "simulation": expansion.simulation,
         "quantification": expansion.quantification,
+        "analyses": expansion.analyses,
         "warnings": expansion.warnings,
     });
     Ok(result.to_string())

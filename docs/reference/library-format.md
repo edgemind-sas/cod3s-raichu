@@ -268,8 +268,36 @@ system declares none unless it states one.
 | `feared_events` | `name`, `condition`, `tempo_occ`, `tempo_not_occ`, `target` |
 | `common_cause_groups` | `name`, `mode`, `instances`, `orders` (`order`, `occurrence`, `repair`), `effect_step` |
 | `indicators`, `targets` | added to the system's; a name the system already uses is refused |
-| `simulation` | `method` (`monte_carlo` or `sequences`), `nb_runs`, `horizon`, `instants`, `seed`, `stop_at_targets` |
+| `simulation` | `method` (`monte_carlo` or `sequences`), `nb_runs`, `horizon`, `instants`, `seed`, `stop_at_targets`, `options` |
 | `quantification` | `target`, `horizon`, `instants`, `seed`, `method` (`{"name": ..., "settings": {...}}`); see below |
+
+`simulation.options` carries the other keywords of the run the method
+names, with the names of `pyraichu.monte_carlo` or `pyraichu.run_sequences`:
+`confidence`, `quantiles`, `threads`, the solver tolerances (`rtol`,
+`atol`, `max_step`, `tol_event`, `sub_samples`, `event_resolution`), and
+`flow` as an object of [`FlowConfig`](../guides/numerical-tuning.md)
+fields; a sequence campaign also takes `observations` (a list of
+`Observation` objects: `name`, `component`, `attribute`, `time`),
+`condition` (a `SequenceCondition` object: `observation`, `op`, `value`) and
+`raw_path`, resolved against the study's directory when relative. A keyword
+the run does not take, one the section states itself (`seed`, `nb_runs`),
+a required one left out, or an object whose fields do not build is refused
+by name when the study is loaded. A `threads` given to `run_study` wins over
+the one a study states.
+
+`analyses` requests analyses of the study, each written with the
+parameters of the function that runs it, the model aside:
+
+| Key | Run by |
+|---|---|
+| `fault_tree` | `pyraichu.fault_tree` (`targets`, `top`, `profile`, `max_nodes`, `cut_set_limit`, `cut_sets`, `name`, `measure`) |
+| `importance` | `pyraichu.importance` (`nb_runs`, `t_max`, `instants`, `target`, `seed`, `threads`, `flow`, `basic_events`, `groups`) |
+| `sequence_analysis` | `pyraichu.analyse_sequences` (`nb_runs`, `t_max`, `seed`, `threads`, `flow`) |
+
+An analysis the format does not list is refused when the study is read, a
+parameter the function does not take when it is loaded.
+`pyraichu.run_study(model, section="fault_tree")` runs one; a study
+carrying a single section runs it without naming it.
 
 A `quantification` states one quantification of the study, as
 [`pyraichu.quantify`](../guides/quantification.md) takes it: the

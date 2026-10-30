@@ -129,6 +129,37 @@
         }
       ]
     },
+    "Analyses": {
+      "additionalProperties": false,
+      "description": "Analyses a study requests, each written with the parameters of the\nPython function that runs it (the model aside), which `pyraichu` checks\nwhen it loads the study.",
+      "properties": {
+        "fault_tree": {
+          "additionalProperties": true,
+          "description": "Fault-tree generation (`pyraichu.fault_tree`).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "importance": {
+          "additionalProperties": true,
+          "description": "Importance measures (`pyraichu.importance`).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "sequence_analysis": {
+          "additionalProperties": true,
+          "description": "Minimal-sequence analysis (`pyraichu.analyse_sequences`).",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "AttrRef": {
       "additionalProperties": false,
       "description": "Reference to an attribute by hierarchical name: the *authoring /\nserialized* form. Build-time validation resolves it to dense indices\n(typed errors on dangling references; no stringly-typed lookups at\nsimulation time).",
@@ -1720,6 +1751,11 @@
           "minimum": 0,
           "type": "integer"
         },
+        "options": {
+          "additionalProperties": true,
+          "description": "The run's other keywords, named as the Python entry point names\nthem (`pyraichu.monte_carlo` or `pyraichu.run_sequences`):\nconfidence, quantiles, thread count, solver tolerances, flow policy.\n`pyraichu` checks them against that entry point when it loads the\nstudy.",
+          "type": "object"
+        },
         "seed": {
           "default": 0,
           "description": "Master seed.",
@@ -1768,6 +1804,17 @@
       "additionalProperties": false,
       "description": "A study: which modes run, with which laws, and what is observed.",
       "properties": {
+        "analyses": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Analyses"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Analyses requested by the study."
+        },
         "common_cause_groups": {
           "default": [],
           "description": "Common-cause groups: a catalogued mode failing several instances\ntogether, one law per order.",
