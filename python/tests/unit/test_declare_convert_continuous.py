@@ -3,10 +3,12 @@
 A continuous network converts into the std fragments each construct's
 plugin-versus-library bench proves (`test_library_std_continuous.py`):
 sources and sinks with their profiles and published rates, split policies,
-pass-throughs, and rule sets with one guarded rule and one idle rule. Every
-other construct, volumes included, is refused by name. The converted
-documents are compared with the declaration route itself, exactly: no
-transition here is random.
+pass-throughs, single-flow output-side volumes, and rule sets with one
+guarded rule and one idle rule. Every other construct is refused by name.
+The converted documents are compared with the declaration route itself: no
+transition here is random. A network without a volume agrees exactly; a
+volume that leaves a bound agrees within the integrator's measured spread
+(the `integrator` level), never beyond it.
 
 Oracle-free: both routes run on RAICHU. Component and flow names are
 invented.
@@ -18,7 +20,7 @@ import copy
 
 import pytest
 
-from pyraichu.muscadet.convert import compare_routes, convert
+from pyraichu.muscadet.convert import _armed_tolerated, _Spread, compare_routes, convert
 from test_declare_convert import component, document, flow_in, link
 
 SUN = {"cls": "SinusoidalProfile", "amplitude": 6.0, "period": 12.0, "phase_shift": 2.0,
@@ -56,13 +58,19 @@ def rule(name: str, cond: list, cons: dict, prod: dict) -> dict:
     return {"name": name, "cond": cond, "cons": cons, "prod": prod, "cls": "Rule"}
 
 
-def proved(declaration: dict, t_max=23.3):
+def proved(declaration: dict, t_max=23.3, levels=("exact",)):
     conversion = convert(declaration)
     assert conversion.converted, conversion.refusals
     comparison = compare_routes(declaration, conversion, t_max=t_max)
     assert comparison.identical, comparison.detail
-    assert comparison.level == "exact", comparison.detail
+    assert comparison.level in levels, comparison.detail
     return conversion
+
+
+#: Levels a converted volume may compare at: its bound departures fall a few
+#: ulps apart on the two routes (`tolerance`), and from there the integrator
+#: may step differently (`integrator`).
+VOLUME_LEVELS = ("exact", "tolerance", "integrator")
 
 
 def refusals(declaration: dict) -> list[str]:
@@ -207,7 +215,7 @@ def test_a_converted_profile_period_altered_is_reported_divergent():
 # --- what is refused by name ---------------------------------------------------
 
 
-def test_a_mixed_volume_is_refused_and_a_single_flow_one_too():
+def test_a_mixed_volume_is_refused_and_a_single_flow_one_converts():
     mixed = document(
         [
             component("S", [c_out("A", 2.0), c_out("B", 1.0)], class_name="Source"),
@@ -230,7 +238,7 @@ def test_a_mixed_volume_is_refused_and_a_single_flow_one_too():
         ],
         [link("S", "T", "A"), link("T", "C", "A")],
     )
-    assert refusals(single) == ["output-side volume"]
+    proved(single, levels=VOLUME_LEVELS)
 
 
 def test_a_transmitting_volume_is_refused():
@@ -268,9 +276,81 @@ def test_two_guarded_rules_are_refused_naming_the_count():
     assert "2 guarded and 0 idle rules" in conversion.refusals[0].detail
 
 
-def test_a_store_is_refused_whatever_its_fill():
-    for fill in (0.0, 0.5, float("inf")):
-        assert refusals(store_plant(fill)) == ["output-side volume"]
+@pytest.mark.parametrize("fill", [0.0, 0.5, float("inf")])
+@pytest.mark.parametrize("t_max", [7.0, 23.3, 40.0])
+def test_a_store_converts_whatever_its_fill(fill, t_max):
+    proved(store_plant(fill), t_max=t_max, levels=VOLUME_LEVELS)
+
+
+def test_a_store_leaving_a_bound_compares_at_the_integrator_level():
+    """Measured: the store runs empty and refills; the two routes date that
+    departure a few ulps apart and step differently from there."""
+    declaration = store_plant(0.0)
+    comparison = compare_routes(declaration, convert(declaration), t_max=40.0)
+    assert comparison.identical, comparison.detail
+    assert comparison.level == "integrator", comparison.detail
+    assert "tank_content_H2" in comparison.detail
+
+
+@pytest.mark.parametrize("fill", [0.0, 0.5])
+def test_a_store_capacity_altered_by_a_millionth_is_reported_divergent(fill):
+    """Negative control: the integrator's spread on this plant is below
+    1e-6, so a capacity one millionth larger is not swallowed."""
+    declaration = store_plant(fill)
+    altered = copy.deepcopy(convert(declaration))
+    tank = next(t for t in altered.library["library"]["types"] if t["name"] == "Tank")
+    for use in tank["uses"]:
+        if use["fragment"] in ("std.volume_flow", "std.volume_total"):
+            use["with"]["capacity"] *= 1.0 + 1e-6
+    comparison = compare_routes(declaration, altered, t_max=40.0)
+    assert not comparison.identical, comparison.detail
+
+
+def test_a_network_without_an_ode_gets_no_integrator_spread():
+    """Negative control: a rate one part in 1e10 off is beyond float
+    reordering, and a network with no ODE has no spread to hide it in."""
+    declaration = bus_plant()
+    altered = copy.deepcopy(convert(declaration))
+    generator = next(t for t in altered.library["library"]["types"] if t["name"] == "Generator")
+    source = next(u for u in generator["uses"] if u["fragment"] == "std.continuous_source")
+    source["with"]["rate"] *= 1.0 + 1e-10
+    comparison = compare_routes(declaration, altered, t_max=24.0)
+    assert not comparison.identical, comparison.detail
+
+
+def test_the_integrator_spread_is_kept_per_transition_and_per_value():
+    """A date spread measured on one transition loosens no other; a value
+    spread measured on one attribute loosens no other."""
+    spread = _Spread(values={"T.content": 1e-7}, dates={"T.bounds.reach_full": 1e-6})
+    assert spread.admits_date(10.0, 10.0 + 5e-7, "T.bounds.reach_full")
+    assert not spread.admits_date(10.0, 10.0 + 5e-7, "T.cycle.delay_done")
+    assert spread.admits_value(1.0, 1.0 + 5e-8, "T.content")
+    assert not spread.admits_value(1.0, 1.0 + 5e-8, "T.rate")
+    assert _Spread(values={}, dates={}).armed == 0.0
+
+
+def test_an_armed_age_beyond_float_reordering_is_never_reported_exact():
+    """An armed transition whose age alone differs beyond 1e-12 needs the
+    integrator's spread: it is named under that level, never passed
+    silently."""
+    left = {"M.fail": ('{"distrib": "exp"}', 3.0, 1.0, True, 0.5)}
+    right = {"M.fail": ('{"distrib": "exp"}', 3.0, 1.0 + 1e-8, True, 0.5)}
+    integrated: set[str] = set()
+    assert _armed_tolerated(left, right, integrated) == set()
+    assert integrated == {"armed M.fail"}
+    # An age read at a shifted date, alike within float reordering, is
+    # the reading's own rounding: named nowhere.
+    right = {"M.fail": ('{"distrib": "exp"}', 3.0, 1.0 + 1e-15, True, 0.5)}
+    integrated = set()
+    assert _armed_tolerated(left, right, integrated) == set() and integrated == set()
+
+
+def test_a_store_output_keeps_its_published_rate():
+    declaration = store_plant(0.5)
+    _flow(declaration, "T", "FlowContinuousOut", "H2").update(publish_rate="capability")
+    conversion = proved(declaration, levels=VOLUME_LEVELS)
+    tank = next(t for t in conversion.library["library"]["types"] if t["name"] == "Tank")
+    assert {"fragment": "std.rate_publisher", "with": {"name": "H2", "of": "capability"}} in tank["uses"]
 
 
 def _flow(declaration: dict, component: str, cls: str, name: str) -> dict:
@@ -279,6 +359,14 @@ def _flow(declaration: dict, component: str, cls: str, name: str) -> dict:
 
 def _rule_set(declaration: dict) -> dict:
     return declaration["components"]["M"]["rules"][0]
+
+
+def _store() -> dict:
+    return store_plant(0.5)
+
+
+#: Bases of `REFUSED_EDITS` holding a volume, which may compare beyond exact.
+STORE_BASES = (_store,)
 
 
 #: One field changed on a converting plant, and the construct it is refused as.
@@ -333,6 +421,16 @@ REFUSED_EDITS = {
         lambda d: _rule_set(d).update(apportionment={"Gas": 1.0}),
         "rule set apportionment",
     ),
+    "store starting full": (
+        _store,
+        lambda d: d["components"]["T"]["capacities"][0].update(content_init={"H2": 6.0}),
+        "volume starting full",
+    ),
+    "store with a finite serve rate": (
+        _store,
+        lambda d: d["components"]["T"]["capacities"][0].update(serve_rate=2.0),
+        "volume serve rate",
+    ),
     "input consumed by two rule sets": (
         machine_plant,
         lambda d: d["components"]["M"]["rules"].append(
@@ -348,6 +446,6 @@ REFUSED_EDITS = {
 def test_an_unproved_construct_is_refused_by_name(edit):
     base, change, construct = REFUSED_EDITS[edit]
     declaration = base()
-    proved(base())
+    proved(base(), levels=VOLUME_LEVELS if base in STORE_BASES else ("exact",))
     change(declaration)
     assert refusals(declaration) == [construct]

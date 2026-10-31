@@ -336,7 +336,8 @@ the repair, and held at rest and written once entering the failure.
 Continuous flows convert where a plugin-versus-library bench proves the
 fragment: sources and sinks with their sinusoidal profiles and published
 rates, proportional and share splits, pass-throughs (`std.pass_through`),
-and rule sets with one guarded rule and one idle rule (boolean conditions
+single-flow volumes on the output side with a finite or unbounded fill
+(`std.volume_flow`, `std.volume_outlet`, `std.volume_total`), and rule sets with one guarded rule and one idle rule (boolean conditions
 and at most one band), handing back a surplus where two suppliers or more
 feed a consumed input. The converter reads each component with the
 declaration route's own reader and asks it what each flow is, so a flow is
@@ -344,12 +345,10 @@ a pass-through, a volume's or a rule set's on both routes alike.
 
 It refuses by name the continuous constructs no bench proves yet: a volume
 served as a mixture (`pooled serving (mixed volume)`, several flows in one
-volume on the output side), a transmitting volume (`transmits`), any other
-volume (`output-side volume`: once a volume leaves a bound, the two routes
-date that departure about 3e-11 apart, the loop through the volume's demand
-being solved in a different order on each, which is beyond the comparison's
-1e-12), volumes on the input side, beside rule sets or holding several
-flows, always-on and
+volume on the output side), a transmitting volume (`transmits`), a volume
+starting full, with a finite serve rate, a discharge command, a make-up
+flow, a hysteresis or a flow weight, volumes on the input side, beside rule
+sets or holding several flows, always-on and
 multi-rule rule sets, an output two rule sets produce, demand and capability
 equations, conduits and transfers, and measurements. It also refuses
 production operands that compare a quantity (a negated operand converts
@@ -408,7 +407,26 @@ events is not replayable. Both routes run the same engine, so values and
 event dates must agree exactly; a difference within `1e-12` (relative, or
 absolute near zero), which only float arithmetic done in another order
 produces, is accepted and reported as `level="tolerance"`, naming what
-needed it, never as `exact`. `method="statistical"` compares
+needed it, never as `exact`.
+
+A model with an ODE may differ by more, and only by what the integrator
+leaves open. Once a volume leaves a bound, the two routes date that
+departure a few ulps apart, the loop through the volume's demand being
+solved in a different order on each; from there the integrator steps
+differently on each route, and the trajectories agree to its accuracy, not
+to the last bit. On such a model, `compare_routes` first measures that
+accuracy: it runs the declaration route twice, with nothing changed but
+where the run stops, and records the largest gap of each float attribute
+and of each transition's firing dates. A difference within that spread is
+accepted and reported as `level="integrator"`, naming the values and dates
+that needed it and the spread they rest on. The spread is also what the
+comparison cannot see on those values: on the volume of the test suite, a
+capacity one millionth off is reported divergent, one ten-millionth off
+can pass. A value or a date the integrator does not move gets no spread and
+stays compared within `1e-12`. The spread is measured on the trajectory
+no draw fires, so a replay reaching another regime is judged against it
+too, and a larger gap there is reported as a divergence. Discrete states,
+event order and hazards stay compared as before. `method="statistical"` compares
 means over at least 30 independent runs per route instead and says so in
 `level`: it only shows that no difference was detected at that sample
 size.
