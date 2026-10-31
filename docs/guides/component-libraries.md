@@ -333,12 +333,29 @@ held effect itself. Two shapes the declaration route folds into a held
 effect are held effects here: held while failed and handed back once at
 the repair, and held at rest and written once entering the failure.
 
-The converter refuses continuous flows and capacities, and production
-operands that compare a quantity (a negated operand converts through
-`std.bool_not`). It also refuses conditions on a common-cause group,
-on-demand repair laws, a rest value other than the initial one, and
-controllers. On persistent availabilities it refuses what the declaration
-route refuses:
+Continuous flows convert where a plugin-versus-library bench proves the
+fragment: sources and sinks with their sinusoidal profiles and published
+rates, proportional and share splits, pass-throughs (`std.pass_through`),
+and rule sets with one guarded rule and one idle rule (boolean conditions
+and at most one band), handing back a surplus where two suppliers or more
+feed a consumed input. The converter reads each component with the
+declaration route's own reader and asks it what each flow is, so a flow is
+a pass-through, a volume's or a rule set's on both routes alike.
+
+It refuses by name the continuous constructs no bench proves yet: a volume
+served as a mixture (`pooled serving (mixed volume)`, several flows in one
+volume on the output side), a transmitting volume (`transmits`), any other
+volume (`output-side volume`: once a volume leaves a bound, the two routes
+date that departure about 3e-11 apart, the loop through the volume's demand
+being solved in a different order on each, which is beyond the comparison's
+1e-12), volumes on the input side, beside rule sets or holding several
+flows, always-on and
+multi-rule rule sets, an output two rule sets produce, demand and capability
+equations, conduits and transfers, and measurements. It also refuses
+production operands that compare a quantity (a negated operand converts
+through `std.bool_not`), conditions on a common-cause group, on-demand
+repair laws, a rest value other than the initial one, and controllers. On
+persistent availabilities it refuses what the declaration route refuses:
 
 - a one-shot write on an availability reset every step;
 - a held and a one-shot write on one face;

@@ -2687,8 +2687,114 @@
         }
       },
       {
+        "name": "pass_through",
+        "description": "The flow `<name>` crosses the component unchanged, from the input `<name>` (a `continuous_flow_in`) to the output `<name>` (a `continuous_flow_out` with `available: produced`), with no volume, rule set or conduit on it: the input asks what the output is asked (zero when nothing reads the output), the output can deliver what could arrive and hands on what did arrive (`<name>_produced_out`), both scaled by `<name>_out_rate` and never negative.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Flow name."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}_produced_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${name}_demand_in",
+              "kind": "explicit",
+              "expr": {
+                "op": "attr",
+                "attr": {
+                  "component": "$self",
+                  "attribute": "${name}_demand_out"
+                }
+              }
+            },
+            {
+              "target": "${name}_capability_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "mul",
+                "args": [
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_out_rate"
+                    }
+                  },
+                  {
+                    "op": "max",
+                    "args": [
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_capability_in"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "target": "${name}_produced_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "mul",
+                "args": [
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_out_rate"
+                    }
+                  },
+                  {
+                    "op": "max",
+                    "args": [
+                      {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_fed_in"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
         "name": "volume_flow",
-        "description": "One flow `<flow>` held in the volume `<volume>`: its content (an ODE: what arrives less what leaves), its fill fraction, and the demand of the input `<flow>` (a `continuous_flow_in`), which asks its nominal demand plus the fill rate while the volume is not full and no more than leaves once it is. The volume's bounds come from `volume_total`; an outlet adds `volume_outlet`.",
+        "description": "One flow `<flow>` held in the volume `<volume>`: its content (an ODE: what arrives less what leaves), its fill fraction, and the demand of the input `<flow>` (a `continuous_flow_in`), which asks its nominal demand plus the fill rate while the volume is not full (with `fill_unbounded`, whatever its suppliers can deliver) and no more than leaves once it is. The volume's bounds come from `volume_total`; an outlet adds `volume_outlet`.",
         "parameters": [
           {
             "name": "volume",
@@ -2722,6 +2828,12 @@
             "kind": "number",
             "default": 0.0,
             "description": "Rate the volume fills at on top of the demand."
+          },
+          {
+            "name": "fill_unbounded",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the volume claims without bound while it is not full (whatever its suppliers can deliver); `fill_rate` is then ignored."
           },
           {
             "name": "outlet",
@@ -2831,39 +2943,77 @@
                   ]
                 },
                 "otherwise": {
-                  "op": "add",
-                  "args": [
-                    {
-                      "op": "min",
+                  "$choose": "fill_unbounded",
+                  "cases": {
+                    "false": {
+                      "op": "add",
                       "args": [
+                        {
+                          "op": "min",
+                          "args": [
+                            {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "demand"
+                                }
+                              }
+                            },
+                            {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${volume}_serve_rate_${flow}"
+                              }
+                            }
+                          ]
+                        },
                         {
                           "op": "const",
                           "value": {
                             "kind": "float",
                             "value": {
-                              "$param": "demand"
+                              "$param": "fill_rate"
                             }
-                          }
-                        },
-                        {
-                          "op": "attr",
-                          "attr": {
-                            "component": "$self",
-                            "attribute": "${volume}_serve_rate_${flow}"
                           }
                         }
                       ]
                     },
-                    {
-                      "op": "const",
-                      "value": {
-                        "kind": "float",
-                        "value": {
-                          "$param": "fill_rate"
+                    "true": {
+                      "op": "max",
+                      "args": [
+                        {
+                          "op": "min",
+                          "args": [
+                            {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "demand"
+                                }
+                              }
+                            },
+                            {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${volume}_serve_rate_${flow}"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 1e+30
+                          }
                         }
-                      }
+                      ]
                     }
-                  ]
+                  }
                 }
               }
             },

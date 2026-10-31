@@ -382,9 +382,13 @@ def _arm_triggers(instances: dict[str, dict], connections: list[dict]) -> None:
                 with_["armed"] = not wired and with_["time_up"] == 0.0
 
 
-def _flow_uses(spec: dict, name: str) -> tuple[list[dict], list[tuple[str, dict]]]:
-    """The std fragments a flow component's declaration means, in order, and
-    the failure modes it declares in its own `failure_modes` section."""
+def _flow_uses(
+    spec: dict, name: str, network: _Network
+) -> tuple[list[dict], list[tuple[str, dict]], dict[str, str]]:
+    """The std fragments a flow component's declaration means, in order, the
+    failure modes it declares in its own `failure_modes` section, and the
+    transitions its continuous part carries under the same names on both
+    routes."""
     try:
         _, _, _, calls = declare._plan(spec, declare.COMPONENT_CLASSES)
     except declare.ComponentSpecError as error:
@@ -400,15 +404,26 @@ def _flow_uses(spec: dict, name: str) -> tuple[list[dict], list[tuple[str, dict]
         if call.section == "failure_modes" and call.method in _EMBEDDED_LAWS:
             embedded.append((call.method, dict(call.keywords)))
             continue
+        if _is_continuous(call):
+            continue
         try:
             uses.append(_flow_call_use(spec, call, inputs, outputs))
         except _Refused as error:
             refused.append(error)
+    rename: dict[str, str] = {}
+    if any(_is_continuous(call) for call in calls):
+        try:
+            continuous, rename = _continuous_uses(spec, name, network)
+            uses += continuous
+        except _Refused as error:
+            refused.append(error)
+        except _RefusedAll as errors:
+            refused.extend(errors.refusals)
     if refused:
         # Every blocking construct of the component, not only the first:
         # the coverage matrix counts what blocks a model alone.
         raise _RefusedAll(refused)
-    return uses + _negations(uses), embedded
+    return uses + _negations(uses), embedded, rename
 
 
 def _flow_call_use(spec: dict, call: Any, inputs: set[str], outputs: set[str]) -> dict:
@@ -431,6 +446,352 @@ def _flow_call_use(spec: dict, call: Any, inputs: set[str], outputs: set[str]) -
     if keywords:
         raise _Refused("flow keyword", f"flow `{flow}` declares {sorted(keywords)}")
     return use
+
+
+# ---------------------------------------------------------------------------
+# Continuous flows: what a component's network part uses
+# ---------------------------------------------------------------------------
+
+#: The authoring methods of the continuous flow classes.
+_CONTINUOUS_METHODS = ("add_flow_continuous_in", "add_flow_continuous_out")
+#: Sections read whole, per component, by :func:`_continuous_uses`.
+_CONTINUOUS_SECTIONS = ("capacities", "rules")
+#: Construct named for a volume the declaration route serves as a mixture
+#: (:meth:`pyraichu.muscadet.ObjFlow._mixed_volume`): pooled serving is a
+#: generic format mechanism the library does not have yet.
+_POOLED = "pooled serving (mixed volume)"
+
+
+@dataclass(frozen=True)
+class _Network:
+    """What the connections say about each continuous end: how many
+    connections feed an input, and which inputs (component, flow) an output
+    feeds."""
+
+    suppliers: dict[tuple[str, str], int]
+    consumers: dict[tuple[str, str], list[tuple[str, str]]]
+    wired: dict[str, set[str]]
+
+    @classmethod
+    def of(cls, declaration: dict, components: dict) -> _Network:
+        suppliers: dict[tuple[str, str], int] = collections.Counter()
+        consumers: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for entry in declaration.get("connections") or []:
+            source, box = entry.get("source"), str(entry.get("source_box") or "")
+            target, inbox = entry.get("target"), str(entry.get("target_box") or "")
+            if inbox.endswith("_in"):
+                suppliers[(target, inbox[: -len("_in")])] += 1
+            if box.endswith("_out") and inbox.endswith("_in"):
+                consumers.setdefault((source, box[: -len("_out")]), []).append((target, inbox[: -len("_in")]))
+        wired = declare._wired_rate_channels(components, declaration.get("connections"))
+        return cls(dict(suppliers), consumers, wired)
+
+
+def _is_continuous(call: Any) -> bool:
+    return call.method in _CONTINUOUS_METHODS or call.section in _CONTINUOUS_SECTIONS
+
+
+def _profile_refusal(profile: Any, where: str) -> list[_Refused]:
+    """`std.time_profile` clamps from below only."""
+    if profile is not None and profile.value_max is not None and not math.isinf(profile.value_max):
+        return [_Refused("profile upper bound", f"{where} clamps its profile at {profile.value_max}")]
+    return []
+
+
+def _profile_uses(target: str, profile: Any) -> list[dict]:
+    """`std.time_profile` for a declared sinusoidal profile."""
+    return [
+        {
+            "fragment": "std.time_profile",
+            "with": {
+                "target": target,
+                "amplitude": float(profile.amplitude),
+                "phase_shift": float(profile.phase_shift),
+                "period": float(profile.period),
+                "offset": float(profile.offset),
+                "value_min": float(profile.value_min),
+                "initial": float(profile.factor(0.0)),
+            },
+        }
+    ]
+
+
+def _allocation(flow: Any, consumers: list[tuple[str, str]]) -> dict[str, Any]:
+    """The `continuous_flow_out` parameters of an output's split policy."""
+    if flow.allocation == "proportional":
+        return {}
+    if flow.allocation != "shares":
+        raise _Refused(f"allocation `{flow.allocation}`", f"output `{flow.name}`")
+    declared = dict(flow.allocation_shares or {})
+    names = [component for component, _ in consumers]
+    if sorted(declared) != sorted(set(names)) or len(names) != len(set(names)):
+        raise _Refused(
+            "allocation shares not naming each consumer once",
+            f"output `{flow.name}` shares {sorted(declared)} over consumers {names}",
+        )
+    return {
+        "allocation": "shares",
+        "shares": [
+            {"to": {"component": component, "port": f"{inflow}_in"}, "value": float(declared[component])}
+            for component, inflow in consumers
+        ],
+    }
+
+
+def _rule_set_uses(
+    rule_set: Any, inputs: dict[str, Any], outputs: dict[str, Any], bool_inputs: set[str]
+) -> list[dict]:
+    """A rule set with one guarded rule and one idle rule, as `std.rule_set`
+    and its `rule_consumes` / `rule_produces`."""
+    where = f"rule set `{rule_set.name}`"
+    if rule_set.apportionment:
+        raise _Refused("rule set apportionment", where)
+    guarded = [rule for rule in rule_set.rules if not rule.is_default]
+    idle = [rule for rule in rule_set.rules if rule.is_default]
+    if not guarded:
+        raise _Refused("always-on rule set", f"{where} has no guarded rule")
+    if len(guarded) != 1 or len(idle) != 1:
+        raise _Refused(
+            "multi-rule rule set", f"{where} has {len(guarded)} guarded and {len(idle)} idle rules"
+        )
+    active, rest = guarded[0], idle[0]
+    if any(rate != 0.0 for rate in [*rest.cons.values(), *rest.prod.values()]):
+        raise _Refused("idle rule moving a flow", f"{where}, rule `{rest.name}`")
+    if not active.name or not rest.name:
+        raise _Refused("unnamed rule", where)
+    if set(rest.cons) - set(active.cons) or set(rest.prod) - set(active.prod):
+        raise _Refused("idle rule naming a flow the active rule does not", where)
+    conditions: list[str] = []
+    band: dict[str, Any] = {}
+    for operand in active.cond:
+        if operand.automaton is not None or operand.negate:
+            raise _Refused("rule guard operand", f"{where} reads {operand.label()}")
+        if operand.op is None and operand.name in bool_inputs and operand.port in (None, "in"):
+            conditions.append(operand.name)
+            continue
+        if (
+            operand.op == ">="
+            and operand.release is not None
+            and operand.name in inputs
+            and operand.port in (None, "in")
+            and not band
+        ):
+            band = {
+                "threshold": "band",
+                "threshold_flow": operand.name,
+                "activate": float(operand.value),
+                "release": float(operand.release),
+            }
+            continue
+        raise _Refused("rule guard operand", f"{where} reads {operand.label()}")
+    consumes, produces = list(active.cons), list(active.prod)
+    for flow in consumes:
+        if flow not in inputs:
+            raise _Refused("rule consuming no continuous input", f"{where} consumes `{flow}`")
+    for flow in produces:
+        if flow not in outputs:
+            raise _Refused("rule producing no continuous output", f"{where} produces `{flow}`")
+    capped = [flow for flow in produces if outputs[flow].max_rate is not None]
+    uses = [
+        {
+            "fragment": "std.rule_set",
+            "with": {
+                "name": rule_set.name,
+                "active": active.name,
+                "idle": rest.name,
+                "consumes": consumes,
+                "produces": produces,
+                "capped": capped,
+                "conditions": conditions,
+                **band,
+            },
+        }
+    ]
+    for flow in consumes:
+        uses.append(
+            {
+                "fragment": "std.rule_consumes",
+                "with": {
+                    "rule_set": rule_set.name,
+                    "active": active.name,
+                    "flow": flow,
+                    "rate": float(active.cons[flow]),
+                },
+            }
+        )
+    for flow in produces:
+        with_: dict[str, Any] = {
+            "rule_set": rule_set.name,
+            "active": active.name,
+            "flow": flow,
+            "rate": float(active.prod[flow]),
+        }
+        if flow in capped:
+            with_["capped"] = True
+            with_["max_rate"] = float(outputs[flow].max_rate)
+        uses.append({"fragment": "std.rule_produces", "with": with_})
+    return uses
+
+
+def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dict], dict[str, str]]:
+    """The std fragments a component's continuous part means, and the
+    transitions they carry under the declaration route's names.
+
+    The declaration is read by the declaration route's own reader
+    (:func:`declare.build_component`) and the component it builds is asked
+    what each flow is (a pass-through, a volume's, a rule set's, a mixture),
+    so no reading rule is written twice. Only the shapes a
+    plugin-versus-library bench proves are mapped; every other one is
+    refused by name, all of them at once."""
+    from .. import muscadet as authoring
+
+    spec = declare._publish_wired_rates(spec, network.wired)
+    try:
+        obj = declare.build_component(authoring.System(name="convert"), spec)
+    except declare.ComponentSpecError as error:
+        raise _Refused("declaration refused by the reader", str(error)) from error
+
+    inputs = {flow.name: flow for flow in obj.flows_continuous_in}
+    outputs = {flow.name: flow for flow in obj.flows_continuous_out}
+    bool_inputs = {flow.name for flow in obj.flows_in}
+    refused: list[_Refused] = []
+    uses: list[dict] = []
+    rename: dict[str, str] = {}
+
+    # Volumes first: a mixture is the one refusal no other reading explains.
+    for capacity in obj.capacities:
+        where = f"volume `{capacity.name}`"
+        mixed = [flow for flow in capacity.flow_names if flow in outputs and obj._mixed_volume(flow) is not None]
+        if mixed:
+            refused.append(_Refused(_POOLED, f"{where} serves {mixed} as a mixture"))
+        elif capacity.side != "out":
+            refused.append(_Refused("input-side volume", where))
+        elif len(capacity.flows) != 1:
+            refused.append(_Refused("multi-flow volume", where))
+        elif capacity.flow_names[0] not in inputs or capacity.flow_names[0] not in outputs:
+            refused.append(_Refused("volume not on an input and an output", where))
+        elif obj._beside_rules(capacity.flow_names[0], "out") is not None:
+            refused.append(_Refused("volume beside a rule set", where))
+        elif capacity.transmits:
+            refused.append(_Refused("transmitting volume (`transmits`)", where))
+        else:
+            # Measured: once the volume leaves a bound, the two routes date
+            # that departure 3e-11 apart and their contents part at 1e-11
+            # relative, the algebraic loop through the volume's demand being
+            # solved in a different order on each route. That is beyond the
+            # comparison's 1e-12; volumes wait for the library to order that
+            # loop as the declaration route does.
+            refused.append(_Refused("output-side volume", where))
+
+    produced_by: dict[str, list[str]] = {}
+    consumed_by: dict[str, list[str]] = {}
+    for rule_set in obj.rule_sets:
+        for flow in rule_set.produced():
+            produced_by.setdefault(flow, []).append(rule_set.name)
+        for flow in rule_set.consumed():
+            consumed_by.setdefault(flow, []).append(rule_set.name)
+    for flow, sets in produced_by.items():
+        if len(sets) > 1:
+            refused.append(_Refused("output produced by two rule sets", f"output `{flow}` by {sets}"))
+    for flow, sets in consumed_by.items():
+        if len(sets) > 1:
+            refused.append(_Refused("input consumed by two rule sets", f"input `{flow}` by {sets}"))
+
+    for flow in inputs.values():
+        where = f"input `{flow.name}`"
+        if flow.var_in_default:
+            refused.append(_Refused("value of an unconnected continuous input", where))
+        if flow.demand_expr is not None:
+            refused.append(_Refused("demand equation", where))
+        if flow.mixture_demand is not None:
+            refused.append(_Refused(_POOLED, f"{where} draws a mixture"))
+        sink = not (obj._passes_through(flow.name) or flow.name in consumed_by)
+        if flow.profile is not None and not sink:
+            refused.append(_Refused("profile on an input that is not a sink", where))
+        refused += _profile_refusal(flow.profile, where)
+        if flow.publish_rate is not None and flow.publish_rate != authoring.RATE_DELIVERED:
+            refused.append(_Refused(f"published input rate `{flow.publish_rate}`", where))
+    for flow in outputs.values():
+        where = f"output `{flow.name}`"
+        if flow.capability_expr is not None:
+            refused.append(_Refused("capability equation", where))
+        source = not (obj._passes_through(flow.name) or flow.name in produced_by)
+        if flow.profile is not None and not source:
+            refused.append(_Refused("profile on an output that is not a source", where))
+        refused += _profile_refusal(flow.profile, where)
+        if flow.max_rate is not None and flow.name not in produced_by:
+            refused.append(_Refused("maximum rate on an output no rule set produces", where))
+        if flow.publish_rate is not None and flow.publish_rate != authoring.RATE_CAPABILITY:
+            refused.append(_Refused(f"published output rate `{flow.publish_rate}`", where))
+        if obj._tapped_into(flow.name):
+            refused.append(_Refused("tap routed into an output", where))
+
+    rule_uses: list[dict] = []
+    for rule_set in obj.rule_sets:
+        try:
+            rule_uses += _rule_set_uses(rule_set, inputs, outputs, bool_inputs)
+        except _Refused as error:
+            refused.append(error)
+            continue
+        guarded = next(rule for rule in rule_set.rules if not rule.is_default)
+        idle = next(rule for rule in rule_set.rules if rule.is_default)
+        for a, b in ((guarded.name, idle.name), (idle.name, guarded.name)):
+            qualified = f"{name}.{rule_set.mode}.{rule_set.name}_{a}_to_{b}"
+            rename[qualified] = qualified
+    if refused:
+        raise _RefusedAll(refused)
+
+    for flow in inputs.values():
+        uses.append(
+            {
+                "fragment": "std.continuous_flow_in",
+                "with": {"name": flow.name, "demand": float(flow.var_demand_in_default)},
+            }
+        )
+        if flow.name in consumed_by and network.suppliers.get((name, flow.name), 0) >= 2:
+            uses.append({"fragment": "std.surplus_release", "with": {"name": flow.name}})
+        if flow.publish_rate is not None:
+            uses.append({"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED}})
+        if obj._passes_through(flow.name) or flow.name in consumed_by:
+            continue
+        if flow.profile is not None:
+            uses += _profile_uses(f"{flow.name}_in_profile", flow.profile)
+        uses.append(
+            {
+                "fragment": "std.continuous_sink",
+                "with": {
+                    "name": flow.name,
+                    "demand": float(flow.var_demand_in_default),
+                    "profiled": flow.profile is not None,
+                },
+            }
+        )
+    uses += rule_uses
+    for flow in outputs.values():
+        consumers = network.consumers.get((name, flow.name), [])
+        out: dict[str, Any] = {"name": flow.name, **_allocation(flow, consumers)}
+        if obj._passes_through(flow.name):
+            uses.append({"fragment": "std.pass_through", "with": {"name": flow.name}})
+            out["available"] = "produced"
+        elif flow.name in produced_by:
+            out["available"] = "produced"
+        else:
+            if flow.profile is not None:
+                uses += _profile_uses(f"{flow.name}_out_profile", flow.profile)
+            uses.append(
+                {
+                    "fragment": "std.continuous_source",
+                    "with": {
+                        "name": flow.name,
+                        "rate": float(flow.var_fed_default),
+                        "profiled": flow.profile is not None,
+                    },
+                }
+            )
+        if flow.publish_rate is not None:
+            uses.append({"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_CAPABILITY}})
+        uses.append({"fragment": "std.continuous_flow_out", "with": out})
+    return uses, rename
 
 
 #: The authoring calls of a `failure_modes` entry and the law each builds.
@@ -569,7 +930,20 @@ _VALUE_PARAMETERS = {
         "enable_value",
         "disable_value",
     ),
+    "std.continuous_flow_in": ("demand",),
+    "std.continuous_source": ("rate",),
+    "std.continuous_sink": ("demand",),
+    "std.time_profile": ("amplitude", "phase_shift", "period", "offset", "value_min", "initial"),
+    "std.volume_flow": ("capacity", "content_init", "demand", "fill_rate"),
+    "std.volume_outlet": ("rate",),
+    "std.volume_total": ("capacity",),
+    "std.rule_set": ("activate", "release"),
+    "std.rule_consumes": ("rate",),
+    "std.rule_produces": ("rate", "max_rate"),
 }
+
+#: The parameter naming a use, for the type parameter a value becomes.
+_USE_LABELS = ("name", "flow", "volume", "target", "rule_set")
 
 #: The fragments carrying a discrete output.
 _OUTPUT_FRAGMENTS = (
@@ -1382,7 +1756,8 @@ def _parameterise(
             seen = [instances[m]["uses"][index]["with"].get(key) for m in variant.members]
             if all(value == seen[0] for value in seen):
                 continue
-            parameter = f"{use['with']['name']}_{key}"
+            label = next(use["with"][k] for k in _USE_LABELS if isinstance(use["with"].get(k), str))
+            parameter = f"{label}_{key}"
             while parameter in taken:
                 parameter += "_"
             taken.add(parameter)
@@ -1432,6 +1807,7 @@ def convert(
         refusals.append(Refusal(component, error.construct, error.detail))
 
     # --- flow components, gates and controllers -------------------------
+    network = _Network.of(declaration, components)
     instances: dict[str, dict] = {}
     gates: dict[str, str] = {}
     connections: list[dict] = []
@@ -1454,7 +1830,8 @@ def convert(
                 gates[name] = uses[0]["with"]["name"]
                 connections.extend(feeds)
             else:
-                uses, embedded = _flow_uses(spec, name)
+                uses, embedded, continuous_rename = _flow_uses(spec, name, network)
+                rename.update(continuous_rename)
                 own, refused = [], []
                 for method, keywords in embedded:
                     try:
@@ -2125,6 +2502,29 @@ def _drawn_trajectory(declared_model, seed: int, t_max: float) -> list[tuple[flo
     return [(event.time, event.transition, event.to_state) for event in drawn.history()]
 
 
+#: Where, besides the midpoint, both routes are observed between two event
+#: dates, as fractions of the interval: (3 - sqrt 5) / 2 and 1 / sqrt 2,
+#: neither in a rational ratio with the midpoint.
+_SIDE_FRACTIONS = ((3.0 - 5.0**0.5) / 2.0, 2.0**-0.5)
+
+
+def _evolves(model) -> bool:
+    """Whether a value of `model` can change between two events: it has an
+    ODE or reads the time. Otherwise every value holds between events, and
+    the midpoint observes all there is."""
+    def reads_time(node: Any) -> bool:
+        if isinstance(node, dict):
+            return node.get("op") == "time" or any(reads_time(v) for v in node.values())
+        if isinstance(node, list):
+            return any(reads_time(v) for v in node)
+        return False
+
+    components = _body(model)["components"]
+    return any(
+        equation.get("kind") == "ode" for component in components for equation in component.get("equations", [])
+    ) or reads_time(components)
+
+
 def _replay(
     declared_model,
     library_model,
@@ -2157,6 +2557,7 @@ def _replay(
         interactive(declared_model, t_max=t_max, deferred_draws=True),
         interactive(library_model, t_max=t_max, deferred_draws=True),
     ]
+    side_fractions = _SIDE_FRACTIONS if _evolves(declared_model) or _evolves(library_model) else ()
 
     def compare(when: str) -> None:
         left = _snapshot(sessions[0], attributes, states)
@@ -2205,9 +2606,29 @@ def _replay(
             sessions[0].fire_deferred_at(stopped[0], sessions[0].time, 0)
             sessions[1].fire_deferred_at(stopped[1], sessions[1].time, 0)
 
-    # Observe between two distinct event dates, where every route has
-    # settled; fire each draw once the events before it have fired, then let
-    # the same-date consequences (zero delays) fire before reading.
+    def observe(start: float, end: float) -> None:
+        """Compare both routes strictly between two event dates, where every
+        route has settled: at the midpoint, on the replayed trajectory, and
+        at side instants, each on a branch that is then undone. A stop
+        restarts the integrator, so stopping the replay at the side instants
+        would change what is compared after them; a branch leaves it as it
+        was. The side instants are incommensurate with the midpoint, so a
+        continuous input differing between the routes (a profile's period
+        or phase) cannot agree at all of them by aliasing."""
+        saved = [session.snapshot() for session in sessions] if side_fractions else []
+        for fraction in side_fractions:
+            instant = start + fraction * (end - start)
+            advance(instant)
+            compare(f"at t={instant}")
+            for session, snapshot in zip(sessions, saved):
+                session.restore(snapshot)
+        middle = (start + end) / 2.0
+        advance(middle)
+        compare(f"at t={middle}")
+
+    # Observe between two distinct event dates; fire each draw once the
+    # events before it have fired, then let the same-date consequences
+    # (zero delays) fire before reading.
     previous = 0.0
     compare("at t=0")
     branches = [_targets(declared_model), _targets(library_model)]
@@ -2215,9 +2636,7 @@ def _replay(
     explored: collections.Counter = collections.Counter()
     for date, transition, entered in plan:
         if date > previous:
-            middle = (previous + date) / 2.0
-            advance(middle)
-            compare(f"at t={middle}")
+            observe(previous, date)
             previous = date
             recorded_here = []
         if transition is None:
@@ -2291,8 +2710,7 @@ def _replay(
         except Exception as error:
             raise _Divergence(f"the library route cannot fire `{mapped}` at {date}: {error}") from error
     if t_max > previous:
-        advance((previous + t_max) / 2.0)
-        compare(f"at t={(previous + t_max) / 2.0}")
+        observe(previous, t_max)
         advance(t_max)
 
     # Every fired transition is accounted for, renamed onto the other route.

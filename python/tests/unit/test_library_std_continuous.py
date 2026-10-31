@@ -13,7 +13,8 @@ Together the benches apply every continuous fragment: the network
 (``continuous_flow_out``, ``continuous_flow_in``, ``surplus_release``),
 sources and sinks (``continuous_source``, ``continuous_sink``,
 ``time_profile``, ``rate_publisher``), volumes (``volume_flow``,
-``volume_outlet``, ``volume_stock``, ``volume_total``), rule sets
+``volume_outlet``, ``volume_stock``, ``volume_total``), a pass-through
+(``pass_through``), rule sets
 (``rule_set``, ``rule_consumes``, ``rule_produces``, ``tap``) and controllers
 (``aggregate_measure``, ``threshold_compare``, ``threshold_band``).
 
@@ -22,6 +23,7 @@ Oracle-free: both routes run on RAICHU.
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -85,6 +87,20 @@ TYPES = [
                   empty_automaton="${volume}_bounds"),
               use("continuous_flow_out", name="${flow}", held=True, empty_automaton="${volume}_bounds"),
               use("volume_total", volume="${volume}", flows=["${flow}"], capacity=P("capacity"))]},
+    {"name": "UnboundedStore",
+     "parameters": [p("volume", "string"), p("flow", "string"), p("capacity", "number"),
+                    p("rate", "number")],
+     "uses": [use("continuous_flow_in", name="${flow}", demand=P("rate")),
+              use("volume_flow", volume="${volume}", flow="${flow}", capacity=P("capacity"),
+                  demand=P("rate"), fill_unbounded=True),
+              use("volume_outlet", volume="${volume}", flow="${flow}", rate=P("rate"),
+                  empty_automaton="${volume}_bounds"),
+              use("continuous_flow_out", name="${flow}", held=True, empty_automaton="${volume}_bounds"),
+              use("volume_total", volume="${volume}", flows=["${flow}"], capacity=P("capacity"))]},
+    {"name": "Bus", "parameters": [p("flow", "string")],
+     "uses": [use("continuous_flow_in", name="${flow}"),
+              use("pass_through", name="${flow}"),
+              use("continuous_flow_out", name="${flow}", available="produced")]},
     {"name": "Machine",
      "parameters": [p("activate", "number"), p("release", "number")],
      "uses": [use("continuous_flow_in", name="Water"),
@@ -216,6 +232,57 @@ BENCHES = {
         [("S.H2_out", "T.H2_in"), ("T.H2_out", "C.H2_in")],
         [], 24.0,
     ),
+    # Fragment: pass_through. Two sources feed a bus the sink draws from
+    # through it. A rival consumer on the first source takes part of what
+    # it could give, so the bus receives less than its suppliers could
+    # offer and hands on what arrived, not what could have. A second bus
+    # nothing reads asks for nothing.
+    "pass_through_bus": (
+        [{"type": "ObjFlow", "name": "S1", "flows_continuous_out": [flow_out("E", 3.0)]},
+         {"type": "ObjFlow", "name": "S2", "flows_continuous_out": [flow_out(
+             "E", 1.0, profile=profile(SUN), publish_rate="capability", allocation="shares",
+             allocation_shares={"BUS": 0.5, "IDLE": 0.5})]},
+         {"type": "ObjFlow", "name": "BUS", "flows_continuous_in": [{"name": "E"}],
+          "flows_continuous_out": [{"name": "E"}]},
+         {"type": "ObjFlow", "name": "IDLE", "flows_continuous_in": [{"name": "E"}],
+          "flows_continuous_out": [{"name": "E"}]},
+         {"type": "ObjFlow", "name": "K", "flows_continuous_in": [flow_in("E", 9.0)]},
+         {"type": "ObjFlow", "name": "R", "flows_continuous_in": [flow_in("E", 2.0)]}],
+        [{"name": "S1", "type": "Source", "parameters": {"flow": "E", "rate": 3.0}},
+         {"name": "S2", "type": "ProfiledSource",
+          "parameters": {**at_zero(SUN), "flow": "E",
+                         "shares": shares(("BUS", "E_in", 0.5), ("IDLE", "E_in", 0.5))}},
+         {"name": "BUS", "type": "Bus", "parameters": {"flow": "E"}},
+         {"name": "IDLE", "type": "Bus", "parameters": {"flow": "E"}},
+         {"name": "K", "type": "Sink", "parameters": {"flow": "E", "demand": 9.0}},
+         {"name": "R", "type": "Sink", "parameters": {"flow": "E", "demand": 2.0}}],
+        [("S1.E_out", "BUS.E_in"), ("S1.E_out", "R.E_in"), ("S2.E_out", "BUS.E_in"),
+         ("S2.E_out", "IDLE.E_in"), ("BUS.E_out", "K.E_in")],
+        [], 24.0,
+    ),
+    # Option: volume_flow fill_unbounded. The store claims whatever its
+    # supplier has while it is not full, so it fills at the supply and the
+    # consumer beside it gets what the split leaves.
+    "unbounded_fill": (
+        [{"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out(
+            "H2", 1.0, profile=profile(SUN), publish_rate="capability", allocation="shares",
+            allocation_shares={"T": 0.5, "D": 0.5})]},
+         {"type": "ObjFlow", "name": "T", "flows_continuous_in": [flow_in("H2", 1.0)],
+          "flows_continuous_out": [flow_out("H2", 1.0)],
+          "capacities": [{"name": "tank", "flow": "H2", "capacity": 30.0,
+                          "content_init": {"H2": 0.0}, "fill_rate": None}]},
+         {"type": "ObjFlow", "name": "D", "flows_continuous_in": [flow_in("H2", 2.0)]},
+         {"type": "ObjFlow", "name": "C", "flows_continuous_in": [flow_in("H2", 3.0)]}],
+        [{"name": "S", "type": "ProfiledSource",
+          "parameters": {**at_zero(SUN), "flow": "H2",
+                         "shares": shares(("T", "H2_in", 0.5), ("D", "H2_in", 0.5))}},
+         {"name": "T", "type": "UnboundedStore",
+          "parameters": {"volume": "tank", "flow": "H2", "capacity": 30.0, "rate": 1.0}},
+         {"name": "D", "type": "Sink", "parameters": {"flow": "H2", "demand": 2.0}},
+         {"name": "C", "type": "Sink", "parameters": {"flow": "H2", "demand": 3.0}}],
+        [("S.H2_out", "T.H2_in"), ("S.H2_out", "D.H2_in"), ("T.H2_out", "C.H2_in")],
+        [], 24.0,
+    ),
     # Fragments: rule_set (band), rule_consumes, rule_produces, tap,
     # surplus_release with a supplier volume that runs out (held), and a
     # failure mode opening the tap.
@@ -328,6 +395,13 @@ BENCHES = {
 }
 
 TYPES.append({
+    "name": "BusByCapability",
+    "parameters": [p("flow", "string")],
+    "uses": [use("continuous_flow_in", name="${flow}"),
+             use("pass_through", name="${flow}"),
+             use("continuous_flow_out", name="${flow}")],
+})
+TYPES.append({
     "name": "TwoSinks",
     "uses": [use("continuous_flow_in", name="Gas", demand=100.0),
              use("continuous_flow_in", name="Gas_leak", demand=100.0),
@@ -405,20 +479,58 @@ BOOLEAN_FRAGMENTS = {
 }
 
 
-def test_the_benches_exercise_every_continuous_fragment():
-    """No fragment of the continuous part of std goes uncharacterised."""
-    std = pyraichu.standard_library()["library"]["fragments"]
-    continuous = {f["name"] for f in std} - BOOLEAN_FRAGMENTS
+#: Option values of continuous fragments no bench applies, each with its
+#: reason. A new option value lands with its bench, never here.
+UNBENCHED_VALUES = {
+    # The benches cover the direction and operator the reference studies
+    # use; the others are the same comparison mirrored.
+    ("threshold_band", "direction", "below"): "mirror of `above`, benched",
+    ("threshold_compare", "operator", "le"): "mirror of `lt`, benched",
+    ("threshold_compare", "operator", "gt"): "mirror of `lt`, benched",
+    ("threshold_compare", "operator", "ge"): "mirror of `lt`, benched",
+    ("volume_total", "initial", "full"): "no declaration starts a volume full",
+}
 
-    def used(type_name):
-        ty = next(t for t in TYPES if t["name"] == type_name)
-        return {u["fragment"].removeprefix("std.") for u in ty["uses"]}
 
+def applied_uses():
+    """Every (fragment, parameter, value) a bench instance applies, with
+    each `$param` resolved from the instance or the type's default."""
+    types = {t["name"]: t for t in TYPES}
     applied = set()
     for _, instances, _, _, _ in BENCHES.values():
         for instance in instances:
-            applied |= used(instance["type"])
-    assert continuous <= applied, continuous - applied
+            ty = types[instance["type"]]
+            given = instance.get("parameters", {})
+            defaults = {q["name"]: q.get("default") for q in ty.get("parameters", [])}
+            for u in ty["uses"]:
+                fragment = u["fragment"].removeprefix("std.")
+                applied.add((fragment, None, None))
+                for key, value in u["with"].items():
+                    if isinstance(value, dict) and "$param" in value:
+                        value = given.get(value["$param"], defaults.get(value["$param"]))
+                    applied.add((fragment, key, json.dumps(value)))
+    return applied
+
+
+def test_the_benches_exercise_every_continuous_fragment():
+    """No fragment of the continuous part of std, and no value of one of its
+    options other than the default, goes uncharacterised: an option of an
+    already benched fragment needs a bench of its own."""
+    std = pyraichu.standard_library()["library"]["fragments"]
+    continuous = [f for f in std if f["name"] not in BOOLEAN_FRAGMENTS]
+    applied = applied_uses()
+    missing = {f["name"] for f in continuous} - {f for f, _, _ in applied}
+    assert not missing, missing
+    unbenched = set()
+    for fragment in continuous:
+        for parameter in fragment["parameters"]:
+            values = {"bool": [True, False], "enum": parameter.get("values", [])}.get(parameter["kind"], [])
+            for value in values:
+                if value == parameter.get("default"):
+                    continue
+                if (fragment["name"], parameter["name"], json.dumps(value)) not in applied:
+                    unbenched.add((fragment["name"], parameter["name"], value))
+    assert unbenched == set(UNBENCHED_VALUES), unbenched ^ set(UNBENCHED_VALUES)
 
 
 def bench_run(bench):
@@ -452,3 +564,23 @@ def test_a_band_switches_at_activate_and_back_at_release():
         assert capability[t] == pytest.approx(6.0, abs=1e-6), t
     for t in stops:
         assert capability[t] == pytest.approx(3.0, abs=1e-6), t
+
+
+@pytest.mark.parametrize(
+    "bench, instance, changed",
+    [
+        # A bus distributing what could arrive instead of what did hands on
+        # more than it received while the supply falls short.
+        ("pass_through_bus", "BUS", {"type": "BusByCapability"}),
+        # A bounded fill at zero is not an unbounded one.
+        ("unbounded_fill", "T", {"type": "Store", "parameters": {
+            "volume": "tank", "flow": "H2", "capacity": 30.0, "rate": 1.0, "fill_rate": 0.0}}),
+    ],
+)
+def test_a_changed_instance_is_reported_different(bench, instance, changed):
+    """Negative control: the agreement above is not vacuous."""
+    objects, instances, connections, modes, t_max = BENCHES[bench]
+    instances = [{**i, **changed} if i["name"] == instance else i for i in instances]
+    plugin = plugin_model(bench, objects, connections)
+    library = library_model(bench, instances, connections, modes, plugin["indicators"])
+    assert run(library, t_max) != run(plugin, t_max)
