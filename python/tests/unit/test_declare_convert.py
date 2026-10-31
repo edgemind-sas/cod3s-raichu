@@ -194,15 +194,17 @@ def test_a_python_class_names_the_type_and_a_bare_component_gets_its_own():
     assert conversion.unverified == ["H1", "H2"]
 
 
-def test_a_continuous_flow_is_refused_naming_its_class_and_component():
-    continuous = {"cls": "FlowContinuousIn", "name": "gas", "var_in_default": 0.0}
+def test_a_continuous_construct_without_counterpart_is_refused_naming_it_and_its_component():
+    # Continuous flows convert (test_declare_convert_continuous.py); what an
+    # unconnected input reads when nothing feeds it has no counterpart.
+    continuous = {"cls": "FlowContinuousIn", "name": "gas", "var_in_default": 1.5}
     doc = document([component("tank", [continuous]), component("ok", [flow_in("power")])], [])
     conversion = convert(doc)
     assert not conversion.converted
     assert conversion.library is None
     (refusal,) = conversion.refusals
     assert refusal.component == "tank"
-    assert refusal.construct == "flow class `FlowContinuousIn`"
+    assert refusal.construct == "value of an unconnected continuous input"
 
 
 def _inverter_chain() -> dict:
@@ -686,8 +688,9 @@ def test_an_unaudited_class_is_flagged_even_when_both_routes_agree():
 
 
 def test_loading_a_refused_conversion_names_the_refusals():
-    doc = document([component("inv", [flow_in("x"), {"cls": "FlowContinuousOut", "name": "relay"}])], [])
-    with pytest.raises(ValueError, match="FlowContinuousOut"):
+    capped = {"cls": "FlowContinuousOut", "name": "relay", "max_rate": 2.0}
+    doc = document([component("inv", [flow_in("x"), capped])], [])
+    with pytest.raises(ValueError, match="maximum rate on an output no rule set produces"):
         convert(doc).load()
 
 
@@ -873,11 +876,14 @@ def test_a_wrong_enable_delay_is_reported_divergent():
 
 
 def test_every_blocking_construct_of_a_component_is_named():
-    continuous = {"cls": "FlowContinuousOut", "name": "relay"}
+    continuous = {"cls": "FlowContinuousOut", "name": "relay", "max_rate": 2.0, "profile": {
+        "cls": "SinusoidalProfile", "amplitude": 1.0, "period": 4.0, "phase_shift": 0.0,
+        "offset": 1.0, "value_min": 0.0, "value_max": 1.5, "name": "SinusoidalProfile"}}
     inverter = component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True), continuous])
     refusals = convert(document([inverter], [])).refusals
     assert [(r.component, r.construct) for r in refusals] == [
-        ("inv", "flow class `FlowContinuousOut`"),
+        ("inv", "profile upper bound"),
+        ("inv", "maximum rate on an output no rule set produces"),
     ]
 
 

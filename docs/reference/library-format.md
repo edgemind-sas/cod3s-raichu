@@ -208,7 +208,8 @@ plugin's continuous objects, and each is characterised against it.
 | `continuous_sink` | `name`, `demand`, `profiled` | the demand of a consumer input, times `<name>_in_profile` when profiled |
 | `time_profile` | `target`, `amplitude`, `phase_shift`, `period`, `offset`, `value_min`, `initial` | a sinusoidal profile written into `target` |
 | `rate_publisher` | `name`, `of` (`capability`, `delivered`) | out port `<name>_rate_out` exporting `<name>_rate` |
-| `volume_flow` | `volume`, `flow`, `capacity`, `content_init`, `demand`, `fill_rate`, `outlet` | one flow held in a volume: its content (an ODE), its fill fraction, and the demand of the input |
+| `pass_through` | `name` | the flow crosses the component unchanged: the input asks what the output is asked, the output can deliver what could arrive and hands on what did arrive (`<name>_produced_out`, so the output is `available: produced`) |
+| `volume_flow` | `volume`, `flow`, `capacity`, `content_init`, `demand`, `fill_rate`, `fill_unbounded`, `outlet` | one flow held in a volume: its content (an ODE), its fill fraction, and the demand of the input; with `fill_unbounded` the volume claims without bound while it is not full (JSON has no infinity, so a flag rather than a rate) |
 | `volume_outlet` | `volume`, `flow`, `rate`, `empty_automaton` | the capability of an output leaving a volume, bounded by what arrives while it is empty |
 | `volume_stock` | `volume`, `flow`, `capacity`, `initial` | automaton `<volume>_stock_<flow>` (`empty`, `stocked`) for one flow of a multi-flow volume |
 | `volume_total` | `volume`, `flows`, `capacity`, `initial`, `ratio_flows` | total content and fill, the bounds automaton `<volume>_bounds` (`empty`, `partial`, `full`), and each listed flow's share |
