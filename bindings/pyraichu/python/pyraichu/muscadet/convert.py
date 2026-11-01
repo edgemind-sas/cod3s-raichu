@@ -633,6 +633,64 @@ def _rule_set_uses(
     return uses
 
 
+def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
+    """A single-flow volume on the output side, as `std.volume_flow`,
+    `std.volume_outlet` and `std.volume_total`."""
+    from .. import muscadet as authoring
+
+    where = f"volume `{capacity.name}`"
+    if not math.isinf(capacity.serve_rate):
+        raise _Refused("volume serve rate", where)
+    if capacity.serve_cond:
+        raise _Refused("volume discharge command", where)
+    if capacity.is_open:
+        raise _Refused("open volume (make-up flow)", where)
+    if capacity.hysteresis != authoring.DEFAULT_HYSTERESIS:
+        raise _Refused("volume hysteresis", where)
+    if capacity.flows[0].weight != 1.0:
+        raise _Refused("volume flow weight", where)
+    if flow_out.profile is not None or flow_out.max_rate is not None:
+        raise _Refused("factor on a volume's output", f"{where}, output `{flow_out.name}`")
+    flow = flow_in.name
+    volume = float(capacity.volume)
+    content = float(capacity.content_init.get(flow, 0.0))
+    if content <= 0.0:
+        initial = "empty"
+    elif content >= volume:
+        raise _Refused("volume starting full", where)
+    else:
+        initial = "partial"
+    fill: dict[str, Any] = (
+        {"fill_unbounded": True} if math.isinf(capacity.fill_rate) else {"fill_rate": float(capacity.fill_rate)}
+    )
+    return [
+        {
+            "fragment": "std.volume_flow",
+            "with": {
+                "volume": capacity.name,
+                "flow": flow,
+                "capacity": volume,
+                "content_init": content,
+                "demand": float(flow_in.var_demand_in_default),
+                **fill,
+            },
+        },
+        {
+            "fragment": "std.volume_outlet",
+            "with": {
+                "volume": capacity.name,
+                "flow": flow,
+                "rate": float(flow_out.var_fed_default),
+                "empty_automaton": f"{capacity.name}_bounds",
+            },
+        },
+        {
+            "fragment": "std.volume_total",
+            "with": {"volume": capacity.name, "flows": [flow], "capacity": volume, "initial": initial},
+        },
+    ]
+
+
 def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dict], dict[str, str]]:
     """The std fragments a component's continuous part means, and the
     transitions they carry under the declaration route's names.
@@ -659,6 +717,7 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
     rename: dict[str, str] = {}
 
     # Volumes first: a mixture is the one refusal no other reading explains.
+    held: dict[str, tuple[Any, list[dict]]] = {}
     for capacity in obj.capacities:
         where = f"volume `{capacity.name}`"
         mixed = [flow for flow in capacity.flow_names if flow in outputs and obj._mixed_volume(flow) is not None]
@@ -675,13 +734,16 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         elif capacity.transmits:
             refused.append(_Refused("transmitting volume (`transmits`)", where))
         else:
-            # Measured: once the volume leaves a bound, the two routes date
-            # that departure 3e-11 apart and their contents part at 1e-11
-            # relative, the algebraic loop through the volume's demand being
-            # solved in a different order on each route. That is beyond the
-            # comparison's 1e-12; volumes wait for the library to order that
-            # loop as the declaration route does.
-            refused.append(_Refused("output-side volume", where))
+            # Once the volume leaves a bound, the two routes date that
+            # departure about 3e-11 apart and their contents part at about
+            # 1e-11 relative: the algebraic loop through the volume's demand
+            # is solved in a different order on each route. `compare_routes`
+            # reports such a pair at the `integrator` level.
+            flow = capacity.flow_names[0]
+            try:
+                held[flow] = (capacity, _volume_uses(capacity, inputs[flow], outputs[flow]))
+            except _Refused as error:
+                refused.append(error)
 
     produced_by: dict[str, list[str]] = {}
     consumed_by: dict[str, list[str]] = {}
@@ -705,7 +767,7 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             refused.append(_Refused("demand equation", where))
         if flow.mixture_demand is not None:
             refused.append(_Refused(_POOLED, f"{where} draws a mixture"))
-        sink = not (obj._passes_through(flow.name) or flow.name in consumed_by)
+        sink = not (obj._passes_through(flow.name) or flow.name in held or flow.name in consumed_by)
         if flow.profile is not None and not sink:
             refused.append(_Refused("profile on an input that is not a sink", where))
         refused += _profile_refusal(flow.profile, where)
@@ -715,7 +777,7 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         where = f"output `{flow.name}`"
         if flow.capability_expr is not None:
             refused.append(_Refused("capability equation", where))
-        source = not (obj._passes_through(flow.name) or flow.name in produced_by)
+        source = not (obj._passes_through(flow.name) or flow.name in held or flow.name in produced_by)
         if flow.profile is not None and not source:
             refused.append(_Refused("profile on an output that is not a source", where))
         refused += _profile_refusal(flow.profile, where)
@@ -754,6 +816,9 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             uses.append({"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED}})
         if obj._passes_through(flow.name) or flow.name in consumed_by:
             continue
+        if flow.name in held:
+            uses.append(held[flow.name][1][0])
+            continue
         if flow.profile is not None:
             uses += _profile_uses(f"{flow.name}_in_profile", flow.profile)
         uses.append(
@@ -775,6 +840,14 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             out["available"] = "produced"
         elif flow.name in produced_by:
             out["available"] = "produced"
+        elif flow.name in held:
+            capacity, volume_uses = held[flow.name]
+            uses.append(volume_uses[1])
+            out["held"] = True
+            out["empty_automaton"] = f"{capacity.name}_bounds"
+            for transition in ("leave_empty", "reach_empty", "reach_full", "leave_full"):
+                qualified = f"{name}.{capacity.name}_bounds.{capacity.name}_{transition}"
+                rename[qualified] = qualified
         else:
             if flow.profile is not None:
                 uses += _profile_uses(f"{flow.name}_out_profile", flow.profile)
@@ -791,6 +864,8 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         if flow.publish_rate is not None:
             uses.append({"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_CAPABILITY}})
         uses.append({"fragment": "std.continuous_flow_out", "with": out})
+        if flow.name in held:
+            uses.append(held[flow.name][1][2])
     return uses, rename
 
 
@@ -2210,7 +2285,15 @@ class RouteComparison:
     divergence, but the transitions in ``unexercised`` never fired, so their
     effects were never observed), ``tolerance`` (an exact or replayed
     comparison in which some values or event dates agreed only within the
-    float-reordering tolerance of 1e-12, named in ``detail``) or
+    float-reordering tolerance of 1e-12, named in ``detail``), ``integrator``
+    (on a model with an ODE, some values or event dates agreed only within
+    the integrator's spread, named in ``detail``: the largest gap the
+    declaration route shows with itself when only its stops move, measured
+    per attribute and over the event dates. Both routes integrate the same
+    system but may order an algebraic loop through ODE-driven state
+    differently, a crossing then falls a few ulps apart, and from there the
+    integrator steps differently: the two trajectories agree to the
+    integrator's own accuracy, not to the last bit) or
     ``statistical`` (attribute means over independent runs, a two-sample
     z-test per observation, which only shows that no difference was
     detected at that sample size). A comparison
@@ -2218,8 +2301,8 @@ class RouteComparison:
     the same sequence events (monitored transitions, their kinds and cycle
     groups), before any trajectory runs.
 
-    ``identical`` says no difference was found. Only ``exact``, ``replay``
-    and ``tolerance`` make it a proof of equality: a partial replay is
+    ``identical`` says no difference was found. Only ``exact``, ``replay``,
+    ``tolerance`` and ``integrator`` make it a proof of equality: a partial replay is
     reported as not identical, and a statistical pass only bounds the
     difference by the test's power.
     """
@@ -2370,20 +2453,25 @@ def _armed(session, rename: dict[str, str] | None, date: float | None = None) ->
 _ARMED_TIMES = (1, 2)
 
 
-def _same_value(a, b, *, time: bool) -> bool:
+def _same_value(a, b, *, time: bool, spread: _Spread | None = None) -> bool:
     if isinstance(a, float) and isinstance(b, float):
         # Deterministic float arithmetic done in another order (a running
         # age read at a shifted date): equal up to the contract's 1e-12,
         # relative. A time near zero also gets 1e-12 absolute; a cumulative
         # hazard has no scale and gets none.
-        return math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-12 if time else 0.0)
+        if math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-12 if time else 0.0):
+            return True
+        # Only a date may differ by the integrator's spread: a hazard is
+        # compared within float reordering whatever the model.
+        return spread is not None and time and spread.admits_date(a, b)
     return a == b
 
 
 #: Float-reordering tolerance of the comparison: both routes run the same
-#: engine and integrator, so a value or a date may differ only by the order
-#: in which deterministic arithmetic was done (the contract's 1e-12), never
-#: by the integrator tolerance meant for two different engines.
+#: engine and integrator, so a value or a date may differ by the order in
+#: which deterministic arithmetic was done (the contract's 1e-12). Beyond
+#: it, only a model with an ODE may differ, within the integrator's measured
+#: spread (:func:`_integrator_spread`), reported at its own level.
 _TOLERANCE = 1e-12
 
 
@@ -2391,10 +2479,101 @@ def _within_tolerance(a: float, b: float) -> bool:
     return math.isclose(a, b, rel_tol=_TOLERANCE, abs_tol=_TOLERANCE)
 
 
-def _tolerated(left: dict[str, Any], right: dict[str, Any]) -> set[str]:
+@dataclass(frozen=True)
+class _Spread:
+    """What the integrator leaves open on one model, measured between two
+    runs of the declaration route that differ only by where they stop: a
+    stop restarts the integrator, so two stop sequences follow two step
+    sequences whose trajectories agree only to the integrator's accuracy.
+
+    `values` holds the largest gap of each float attribute, `dates` the
+    largest gap of each transition's firing dates (library names), and
+    `armed` the largest of those, which bounds the date a transition was
+    armed at and its age (the law itself stays compared strictly). A name
+    not measured gets no spread."""
+
+    values: dict[str, float]
+    dates: dict[str, float]
+
+    @property
+    def armed(self) -> float:
+        return max(self.dates.values(), default=0.0)
+
+    def admits_value(self, a: float, b: float, key: str) -> bool:
+        return abs(a - b) <= self.values.get(key, 0.0)
+
+    def admits_date(self, a: float, b: float, transition: str | None = None) -> bool:
+        bound = self.armed if transition is None else self.dates.get(transition, 0.0)
+        return abs(a - b) <= bound
+
+
+#: Stops of the two runs that measure a :class:`_Spread`, as fractions of
+#: the horizon, and the instants where both are read. The grids share no
+#: instant but the samples.
+_SPREAD_GRIDS = (
+    tuple(k / 97.0 for k in range(1, 97)),
+    tuple((k + (5.0**0.5 - 1.0) / 2.0) / 89.0 for k in range(89)),
+)
+_SPREAD_SAMPLES = tuple((k + 0.5) / 128.0 for k in range(128))
+
+
+def _integrator_spread(declared_model, t_max: float, attributes: list[str], rename: dict[str, str]) -> _Spread:
+    """The :class:`_Spread` of `declared_model` over `t_max`, on the
+    trajectory no draw fires (deferred mode). A replay that fires draws may
+    reach regimes this one does not; a gap there beyond the spread is
+    reported as a divergence, never hidden.
+
+    A sample read where one run has passed an event and the other not yet
+    would count the event's jump as integration error: samples that close
+    to an event of either run are left out. A transition fired a different
+    number of times by the two runs gets no date spread."""
+    from .. import interactive
+
+    samples = [t_max * f for f in _SPREAD_SAMPLES]
+    runs = []
+    for grid in _SPREAD_GRIDS:
+        session = interactive(declared_model, t_max=t_max, deferred_draws=True)
+        read: dict[float, list] = {}
+        for instant in sorted(set(t_max * f for f in grid) | set(samples)):
+            session.advance_to(instant)
+            if instant in samples:
+                read[instant] = [session.attribute(name) for name in attributes]
+        session.advance_to(t_max)
+        fired: dict[str, list[float]] = {}
+        for event in session.history():
+            fired.setdefault(event.transition, []).append(event.time)
+        runs.append((read, fired))
+    dates = {}
+    for transition, times in runs[0][1].items():
+        other = runs[1][1].get(transition, [])
+        if transition in rename and len(other) == len(times):
+            dates[rename[transition]] = max(abs(a - b) for a, b in zip(times, other))
+    window = max(dates.values(), default=0.0)
+    events = [t for _, fired in runs for times in fired.values() for t in times]
+    clear = [t for t in samples if all(abs(t - e) > window for e in events)]
+    values = {}
+    for i, name in enumerate(attributes):
+        gaps = [
+            abs(runs[0][0][t][i] - runs[1][0][t][i])
+            for t in clear
+            if isinstance(runs[0][0][t][i], float) and isinstance(runs[1][0][t][i], float)
+        ]
+        if gaps:
+            values[name] = max(gaps)
+    return _Spread(values, dates)
+
+
+def _tolerated(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    integrated: set[str] | None = None,
+    spread: _Spread | None = None,
+) -> set[str]:
     """The keys of `left` whose value differs from `right`'s within float
-    reordering only (1e-12 relative, or absolute near zero). Raises
-    `ValueError` naming the first key that differs beyond it."""
+    reordering only (1e-12 relative, or absolute near zero). With
+    `integrated` and `spread`, a float beyond that but within the measured
+    spread of the integrator is added to `integrated` instead. Raises `ValueError` naming the first key that
+    differs beyond what is allowed."""
     tolerated = set()
     for key, value in left.items():
         other = right.get(key)
@@ -2407,22 +2586,32 @@ def _tolerated(left: dict[str, Any], right: dict[str, Any]) -> set[str]:
         ):
             tolerated.add(key)
             continue
+        if (
+            integrated is not None
+            and spread is not None
+            and isinstance(value, float)
+            and isinstance(other, float)
+            and spread.admits_value(value, other, key)
+        ):
+            integrated.add(key)
+            continue
         raise ValueError(f"`{key}`: declaration {value!r}, library {other!r}")
     return tolerated
 
 
-def _same_entry(a: tuple | None, b: tuple | None) -> bool:
+def _same_entry(a: tuple | None, b: tuple | None, *, spread: _Spread | None = None) -> bool:
     if a is None or b is None:
         return a is b
     return len(a) == len(b) and all(
-        _same_value(x, y, time=i in _ARMED_TIMES) for i, (x, y) in enumerate(zip(a, b))
+        _same_value(x, y, time=i in _ARMED_TIMES, spread=spread) for i, (x, y) in enumerate(zip(a, b))
     )
 
 
-def _same_armed(left: dict[str, tuple], right: dict[str, tuple]) -> bool:
+def _same_armed(left: dict[str, tuple], right: dict[str, tuple], *, spread: _Spread | None = None) -> bool:
     """Whether two routes arm the same transitions with the same laws,
-    dates and ages, floats compared within the float tolerance."""
-    return left.keys() == right.keys() and all(_same_entry(left[n], right[n]) for n in left)
+    dates and ages, floats compared within the float tolerance (dates also
+    within `spread`, when given)."""
+    return left.keys() == right.keys() and all(_same_entry(left[n], right[n], spread=spread) for n in left)
 
 
 #: Position of the running age in an :func:`_armed` entry: it is read at a
@@ -2431,16 +2620,24 @@ def _same_armed(left: dict[str, tuple], right: dict[str, tuple]) -> bool:
 _ARMED_AGE = 2
 
 
-def _armed_tolerated(left: dict[str, tuple], right: dict[str, tuple]) -> set[str]:
+def _armed_tolerated(
+    left: dict[str, tuple], right: dict[str, tuple], integrated: set[str] | None = None
+) -> set[str]:
     """`armed <name>` for every transition both routes arm alike only within
     the float tolerance on its armed date or hazard (entries already found
-    the same by :func:`_same_entry`)."""
-    return {
-        f"armed {name}"
-        for name, entry in left.items()
-        if (other := right.get(name)) is not None
-        and any(i != _ARMED_AGE and x != y for i, (x, y) in enumerate(zip(entry, other)))
-    }
+    the same by :func:`_same_entry`). With `integrated`, an entry alike only
+    within the integrator's spread is added to it instead."""
+    tolerated = set()
+    for name, entry in left.items():
+        other = right.get(name)
+        if other is None:
+            continue
+        # Any field, the age included, alike only within the spread.
+        if integrated is not None and not _same_entry(entry, other):
+            integrated.add(f"armed {name}")
+        elif any(i != _ARMED_AGE and x != y for i, (x, y) in enumerate(zip(entry, other))):
+            tolerated.add(f"armed {name}")
+    return tolerated
 
 
 def _armed_by_stepping(session, name: str, date: float, limit: int = 10_000) -> bool:
@@ -2508,6 +2705,16 @@ def _drawn_trajectory(declared_model, seed: int, t_max: float) -> list[tuple[flo
 _SIDE_FRACTIONS = ((3.0 - 5.0**0.5) / 2.0, 2.0**-0.5)
 
 
+def _has_ode(model) -> bool:
+    """Whether `model` integrates an ODE: only then can the two routes'
+    trajectories part by the integrator's accuracy."""
+    return any(
+        equation.get("kind") == "ode"
+        for component in _body(model)["components"]
+        for equation in component.get("equations", [])
+    )
+
+
 def _evolves(model) -> bool:
     """Whether a value of `model` can change between two events: it has an
     ODE or reads the time. Otherwise every value holds between events, and
@@ -2519,10 +2726,7 @@ def _evolves(model) -> bool:
             return any(reads_time(v) for v in node)
         return False
 
-    components = _body(model)["components"]
-    return any(
-        equation.get("kind") == "ode" for component in components for equation in component.get("equations", [])
-    ) or reads_time(components)
+    return _has_ode(model) or reads_time(_body(model)["components"])
 
 
 def _replay(
@@ -2538,6 +2742,8 @@ def _replay(
     recorded: bool,
     prefer: frozenset[str] = frozenset(),
     tolerated: set[str] | None = None,
+    integrated: set[str] | None = None,
+    spread: _Spread | None = None,
 ) -> set[str]:
     """Replay `plan` on both routes in deferred mode and return the
     declaration transitions fired.
@@ -2558,27 +2764,35 @@ def _replay(
         interactive(library_model, t_max=t_max, deferred_draws=True),
     ]
     side_fractions = _SIDE_FRACTIONS if _evolves(declared_model) or _evolves(library_model) else ()
+    # The integrator's spread applies only when the caller measured it (a
+    # model with an ODE) and collects what needed it.
+    loose = integrated if integrated is not None and spread is not None else None
+    within = spread if loose is not None else None
 
     def compare(when: str) -> None:
         left = _snapshot(sessions[0], attributes, states)
         right = _snapshot(sessions[1], attributes, states)
         if left != right:
             try:
-                near = _tolerated(left, right)
+                near = _tolerated(left, right, loose, within)
             except ValueError as difference:
                 raise _Divergence(f"{when}: {difference}") from None
             if tolerated is not None:
                 tolerated.update(near)
         armed = [_armed(sessions[0], rename), _armed(sessions[1], None)]
-        if not _same_armed(armed[0], armed[1]):
+        if not _same_armed(armed[0], armed[1], spread=within):
             names = sorted(set(armed[0]) | set(armed[1]))
-            differing = next(n for n in names if not _same_entry(armed[0].get(n), armed[1].get(n)))
+            differing = next(
+                n
+                for n in names
+                if not _same_entry(armed[0].get(n), armed[1].get(n), spread=within)
+            )
             raise _Divergence(
                 f"{when}: armed transition `{differing}` differs: declaration "
                 f"{armed[0].get(differing)}, library {armed[1].get(differing)}"
             )
         if tolerated is not None:
-            tolerated.update(_armed_tolerated(armed[0], armed[1]))
+            tolerated.update(_armed_tolerated(armed[0], armed[1], loose))
 
     def held(session) -> str | None:
         """The held choice `session` stopped before, if any."""
@@ -2682,19 +2896,19 @@ def _replay(
         # never see it.
         left = _armed(sessions[0], rename, date).get(mapped)
         right = _armed(sessions[1], None, date).get(mapped)
-        if not _same_entry(left, right) and (left is None or right is None):
+        if not _same_entry(left, right, spread=within) and (left is None or right is None):
             law = (left or right)[0]
             if _within_the_instant(law, date):
                 raise _Unordered(
                     f"at t={date}: `{mapped}` draws within its instant ({law}): "
                     "its place among the same-date events is not replayable"
                 )
-        if not _same_entry(left, right):
+        if not _same_entry(left, right, spread=within):
             raise _Divergence(
                 f"at t={date}: armed transition `{mapped}` differs: declaration {left}, library {right}"
             )
         if tolerated is not None and left is not None:
-            tolerated.update(_armed_tolerated({mapped: left}, {mapped: right}))
+            tolerated.update(_armed_tolerated({mapped: left}, {mapped: right}, loose))
         targets = branches[0].get(transition, [])
         branch = None
         if len(targets) > 1:
@@ -2748,6 +2962,17 @@ def _replay(
             ):
                 if tolerated is not None:
                     tolerated.add(f"date of {a[1]}")
+                continue
+            if (
+                loose is not None
+                and same_length
+                and a is not None
+                and b is not None
+                and a[1] == b[1]
+                and within is not None
+                and within.admits_date(a[0], b[0], a[1])
+            ):
+                loose.add(f"date of {a[1]}")
                 continue
             raise _Divergence(f"event histories part at {(a, b)}")
     return {e.transition for e in sessions[0].history() if e.transition in stochastic}
@@ -2948,6 +3173,12 @@ def compare_routes(
     seeds = list(range(10) if seeds is None else seeds) if stochastic else [0]
     level = "replay" if stochastic else "exact"
     tolerated: set[str] = set()
+    integrated: set[str] = set()
+    spread = (
+        _integrator_spread(declared_model, t_max, attributes, conversion.rename)
+        if _has_ode(declared_model) or _has_ode(library_model)
+        else None
+    )
     replay = functools.partial(
         _replay,
         declared_model,
@@ -2958,6 +3189,8 @@ def compare_routes(
         attributes=attributes,
         states=states,
         tolerated=tolerated,
+        integrated=integrated,
+        spread=spread,
     )
     fired: set[str] = set()
     for seed in seeds:
@@ -3032,6 +3265,20 @@ def compare_routes(
             f"{observed} agree, but {len(unexercised)} transitions never fired: {list(unexercised)[:5]}",
             len(seeds),
             unexercised,
+        )
+    if integrated and spread is not None:
+        # Agreement that needed the integrator's spread is reported under
+        # its own level, with the spread it rests on.
+        named = ", ".join(f"`{name}`" for name in sorted(integrated)[:5])
+        more = f" and {len(integrated) - 5} more" if len(integrated) > 5 else ""
+        widest = max((spread.values.get(name, 0.0) for name in integrated), default=0.0)
+        reordered = f"; within {_TOLERANCE:g} on {len(tolerated - integrated)} more" if tolerated - integrated else ""
+        return RouteComparison(
+            True,
+            "integrator",
+            f"{observed} agree on every trajectory ({level}), within the integrator's measured spread "
+            f"(values up to {widest:.3g}, event dates up to {spread.armed:.3g}) on {named}{more}{reordered}",
+            len(seeds),
         )
     if tolerated:
         # Agreement that needed the float-reordering tolerance is reported
