@@ -538,18 +538,33 @@ def _allocation(flow: Any, consumers: list[tuple[str, str]]) -> dict[str, Any]:
     }
 
 
+def _always_on(rule_set: Any) -> bool:
+    """Whether `rule_set` is one rule declared without a condition, which
+    always applies (no mode automaton)."""
+    return len(rule_set.rules) == 1 and rule_set.rules[0].is_default
+
+
 def _rule_set_uses(
-    rule_set: Any, inputs: dict[str, Any], outputs: dict[str, Any], bool_inputs: set[str]
+    rule_set: Any,
+    inputs: dict[str, Any],
+    outputs: dict[str, Any],
+    bool_inputs: set[str],
+    from_volume: frozenset[str] = frozenset(),
 ) -> list[dict]:
-    """A rule set with one guarded rule and one idle rule, as `std.rule_set`
-    and its `rule_consumes` / `rule_produces`."""
+    """A rule set with one guarded rule and one idle rule, or one rule
+    always on, as `std.rule_set` and its `rule_consumes` / `rule_produces`.
+    The flows in `from_volume` are drawn from a volume upstream of the
+    rules."""
     where = f"rule set `{rule_set.name}`"
     if rule_set.apportionment:
         raise _Refused("rule set apportionment", where)
+    if _always_on(rule_set):
+        return _always_on_uses(rule_set, inputs, outputs, from_volume)
     guarded = [rule for rule in rule_set.rules if not rule.is_default]
     idle = [rule for rule in rule_set.rules if rule.is_default]
-    if not guarded:
-        raise _Refused("always-on rule set", f"{where} has no guarded rule")
+    if from_volume & set(rule_set.consumed()):
+        # Benched only with a rule always on.
+        raise _Refused("conditioned rule set drawing from a volume", where)
     if len(guarded) != 1 or len(idle) != 1:
         raise _Refused(
             "multi-rule rule set", f"{where} has {len(guarded)} guarded and {len(idle)} idle rules"
@@ -633,9 +648,75 @@ def _rule_set_uses(
     return uses
 
 
-def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
-    """A single-flow volume on the output side, as `std.volume_flow`,
-    `std.volume_outlet` and `std.volume_total`."""
+def _always_on_uses(
+    rule_set: Any, inputs: dict[str, Any], outputs: dict[str, Any], from_volume: frozenset[str]
+) -> list[dict]:
+    """One rule always on, as `std.rule_set` with `always_on`."""
+    where = f"rule set `{rule_set.name}`"
+    rule = rule_set.rules[0]
+    if not rule.name:
+        raise _Refused("unnamed rule", where)
+    consumes, produces = list(rule.cons), list(rule.prod)
+    if not consumes:
+        # The scales are bounded by what the rule draws: with nothing to
+        # draw, no bench says what they are.
+        raise _Refused("always-on rule consuming nothing", where)
+    zero = [flow for flow, rate in {**rule.cons, **rule.prod}.items() if rate == 0.0]
+    if zero:
+        # A zero coefficient leaves the flow out of the plugin's scales.
+        raise _Refused("zero coefficient in an always-on rule", f"{where}: {zero}")
+    for flow in consumes:
+        if flow not in inputs:
+            raise _Refused("rule consuming no continuous input", f"{where} consumes `{flow}`")
+    for flow in produces:
+        if flow not in outputs:
+            raise _Refused("rule producing no continuous output", f"{where} produces `{flow}`")
+        if outputs[flow].max_rate is not None:
+            raise _Refused("maximum rate on an always-on rule's output", f"{where}, output `{flow}`")
+    drawn = [flow for flow in consumes if flow in from_volume]
+    uses = [
+        {
+            "fragment": "std.rule_set",
+            "with": {
+                "name": rule_set.name,
+                "active": rule.name,
+                "idle": "none",
+                "consumes": [flow for flow in consumes if flow not in from_volume],
+                "from_volume": drawn,
+                "produces": produces,
+                "always_on": True,
+            },
+        }
+    ]
+    for flow in consumes:
+        with_: dict[str, Any] = {
+            "rule_set": rule_set.name,
+            "active": rule.name,
+            "flow": flow,
+            "rate": float(rule.cons[flow]),
+            "always_on": True,
+        }
+        if flow in from_volume:
+            with_["from_volume"] = True
+        uses.append({"fragment": "std.rule_consumes", "with": with_})
+    for flow in produces:
+        uses.append(
+            {
+                "fragment": "std.rule_produces",
+                "with": {
+                    "rule_set": rule_set.name,
+                    "active": rule.name,
+                    "flow": flow,
+                    "rate": float(rule.prod[flow]),
+                    "always_on": True,
+                },
+            }
+        )
+    return uses
+
+
+def _volume_refusal(capacity: Any) -> None:
+    """Refuse by name what no volume bench covers."""
     from .. import muscadet as authoring
 
     where = f"volume `{capacity.name}`"
@@ -647,8 +728,76 @@ def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
         raise _Refused("open volume (make-up flow)", where)
     if capacity.hysteresis != authoring.DEFAULT_HYSTERESIS:
         raise _Refused("volume hysteresis", where)
-    if capacity.flows[0].weight != 1.0:
+    if any(flow.weight != 1.0 for flow in capacity.flows):
         raise _Refused("volume flow weight", where)
+
+
+def _input_volume_uses(capacity: Any) -> list[dict]:
+    """A volume upstream of the rules, as `std.volume_flow` with side `in`
+    for each flow it holds, `std.volume_total`, and `std.volume_stock` per
+    flow when it holds several (emptiness is judged per flow, fullness on
+    the total)."""
+    _volume_refusal(capacity)
+    where = f"volume `{capacity.name}`"
+    volume = float(capacity.volume)
+    contents = {flow: float(capacity.content_init.get(flow, 0.0)) for flow in capacity.flow_names}
+    total = sum(contents.values())
+    if total >= volume:
+        raise _Refused("volume starting full", where)
+    multi = len(capacity.flow_names) > 1
+    fill: dict[str, Any] = (
+        {"fill_unbounded": True} if math.isinf(capacity.fill_rate) else {"fill_rate": float(capacity.fill_rate)}
+    )
+    uses = []
+    for flow in capacity.flow_names:
+        uses.append(
+            {
+                "fragment": "std.volume_flow",
+                "with": {
+                    "volume": capacity.name,
+                    "flow": flow,
+                    "capacity": volume,
+                    "content_init": contents[flow],
+                    "side": "in",
+                    "empty_automaton": (
+                        f"{capacity.name}_stock_{flow}" if multi else f"{capacity.name}_bounds"
+                    ),
+                    **fill,
+                },
+            }
+        )
+    # The bounds automaton before the stock automata, as the plugin
+    # declares them: same-date crossings fire in declaration order.
+    total_with: dict[str, Any] = {
+        "volume": capacity.name,
+        "flows": list(capacity.flow_names),
+        "capacity": volume,
+        "initial": "partial" if total > 0.0 else "empty",
+    }
+    if multi:
+        total_with["ratio_flows"] = list(capacity.flow_names)
+    uses.append({"fragment": "std.volume_total", "with": total_with})
+    if multi:
+        for flow in capacity.flow_names:
+            uses.append(
+                {
+                    "fragment": "std.volume_stock",
+                    "with": {
+                        "volume": capacity.name,
+                        "flow": flow,
+                        "capacity": volume,
+                        "initial": "stocked" if contents[flow] > 0.0 else "empty",
+                    },
+                }
+            )
+    return uses
+
+
+def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
+    """A single-flow volume on the output side, as `std.volume_flow`,
+    `std.volume_outlet` and `std.volume_total`."""
+    where = f"volume `{capacity.name}`"
+    _volume_refusal(capacity)
     if flow_out.profile is not None or flow_out.max_rate is not None:
         raise _Refused("factor on a volume's output", f"{where}, output `{flow_out.name}`")
     flow = flow_in.name
@@ -718,11 +867,48 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
 
     # Volumes first: a mixture is the one refusal no other reading explains.
     held: dict[str, tuple[Any, list[dict]]] = {}
+    upstream: list[list[dict]] = []
+    drawn: set[str] = set()
     for capacity in obj.capacities:
         where = f"volume `{capacity.name}`"
         mixed = [flow for flow in capacity.flow_names if flow in outputs and obj._mixed_volume(flow) is not None]
         if mixed:
             refused.append(_Refused(_POOLED, f"{where} serves {mixed} as a mixture"))
+        elif capacity.side == "in":
+            # Upstream of the rules: every flow it holds is an input a rule
+            # set draws from it (the reader refuses a flow carried twice).
+            undrawn = [
+                flow
+                for flow in capacity.flow_names
+                if flow not in inputs or not any(flow in r.consumed() for r in obj.rule_sets)
+            ]
+            fed_twice = [flow for flow in capacity.flow_names if network.suppliers.get((name, flow), 0) >= 2]
+            if undrawn:
+                refused.append(_Refused("input-side volume on a flow no rule draws", f"{where}: {undrawn}"))
+            elif fed_twice:
+                refused.append(_Refused("input-side volume fed by two suppliers or more", f"{where}: {fed_twice}"))
+            else:
+                try:
+                    upstream.append(_input_volume_uses(capacity))
+                except _Refused as error:
+                    refused.append(error)
+                    continue
+                drawn |= set(capacity.flow_names)
+                # automaton: (transition prefix, transitions)
+                automata = {
+                    f"{capacity.name}_bounds": (
+                        capacity.name,
+                        ("leave_empty", "reach_empty", "reach_full", "leave_full"),
+                    )
+                }
+                if len(capacity.flow_names) > 1:
+                    for flow in capacity.flow_names:
+                        stock = f"{capacity.name}_stock_{flow}"
+                        automata[stock] = (stock, ("leave_empty", "reach_empty"))
+                for automaton, (prefix, transitions) in automata.items():
+                    for transition in transitions:
+                        qualified = f"{name}.{automaton}.{prefix}_{transition}"
+                        rename[qualified] = qualified
         elif capacity.side != "out":
             refused.append(_Refused("input-side volume", where))
         elif len(capacity.flows) != 1:
@@ -773,6 +959,8 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         refused += _profile_refusal(flow.profile, where)
         if flow.publish_rate is not None and flow.publish_rate != authoring.RATE_DELIVERED:
             refused.append(_Refused(f"published input rate `{flow.publish_rate}`", where))
+        elif flow.publish_rate is not None and flow.name in drawn:
+            refused.append(_Refused("published rate of an input drawn from a volume", where))
     for flow in outputs.values():
         where = f"output `{flow.name}`"
         if flow.capability_expr is not None:
@@ -791,9 +979,11 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
     rule_uses: list[dict] = []
     for rule_set in obj.rule_sets:
         try:
-            rule_uses += _rule_set_uses(rule_set, inputs, outputs, bool_inputs)
+            rule_uses += _rule_set_uses(rule_set, inputs, outputs, bool_inputs, frozenset(drawn))
         except _Refused as error:
             refused.append(error)
+            continue
+        if _always_on(rule_set):
             continue
         guarded = next(rule for rule in rule_set.rules if not rule.is_default)
         idle = next(rule for rule in rule_set.rules if rule.is_default)
@@ -831,6 +1021,8 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
                 },
             }
         )
+    for volume_uses in upstream:
+        uses += volume_uses
     uses += rule_uses
     for flow in outputs.values():
         consumers = network.consumers.get((name, flow.name), [])

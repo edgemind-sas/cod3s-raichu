@@ -375,6 +375,77 @@ BENCHES = {
          ("AP.vent_out", "F.vent_in"), ("F.H2_vented_out", "A.H2_vented_in")],
         [], 24.0,
     ),
+    # Option: rule_set always_on (with rule_consumes and rule_produces).
+    # A rule declared without a condition always applies: no mode
+    # automaton, its scale follows the profiled supply and the demand.
+    "always_on_rule_set": (
+        [{"type": "ObjFlow", "name": "W", "flows_continuous_out": [flow_out(
+            "Water", 1.0, profile=profile(SUN), publish_rate="capability", allocation="shares",
+            allocation_shares={"M": 1.0})]},
+         {"type": "ObjFlow", "name": "M", "flows_continuous_in": [{"name": "Water"}],
+          "flows_continuous_out": [{"name": "Gas"}],
+          "rules": [{"name": "work", "rules": [
+              {"name": "go", "cond": [], "cons": {"Water": 2.0}, "prod": {"Gas": 3.0}}]}]},
+         {"type": "ObjFlow", "name": "G", "flows_continuous_in": [flow_in(
+             "Gas", 1.0, profile=profile(DAY), publish_rate="delivered")]}],
+        [{"name": "W", "type": "ProfiledSource",
+          "parameters": {**at_zero(SUN), "flow": "Water", "shares": shares(("M", "Water_in", 1.0))}},
+         {"name": "M", "type": "Steady"},
+         {"name": "G", "type": "ProfiledSink", "parameters": {**at_zero(DAY), "flow": "Gas"}}],
+        [("W.Water_out", "M.Water_in"), ("M.Gas_out", "G.Gas_in")],
+        [], 24.0,
+    ),
+    # Option: volume_flow side `in` (with rule_set from_volume and
+    # rule_consumes from_volume), multi-flow. Two rules always on draw one
+    # flow each from a volume upstream of them that fills without bound:
+    # each draws what it needs while its flow is stocked, what arrives once
+    # it has run out, and the volume asks for whatever it can get until it
+    # is full.
+    "input_side_volume": (
+        [{"type": "ObjFlow", "name": "SA", "flows_continuous_out": [flow_out(
+            "A", 1.0, profile=profile(SUN), publish_rate="capability", allocation="shares",
+            allocation_shares={"M": 1.0})]},
+         {"type": "ObjFlow", "name": "SB", "flows_continuous_out": [flow_out("B", 0.6)]},
+         {"type": "ObjFlow", "name": "M", "flows_continuous_in": [{"name": "A"}, {"name": "B"}],
+          "flows_continuous_out": [{"name": "A_vent"}, {"name": "B_vent"}],
+          "capacities": [{"name": "membrane", "flows": ["A", "B"], "capacity": 4.0, "side": "in",
+                          "content_init": {"A": 0.0, "B": 0.0}, "transmits": True, "fill_rate": None}],
+          "rules": [{"name": "ra", "rules": [{"name": "go", "cond": [], "cons": {"A": 1.0}, "prod": {"A_vent": 1.0}}]},
+                    {"name": "rb", "rules": [{"name": "go", "cond": [], "cons": {"B": 1.0}, "prod": {"B_vent": 1.0}}]}]},
+         {"type": "ObjFlow", "name": "KA", "flows_continuous_in": [flow_in(
+             "A_vent", 1.0, profile=profile(DAY), publish_rate="delivered")]},
+         {"type": "ObjFlow", "name": "KB", "flows_continuous_in": [flow_in("B_vent", 0.5)]}],
+        [{"name": "SA", "type": "ProfiledSource",
+          "parameters": {**at_zero(SUN), "flow": "A", "shares": shares(("M", "A_in", 1.0))}},
+         {"name": "SB", "type": "Source", "parameters": {"flow": "B", "rate": 0.6}},
+         {"name": "M", "type": "Membrane", "parameters": {"capacity": 4.0}},
+         {"name": "KA", "type": "ProfiledSink", "parameters": {**at_zero(DAY), "flow": "A_vent"}},
+         {"name": "KB", "type": "Sink", "parameters": {"flow": "B_vent", "demand": 0.5}}],
+        [("SA.A_out", "M.A_in"), ("SB.B_out", "M.B_in"), ("M.A_vent_out", "KA.A_vent_in"),
+         ("M.B_vent_out", "KB.B_vent_in")],
+        [], 24.0,
+    ),
+    # The same option on a single-flow volume with a finite fill, starting
+    # part full: its bounds automaton says when the flow has run out.
+    "input_side_volume_single": (
+        [{"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out(
+            "Fuel", 1.0, profile=profile(SUN), publish_rate="capability", allocation="shares",
+            allocation_shares={"F": 1.0})]},
+         {"type": "ObjFlow", "name": "F", "flows_continuous_in": [{"name": "Fuel"}],
+          "flows_continuous_out": [{"name": "Heat"}],
+          "capacities": [{"name": "hopper", "flow": "Fuel", "capacity": 1.5, "side": "in",
+                          "content_init": {"Fuel": 1.0}, "transmits": True, "fill_rate": 0.5}],
+          "rules": [{"name": "burn", "rules": [{"name": "go", "cond": [], "cons": {"Fuel": 2.0},
+                                                "prod": {"Heat": 3.0}}]}]},
+         {"type": "ObjFlow", "name": "H", "flows_continuous_in": [flow_in(
+             "Heat", 1.0, profile=profile(DAY), publish_rate="delivered")]}],
+        [{"name": "S", "type": "ProfiledSource",
+          "parameters": {**at_zero(SUN), "flow": "Fuel", "shares": shares(("F", "Fuel_in", 1.0))}},
+         {"name": "F", "type": "Feeder", "parameters": {"capacity": 1.5, "content": 1.0, "fill_rate": 0.5}},
+         {"name": "H", "type": "ProfiledSink", "parameters": {**at_zero(DAY), "flow": "Heat"}}],
+        [("S.Fuel_out", "F.Fuel_in"), ("F.Heat_out", "H.Heat_in")],
+        [], 24.0,
+    ),
     # Fragments: threshold_compare on a published rate.
     "compare_a_rate": (
         [{"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out(
@@ -394,6 +465,52 @@ BENCHES = {
     ),
 }
 
+TYPES.append({
+    "name": "Steady",
+    "uses": [use("continuous_flow_in", name="Water"),
+             use("rule_set", name="work", active="go", idle="none", consumes=["Water"], produces=["Gas"], always_on=True),
+             use("rule_consumes", rule_set="work", active="go", flow="Water", rate=2.0, always_on=True),
+             use("rule_produces", rule_set="work", active="go", flow="Gas", rate=3.0, always_on=True),
+             use("continuous_flow_out", name="Gas", available="produced")],
+})
+TYPES.append({
+    "name": "Membrane",
+    "parameters": [p("capacity", "number")],
+    "uses": [use("continuous_flow_in", name="A"),
+             use("continuous_flow_in", name="B"),
+             use("volume_flow", volume="membrane", flow="A", capacity=P("capacity"), fill_unbounded=True,
+                 side="in", empty_automaton="membrane_stock_A"),
+             use("volume_flow", volume="membrane", flow="B", capacity=P("capacity"), fill_unbounded=True,
+                 side="in", empty_automaton="membrane_stock_B"),
+             use("volume_total", volume="membrane", flows=["A", "B"], capacity=P("capacity"),
+                 ratio_flows=["A", "B"]),
+             use("volume_stock", volume="membrane", flow="A", capacity=P("capacity")),
+             use("volume_stock", volume="membrane", flow="B", capacity=P("capacity")),
+             use("rule_set", name="ra", active="go", idle="none", consumes=[], from_volume=["A"], produces=["A_vent"],
+                 always_on=True),
+             use("rule_consumes", rule_set="ra", active="go", flow="A", rate=1.0, always_on=True, from_volume=True),
+             use("rule_produces", rule_set="ra", active="go", flow="A_vent", rate=1.0, always_on=True),
+             use("rule_set", name="rb", active="go", idle="none", consumes=[], from_volume=["B"], produces=["B_vent"],
+                 always_on=True),
+             use("rule_consumes", rule_set="rb", active="go", flow="B", rate=1.0, always_on=True, from_volume=True),
+             use("rule_produces", rule_set="rb", active="go", flow="B_vent", rate=1.0, always_on=True),
+             use("continuous_flow_out", name="A_vent", available="produced"),
+             use("continuous_flow_out", name="B_vent", available="produced")],
+})
+TYPES.append({
+    "name": "Feeder",
+    "parameters": [p("capacity", "number"), p("content", "number"), p("fill_rate", "number")],
+    "uses": [use("continuous_flow_in", name="Fuel"),
+             use("volume_flow", volume="hopper", flow="Fuel", capacity=P("capacity"), content_init=P("content"),
+                 fill_rate=P("fill_rate"), side="in", empty_automaton="hopper_bounds"),
+             use("volume_total", volume="hopper", flows=["Fuel"], capacity=P("capacity"), initial="partial"),
+             use("rule_set", name="burn", active="go", idle="none", consumes=[], from_volume=["Fuel"], produces=["Heat"],
+                 always_on=True),
+             use("rule_consumes", rule_set="burn", active="go", flow="Fuel", rate=2.0, always_on=True,
+                 from_volume=True),
+             use("rule_produces", rule_set="burn", active="go", flow="Heat", rate=3.0, always_on=True),
+             use("continuous_flow_out", name="Heat", available="produced")],
+})
 TYPES.append({
     "name": "BusByCapability",
     "parameters": [p("flow", "string")],

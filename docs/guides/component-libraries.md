@@ -337,8 +337,12 @@ Continuous flows convert where a plugin-versus-library bench proves the
 fragment: sources and sinks with their sinusoidal profiles and published
 rates, proportional and share splits, pass-throughs (`std.pass_through`),
 single-flow volumes on the output side with a finite or unbounded fill
-(`std.volume_flow`, `std.volume_outlet`, `std.volume_total`), and rule sets with one guarded rule and one idle rule (boolean conditions
-and at most one band), handing back a surplus where two suppliers or more
+(`std.volume_flow`, `std.volume_outlet`, `std.volume_total`), volumes
+upstream of rules that draw from them (`std.volume_flow` with side `in`,
+one or several flows, `std.volume_stock` judging each flow's emptiness),
+rule sets with one guarded rule and one idle rule (boolean conditions and
+at most one band), and rule sets of one rule declared without a condition,
+which always applies (`always_on`), handing back a surplus where two suppliers or more
 feed a consumed input. The converter reads each component with the
 declaration route's own reader and asks it what each flow is, so a flow is
 a pass-through, a volume's or a rule set's on both routes alike.
@@ -347,9 +351,11 @@ It refuses by name the continuous constructs no bench proves yet: a volume
 served as a mixture (`pooled serving (mixed volume)`, several flows in one
 volume on the output side), a transmitting volume (`transmits`), a volume
 starting full, with a finite serve rate, a discharge command, a make-up
-flow, a hysteresis or a flow weight, volumes on the input side, beside rule
-sets or holding several flows, always-on and
-multi-rule rule sets, an output two rule sets produce, demand and capability
+flow, a hysteresis or a flow weight, a volume on the input side holding a
+flow no rule draws or fed by two suppliers or more, a conditioned rule set
+drawing from a volume, a maximum rate on an always-on rule's output,
+output-side volumes beside rule sets or holding several flows, multi-rule
+rule sets, an output two rule sets produce, demand and capability
 equations, conduits and transfers, and measurements. It also refuses
 production operands that compare a quantity (a negated operand converts
 through `std.bool_not`), conditions on a common-cause group, on-demand
