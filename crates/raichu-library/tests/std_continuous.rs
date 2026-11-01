@@ -235,3 +235,102 @@ fn an_unbounded_fill_takes_the_whole_supply() {
         );
     }
 }
+
+/// A source of 4 feeding a rule always on that turns 2 of water into 3 of
+/// gas, for a consumer asking 9: the rule runs at the supply's scale, 2,
+/// and delivers 6, with no mode automaton.
+#[test]
+fn an_always_on_rule_runs_at_the_scale_its_supply_allows() {
+    let result = run_plant(
+        json!([
+            {"name": "Source", "uses": [
+                {"fragment": "std.continuous_flow_out", "with": {"name": "W"}},
+                {"fragment": "std.continuous_source", "with": {"name": "W", "rate": 4.0}}]},
+            {"name": "Machine", "uses": [
+                {"fragment": "std.continuous_flow_in", "with": {"name": "W"}},
+                {"fragment": "std.rule_set", "with": {"name": "work", "active": "go", "idle": "none",
+                    "consumes": ["W"], "produces": ["G"], "always_on": true}},
+                {"fragment": "std.rule_consumes", "with": {"rule_set": "work", "active": "go",
+                    "flow": "W", "rate": 2.0, "always_on": true}},
+                {"fragment": "std.rule_produces", "with": {"rule_set": "work", "active": "go",
+                    "flow": "G", "rate": 3.0, "always_on": true}},
+                {"fragment": "std.continuous_flow_out", "with": {"name": "G", "available": "produced"}}]},
+            {"name": "Sink", "uses": [
+                {"fragment": "std.continuous_flow_in", "with": {"name": "G", "demand": 9.0}},
+                {"fragment": "std.continuous_sink", "with": {"name": "G", "demand": 9.0}}]}
+        ]),
+        json!({"raichu_system": {"format": 1}, "system": {
+            "name": "steady", "library": {"name": "plant", "version": "1.0.0"},
+            "instances": [{"name": "S", "type": "Source"}, {"name": "M", "type": "Machine"},
+                          {"name": "K", "type": "Sink"}],
+            "connections": [{"from": "S.W_out", "to": "M.W_in"}, {"from": "M.G_out", "to": "K.G_in"}],
+            "indicators": [{"name": "gas", "target": "attribute",
+                            "attr": {"component": "K", "attribute": "G_fed_in"}}]}}),
+        2.0,
+    );
+    assert!(result.events.is_empty(), "{:?}", result.events);
+    for (_, v) in float_points(&result, "gas") {
+        assert_eq!(v, 6.0);
+    }
+}
+
+/// A source of 4 feeding a hopper of 10 upstream of a rule always on that
+/// draws 1 for a consumer asking 1: the hopper fills without bound, so it
+/// takes all 4 and fills at 3 until it is full at t = 10/3, then asks the
+/// rule's need alone.
+#[test]
+fn an_input_side_volume_takes_the_supply_until_full_then_the_need() {
+    let result = run_plant(
+        json!([
+            {"name": "Source", "uses": [
+                {"fragment": "std.continuous_flow_out", "with": {"name": "F"}},
+                {"fragment": "std.continuous_source", "with": {"name": "F", "rate": 4.0}}]},
+            {"name": "Feeder", "uses": [
+                {"fragment": "std.continuous_flow_in", "with": {"name": "F"}},
+                {"fragment": "std.volume_flow", "with": {"volume": "hopper", "flow": "F",
+                    "capacity": 10.0, "fill_unbounded": true, "side": "in",
+                    "empty_automaton": "hopper_bounds"}},
+                {"fragment": "std.volume_total", "with": {"volume": "hopper", "flows": ["F"],
+                    "capacity": 10.0}},
+                {"fragment": "std.rule_set", "with": {"name": "burn", "active": "go", "idle": "none",
+                    "consumes": [], "from_volume": ["F"], "produces": ["H"], "always_on": true}},
+                {"fragment": "std.rule_consumes", "with": {"rule_set": "burn", "active": "go",
+                    "flow": "F", "rate": 1.0, "always_on": true, "from_volume": true}},
+                {"fragment": "std.rule_produces", "with": {"rule_set": "burn", "active": "go",
+                    "flow": "H", "rate": 1.0, "always_on": true}},
+                {"fragment": "std.continuous_flow_out", "with": {"name": "H", "available": "produced"}}]},
+            {"name": "Sink", "uses": [
+                {"fragment": "std.continuous_flow_in", "with": {"name": "H", "demand": 1.0}},
+                {"fragment": "std.continuous_sink", "with": {"name": "H", "demand": 1.0}}]}
+        ]),
+        json!({"raichu_system": {"format": 1}, "system": {
+            "name": "hopper", "library": {"name": "plant", "version": "1.0.0"},
+            "instances": [{"name": "S", "type": "Source"}, {"name": "F", "type": "Feeder"},
+                          {"name": "K", "type": "Sink"}],
+            "connections": [{"from": "S.F_out", "to": "F.F_in"}, {"from": "F.H_out", "to": "K.H_in"}],
+            "indicators": [
+                {"name": "content", "target": "attribute",
+                 "attr": {"component": "F", "attribute": "hopper_content"}},
+                {"name": "heat", "target": "attribute",
+                 "attr": {"component": "K", "attribute": "H_fed_in"}}]}}),
+        5.0,
+    );
+    let full: Vec<f64> = result
+        .events
+        .iter()
+        .filter(|e| e.transition.ends_with("hopper_reach_full"))
+        .map(|e| e.time)
+        .collect();
+    assert!(!full.is_empty(), "{:?}", result.events);
+    assert!((full[0] - 10.0 / 3.0).abs() < 1e-9, "full at {}", full[0]);
+    for (t, v) in float_points(&result, "content") {
+        let expected = (3.0 * t).min(10.0);
+        assert!(
+            (v - expected).abs() < 1e-6,
+            "content {v} at {t}, expected {expected}"
+        );
+    }
+    for (_, v) in float_points(&result, "heat") {
+        assert_eq!(v, 1.0);
+    }
+}

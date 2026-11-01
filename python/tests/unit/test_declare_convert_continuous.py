@@ -258,13 +258,103 @@ def test_an_always_on_rule_set_and_a_contested_output_are_refused():
     machine["rules"][0]["apportionment"] = {}
     found = refusals(declaration)
     assert "output produced by two rule sets" in found
-    assert "always-on rule set" in found
+    # A rule declared without a condition converts on its own.
+    assert "always-on rule set" not in found
 
 
-def test_an_input_side_volume_is_refused():
+def test_an_input_side_volume_no_rule_draws_from_is_refused():
     declaration = store_plant(0.5)
     declaration["components"]["T"]["capacities"] = [volume("tank", ["H2"], 6.0, {"H2": 1.0}, 0.5, side="in")]
-    assert "input-side volume" in refusals(declaration)
+    assert refusals(declaration) == ["input-side volume on a flow no rule draws"]
+
+
+def membrane_plant(fill_rate=float("inf"), content=None) -> dict:
+    """Two leaks gathered in a membrane upstream of two rules always on,
+    each venting one of them, as the reference plant's stack does."""
+    membrane = component(
+        "M", [c_in("A"), c_in("B"), c_out("A_vent"), c_out("B_vent")], class_name="Membrane"
+    ) | {"capacities": [volume("membrane", ["A", "B"], 4.0, content or {"A": 0.0, "B": 0.0}, fill_rate,
+                               side="in", transmits=True)]}
+    membrane["rules"] = [
+        {"name": "ra", "rules": [rule("venting", [], {"A": 1.0}, {"A_vent": 1.0})]},
+        {"name": "rb", "rules": [rule("venting", [], {"B": 1.0}, {"B_vent": 1.0})]},
+    ]
+    return document(
+        [
+            component("SA", [c_out("A", 1.0, profile=SUN)], class_name="Stack"),
+            component("SB", [c_out("B", 0.6)], class_name="Cell"),
+            membrane,
+            component("KA", [c_in("A_vent", 1.0, profile=DAY)], class_name="Room"),
+            component("KB", [c_in("B_vent", 0.5)], class_name="Air"),
+        ],
+        [link("SA", "M", "A"), link("SB", "M", "B"), link("M", "KA", "A_vent"), link("M", "KB", "B_vent")],
+    )
+
+
+def always_on_plant() -> dict:
+    """A rule declared without a condition, always applying."""
+    machine = component("M", [c_in("Water"), c_out("Gas")], class_name="Machine")
+    machine["rules"] = [{"name": "work", "rules": [rule("go", [], {"Water": 2.0}, {"Gas": 3.0})]}]
+    return document(
+        [
+            component("W", [c_out("Water", 1.0, profile=SUN)], class_name="Pump"),
+            machine,
+            component("K", [c_in("Gas", 1.0, profile=DAY)], class_name="Load"),
+        ],
+        [link("W", "M", "Water"), link("M", "K", "Gas")],
+    )
+
+
+def test_an_always_on_rule_set_converts():
+    conversion = proved(always_on_plant())
+    machine = next(t for t in conversion.library["library"]["types"] if t["name"] == "Machine")
+    rule_set = next(u for u in machine["uses"] if u["fragment"] == "std.rule_set")
+    assert rule_set["with"]["always_on"] is True
+
+
+@pytest.mark.parametrize("fill", [float("inf"), 0.5])
+@pytest.mark.parametrize("t_max", [7.0, 23.3])
+def test_a_volume_upstream_of_rules_always_on_converts(fill, t_max):
+    proved(membrane_plant(fill), t_max=t_max, levels=VOLUME_LEVELS)
+
+
+def feeder_plant(content: float, transmits: bool) -> dict:
+    """A single-flow hopper upstream of a rule always on that also draws a
+    second flow directly."""
+    feeder = component("F", [c_in("Fuel"), c_in("Air"), c_out("Heat")], class_name="Burner") | {
+        "capacities": [volume("hopper", ["Fuel"], 1.5, {"Fuel": content}, 0.5, side="in", transmits=transmits)]
+    }
+    feeder["rules"] = [{"name": "burn", "rules": [rule("go", [], {"Fuel": 2.0, "Air": 1.0}, {"Heat": 3.0})]}]
+    return document(
+        [
+            component("S", [c_out("Fuel", 1.0, profile=SUN)], class_name="Silo"),
+            component("A", [c_out("Air", 2.0)], class_name="Blower"),
+            feeder,
+            component("H", [c_in("Heat", 1.0, profile=DAY)], class_name="Room"),
+        ],
+        [link("S", "F", "Fuel"), link("A", "F", "Air"), link("F", "H", "Heat")],
+    )
+
+
+@pytest.mark.parametrize("content", [0.0, 1.0])
+@pytest.mark.parametrize("transmits", [True, False])
+def test_a_single_flow_hopper_beside_a_direct_input_converts(content, transmits):
+    proved(feeder_plant(content, transmits), levels=VOLUME_LEVELS)
+
+
+def test_a_membrane_starting_stocked_converts():
+    proved(membrane_plant(content={"A": 1.0, "B": 0.0}), levels=VOLUME_LEVELS)
+
+
+def test_a_membrane_altered_is_reported_divergent():
+    """Negative control: the volume a rule draws from is observed."""
+    declaration = membrane_plant()
+    altered = copy.deepcopy(convert(declaration))
+    membrane = next(t for t in altered.library["library"]["types"] if t["name"] == "Membrane")
+    for use in membrane["uses"]:
+        if use["fragment"] in ("std.volume_flow", "std.volume_total", "std.volume_stock"):
+            use["with"]["capacity"] *= 1.0 + 1e-3
+    assert not compare_routes(declaration, altered, t_max=23.3).identical
 
 
 def test_two_guarded_rules_are_refused_naming_the_count():
@@ -366,7 +456,7 @@ def _store() -> dict:
 
 
 #: Bases of `REFUSED_EDITS` holding a volume, which may compare beyond exact.
-STORE_BASES = (_store,)
+STORE_BASES = (_store, membrane_plant)
 
 
 #: One field changed on a converting plant, and the construct it is refused as.
@@ -430,6 +520,33 @@ REFUSED_EDITS = {
         _store,
         lambda d: d["components"]["T"]["capacities"][0].update(serve_rate=2.0),
         "volume serve rate",
+    ),
+    "condition on a rule drawing from a volume": (
+        membrane_plant,
+        lambda d: d["components"]["M"]["rules"][0]["rules"].insert(
+            0, rule("on", [operand("A", op=">=", value=1.0, release=0.5)], {"A": 1.0}, {"A_vent": 1.0})
+        ),
+        "conditioned rule set drawing from a volume",
+    ),
+    "membrane starting full": (
+        membrane_plant,
+        lambda d: d["components"]["M"]["capacities"][0].update(content_init={"A": 3.0, "B": 1.0}),
+        "volume starting full",
+    ),
+    "zero coefficient in an always-on rule": (
+        always_on_plant,
+        lambda d: d["components"]["M"]["rules"][0]["rules"][0]["cons"].update(Water=0.0),
+        "zero coefficient in an always-on rule",
+    ),
+    "always-on rule consuming nothing": (
+        always_on_plant,
+        lambda d: d["components"]["M"]["rules"][0]["rules"][0].update(cons={}),
+        "always-on rule consuming nothing",
+    ),
+    "maximum rate on an always-on output": (
+        always_on_plant,
+        lambda d: _flow(d, "M", "FlowContinuousOut", "Gas").update(max_rate=1.0),
+        "maximum rate on an always-on rule's output",
     ),
     "input consumed by two rule sets": (
         machine_plant,
