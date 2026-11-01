@@ -15,7 +15,8 @@ sources and sinks (``continuous_source``, ``continuous_sink``,
 ``time_profile``, ``rate_publisher``), volumes (``volume_flow``,
 ``volume_outlet``, ``volume_stock``, ``volume_total``), a pass-through
 (``pass_through``), rule sets
-(``rule_set``, ``rule_consumes``, ``rule_produces``, ``tap``) and controllers
+(``rule_set``, ``rule_consumes``, ``rule_produces``, ``tap``), an output
+two rule sets produce (``shared_output``, ``rule_cascade``) and controllers
 (``aggregate_measure``, ``threshold_compare``, ``threshold_band``).
 
 Oracle-free: both routes run on RAICHU.
@@ -446,6 +447,37 @@ BENCHES = {
         [("S.Fuel_out", "F.Fuel_in"), ("F.Heat_out", "H.Heat_in")],
         [], 24.0,
     ),
+    # Fragments: shared_output, rule_cascade, rule_produces shared and
+    # rule_set cascaded. Two rule sets produce one exhaust, served in
+    # declaration order: the first, held by a band on its input, is asked
+    # the whole demand, the second only what the first leaves unserved.
+    # The first's supply follows the sun, so it serves the whole demand,
+    # part of it, or nothing once its band has released.
+    "cascade_two_rule_sets": (
+        [{"type": "ObjFlow", "name": "SA", "flows_continuous_out": [flow_out(
+            "A", 1.0, profile=profile(SUN), publish_rate="capability", allocation="shares",
+            allocation_shares={"V": 1.0})]},
+         {"type": "ObjFlow", "name": "SB", "flows_continuous_out": [flow_out("B", 3.0)]},
+         {"type": "ObjFlow", "name": "V", "flows_continuous_in": [{"name": "A"}, {"name": "B"}],
+          "flows_continuous_out": [{"name": "X"}, {"name": "Y"}],
+          "rules": [{"name": "first", "rules": [
+              {"name": "on", "cond": [{"name": "A", "port": "in", "op": ">=", "value": 2.0, "release": 1.0}],
+               "cons": {"A": 4.0}, "prod": {"X": 1.0}},
+              {"name": "off", "prod": {"X": 0.0}}]},
+                    {"name": "second", "rules": [
+              {"name": "go", "cond": [], "cons": {"B": 1.0}, "prod": {"X": 1.0, "Y": 0.5}}]}]},
+         {"type": "ObjFlow", "name": "KX", "flows_continuous_in": [flow_in(
+             "X", 1.0, profile=profile(DAY), publish_rate="delivered")]},
+         {"type": "ObjFlow", "name": "KY", "flows_continuous_in": [flow_in("Y", 10.0)]}],
+        [{"name": "SA", "type": "ProfiledSource",
+          "parameters": {**at_zero(SUN), "flow": "A", "shares": shares(("V", "A_in", 1.0))}},
+         {"name": "SB", "type": "Source", "parameters": {"flow": "B", "rate": 3.0}},
+         {"name": "V", "type": "Ventilator"},
+         {"name": "KX", "type": "ProfiledSink", "parameters": {**at_zero(DAY), "flow": "X"}},
+         {"name": "KY", "type": "Sink", "parameters": {"flow": "Y", "demand": 10.0}}],
+        [("SA.A_out", "V.A_in"), ("SB.B_out", "V.B_in"), ("V.X_out", "KX.X_in"), ("V.Y_out", "KY.Y_in")],
+        [], 24.0,
+    ),
     # Fragments: threshold_compare on a published rate.
     "compare_a_rate": (
         [{"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out(
@@ -511,6 +543,37 @@ TYPES.append({
              use("rule_produces", rule_set="burn", active="go", flow="Heat", rate=3.0, always_on=True),
              use("continuous_flow_out", name="Heat", available="produced")],
 })
+def ventilator(name, order):
+    """Two rule sets producing the exhaust X, cascaded in `order`: the
+    first named is asked the whole demand, the second what it leaves."""
+    head, tail = order
+    produces = {"first": [], "second": ["Y"]}
+    produces[head] = produces[head] + ["X"]
+    cascaded = {head: [], tail: ["X"]}
+    return {
+        "name": name,
+        "uses": [use("continuous_flow_in", name="A"),
+                 use("continuous_flow_in", name="B"),
+                 use("rule_set", name="first", active="on", idle="off", consumes=["A"],
+                     produces=produces["first"], cascaded=cascaded["first"], threshold="band",
+                     threshold_flow="A", activate=2.0, release=1.0),
+                 use("rule_consumes", rule_set="first", active="on", flow="A", rate=4.0),
+                 use("rule_produces", rule_set="first", active="on", flow="X", rate=1.0, shared=True),
+                 use("rule_set", name="second", active="go", idle="none", consumes=["B"],
+                     produces=produces["second"], cascaded=cascaded["second"], always_on=True),
+                 use("rule_consumes", rule_set="second", active="go", flow="B", rate=1.0, always_on=True),
+                 use("rule_produces", rule_set="second", active="go", flow="X", rate=1.0, always_on=True,
+                     shared=True),
+                 use("rule_produces", rule_set="second", active="go", flow="Y", rate=0.5, always_on=True),
+                 use("rule_cascade", rule_set=tail, flow="X", before=[head]),
+                 use("shared_output", flow="X", producers=["first", "second"]),
+                 use("continuous_flow_out", name="X", available="produced"),
+                 use("continuous_flow_out", name="Y", available="produced")],
+    }
+
+
+TYPES.append(ventilator("Ventilator", ("first", "second")))
+TYPES.append(ventilator("VentilatorReversed", ("second", "first")))
 TYPES.append({
     "name": "BusByCapability",
     "parameters": [p("flow", "string")],
@@ -683,6 +746,33 @@ def test_a_band_switches_at_activate_and_back_at_release():
         assert capability[t] == pytest.approx(3.0, abs=1e-6), t
 
 
+def test_a_cascade_hands_the_second_set_what_the_first_leaves():
+    """The cascade bench crosses its three regimes: the first set serves
+    the whole demand and the second makes none of it, the first serves
+    part and the second the rest, and the first is off and the second
+    serves it all."""
+    library, (events, _) = bench_run("cascade_two_rule_sets")
+    off = [t for t, name in events if name == "V.first_mode.first_on_to_off"]
+    on = [t for t, name in events if name == "V.first_mode.first_off_to_on"]
+    assert off and on
+    instants = [i * 0.25 for i in range(97)]
+    result = pyraichu.simulate(pyraichu.load_model(library), t_max=24.0, samples=instants)
+    s = {name: dict(series) for name, series in result.samples.items()}
+    regimes = set()
+    for t in instants:
+        first_on = any(a < t < b for a, b in zip(on, off))
+        demand, first, second = s["V_X_demand_out"][t], s["V_first_draw_scale"][t], s["V_second_scale"][t]
+        if not first_on and off[0] < t < on[1]:
+            assert second == pytest.approx(demand), t
+            regimes.add("first off")
+        elif first_on and second == 0.0 and demand > 0.0:
+            regimes.add("first serves all")
+        elif first_on and first > 0.0 and second > 0.0:
+            assert first + second == pytest.approx(demand), t
+            regimes.add("both serve")
+    assert regimes == {"first off", "first serves all", "both serve"}
+
+
 @pytest.mark.parametrize(
     "bench, instance, changed",
     [
@@ -692,6 +782,9 @@ def test_a_band_switches_at_activate_and_back_at_release():
         # A bounded fill at zero is not an unbounded one.
         ("unbounded_fill", "T", {"type": "Store", "parameters": {
             "volume": "tank", "flow": "H2", "capacity": 30.0, "rate": 1.0, "fill_rate": 0.0}}),
+        # Producers cascaded in the other order: the second set is asked
+        # the whole demand and the first only what it leaves.
+        ("cascade_two_rule_sets", "V", {"type": "VentilatorReversed"}),
     ],
 )
 def test_a_changed_instance_is_reported_different(bench, instance, changed):

@@ -550,16 +550,21 @@ def _rule_set_uses(
     outputs: dict[str, Any],
     bool_inputs: set[str],
     from_volume: frozenset[str] = frozenset(),
+    shared: dict[str, list[str]] | None = None,
 ) -> list[dict]:
     """A rule set with one guarded rule and one idle rule, or one rule
     always on, as `std.rule_set` and its `rule_consumes` / `rule_produces`.
     The flows in `from_volume` are drawn from a volume upstream of the
-    rules."""
+    rules. The flows in `shared` are produced by other rule sets too, each
+    mapped to the sets declared before this one: served in declaration
+    order, a flow with sets before it is bounded by what they leave."""
+    shared = shared or {}
     where = f"rule set `{rule_set.name}`"
-    if rule_set.apportionment:
+    if set(rule_set.apportionment) - set(shared):
+        # An apportioned shared output is refused as such by the caller.
         raise _Refused("rule set apportionment", where)
     if _always_on(rule_set):
-        return _always_on_uses(rule_set, inputs, outputs, from_volume)
+        return _always_on_uses(rule_set, inputs, outputs, from_volume, shared)
     guarded = [rule for rule in rule_set.rules if not rule.is_default]
     idle = [rule for rule in rule_set.rules if rule.is_default]
     if from_volume & set(rule_set.consumed()):
@@ -615,7 +620,7 @@ def _rule_set_uses(
                 "active": active.name,
                 "idle": rest.name,
                 "consumes": consumes,
-                "produces": produces,
+                **_produced_and_cascaded(produces, shared),
                 "capped": capped,
                 "conditions": conditions,
                 **band,
@@ -644,12 +649,37 @@ def _rule_set_uses(
         if flow in capped:
             with_["capped"] = True
             with_["max_rate"] = float(outputs[flow].max_rate)
+        if flow in shared:
+            with_["shared"] = True
         uses.append({"fragment": "std.rule_produces", "with": with_})
-    return uses
+    return uses + _cascade_uses(rule_set.name, shared)
+
+
+def _produced_and_cascaded(produces: list[str], shared: dict[str, list[str]]) -> dict[str, list[str]]:
+    """The `produces` and `cascaded` lists of a `std.rule_set`: a flow
+    other sets produce before this one is asked only what they leave."""
+    return {
+        "produces": [flow for flow in produces if not shared.get(flow)],
+        "cascaded": [flow for flow in produces if shared.get(flow)],
+    }
+
+
+def _cascade_uses(rule_set: str, shared: dict[str, list[str]]) -> list[dict]:
+    """The demand each shared output leaves to `rule_set`, one
+    `std.rule_cascade` per flow with rule sets declared before it."""
+    return [
+        {"fragment": "std.rule_cascade", "with": {"rule_set": rule_set, "flow": flow, "before": before}}
+        for flow, before in shared.items()
+        if before
+    ]
 
 
 def _always_on_uses(
-    rule_set: Any, inputs: dict[str, Any], outputs: dict[str, Any], from_volume: frozenset[str]
+    rule_set: Any,
+    inputs: dict[str, Any],
+    outputs: dict[str, Any],
+    from_volume: frozenset[str],
+    shared: dict[str, list[str]],
 ) -> list[dict]:
     """One rule always on, as `std.rule_set` with `always_on`."""
     where = f"rule set `{rule_set.name}`"
@@ -683,7 +713,7 @@ def _always_on_uses(
                 "idle": "none",
                 "consumes": [flow for flow in consumes if flow not in from_volume],
                 "from_volume": drawn,
-                "produces": produces,
+                **_produced_and_cascaded(produces, shared),
                 "always_on": True,
             },
         }
@@ -700,19 +730,17 @@ def _always_on_uses(
             with_["from_volume"] = True
         uses.append({"fragment": "std.rule_consumes", "with": with_})
     for flow in produces:
-        uses.append(
-            {
-                "fragment": "std.rule_produces",
-                "with": {
-                    "rule_set": rule_set.name,
-                    "active": rule.name,
-                    "flow": flow,
-                    "rate": float(rule.prod[flow]),
-                    "always_on": True,
-                },
-            }
-        )
-    return uses
+        with_ = {
+            "rule_set": rule_set.name,
+            "active": rule.name,
+            "flow": flow,
+            "rate": float(rule.prod[flow]),
+            "always_on": True,
+        }
+        if flow in shared:
+            with_["shared"] = True
+        uses.append({"fragment": "std.rule_produces", "with": with_})
+    return uses + _cascade_uses(rule_set.name, shared)
 
 
 def _volume_refusal(capacity: Any) -> None:
@@ -938,9 +966,21 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             produced_by.setdefault(flow, []).append(rule_set.name)
         for flow in rule_set.consumed():
             consumed_by.setdefault(flow, []).append(rule_set.name)
-    for flow, sets in produced_by.items():
-        if len(sets) > 1:
-            refused.append(_Refused("output produced by two rule sets", f"output `{flow}` by {sets}"))
+    # An output two rule sets produce is served in declaration order, as
+    # the plugin route's cascade does, unless a producer apportions it.
+    contested = {flow: sets for flow, sets in produced_by.items() if len(sets) > 1}
+    shared_by: dict[str, dict[str, list[str]]] = {}
+    for flow, sets in contested.items():
+        where = f"output `{flow}` by {sets}"
+        producers = [r for r in obj.rule_sets if r.name in sets]
+        if any(flow in r.apportionment for r in producers):
+            refused.append(_Refused("apportioned output produced by two rule sets", where))
+        elif outputs.get(flow) is not None and outputs[flow].max_rate is not None:
+            refused.append(_Refused("maximum rate on an output produced by two rule sets", where))
+        elif any(set(r.consumed()) & drawn for r in producers):
+            refused.append(_Refused("output produced by two rule sets drawing from a volume", where))
+        for position, rule_set in enumerate(sets):
+            shared_by.setdefault(rule_set, {})[flow] = sets[:position]
     for flow, sets in consumed_by.items():
         if len(sets) > 1:
             refused.append(_Refused("input consumed by two rule sets", f"input `{flow}` by {sets}"))
@@ -979,7 +1019,9 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
     rule_uses: list[dict] = []
     for rule_set in obj.rule_sets:
         try:
-            rule_uses += _rule_set_uses(rule_set, inputs, outputs, bool_inputs, frozenset(drawn))
+            rule_uses += _rule_set_uses(
+                rule_set, inputs, outputs, bool_inputs, frozenset(drawn), shared_by.get(rule_set.name)
+            )
         except _Refused as error:
             refused.append(error)
             continue
@@ -1024,6 +1066,8 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
     for volume_uses in upstream:
         uses += volume_uses
     uses += rule_uses
+    for flow, sets in contested.items():
+        uses.append({"fragment": "std.shared_output", "with": {"flow": flow, "producers": sets}})
     for flow in outputs.values():
         consumers = network.consumers.get((name, flow.name), [])
         out: dict[str, Any] = {"name": flow.name, **_allocation(flow, consumers)}
