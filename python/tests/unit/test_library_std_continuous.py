@@ -17,7 +17,8 @@ sources and sinks (``continuous_source``, ``continuous_sink``,
 (``pass_through``), rule sets
 (``rule_set``, ``rule_consumes``, ``rule_produces``, ``tap``), an output
 two rule sets produce (``shared_output``, ``rule_cascade``) and controllers
-(``aggregate_measure``, ``threshold_compare``, ``threshold_band``).
+(``aggregate_measure``, ``threshold_compare``, ``threshold_band``,
+``republish``).
 
 Oracle-free: both routes run on RAICHU.
 """
@@ -590,6 +591,130 @@ TYPES.append({
 })
 
 
+TYPES.append({
+    "name": "Instrument",
+    "parameters": [p("measure", "string"), p("output", "string"), p("gain", "number", default=1.0)],
+    "uses": [use("aggregate_measure", name="${measure}"),
+             use("republish", name="${output}", input="${measure}", gain=P("gain"))],
+})
+TYPES.append({
+    "name": "Voter",
+    "parameters": [p("measure", "string"), p("output", "string"),
+                   p("direction", "enum", values=["below", "above"]),
+                   p("activate", "number"), p("release", "number"), p("initial", "number", default=0.0)],
+    "uses": [use("aggregate_measure", name="${measure}", agg="median", initial=P("initial")),
+             use("threshold_band", name="${output}", input="${measure}", direction=P("direction"),
+                 activate=P("activate"), release=P("release"))],
+})
+TYPES.append({
+    "name": "RateMeter",
+    "parameters": [p("measure", "string"), p("output", "string")],
+    "uses": [use("aggregate_measure", name="${measure}", agg="mean"),
+             use("republish", name="${output}", input="${measure}")],
+})
+TYPES.append({
+    "name": "DeliveringSource",
+    "parameters": SINUSOID + [p("flow", "string"), p("shares", "list", items="object")],
+    "uses": [sinusoid("${flow}_out_profile"),
+             use("rate_publisher", name="${flow}", of="delivered", side="out"),
+             use("continuous_source", name="${flow}", rate=1.0, profiled=True),
+             use("continuous_flow_out", name="${flow}", allocation="shares", shares=P("shares"))]},
+)
+
+
+def four_sources():
+    """Four profiled sources a quarter period apart, each serving a sink of
+    its own, and the capability each publishes."""
+    plugin, library, links = [], [], []
+    for index in range(4):
+        curve = {**SUN, "phase_shift": 3.0 * index}
+        source, sink = f"S{index}", f"K{index}"
+        plugin += [{"type": "ObjFlow", "name": source, "flows_continuous_out": [flow_out(
+                       "Elec", 1.0, profile=profile(curve), publish_rate="capability",
+                       allocation="shares", allocation_shares={sink: 1.0})]},
+                   {"type": "ObjFlow", "name": sink, "flows_continuous_in": [flow_in("Elec", 20.0)]}]
+        library += [{"name": source, "type": "ProfiledSource", "parameters": {
+                        **at_zero(curve), "flow": "Elec", "shares": shares((sink, "Elec_in", 1.0))}},
+                    {"name": sink, "type": "Sink", "parameters": {"flow": "Elec", "demand": 20.0}}]
+        links.append((f"{source}.Elec_out", f"{sink}.Elec_in"))
+    return plugin, library, links
+
+
+def median_of_instruments():
+    """Four instruments republishing a rate, the last with a gain of zero (a
+    failed instrument publishing nothing), and a voter thresholding the
+    median of the four with a band."""
+    plugin, library, links = four_sources()
+    for index in range(4):
+        gain = 0.0 if index == 3 else 1.0
+        name = f"CT{index}"
+        plugin.append({"type": "ObjCtrl", "name": name, "controls_in": [{"name": "Elec", "kind": "rate"}],
+                       "controls_out": [{"name": "reading", "kind": "value", "emit": {
+                           "op": "republish", "input": "Elec", "gain": gain}}]})
+        library.append({"name": name, "type": "Instrument", "parameters": {
+            "measure": "Elec_rate", "output": "reading", "gain": gain}})
+        links += [(f"S{index}.Elec_rate_out", f"{name}.Elec_rate_in"),
+                  (f"{name}.reading_level_out", "AP.reading_level_in")]
+    plugin.append({"type": "ObjCtrl", "name": "AP",
+                   "controls_in": [{"name": "reading", "kind": "level", "aggregate": "median"}],
+                   "controls_out": [{"name": "high", "kind": "bool", "emit": {
+                       "op": "band", "input": "reading", "direction": "above",
+                       "activate": 4.5, "release": 1.5}}]})
+    library.append({"name": "AP", "type": "Voter", "parameters": {
+        "measure": "reading_level", "output": "high", "direction": "above",
+        "activate": 4.5, "release": 1.5}})
+    return plugin, library, links, [], 24.0
+
+
+def level_sensor_and_delivered_rate():
+    """A store fed by a profiled source that publishes what it delivers: an
+    instrument republishes the store's level, a voter switches a band on it,
+    and a meter republishes the delivered rate it reads."""
+    plugin = [
+        {"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out(
+            "H2", 1.0, profile=profile(SUN), publish_rate="delivered", allocation="shares",
+            allocation_shares={"T": 1.0})]},
+        {"type": "ObjFlow", "name": "T", "flows_continuous_in": [flow_in("H2", 4.0)],
+         "flows_continuous_out": [flow_out("H2", 4.0)],
+         "capacities": [{"name": "tank", "flow": "H2", "capacity": 30.0, "content_init": {"H2": 0.0},
+                         "fill_rate": 2.0}]},
+        {"type": "ObjFlow", "name": "K", "flows_continuous_in": [flow_in(
+            "H2", 1.0, profile=profile(DAY), publish_rate="delivered")]},
+        {"type": "ObjCtrl", "name": "CT", "controls_in": [{"name": "tank", "kind": "level"}],
+         "controls_out": [{"name": "tank_reading", "kind": "value", "emit": {
+             "op": "republish", "input": "tank", "gain": 1.0}}]},
+        {"type": "ObjCtrl", "name": "AP",
+         "controls_in": [{"name": "tank_reading", "kind": "level", "aggregate": "median"}],
+         "controls_out": [{"name": "low", "kind": "bool", "emit": {
+             "op": "band", "input": "tank_reading", "direction": "below", "activate": 5.0, "release": 12.0}}]},
+        {"type": "ObjCtrl", "name": "M", "controls_in": [{"name": "H2", "kind": "rate", "aggregate": "mean"}],
+         "controls_out": [{"name": "supply", "kind": "value", "emit": {
+             "op": "republish", "input": "H2", "gain": 1.0}}]},
+    ]
+    library = [
+        {"name": "S", "type": "DeliveringSource",
+         "parameters": {**at_zero(SUN), "flow": "H2", "shares": shares(("T", "H2_in", 1.0))}},
+        {"name": "T", "type": "Store", "parameters": {
+            "volume": "tank", "flow": "H2", "capacity": 30.0, "rate": 4.0, "fill_rate": 2.0}},
+        {"name": "K", "type": "ProfiledSink", "parameters": {**at_zero(DAY), "flow": "H2"}},
+        {"name": "CT", "type": "Instrument", "parameters": {"measure": "tank_level", "output": "tank_reading"}},
+        {"name": "AP", "type": "Voter", "parameters": {
+            "measure": "tank_reading_level", "output": "low", "direction": "below",
+            "activate": 5.0, "release": 12.0}},
+        {"name": "M", "type": "RateMeter", "parameters": {"measure": "H2_rate", "output": "supply"}},
+    ]
+    links = [("S.H2_out", "T.H2_in"), ("T.H2_out", "K.H2_in"), ("T.tank_level_out", "CT.tank_level_in"),
+             ("CT.tank_reading_level_out", "AP.tank_reading_level_in"), ("S.H2_rate_out", "M.H2_rate_in")]
+    return plugin, library, links, [], 24.0
+
+
+# Fragments: aggregate_measure (median), republish, threshold_band.
+BENCHES["median_of_instruments"] = median_of_instruments()
+# Fragments: republish of a volume level, threshold_band `below`,
+# aggregate_measure (mean), rate_publisher delivered by an output.
+BENCHES["level_sensor_and_delivered_rate"] = level_sensor_and_delivered_rate()
+
+
 def plugin_model(name, objects, connections):
     def end(written):
         component, port = written.split(".", 1)
@@ -664,7 +789,6 @@ BOOLEAN_FRAGMENTS = {
 UNBENCHED_VALUES = {
     # The benches cover the direction and operator the reference studies
     # use; the others are the same comparison mirrored.
-    ("threshold_band", "direction", "below"): "mirror of `above`, benched",
     ("threshold_compare", "operator", "le"): "mirror of `lt`, benched",
     ("threshold_compare", "operator", "gt"): "mirror of `lt`, benched",
     ("threshold_compare", "operator", "ge"): "mirror of `lt`, benched",
@@ -785,6 +909,14 @@ def test_a_cascade_hands_the_second_set_what_the_first_leaves():
         # Producers cascaded in the other order: the second set is asked
         # the whole demand and the first only what it leaves.
         ("cascade_two_rule_sets", "V", {"type": "VentilatorReversed"}),
+        # A band released at another threshold switches at other dates.
+        ("median_of_instruments", "AP", {"parameters": {
+            "measure": "reading_level", "output": "high", "direction": "above",
+            "activate": 4.5, "release": 1.6}}),
+        # A voter summing the four readings instead of taking their median.
+        ("median_of_instruments", "AP", {"type": "Band", "parameters": {
+            "measure": "reading_level", "output": "high", "direction": "above",
+            "activate": 4.5, "release": 1.5}}),
     ],
 )
 def test_a_changed_instance_is_reported_different(bench, instance, changed):

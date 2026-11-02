@@ -2624,7 +2624,7 @@
       },
       {
         "name": "rate_publisher",
-        "description": "Publishes a flow's rate on the out port `<name>_rate_out` (attribute `<name>_rate`): the capability of an output, or what an input receives.",
+        "description": "Publishes a flow's rate on the out port `<name>_rate_out` (attribute `<name>_rate`): the capability of an output, or what a flow delivers: what an input receives (`side: in`) or what an output delivers (`side: out`).",
         "parameters": [
           {
             "name": "name",
@@ -2639,6 +2639,16 @@
               "delivered"
             ],
             "description": "Which quantity is published."
+          },
+          {
+            "name": "side",
+            "kind": "enum",
+            "values": [
+              "in",
+              "out"
+            ],
+            "default": "in",
+            "description": "For `of: delivered`, whether `<name>` is an input or an output."
           }
         ],
         "body": {
@@ -2674,10 +2684,22 @@
                     }
                   },
                   "delivered": {
-                    "op": "attr",
-                    "attr": {
-                      "component": "$self",
-                      "attribute": "${name}_fed_in"
+                    "$choose": "side",
+                    "cases": {
+                      "in": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_fed_in"
+                        }
+                      },
+                      "out": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_fed_out"
+                        }
+                      }
                     }
                   }
                 }
@@ -5950,12 +5972,29 @@
       },
       {
         "name": "aggregate_measure",
-        "description": "A measured quantity `<name>`: the sum of what is connected to the in port `<name>_in`.",
+        "description": "A measured quantity `<name>`: what is connected to the in port `<name>_in`, reduced by `agg` (the sum, the mean or the median of the connected values; the median of an even count is the mean of the two central ones). `initial` is its value before the first evaluation; a port nothing feeds reads zero from then on.",
         "parameters": [
           {
             "name": "name",
             "kind": "string",
             "description": "Measure name (an attribute and its in port)."
+          },
+          {
+            "name": "agg",
+            "kind": "enum",
+            "values": [
+              "sum",
+              "mean",
+              "median"
+            ],
+            "default": "sum",
+            "description": "How the connected values reduce to one."
+          },
+          {
+            "name": "initial",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Value before the first evaluation."
           }
         ],
         "body": {
@@ -5965,7 +6004,9 @@
               "kind": "float",
               "init": {
                 "kind": "float",
-                "value": 0.0
+                "value": {
+                  "$param": "initial"
+                }
               }
             }
           ],
@@ -5985,7 +6026,9 @@
                   "component": "$self",
                   "port": "${name}_in"
                 },
-                "agg": "sum"
+                "agg": {
+                  "$param": "agg"
+                }
               }
             }
           ]
@@ -6398,6 +6441,123 @@
                   }
                 }
               ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "republish",
+        "description": "A value output `<name>` publishing the attribute `<input>` times `<name>_level_gain` on the out port `<name>_level_out` (attribute `<name>_level`), as an instrument does. With `<name>_forced` true it publishes `<name>_forced_value` instead, times the same gain. A failure mode may set any of the three.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Output name."
+          },
+          {
+            "name": "input",
+            "kind": "string",
+            "description": "Attribute republished."
+          },
+          {
+            "name": "gain",
+            "kind": "number",
+            "default": 1.0,
+            "description": "Initial gain."
+          },
+          {
+            "name": "initial",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Published value before the first evaluation."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}_level",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "initial"
+                }
+              }
+            },
+            {
+              "name": "${name}_level_gain",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "gain"
+                }
+              }
+            },
+            {
+              "name": "${name}_forced",
+              "kind": "bool",
+              "init": {
+                "kind": "bool",
+                "value": false
+              }
+            },
+            {
+              "name": "${name}_forced_value",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "ports": [
+            {
+              "name": "${name}_level_out",
+              "dir": "out",
+              "attr": "${name}_level"
+            }
+          ],
+          "equations": [
+            {
+              "target": "${name}_level",
+              "kind": "explicit",
+              "expr": {
+                "op": "mul",
+                "args": [
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${name}_level_gain"
+                    }
+                  },
+                  {
+                    "op": "if",
+                    "cond": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_forced"
+                      }
+                    },
+                    "then": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${name}_forced_value"
+                      }
+                    },
+                    "otherwise": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${input}"
+                      }
+                    }
+                  }
+                ]
+              }
             }
           ]
         }

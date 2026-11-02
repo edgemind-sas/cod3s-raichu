@@ -556,11 +556,6 @@ REFUSED_EDITS = {
         lambda d: _flow(d, "K", "FlowContinuousIn", "E").update(publish_rate="capability"),
         "published input rate `capability`",
     ),
-    "delivered rate published on an output": (
-        bus_plant,
-        lambda d: _flow(d, "S1", "FlowContinuousOut", "E").update(publish_rate="delivered"),
-        "published output rate `delivered`",
-    ),
     "profile on a pass-through input": (
         bus_plant,
         lambda d: _flow(d, "BUS", "FlowContinuousIn", "E").update(profile=DAY),
@@ -656,3 +651,121 @@ def test_an_unproved_construct_is_refused_by_name(edit):
     proved(base(), levels=VOLUME_LEVELS if base in STORE_BASES else ("exact",))
     change(declaration)
     assert refusals(declaration) == [construct]
+
+
+# --- controllers ---------------------------------------------------------------
+
+
+def reading(name: str, kind="level", flows=(), aggregate=None, default=0.0) -> dict:
+    defaults = {"level_default": 0.0, "fill_default": 0.0, "rate_default": 0.0, "ratio_default": 0.0}
+    return {"name": name, "kind": kind, "flows": list(flows), **defaults, f"{kind}_default": default,
+            "aggregate": aggregate}
+
+
+def republished(name: str, of: str, gain=1.0) -> dict:
+    return {"name": name, "kind": "value", "flows": [], "level_default": 0.0, "fill_default": 0.0,
+            "ratio_default": 0.0, "emit": {"op": "republish", "input": of, "gain": gain}}
+
+
+def banded(name: str, of: str, direction: str, activate: float, release: float) -> dict:
+    return {"name": name, "kind": "bool", "default": False, "emit": {
+        "op": "band", "input": of, "direction": direction, "activate": activate, "release": release}}
+
+
+def controller(name: str, controls_in: list, controls_out: list) -> dict:
+    return {"name": name, "kind": "controller", "cls": "ObjCtrl", "source_cls": "ObjCtrl",
+            "controls_in": controls_in, "controls_out": controls_out}
+
+
+def box(source: str, source_box: str, target: str, target_box: str) -> dict:
+    return {"source": source, "source_box": source_box, "target": target, "target_box": target_box}
+
+
+def instrumented_store_plant() -> dict:
+    """The store plant read by instruments: one republishes the store's
+    level, a voter switches a band on the median of what it republishes,
+    and a meter republishes the rate the source delivers."""
+    declaration = store_plant(0.5)
+    source = declaration["components"]["S"]
+    source["flows"][0]["publish_rate"] = "delivered"
+    declaration["components"] |= {
+        "CT": controller("CT", [reading("tank", default=1.0)], [republished("tank_reading", "tank")]),
+        "AP": controller("AP", [reading("tank_reading", aggregate="median", default=1.0)],
+                         [banded("low", "tank_reading", "below", 1.5, 3.0)]),
+        "MT": controller("MT", [reading("H2", kind="rate", aggregate="sum")], [republished("supply", "H2")]),
+    }
+    declaration["connections"] += [
+        box("T", "tank_level_out", "CT", "tank_level_in"),
+        box("CT", "tank_reading_level_out", "AP", "tank_reading_level_in"),
+        box("S", "H2_rate_out", "MT", "H2_rate_in"),
+    ]
+    return declaration
+
+
+def test_instruments_on_a_store_convert():
+    conversion = proved(instrumented_store_plant(), levels=VOLUME_LEVELS)
+    types = {t["name"]: t for t in conversion.library["library"]["types"]}
+    assert {"fragment": "std.aggregate_measure",
+            "with": {"name": "tank_reading_level", "agg": "median", "initial": 1.0}} in types["AP"]["uses"]
+    assert {"fragment": "std.rate_publisher",
+            "with": {"name": "H2", "of": "delivered", "side": "out"}} in types["Source"]["uses"]
+
+
+def test_a_band_released_at_another_threshold_is_reported_divergent():
+    """Negative control: the voter's band moved in the converted documents."""
+    declaration = instrumented_store_plant()
+    conversion = convert(declaration)
+    altered = copy.deepcopy(conversion)
+    voter = next(t for t in altered.library["library"]["types"] if t["name"] == "AP")
+    band = next(u for u in voter["uses"] if u["fragment"] == "std.threshold_band")
+    band["with"]["release"] = 3.5
+    assert not compare_routes(declaration, altered, t_max=23.3).identical
+
+
+def test_a_controller_reads_the_share_a_volume_publishes():
+    declaration = membrane_plant()
+    declaration["components"]["CT"] = controller(
+        "CT", [reading("membrane", kind="ratio", flows=["A"])],
+        [banded("rich", "membrane", "above", 0.6, 0.4)])
+    declaration["connections"].append(box("M", "membrane_level_out", "CT", "membrane_level_in"))
+    conversion = proved(declaration, levels=VOLUME_LEVELS)
+    assert {"from": "M.membrane_ratio_A_out", "to": "CT.membrane_ratio_A_in"} in (
+        conversion.system["system"]["connections"])
+
+
+CONTROLLER_REFUSALS = {
+    "combine": (
+        lambda d: d["components"]["AP"]["controls_out"].__setitem__(0, {
+            "name": "low", "kind": "bool", "default": False, "emit": {"op": "combine", "logic": "not", "operands": [
+                {"op": "compare", "input": "tank_reading", "operator": "<", "threshold": 2.0}]}}),
+        "controller operator `combine`",
+    ),
+    "default true": (
+        lambda d: d["components"]["AP"]["controls_out"][0].update(default=True),
+        "boolean controller output defaulting to true",
+    ),
+    "failure mode": (
+        lambda d: d["components"].update(CT__fail={
+            "name": "CT__fail", "kind": "two_state_mode", "cls": "ObjFMDelay", "fm_name": "fail",
+            "targets": ["CT"], "target_name": "CT", "failure_effects": {"tank_reading_level_gain": 0.0},
+            "failure_param_name": ["ttf"], "failure_param": [5.0], "repair_effects": {"tank_reading_level_gain": 1.0},
+            "repair_param_name": ["ttr"], "repair_param": [3.0]}),
+        "failure mode on a controller",
+    ),
+    "emptied observer": (
+        lambda d: d["components"]["AP"].update(controls_in=[], controls_out=[]),
+        "controller declaration",
+    ),
+    "unknown publisher box": (
+        lambda d: next(c for c in d["connections"] if c["source"] == "CT").update(source_box="drift_level_out"),
+        "controller connection",
+    ),
+}
+
+
+@pytest.mark.parametrize("edit", sorted(CONTROLLER_REFUSALS))
+def test_an_unbenched_controller_construct_is_refused_by_name(edit):
+    change, construct = CONTROLLER_REFUSALS[edit]
+    declaration = instrumented_store_plant()
+    change(declaration)
+    assert construct in refusals(declaration)

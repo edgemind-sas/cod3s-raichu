@@ -1011,7 +1011,7 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         refused += _profile_refusal(flow.profile, where)
         if flow.max_rate is not None and flow.name not in produced_by:
             refused.append(_Refused("maximum rate on an output no rule set produces", where))
-        if flow.publish_rate is not None and flow.publish_rate != authoring.RATE_CAPABILITY:
+        if flow.publish_rate not in (None, authoring.RATE_CAPABILITY, authoring.RATE_DELIVERED):
             refused.append(_Refused(f"published output rate `{flow.publish_rate}`", where))
         if obj._tapped_into(flow.name):
             refused.append(_Refused("tap routed into an output", where))
@@ -1097,7 +1097,11 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
                     },
                 }
             )
-        if flow.publish_rate is not None:
+        if flow.publish_rate == authoring.RATE_DELIVERED:
+            uses.append(
+                {"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED, "side": "out"}}
+            )
+        elif flow.publish_rate is not None:
             uses.append({"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_CAPABILITY}})
         uses.append({"fragment": "std.continuous_flow_out", "with": out})
         if flow.name in held:
@@ -1183,6 +1187,123 @@ def _embedded_mode(
         f"{component}.{mode}.repair": f"{component}.{mode}.{_REP}",
     }
     return _EmbeddedMode(component, mode, entry, activation, rename)
+
+
+def _controller_uses(spec: dict, name: str) -> tuple[list[dict], dict[str, str]]:
+    """The fragments of a controller: one `std.aggregate_measure` per
+    observation input, then per output a `std.threshold_band`, a
+    `std.threshold_compare` or a `std.republish`. The other operators of
+    the grammar have no bench and are refused by name."""
+    from ..plugins import controller as grammar
+
+    where = f"Controller {name}"
+    try:
+        declared = declare.controller_object(spec, name)
+        inputs = [grammar._build_control_in(where, entry) for entry in declared["controls_in"]]
+        outputs = [grammar._build_control_out(where, entry) for entry in declared["controls_out"]]
+    except (declare.ComponentSpecError, ValueError) as error:
+        raise _Refused("controller declaration", str(error)) from error
+    if not inputs and not outputs:
+        raise _Refused("controller declaration", "a controller declares no input and no output")
+    channels = {channel.name: channel for channel in inputs}
+    uses: list[dict] = [
+        {
+            "fragment": "std.aggregate_measure",
+            "with": {"name": channel.attribute, "agg": channel.agg, "initial": float(channel.default)},
+        }
+        for channel in inputs
+    ]
+    rename: dict[str, str] = {}
+    for output in outputs:
+        node = output.node
+        here = f"output `{output.name}`"
+        if node is None:
+            raise _Refused("controller output with no emission", here)
+        if isinstance(node, grammar.CtrlBand):
+            fragment, with_ = "std.threshold_band", {
+                "direction": node.direction,
+                "activate": float(node.activate),
+                "release": float(node.release),
+            }
+            automaton, edges = f"{output.name}_band", ("up", "down")
+        elif isinstance(node, grammar.CtrlCompare):
+            fragment, with_ = "std.threshold_compare", {
+                "operator": _CTRL_COMPARE[node.operator],
+                "threshold": float(node.threshold),
+            }
+            automaton, edges = f"{output.name}_compare", ("up", "down")
+        elif isinstance(node, grammar.CtrlRepublish):
+            uses.append(
+                {
+                    "fragment": "std.republish",
+                    "with": {
+                        "name": output.name,
+                        "input": channels[node.input].attribute,
+                        "gain": float(node.gain),
+                        "initial": float(output.default),
+                    },
+                }
+            )
+            continue
+        else:
+            raise _Refused(f"controller operator `{node.op}`", here)
+        if output.default:
+            raise _Refused("boolean controller output defaulting to true", here)
+        uses.append(
+            {
+                "fragment": fragment,
+                "with": {"name": output.name, "input": channels[node.input].attribute, **with_},
+            }
+        )
+        for edge in edges:
+            qualified = f"{name}.{automaton}.{automaton}_{edge}"
+            rename[qualified] = qualified
+    return uses, rename
+
+
+#: The comparison a `compare` node declares, as `std.threshold_compare`
+#: names it.
+_CTRL_COMPARE = {"<": "lt", "<=": "le", ">": "gt", ">=": "ge"}
+
+
+def _controller_connection(entry: dict, components: dict) -> dict:
+    """A connection with a controller at one end, from box to port.
+
+    A muscadet message box carries several variables; a library port
+    carries one. An observation input reads the port its own attribute
+    arrives on, and one reading a constituent's share or level reads it
+    from the port the volume publishes that constituent on."""
+    source, source_box = entry["source"], str(entry["source_box"])
+    target, target_box = entry["target"], str(entry["target_box"])
+    publisher = components.get(source)
+    observer = components.get(target)
+    is_controller = lambda spec: spec is not None and declare.component_kind(spec, "") == declare.COMPONENT_KIND_CONTROLLER  # noqa: E731
+    try:
+        if is_controller(publisher):
+            boxes = [declare._controller_out_box(out) for out in declare.controller_object(publisher, source)["controls_out"]]
+            if source_box not in boxes:
+                raise _Refused("controller connection", f"`{source}` publishes on no box `{source_box}`")
+        anchors = {}
+        if is_controller(observer):
+            for read in declare.controller_object(observer, target)["controls_in"]:
+                box, port, alias = declare._controller_in_anchor(read)
+                anchors[box] = (port, alias)
+    except (declare.ComponentSpecError, ValueError) as error:
+        raise _Refused("controller declaration", str(error)) from error
+    target_port = target_box
+    if is_controller(observer):
+        if target_box not in anchors:
+            raise _Refused("controller connection", f"`{target}` observes on no box `{target_box}`")
+        target_port, alias = anchors[target_box]
+        if alias is not None:
+            if is_controller(publisher) or not source_box.endswith("_level_out"):
+                raise _Refused(
+                    "controller connection", f"`{target}.{target_box}` reads a constituent `{source}` does not publish"
+                )
+            source_box = f"{source_box[: -len('_level_out')]}_{alias}_out"
+    elif is_controller(publisher) and target_box.endswith("_level_in"):
+        raise _Refused("measurement link of a flow component reading a controller", f"{source} -> {target}")
+    return {"from": f"{source}.{source_box}", "to": f"{target}.{target_port}"}
 
 
 def _gate_use(
@@ -2135,8 +2256,9 @@ def convert(
             unverified.append(name)
         try:
             if kind == declare.COMPONENT_KIND_CONTROLLER:
-                raise _Refused("controller", "controllers have no library counterpart yet")
-            if kind == declare.COMPONENT_KIND_LOGIC_GATE:
+                uses, controller_rename = _controller_uses(spec, name)
+                rename.update(controller_rename)
+            elif kind == declare.COMPONENT_KIND_LOGIC_GATE:
                 uses, feeds = _gate_use(spec, name, components)
                 gates[name] = uses[0]["with"]["name"]
                 connections.extend(feeds)
@@ -2200,6 +2322,14 @@ def convert(
             continue
         if obj["type"] == "ObjEvent":
             events.append(obj)
+            continue
+        controllers = [
+            target
+            for target in obj.get("targets") or []
+            if declare.component_kind(components.get(target, {}), target) == declare.COMPONENT_KIND_CONTROLLER
+        ]
+        if controllers:
+            refuse(name, _Refused("failure mode on a controller", f"mode `{name}` targets {controllers}"))
             continue
         mode_objects[name] = obj
 
@@ -2291,12 +2421,10 @@ def convert(
 
     # --- connections ----------------------------------------------------
     for entry in declaration.get("connections") or []:
-        connections.append(
-            {
-                "from": f"{entry['source']}.{entry['source_box']}",
-                "to": f"{entry['target']}.{entry['target_box']}",
-            }
-        )
+        try:
+            connections.append(_controller_connection(entry, components))
+        except _Refused as error:
+            refuse(entry["target"], error)
 
     if declaration.get("indicators"):
         notes.append(

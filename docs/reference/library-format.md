@@ -207,7 +207,7 @@ plugin's continuous objects, and each is characterised against it.
 | `continuous_source` | `name`, `rate`, `profiled` | the capability of a source output, times `<name>_out_profile` when profiled |
 | `continuous_sink` | `name`, `demand`, `profiled` | the demand of a consumer input, times `<name>_in_profile` when profiled |
 | `time_profile` | `target`, `amplitude`, `phase_shift`, `period`, `offset`, `value_min`, `initial` | a sinusoidal profile written into `target` |
-| `rate_publisher` | `name`, `of` (`capability`, `delivered`) | out port `<name>_rate_out` exporting `<name>_rate` |
+| `rate_publisher` | `name`, `of` (`capability`, `delivered`), `side` (`in`, `out`) | out port `<name>_rate_out` exporting `<name>_rate`: the capability of an output, or what a flow delivers, an input (`side: in`) or an output (`side: out`) |
 | `pass_through` | `name` | the flow crosses the component unchanged: the input asks what the output is asked, the output can deliver what could arrive and hands on what did arrive (`<name>_produced_out`, so the output is `available: produced`) |
 | `volume_flow` | `volume`, `flow`, `capacity`, `content_init`, `demand`, `fill_rate`, `fill_unbounded`, `outlet`, `side` (`out`, `in`), `empty_automaton` | one flow held in a volume: its content (an ODE), its fill fraction, and the demand of the input; with `fill_unbounded` the volume claims without bound while it is not full (JSON has no infinity, so a flag rather than a rate); with side `in` the volume sits upstream of a rule that draws from it (`rule_consumes` with `from_volume`), serving what the rule needs while the flow is stocked and what arrives once `empty_automaton` is `empty` |
 | `volume_outlet` | `volume`, `flow`, `rate`, `empty_automaton` | the capability of an output leaving a volume, bounded by what arrives while it is empty |
@@ -219,9 +219,10 @@ plugin's continuous objects, and each is characterised against it.
 | `shared_output` | `flow`, `producers` | the capability and production of an output two rule sets or more produce, the sums of their contributions |
 | `rule_cascade` | `rule_set`, `flow`, `before` | `<rule_set>_<flow>_left`, the output's demand less what the sets declared before it are expected to make, never below zero |
 | `tap` | `flow`, `outlets` | leaks taken from an output into the outlets, each the fraction `<outlet>_pct`, targetable with `max` |
-| `aggregate_measure` | `name` | attribute `<name>`, the sum over the in port `<name>_in` |
+| `aggregate_measure` | `name`, `agg` (`sum`, `mean`, `median`), `initial` | attribute `<name>`, the values connected to the in port `<name>_in` reduced by `agg` (the median of an even count is the mean of the two central values) |
 | `threshold_compare` | `name`, `input`, `operator`, `threshold` | boolean output `<name>` true while `input` compares to the threshold |
 | `threshold_band` | `name`, `input`, `direction` (`below`, `above`), `activate`, `release` | boolean output `<name>` with a hysteresis band |
+| `republish` | `name`, `input`, `gain`, `initial` | value output `<name>_level` on the out port `<name>_level_out`: `input` times `<name>_level_gain`, or `<name>_forced_value` times the gain while `<name>_forced` holds |
 
 The muscadet plugin's mixture serving and ring tearing need a pass over the
 whole connection graph and have no fragment: a plant that needs them stays
