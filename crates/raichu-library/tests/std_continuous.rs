@@ -12,7 +12,7 @@ use raichu_expr::Value;
 use raichu_library::{expand, parse_library, parse_system, standard_library};
 use serde_json::json;
 
-const CONTINUOUS: [&str; 21] = [
+const CONTINUOUS: [&str; 22] = [
     "continuous_flow_out",
     "continuous_flow_in",
     "surplus_release",
@@ -34,6 +34,7 @@ const CONTINUOUS: [&str; 21] = [
     "aggregate_measure",
     "threshold_compare",
     "threshold_band",
+    "republish",
 ];
 
 #[test]
@@ -400,5 +401,60 @@ fn a_cascade_asks_the_second_rule_set_what_the_first_leaves() {
     }
     for (_, v) in float_points(&result, "second_draw") {
         assert_eq!(v, 1.0);
+    }
+}
+
+/// Three sources of 1, 4 and 9 each read by an instrument republishing it,
+/// the last with a gain of 2, and a voter taking the median of the three
+/// readings, 1, 4 and 18: it reads 4, and the instrument publishes 18.
+#[test]
+fn a_voter_reads_the_median_of_what_instruments_republish() {
+    let instances: Vec<serde_json::Value> = [(1.0, 1.0), (4.0, 1.0), (9.0, 2.0)]
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (rate, gain))| {
+            vec![
+                json!({"name": format!("S{i}"), "type": "Source", "parameters": {"rate": rate}}),
+                json!({"name": format!("CT{i}"), "type": "Instrument", "parameters": {"gain": gain}}),
+            ]
+        })
+        .chain([json!({"name": "AP", "type": "Voter"})])
+        .collect();
+    let connections: Vec<serde_json::Value> = (0..3)
+        .flat_map(|i| {
+            vec![
+                json!({"from": format!("S{i}.Q_rate_out"), "to": format!("CT{i}.Q_rate_in")}),
+                json!({"from": format!("CT{i}.reading_level_out"), "to": "AP.reading_level_in"}),
+            ]
+        })
+        .collect();
+    let result = run_plant(
+        json!([
+            {"name": "Source", "parameters": [{"name": "rate", "kind": "number"}], "uses": [
+                {"fragment": "std.continuous_flow_out", "with": {"name": "Q"}},
+                {"fragment": "std.continuous_source", "with": {"name": "Q", "rate": {"$param": "rate"}}},
+                {"fragment": "std.rate_publisher", "with": {"name": "Q", "of": "capability"}}]},
+            {"name": "Instrument", "parameters": [{"name": "gain", "kind": "number"}], "uses": [
+                {"fragment": "std.aggregate_measure", "with": {"name": "Q_rate"}},
+                {"fragment": "std.republish", "with": {"name": "reading", "input": "Q_rate", "gain": {"$param": "gain"}}}]},
+            {"name": "Voter", "uses": [
+                {"fragment": "std.aggregate_measure", "with": {"name": "reading_level", "agg": "median"}}]}
+        ]),
+        json!({"raichu_system": {"format": 1}, "system": {
+            "name": "voter", "library": {"name": "plant", "version": "1.0.0"},
+            "instances": instances,
+            "connections": connections,
+            "indicators": [
+                {"name": "median", "target": "attribute", "attr": {"component": "AP", "attribute": "reading_level"}},
+                {"name": "doubled", "target": "attribute", "attr": {"component": "CT2", "attribute": "reading_level"}}]}}),
+        1.0,
+    );
+    let median = float_points(&result, "median");
+    assert!(!median.is_empty());
+    for (_, v) in median {
+        assert_eq!(v, 4.0);
+    }
+    for (_, v) in float_points(&result, "doubled") {
+        assert_eq!(v, 18.0);
     }
 }

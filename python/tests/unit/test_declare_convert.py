@@ -584,11 +584,11 @@ def test_an_on_demand_repair_law_is_refused_by_name():
     ]
 
 
-def test_a_controller_is_refused_by_name():
+def test_an_empty_controller_is_refused_by_name():
     doc = two_pumps()
     doc["components"]["ctrl"] = {"name": "ctrl", "kind": "controller", "cls": "ObjCtrl"}
     (refusal,) = convert(doc).refusals
-    assert (refusal.component, refusal.construct) == ("ctrl", "controller")
+    assert (refusal.component, refusal.construct) == ("ctrl", "controller declaration")
 
 
 def gate(cond: list) -> dict:

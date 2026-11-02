@@ -346,7 +346,12 @@ which always applies (`always_on`), handing back a surplus where two suppliers o
 feed a consumed input. An output two rule sets of one component produce is
 served in declaration order, as the declaration route serves it: the first
 set is asked the whole demand, each next one what those before it leave
-(`std.shared_output`, `std.rule_cascade`). The converter reads each component with the
+(`std.shared_output`, `std.rule_cascade`). A controller converts when its outputs
+are bands, comparisons or republished readings and its inputs read a level, a
+constituent's share or a rate, summed, averaged or taken at their median
+(`std.aggregate_measure`, `std.threshold_band`, `std.threshold_compare`,
+`std.republish`); an output may publish what it delivers (`std.rate_publisher`
+with side `out`). The converter reads each component with the
 declaration route's own reader and asks it what each flow is, so a flow is
 a pass-through, a volume's or a rule set's on both routes alike.
 
@@ -364,7 +369,9 @@ consume, demand and capability
 equations, conduits and transfers, and measurements. It also refuses
 production operands that compare a quantity (a negated operand converts
 through `std.bool_not`), conditions on a common-cause group, on-demand
-repair laws, a rest value other than the initial one, and controllers. On
+repair laws, a rest value other than the initial one, and, on a controller, the
+other operators of its grammar (`combine`, `ternary`), a boolean output whose
+default is true, a failure mode, and a flow component measuring it. On
 persistent availabilities it refuses what the declaration route refuses:
 
 - a one-shot write on an availability reset every step;
