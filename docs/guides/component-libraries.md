@@ -343,7 +343,10 @@ one or several flows, `std.volume_stock` judging each flow's emptiness),
 rule sets with one guarded rule and one idle rule (boolean conditions and
 at most one band), and rule sets of one rule declared without a condition,
 which always applies (`always_on`), handing back a surplus where two suppliers or more
-feed a consumed input. The converter reads each component with the
+feed a consumed input. An output two rule sets of one component produce is
+served in declaration order, as the declaration route serves it: the first
+set is asked the whole demand, each next one what those before it leave
+(`std.shared_output`, `std.rule_cascade`). The converter reads each component with the
 declaration route's own reader and asks it what each flow is, so a flow is
 a pass-through, a volume's or a rule set's on both routes alike.
 
@@ -355,7 +358,9 @@ flow, a hysteresis or a flow weight, a volume on the input side holding a
 flow no rule draws or fed by two suppliers or more, a conditioned rule set
 drawing from a volume, a maximum rate on an always-on rule's output,
 output-side volumes beside rule sets or holding several flows, multi-rule
-rule sets, an output two rule sets produce, demand and capability
+rule sets, an output two rule sets produce when a producer apportions it,
+caps it with a maximum rate or draws from a volume, an input two rule sets
+consume, demand and capability
 equations, conduits and transfers, and measurements. It also refuses
 production operands that compare a quantity (a negated operand converts
 through `std.bool_not`), conditions on a common-cause group, on-demand

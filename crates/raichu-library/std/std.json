@@ -3995,7 +3995,7 @@
       },
       {
         "name": "rule_set",
-        "description": "A rule set `<name>` with one producing rule `<active>` and one idle rule `<idle>`: the automaton `<name>_mode` runs `<active>` while every boolean input in `conditions` is fed (and, with a `band` threshold, while the capability of `<threshold_flow>` has reached `activate` and not fallen below `release`). The rule's scale is the largest fraction of its nominal rates the inputs' capabilities allow (`<name>_capability_scale`), bounded by what the outputs are asked (`<name>_scale`) and by what actually arrives (`<name>_draw_scale`). With `always_on`, the set has its producing rule only, with no condition and no automaton, as a rule declared without a condition. Each consumed flow is a `rule_consumes`, each produced one a `rule_produces`.",
+        "description": "A rule set `<name>` with one producing rule `<active>` and one idle rule `<idle>`: the automaton `<name>_mode` runs `<active>` while every boolean input in `conditions` is fed (and, with a `band` threshold, while the capability of `<threshold_flow>` has reached `activate` and not fallen below `release`). The rule's scale is the largest fraction of its nominal rates the inputs' capabilities allow (`<name>_capability_scale`), bounded by what the outputs are asked (`<name>_scale`) and by what actually arrives (`<name>_draw_scale`). With `always_on`, the set has its producing rule only, with no condition and no automaton, as a rule declared without a condition. Each consumed flow is a `rule_consumes`, each produced one a `rule_produces`. The outputs in `cascaded` are produced by another rule set too and served in declaration order: this set is bounded by what those declared before it leave (`<name>_<flow>_left`, a `rule_cascade`) instead of by the whole demand.",
         "parameters": [
           {
             "name": "name",
@@ -4023,6 +4023,13 @@
             "kind": "list",
             "items": "string",
             "description": "Flows the producing rule produces."
+          },
+          {
+            "name": "cascaded",
+            "kind": "list",
+            "items": "string",
+            "default": [],
+            "description": "Produced flows shared with rule sets declared before this one (`rule_produces` with `shared`), bounded by `<name>_<flow>_left` rather than by the output's demand. They are not listed in `produces`."
           },
           {
             "name": "from_volume",
@@ -4331,6 +4338,29 @@
                               }
                             }
                           ]
+                        },
+                        {
+                          "$for_each": "cascaded",
+                          "as": "f",
+                          "items": [
+                            {
+                              "op": "div",
+                              "lhs": {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_${f}_left"
+                                }
+                              },
+                              "rhs": {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_prod_${f}"
+                                }
+                              }
+                            }
+                          ]
                         }
                       ]
                     },
@@ -4363,6 +4393,29 @@
                               "attr": {
                                 "component": "$self",
                                 "attribute": "${f}_demand_out"
+                              }
+                            },
+                            "rhs": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${name}_prod_${f}"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "$for_each": "cascaded",
+                        "as": "f",
+                        "items": [
+                          {
+                            "op": "div",
+                            "lhs": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${name}_${f}_left"
                               }
                             },
                             "rhs": {
@@ -4914,7 +4967,7 @@
       },
       {
         "name": "rule_produces",
-        "description": "The producing rule `<active>` of the rule set `<rule_set>` produces the output `<flow>` (a `continuous_flow_out` with `available: produced`) at `rate` per unit of scale: its capability at the capability scale and `<flow>_produced_out` at the draw scale, bounded by `max_rate` when `capped`. With `tapped`, they are written before a `tap` takes its leaks (`<flow>_pre_tap_capability_out`, `<flow>_pre_tap_produced_out`).",
+        "description": "The producing rule `<active>` of the rule set `<rule_set>` produces the output `<flow>` (a `continuous_flow_out` with `available: produced`) at `rate` per unit of scale: its capability at the capability scale and `<flow>_produced_out` at the draw scale, bounded by `max_rate` when `capped`. With `tapped`, they are written before a `tap` takes its leaks (`<flow>_pre_tap_capability_out`, `<flow>_pre_tap_produced_out`). With `shared`, another rule set produces the flow too: the set writes its contributions `<rule_set>_<flow>_capability`, `<rule_set>_<flow>_production` and `<rule_set>_<flow>_served` (what it is expected to make, at its scale), which a `shared_output` sums onto the output and a `rule_cascade` subtracts from the demand left to the sets declared after it; `capped` and `tapped` do not apply.",
         "parameters": [
           {
             "name": "rule_set",
@@ -4959,6 +5012,12 @@
             "kind": "bool",
             "default": false,
             "description": "Whether the rule set has one rule and no condition: no `<rule_set>_mode` automaton, the producing rule always applies."
+          },
+          {
+            "name": "shared",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether another rule set produces the flow too (`shared_output`)."
           }
         ],
         "body": {
@@ -4984,92 +5043,67 @@
               }
             },
             {
-              "name": "${flow}_produced_out",
-              "kind": "float",
-              "init": {
-                "kind": "float",
-                "value": 0.0
-              }
+              "$when": "shared",
+              "is": false,
+              "items": [
+                {
+                  "name": "${flow}_produced_out",
+                  "kind": "float",
+                  "init": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              ]
+            },
+            {
+              "$when": "shared",
+              "items": [
+                {
+                  "name": "${rule_set}_${flow}_capability",
+                  "kind": "float",
+                  "init": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                },
+                {
+                  "name": "${rule_set}_${flow}_production",
+                  "kind": "float",
+                  "init": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                },
+                {
+                  "name": "${rule_set}_${flow}_served",
+                  "kind": "float",
+                  "init": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              ]
             }
           ],
           "equations": [
             {
-              "target": {
-                "$choose": "tapped",
-                "cases": {
-                  "false": "${flow}_capability_out",
-                  "true": "${flow}_pre_tap_capability_out"
-                }
-              },
-              "kind": "explicit",
-              "expr": {
-                "$choose": "capped",
-                "cases": {
-                  "false": {
-                    "op": "mul",
-                    "args": [
-                      {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${flow}_out_rate"
-                        }
-                      },
-                      {
-                        "op": "mul",
-                        "args": [
-                          {
-                            "$choose": "always_on",
-                            "cases": {
-                              "false": {
-                                "op": "if",
-                                "cond": {
-                                  "op": "state_active",
-                                  "state": {
-                                    "component": "$self",
-                                    "automaton": "${rule_set}_mode",
-                                    "state": "${active}"
-                                  }
-                                },
-                                "then": {
-                                  "op": "attr",
-                                  "attr": {
-                                    "component": "$self",
-                                    "attribute": "${rule_set}_prod_${flow}"
-                                  }
-                                },
-                                "otherwise": {
-                                  "op": "const",
-                                  "value": {
-                                    "kind": "float",
-                                    "value": 0.0
-                                  }
-                                }
-                              },
-                              "true": {
-                                "op": "attr",
-                                "attr": {
-                                  "component": "$self",
-                                  "attribute": "${rule_set}_prod_${flow}"
-                                }
-                              }
-                            }
-                          },
-                          {
-                            "op": "attr",
-                            "attr": {
-                              "component": "$self",
-                              "attribute": "${rule_set}_capability_scale"
-                            }
-                          }
-                        ]
-                      }
-                    ]
+              "$when": "shared",
+              "is": false,
+              "items": [
+                {
+                  "target": {
+                    "$choose": "tapped",
+                    "cases": {
+                      "false": "${flow}_capability_out",
+                      "true": "${flow}_pre_tap_capability_out"
+                    }
                   },
-                  "true": {
-                    "op": "min",
-                    "args": [
-                      {
+                  "kind": "explicit",
+                  "expr": {
+                    "$choose": "capped",
+                    "cases": {
+                      "false": {
                         "op": "mul",
                         "args": [
                           {
@@ -5130,95 +5164,95 @@
                           }
                         ]
                       },
-                      {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${rule_set}_max_${flow}"
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            },
-            {
-              "target": {
-                "$choose": "tapped",
-                "cases": {
-                  "false": "${flow}_produced_out",
-                  "true": "${flow}_pre_tap_produced_out"
-                }
-              },
-              "kind": "explicit",
-              "expr": {
-                "$choose": "capped",
-                "cases": {
-                  "false": {
-                    "op": "mul",
-                    "args": [
-                      {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${flow}_out_rate"
-                        }
-                      },
-                      {
-                        "op": "mul",
+                      "true": {
+                        "op": "min",
                         "args": [
                           {
-                            "$choose": "always_on",
-                            "cases": {
-                              "false": {
-                                "op": "if",
-                                "cond": {
-                                  "op": "state_active",
-                                  "state": {
-                                    "component": "$self",
-                                    "automaton": "${rule_set}_mode",
-                                    "state": "${active}"
-                                  }
-                                },
-                                "then": {
-                                  "op": "attr",
-                                  "attr": {
-                                    "component": "$self",
-                                    "attribute": "${rule_set}_prod_${flow}"
-                                  }
-                                },
-                                "otherwise": {
-                                  "op": "const",
-                                  "value": {
-                                    "kind": "float",
-                                    "value": 0.0
-                                  }
-                                }
-                              },
-                              "true": {
+                            "op": "mul",
+                            "args": [
+                              {
                                 "op": "attr",
                                 "attr": {
                                   "component": "$self",
-                                  "attribute": "${rule_set}_prod_${flow}"
+                                  "attribute": "${flow}_out_rate"
                                 }
+                              },
+                              {
+                                "op": "mul",
+                                "args": [
+                                  {
+                                    "$choose": "always_on",
+                                    "cases": {
+                                      "false": {
+                                        "op": "if",
+                                        "cond": {
+                                          "op": "state_active",
+                                          "state": {
+                                            "component": "$self",
+                                            "automaton": "${rule_set}_mode",
+                                            "state": "${active}"
+                                          }
+                                        },
+                                        "then": {
+                                          "op": "attr",
+                                          "attr": {
+                                            "component": "$self",
+                                            "attribute": "${rule_set}_prod_${flow}"
+                                          }
+                                        },
+                                        "otherwise": {
+                                          "op": "const",
+                                          "value": {
+                                            "kind": "float",
+                                            "value": 0.0
+                                          }
+                                        }
+                                      },
+                                      "true": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${rule_set}_prod_${flow}"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "op": "attr",
+                                    "attr": {
+                                      "component": "$self",
+                                      "attribute": "${rule_set}_capability_scale"
+                                    }
+                                  }
+                                ]
                               }
-                            }
+                            ]
                           },
                           {
                             "op": "attr",
                             "attr": {
                               "component": "$self",
-                              "attribute": "${rule_set}_draw_scale"
+                              "attribute": "${rule_set}_max_${flow}"
                             }
                           }
                         ]
                       }
-                    ]
+                    }
+                  }
+                },
+                {
+                  "target": {
+                    "$choose": "tapped",
+                    "cases": {
+                      "false": "${flow}_produced_out",
+                      "true": "${flow}_pre_tap_produced_out"
+                    }
                   },
-                  "true": {
-                    "op": "min",
-                    "args": [
-                      {
+                  "kind": "explicit",
+                  "expr": {
+                    "$choose": "capped",
+                    "cases": {
+                      "false": {
                         "op": "mul",
                         "args": [
                           {
@@ -5279,16 +5313,425 @@
                           }
                         ]
                       },
+                      "true": {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${flow}_out_rate"
+                                }
+                              },
+                              {
+                                "op": "mul",
+                                "args": [
+                                  {
+                                    "$choose": "always_on",
+                                    "cases": {
+                                      "false": {
+                                        "op": "if",
+                                        "cond": {
+                                          "op": "state_active",
+                                          "state": {
+                                            "component": "$self",
+                                            "automaton": "${rule_set}_mode",
+                                            "state": "${active}"
+                                          }
+                                        },
+                                        "then": {
+                                          "op": "attr",
+                                          "attr": {
+                                            "component": "$self",
+                                            "attribute": "${rule_set}_prod_${flow}"
+                                          }
+                                        },
+                                        "otherwise": {
+                                          "op": "const",
+                                          "value": {
+                                            "kind": "float",
+                                            "value": 0.0
+                                          }
+                                        }
+                                      },
+                                      "true": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${rule_set}_prod_${flow}"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "op": "attr",
+                                    "attr": {
+                                      "component": "$self",
+                                      "attribute": "${rule_set}_draw_scale"
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_max_${flow}"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "$when": "shared",
+              "items": [
+                {
+                  "target": "${rule_set}_${flow}_capability",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "$choose": "always_on",
+                        "cases": {
+                          "false": {
+                            "op": "if",
+                            "cond": {
+                              "op": "state_active",
+                              "state": {
+                                "component": "$self",
+                                "automaton": "${rule_set}_mode",
+                                "state": "${active}"
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${rule_set}_prod_${flow}"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          },
+                          "true": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_prod_${flow}"
+                            }
+                          }
+                        }
+                      },
                       {
                         "op": "attr",
                         "attr": {
                           "component": "$self",
-                          "attribute": "${rule_set}_max_${flow}"
+                          "attribute": "${rule_set}_capability_scale"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "target": "${rule_set}_${flow}_production",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "$choose": "always_on",
+                        "cases": {
+                          "false": {
+                            "op": "if",
+                            "cond": {
+                              "op": "state_active",
+                              "state": {
+                                "component": "$self",
+                                "automaton": "${rule_set}_mode",
+                                "state": "${active}"
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${rule_set}_prod_${flow}"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          },
+                          "true": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_prod_${flow}"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${rule_set}_draw_scale"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "target": "${rule_set}_${flow}_served",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "$choose": "always_on",
+                        "cases": {
+                          "false": {
+                            "op": "if",
+                            "cond": {
+                              "op": "state_active",
+                              "state": {
+                                "component": "$self",
+                                "automaton": "${rule_set}_mode",
+                                "state": "${active}"
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${rule_set}_prod_${flow}"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          },
+                          "true": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_prod_${flow}"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${rule_set}_scale"
                         }
                       }
                     ]
                   }
                 }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "shared_output",
+        "description": "The output `<flow>` (a `continuous_flow_out` with `available: produced`) of two rule sets or more (each a `rule_produces` with `shared`): its capability and `<flow>_produced_out` are the sums of their contributions, scaled by the output's rate.",
+        "parameters": [
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Flow produced."
+          },
+          {
+            "name": "producers",
+            "kind": "list",
+            "items": "string",
+            "description": "The rule sets producing the flow, in declaration order."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${flow}_produced_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${flow}_capability_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "mul",
+                "args": [
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${flow}_out_rate"
+                    }
+                  },
+                  {
+                    "op": "add",
+                    "args": [
+                      {
+                        "$for_each": "producers",
+                        "as": "p",
+                        "items": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${p}_${flow}_capability"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "target": "${flow}_produced_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "mul",
+                "args": [
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${flow}_out_rate"
+                    }
+                  },
+                  {
+                    "op": "add",
+                    "args": [
+                      {
+                        "$for_each": "producers",
+                        "as": "p",
+                        "items": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${p}_${flow}_production"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "rule_cascade",
+        "description": "The demand of the output `<flow>` left to the rule set `<rule_set>` by the sets producing it declared before it (`before`): `<rule_set>_<flow>_left`, the output's demand less what those sets are expected to make (their `<set>_<flow>_served`), never below zero. The rule set lists the flow in `cascaded`.",
+        "parameters": [
+          {
+            "name": "rule_set",
+            "kind": "string",
+            "description": "Rule set the demand is left to."
+          },
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Flow produced."
+          },
+          {
+            "name": "before",
+            "kind": "list",
+            "items": "string",
+            "description": "The rule sets producing the flow declared before `rule_set`, in declaration order."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${rule_set}_${flow}_left",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${rule_set}_${flow}_left",
+              "kind": "explicit",
+              "expr": {
+                "op": "max",
+                "args": [
+                  {
+                    "op": "const",
+                    "value": {
+                      "kind": "float",
+                      "value": 0.0
+                    }
+                  },
+                  {
+                    "op": "sub",
+                    "lhs": {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${flow}_demand_out"
+                      }
+                    },
+                    "rhs": {
+                      "op": "add",
+                      "args": [
+                        {
+                          "$for_each": "before",
+                          "as": "b",
+                          "items": [
+                            {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${b}_${flow}_served"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
               }
             }
           ]

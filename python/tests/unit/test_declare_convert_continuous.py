@@ -247,7 +247,10 @@ def test_a_transmitting_volume_is_refused():
     assert refusals(declaration) == ["transmitting volume (`transmits`)"]
 
 
-def test_an_always_on_rule_set_and_a_contested_output_are_refused():
+def test_a_contested_output_converts_unless_capped():
+    """Two rule sets of one machine, one always on and one guarded,
+    produce its gas: served in declaration order they convert, except
+    under a maximum rate on the shared output."""
     declaration = machine_plant()
     machine = declaration["components"]["M"]
     machine["rules"] = [
@@ -256,10 +259,87 @@ def test_an_always_on_rule_set_and_a_contested_output_are_refused():
                                   rule("off", [], {}, {"Gas": 0.0})]},
     ]
     machine["rules"][0]["apportionment"] = {}
-    found = refusals(declaration)
-    assert "output produced by two rule sets" in found
-    # A rule declared without a condition converts on its own.
-    assert "always-on rule set" not in found
+    assert sorted(refusals(declaration)) == [
+        "maximum rate on an always-on rule's output",
+        "maximum rate on an output produced by two rule sets",
+    ]
+    _flow(declaration, "M", "FlowContinuousOut", "Gas").pop("max_rate")
+    proved(declaration)
+
+
+def ventilation_plant() -> dict:
+    """An extraction and an air renewal sharing one exhaust, as the
+    reference plant's ventilation does: the extraction, declared first and
+    held by a band on its leak supply, is asked the whole exhaust demand,
+    the renewal what it leaves."""
+    vent = component(
+        "V", [flow_in("vent", logic="or", default=True), c_in("Leak"), c_in("Air"), c_out("Air"),
+              c_out("Exhaust")], class_name="Ventilation",
+    )
+    vent["rules"] = [
+        {"name": "extraction", "rules": [
+            rule("running", [operand("vent"), operand("Leak", op=">=", value=2.0, release=1.0)],
+                 {"Leak": 2.0}, {"Exhaust": 2.0}),
+            rule("idle", [], {"Leak": 0.0}, {"Exhaust": 0.0})]},
+        {"name": "renewal", "rules": [
+            rule("running", [operand("vent")], {"Air": 1.0}, {"Air": 1.0, "Exhaust": 1.0}),
+            rule("idle", [], {"Air": 0.0}, {"Air": 0.0, "Exhaust": 0.0})]},
+    ]
+    return document(
+        [
+            component("L", [c_out("Leak", 1.0, profile=SUN)], class_name="Leak"),
+            component("F", [c_out("Air", 4.0)], class_name="Fresh"),
+            vent,
+            component("X", [c_in("Exhaust", 1.0, profile=DAY)], class_name="Outside"),
+            component("R", [c_in("Air", 9.0)], class_name="Room"),
+        ],
+        [link("L", "V", "Leak"), link("F", "V", "Air"), link("V", "X", "Exhaust"), link("V", "R", "Air")],
+    )
+
+
+def test_an_output_produced_by_two_rule_sets_converts():
+    conversion = proved(ventilation_plant())
+    vent = next(t for t in conversion.library["library"]["types"] if t["name"] == "Ventilation")
+    assert {"fragment": "std.shared_output", "with": {"flow": "Exhaust", "producers": ["extraction", "renewal"]}} in vent["uses"]
+    assert {"fragment": "std.rule_cascade",
+            "with": {"rule_set": "renewal", "flow": "Exhaust", "before": ["extraction"]}} in vent["uses"]
+
+
+def test_a_third_producer_is_asked_what_both_earlier_ones_leave():
+    declaration = ventilation_plant()
+    vent = declaration["components"]["V"]
+    vent["flows"].append(c_in("Draft"))
+    vent["rules"].append(
+        {"name": "draft", "rules": [
+            rule("running", [operand("vent")], {"Draft": 1.0}, {"Exhaust": 1.0}),
+            rule("idle", [], {"Draft": 0.0}, {"Exhaust": 0.0})]}
+    )
+    declaration["components"]["D"] = component("D", [c_out("Draft", 2.0, profile=SUN)], class_name="Draft")
+    declaration["connections"].append(link("D", "V", "Draft"))
+    # Asked more than the extraction and the renewal can make together.
+    declaration["components"]["X"]["flows"][0]["var_demand_default"] = 6.0
+    conversion = proved(declaration)
+    types = conversion.library["library"]["types"]
+    uses = next(t for t in types if t["name"] == "Ventilation")["uses"]
+    assert {"fragment": "std.rule_cascade",
+            "with": {"rule_set": "draft", "flow": "Exhaust", "before": ["extraction", "renewal"]}} in uses
+
+
+def test_a_cascade_served_in_the_other_order_is_reported_divergent():
+    """Negative control: the renewal asked first is not the declaration."""
+    declaration = ventilation_plant()
+    conversion = convert(declaration)
+    altered = copy.deepcopy(conversion)
+    vent = next(t for t in altered.library["library"]["types"] if t["name"] == "Ventilation")
+    for use in vent["uses"]:
+        if use["fragment"] == "std.rule_cascade":
+            use["with"].update(rule_set="extraction", before=["renewal"])
+        elif use["fragment"] == "std.rule_set":
+            produced = use["with"]["produces"] + use["with"]["cascaded"]
+            first = use["with"]["name"] == "renewal"
+            use["with"]["produces"] = [f for f in produced if first or f != "Exhaust"]
+            use["with"]["cascaded"] = [f for f in produced if not first and f == "Exhaust"]
+    assert not compare_routes(declaration, altered, t_max=23.3).identical
 
 
 def test_an_input_side_volume_no_rule_draws_from_is_refused():
@@ -547,6 +627,16 @@ REFUSED_EDITS = {
         always_on_plant,
         lambda d: _flow(d, "M", "FlowContinuousOut", "Gas").update(max_rate=1.0),
         "maximum rate on an always-on rule's output",
+    ),
+    "apportioned output produced by two rule sets": (
+        ventilation_plant,
+        lambda d: [r.update(apportionment={"Exhaust": 1.0}) for r in d["components"]["V"]["rules"]],
+        "apportioned output produced by two rule sets",
+    ),
+    "maximum rate on an output produced by two rule sets": (
+        ventilation_plant,
+        lambda d: _flow(d, "V", "FlowContinuousOut", "Exhaust").update(max_rate=3.0),
+        "maximum rate on an output produced by two rule sets",
     ),
     "input consumed by two rule sets": (
         machine_plant,

@@ -12,7 +12,7 @@ use raichu_expr::Value;
 use raichu_library::{expand, parse_library, parse_system, standard_library};
 use serde_json::json;
 
-const CONTINUOUS: [&str; 19] = [
+const CONTINUOUS: [&str; 21] = [
     "continuous_flow_out",
     "continuous_flow_in",
     "surplus_release",
@@ -28,6 +28,8 @@ const CONTINUOUS: [&str; 19] = [
     "rule_set",
     "rule_consumes",
     "rule_produces",
+    "shared_output",
+    "rule_cascade",
     "tap",
     "aggregate_measure",
     "threshold_compare",
@@ -331,6 +333,72 @@ fn an_input_side_volume_takes_the_supply_until_full_then_the_need() {
         );
     }
     for (_, v) in float_points(&result, "heat") {
+        assert_eq!(v, 1.0);
+    }
+}
+
+/// Two rules always on produce one exhaust for a consumer asking 3: the
+/// first, fed 2, is asked the whole demand and makes 2; the second, fed 5,
+/// is asked only the 1 left, so it draws 1 and the consumer receives 3.
+#[test]
+fn a_cascade_asks_the_second_rule_set_what_the_first_leaves() {
+    let source = |name: &str, flow: &str, rate: f64| {
+        json!({"name": name, "uses": [
+            {"fragment": "std.continuous_flow_out", "with": {"name": flow}},
+            {"fragment": "std.continuous_source", "with": {"name": flow, "rate": rate}}]})
+    };
+    let rule = |set: &str, flow: &str, cascaded: bool| {
+        let (produces, cascade) = if cascaded {
+            (json!([]), json!(["X"]))
+        } else {
+            (json!(["X"]), json!([]))
+        };
+        vec![
+            json!({"fragment": "std.continuous_flow_in", "with": {"name": flow}}),
+            json!({"fragment": "std.rule_set", "with": {"name": set, "active": "go", "idle": "none",
+                "consumes": [flow], "produces": produces, "cascaded": cascade, "always_on": true}}),
+            json!({"fragment": "std.rule_consumes", "with": {"rule_set": set, "active": "go",
+                "flow": flow, "rate": 1.0, "always_on": true}}),
+            json!({"fragment": "std.rule_produces", "with": {"rule_set": set, "active": "go",
+                "flow": "X", "rate": 1.0, "always_on": true, "shared": true}}),
+        ]
+    };
+    let mut uses = rule("first", "W1", false);
+    uses.extend(rule("second", "W2", true));
+    uses.extend([
+        json!({"fragment": "std.rule_cascade", "with": {"rule_set": "second", "flow": "X",
+            "before": ["first"]}}),
+        json!({"fragment": "std.shared_output", "with": {"flow": "X",
+            "producers": ["first", "second"]}}),
+        json!({"fragment": "std.continuous_flow_out", "with": {"name": "X", "available": "produced"}}),
+    ]);
+    let result = run_plant(
+        json!([
+            source("Source1", "W1", 2.0),
+            source("Source2", "W2", 5.0),
+            {"name": "Vent", "uses": uses},
+            {"name": "Sink", "uses": [
+                {"fragment": "std.continuous_flow_in", "with": {"name": "X", "demand": 3.0}},
+                {"fragment": "std.continuous_sink", "with": {"name": "X", "demand": 3.0}}]}
+        ]),
+        json!({"raichu_system": {"format": 1}, "system": {
+            "name": "cascade", "library": {"name": "plant", "version": "1.0.0"},
+            "instances": [{"name": "S1", "type": "Source1"}, {"name": "S2", "type": "Source2"},
+                          {"name": "V", "type": "Vent"}, {"name": "K", "type": "Sink"}],
+            "connections": [{"from": "S1.W1_out", "to": "V.W1_in"},
+                            {"from": "S2.W2_out", "to": "V.W2_in"},
+                            {"from": "V.X_out", "to": "K.X_in"}],
+            "indicators": [
+                {"name": "exhaust", "target": "attribute",
+                 "attr": {"component": "K", "attribute": "X_fed_in"}},
+                {"name": "second_draw", "target": "attribute",
+                 "attr": {"component": "V", "attribute": "W2_demand_in"}}]}}),
+        2.0,
+    );
+    for (_, v) in float_points(&result, "exhaust") {
+        assert_eq!(v, 3.0);
+    }
+    for (_, v) in float_points(&result, "second_draw") {
         assert_eq!(v, 1.0);
     }
 }
