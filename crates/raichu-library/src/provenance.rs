@@ -37,7 +37,7 @@ pub struct Origin {
     /// The instance's type.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "type")]
     pub type_name: Option<String>,
-    /// The fragment that declared the element, qualified (`std.bool_flow_in`).
+    /// The fragment that declared the element, qualified (`muscadet.bool_flow_in`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragment: Option<String>,
     /// The mode the element implements, by its name on the instance.

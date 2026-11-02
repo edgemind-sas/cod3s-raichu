@@ -117,7 +117,7 @@ CASES = [
     (
         "duplicate fragment attribute",
         "library",
-        lambda d: library_types(d)[0]["uses"].append({"fragment": "std.bool_source_out", "with": {"name": "power"}}),
+        lambda d: library_types(d)[0]["uses"].append({"fragment": "muscadet.bool_source_out", "with": {"name": "power"}}),
         "declared by both",
         False,
     ),

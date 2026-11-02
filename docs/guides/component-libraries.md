@@ -13,9 +13,15 @@ through it inhibits the process.
 
 ## The library
 
-A type is built from fragments of the standard library `std` and declares
-the modes it can suffer. The server's service output is dormant: it has no
+A type is built from fragments of the embedded library `muscadet` and
+declares the modes it can suffer. The server's service output is dormant: it has no
 production condition and starts unproduced, so only a mode can start it.
+
+`muscadet` holds the fragments that reproduce the muscadet knowledge base;
+the generic ones (time profiles, measures, thresholds, negations) are in
+`std`. Before 0.126.0 every fragment was in `std`, which still answers to
+the moved names by forwarding them to `muscadet` until the next major
+release.
 
 ```python
 import pyraichu
@@ -30,16 +36,16 @@ def is_(component, attribute, value):
 library = {
     "raichu_library": {"format": 1},
     "library": {
-        "name": "cyber", "version": "1.0.0", "imports": ["std"],
+        "name": "cyber", "version": "1.0.0", "imports": ["muscadet"],
         "types": [
             {"name": "PowerSupply",
-             "uses": [{"fragment": "std.bool_source_out", "with": {"name": "power"}}]},
+             "uses": [{"fragment": "muscadet.bool_source_out", "with": {"name": "power"}}]},
             {"name": "Server",
              "uses": [
-                 {"fragment": "std.bool_flow_in", "with": {"name": "power"}},
-                 {"fragment": "std.bool_flow_out",
+                 {"fragment": "muscadet.bool_flow_in", "with": {"name": "power"}},
+                 {"fragment": "muscadet.bool_flow_out",
                   "with": {"name": "orange", "prod_cond": [["power_fed_in"]]}},
-                 {"fragment": "std.bool_source_out",
+                 {"fragment": "muscadet.bool_source_out",
                   "with": {"name": "service", "prod_init": False}}],
              "modes": [
                  {"name": "escalation", "nature": "compromise"},
@@ -47,9 +53,9 @@ library = {
                   "effects": [{"attribute": "service_prod_available", "value": True}]}]},
             {"name": "Process",
              "uses": [
-                 {"fragment": "std.bool_flow_in", "with": {"name": "orange"}},
-                 {"fragment": "std.bool_flow_in", "with": {"name": "service", "logic": "or"}},
-                 {"fragment": "std.bool_flow_out",
+                 {"fragment": "muscadet.bool_flow_in", "with": {"name": "orange"}},
+                 {"fragment": "muscadet.bool_flow_in", "with": {"name": "service", "logic": "or"}},
+                 {"fragment": "muscadet.bool_flow_out",
                   "with": {"name": "F1", "prod_cond": [["orange_fed_in"]]}}],
              "modes": [
                  {"name": "inhibition", "nature": "compromise",
@@ -60,9 +66,9 @@ library = {
 }
 ```
 
-`std.bool_flow_out` makes `<name>_fed_available_out` targetable with the rule
+`muscadet.bool_flow_out` makes `<name>_fed_available_out` targetable with the rule
 `any_cuts`, so the process's `inhibition` may cut `F1`;
-`std.bool_source_out` makes the dormant `service_prod_available` targetable
+`muscadet.bool_source_out` makes the dormant `service_prod_available` targetable
 with `any_activates`, so `service_exploit` may start it. The process's
 catalogue says *when* `inhibition` can happen (once the service flow
 arrives), never *how fast*: the law belongs to the study.
@@ -156,7 +162,7 @@ that produced it:
 
 ```python
 origin = model.provenance["attribute:Proc.F1_fed_available_out"]
-assert origin["fragment"] == "std.bool_flow_out"
+assert origin["fragment"] == "muscadet.bool_flow_out"
 assert origin["type"] == "Process"
 origin = model.provenance["automaton:Srv.service_exploit"]
 assert (origin["document"], origin["pointer"], origin["nature"]) == ("study", "/study/modes/1", "compromise")
@@ -184,7 +190,7 @@ that way.
 
 ## Continuous types
 
-The continuous fragments of `std` build a conservative flow network out of
+The continuous fragments of `muscadet` build a conservative flow network out of
 component-local declarations: every output publishes, on each of its
 connections, what it can deliver and what it hands over, every input what
 it asks and the share it accepts, and a distribution operator splits the
@@ -196,20 +202,20 @@ capacity 10 that nobody draws from:
 tank_library = {
     "raichu_library": {"format": 1},
     "library": {
-        "name": "tanks", "version": "1.0.0", "imports": ["std"],
+        "name": "tanks", "version": "1.0.0", "imports": ["muscadet"],
         "types": [
             {"name": "Source", "uses": [
-                {"fragment": "std.continuous_flow_out", "with": {"name": "Q"}},
-                {"fragment": "std.continuous_source", "with": {"name": "Q", "rate": 2.0}}]},
+                {"fragment": "muscadet.continuous_flow_out", "with": {"name": "Q"}},
+                {"fragment": "muscadet.continuous_source", "with": {"name": "Q", "rate": 2.0}}]},
             {"name": "Tank", "uses": [
-                {"fragment": "std.continuous_flow_in", "with": {"name": "Q", "demand": 2.0}},
-                {"fragment": "std.volume_flow",
+                {"fragment": "muscadet.continuous_flow_in", "with": {"name": "Q", "demand": 2.0}},
+                {"fragment": "muscadet.volume_flow",
                  "with": {"volume": "tank", "flow": "Q", "capacity": 10.0, "demand": 2.0}},
-                {"fragment": "std.volume_outlet",
+                {"fragment": "muscadet.volume_outlet",
                  "with": {"volume": "tank", "flow": "Q", "rate": 2.0, "empty_automaton": "tank_bounds"}},
-                {"fragment": "std.continuous_flow_out",
+                {"fragment": "muscadet.continuous_flow_out",
                  "with": {"name": "Q", "held": True, "empty_automaton": "tank_bounds"}},
-                {"fragment": "std.volume_total",
+                {"fragment": "muscadet.volume_total",
                  "with": {"volume": "tank", "flows": ["Q"], "capacity": 10.0}}]},
         ],
     },
@@ -234,7 +240,7 @@ assert abs(full[0] - 5.0) < 1e-9
 The engine derives the order in which the network's equations are swept
 from what each one reads, so a library author never writes one; the
 per-connection quantities are [port equations](../reference/model-schema.md#port-equation)
-of the fragments. The [format reference](../reference/library-format.md#the-standard-library)
+of the fragments. The [format reference](../reference/library-format.md#the-embedded-libraries)
 lists every continuous fragment.
 
 ## Published examples written as libraries
@@ -245,7 +251,7 @@ exactly as the page's flat model:
 
 | Example | Types | What the library shows |
 |---|---|---|
-| [Two-out-of-three pumps](../examples/two-out-of-three.md) | `Pump`, `Voter` | a failure mode on the type with its laws in the study, k-out-of-n with `std.bool_flow_in` |
+| [Two-out-of-three pumps](../examples/two-out-of-three.md) | `Pump`, `Voter` | a failure mode on the type with its laws in the study, k-out-of-n with `muscadet.bool_flow_in` |
 | [Heated room](../examples/heated-room.md) | `Heater`, `Room` | two instances of one type differing by parameters, a neighbour's temperature read through a port |
 | [Heated tank](../examples/heated-tank.md) | `Pump`, `Valve`, `Tank` | two types built on one library-local fragment, a failure rate reading a port |
 | [Hydrogen installation](../examples/h2-installation.md) | six equipment types | a shared `health` fragment, explicit equations ordered by the expander |
@@ -313,8 +319,8 @@ What the format cannot express is refused per component, naming every
 blocking construct of a component and of a mode, and never dropped: a
 conversion with one refusal yields no documents. In this version the
 converter carries discrete flows, negated outputs (the `negate` parameter
-of `std.bool_flow_out` and `std.bool_source_out`), temporised outputs
-(`std.bool_flow_out_tempo`), triggered outputs (`std.bool_flow_out_trigger`,
+of `muscadet.bool_flow_out` and `muscadet.bool_source_out`), temporised outputs
+(`muscadet.bool_flow_out_tempo`), triggered outputs (`muscadet.bool_flow_out_trigger`,
 armed when nothing feeds the trigger port and `time_up` is zero), gates fed
 by outputs, single-target timed and on-demand modes with their occurrence
 and repair conditions, common-cause modes as study groups
@@ -335,22 +341,22 @@ the repair, and held at rest and written once entering the failure.
 
 Continuous flows convert where a plugin-versus-library bench proves the
 fragment: sources and sinks with their sinusoidal profiles and published
-rates, proportional and share splits, pass-throughs (`std.pass_through`),
+rates, proportional and share splits, pass-throughs (`muscadet.pass_through`),
 single-flow volumes on the output side with a finite or unbounded fill
-(`std.volume_flow`, `std.volume_outlet`, `std.volume_total`), volumes
-upstream of rules that draw from them (`std.volume_flow` with side `in`,
-one or several flows, `std.volume_stock` judging each flow's emptiness),
+(`muscadet.volume_flow`, `muscadet.volume_outlet`, `muscadet.volume_total`), volumes
+upstream of rules that draw from them (`muscadet.volume_flow` with side `in`,
+one or several flows, `muscadet.volume_stock` judging each flow's emptiness),
 rule sets with one guarded rule and one idle rule (boolean conditions and
 at most one band), and rule sets of one rule declared without a condition,
 which always applies (`always_on`), handing back a surplus where two suppliers or more
 feed a consumed input. An output two rule sets of one component produce is
 served in declaration order, as the declaration route serves it: the first
 set is asked the whole demand, each next one what those before it leave
-(`std.shared_output`, `std.rule_cascade`). A controller converts when its outputs
+(`muscadet.shared_output`, `muscadet.rule_cascade`). A controller converts when its outputs
 are bands, comparisons or republished readings and its inputs read a level, a
 constituent's share or a rate, summed, averaged or taken at their median
 (`std.aggregate_measure`, `std.threshold_band`, `std.threshold_compare`,
-`std.republish`); an output may publish what it delivers (`std.rate_publisher`
+`std.republish`); an output may publish what it delivers (`muscadet.rate_publisher`
 with side `out`). The converter reads each component with the
 declaration route's own reader and asks it what each flow is, so a flow is
 a pass-through, a volume's or a rule set's on both routes alike.

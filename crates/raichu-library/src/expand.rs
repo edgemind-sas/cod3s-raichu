@@ -287,9 +287,10 @@ fn check_quantification(quantification: &Quantification, model: &Model) -> Resul
 
 /// The `unbounded_rate` of the expanded model.
 ///
-/// An instance applying a standard continuous flow fragment makes the model
-/// a continuous network, which carries the magnitude the standard fragments
-/// write for "unbounded" ([`STD_UNBOUNDED_RATE`]), as the muscadet plugin
+/// An instance applying a continuous flow fragment of `muscadet` (directly
+/// or through its `std` forwarding name) makes the model a continuous
+/// network, which carries the magnitude those fragments write for
+/// "unbounded" ([`STD_UNBOUNDED_RATE`]), as the muscadet plugin
 /// declares it on every system with a continuous flow: without it the
 /// engine would integrate that magnitude as a rate instead of refusing it
 /// by name. Such a system may state only that magnitude; another system
@@ -313,7 +314,7 @@ fn unbounded_rate(
             DocumentKind::System,
             "/system/unbounded_rate",
             format!(
-                "system `{}` states unbounded_rate {stated:e}, but it applies the standard \
+                "system `{}` states unbounded_rate {stated:e}, but it applies the muscadet \
                  continuous flow fragments, whose unbounded magnitude is {STD_UNBOUNDED_RATE:e}: \
                  state that one or none",
                 system.name

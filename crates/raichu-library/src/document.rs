@@ -109,7 +109,7 @@ pub struct Parameter {
 #[serde(deny_unknown_fields)]
 pub struct Use {
     /// Fragment name: local (`gate`) or from an imported library
-    /// (`std.bool_flow_out`).
+    /// (`muscadet.bool_flow_out`).
     pub fragment: String,
     /// Parameter values of the fragment; a value may itself be a template
     /// of the enclosing type (`{"$param": "name"}`, `"${name}_in"`).
@@ -312,8 +312,8 @@ pub struct SystemModel {
     #[cfg_attr(feature = "schema", schemars(with = "Vec<raichu_model::FmuUnit>"))]
     pub fmu_units: Vec<Value>,
     /// The model's `unbounded_rate`: the magnitude no integrated rate may
-    /// reach. A system applying the standard continuous flow fragments
-    /// gets the standard one without stating it, and may state only that
+    /// reach. A system applying the continuous flow fragments of
+    /// `muscadet` gets their magnitude without stating it, and may state only that
     /// one; any other system declares none unless it states it here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unbounded_rate: Option<f64>,

@@ -189,7 +189,7 @@ how fast the failures occur and are repaired.
 
 The pump declares *what* its failure does (its delivery is cut) and the
 study *how fast* it happens, so the rates live in one place. The voter's
-k-out-of-n logic is the standard fragment `std.bool_flow_in`: the voter
+k-out-of-n logic is the embedded fragment `muscadet.bool_flow_in`: the voter
 reads its three inputs through a port and never names a pump.
 
 Expanded, the library gives a model that behaves exactly as the one

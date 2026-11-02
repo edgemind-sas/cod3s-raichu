@@ -3,7 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use raichu_library::{
-    embedded_library, expand, parse_library, parse_system, standard_library, Library, EMBEDDED, STD,
+    embedded_library, expand, muscadet_library, parse_library, parse_system, standard_library,
+    Library, EMBEDDED, MUSCADET, STD,
 };
 use serde_json::{json, Value};
 
@@ -33,20 +34,25 @@ fn system(library: &str) -> raichu_library::SystemModel {
 }
 
 #[test]
-fn the_registry_holds_std_at_the_engine_version() {
-    assert_eq!(EMBEDDED, [STD]);
+fn the_registry_holds_std_and_muscadet_at_the_engine_version() {
+    assert_eq!(EMBEDDED, [STD, MUSCADET]);
     let std = embedded_library("std").unwrap().unwrap();
     assert_eq!(std, standard_library().unwrap());
     assert_eq!(std.version, env!("CARGO_PKG_VERSION"));
-    assert!(embedded_library("muscadet").is_none());
+    let muscadet = embedded_library("muscadet").unwrap().unwrap();
+    assert_eq!(muscadet, muscadet_library().unwrap());
+    assert_eq!(muscadet.version, env!("CARGO_PKG_VERSION"));
+    assert!(embedded_library("other").is_none());
 }
 
 #[test]
 fn a_library_importing_std_records_its_version() {
     let model = expand(&[plant()], &system("plant"), None).unwrap().model;
     let source = model.source.unwrap();
-    assert_eq!(source.embedded.len(), 1);
+    // `std` imports `muscadet`, where its forwarding names lead.
+    assert_eq!(source.embedded.len(), 2);
     assert_eq!(source.embedded["std"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(source.embedded["muscadet"], env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
