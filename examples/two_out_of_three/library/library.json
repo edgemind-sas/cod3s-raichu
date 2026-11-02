@@ -6,7 +6,7 @@
     "name": "two_out_of_three",
     "version": "1.0.0",
     "imports": [
-      "std"
+      "muscadet"
     ],
     "description": "The two-out-of-three pumps example as a component type library: a pump that can fail, and a voter that keeps the service up while at least k of its inputs are fed.",
     "types": [
@@ -15,7 +15,7 @@
         "description": "A pump delivering water. Its failure mode cuts the delivery; the study says how fast it occurs and is repaired.",
         "uses": [
           {
-            "fragment": "std.bool_source_out",
+            "fragment": "muscadet.bool_source_out",
             "with": {
               "name": "water"
             }
@@ -47,7 +47,7 @@
         ],
         "uses": [
           {
-            "fragment": "std.bool_flow_in",
+            "fragment": "muscadet.bool_flow_in",
             "with": {
               "name": "water",
               "logic": "k",

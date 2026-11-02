@@ -138,6 +138,10 @@ def with_mode(doc: dict, replaced: str, spec: dict) -> dict:
     return doc
 
 
+def test_a_boolean_conversion_imports_muscadet_alone():
+    assert convert(declared_document()).library["library"]["imports"] == ["muscadet"]
+
+
 def types_of(conversion) -> dict:
     return {t["name"]: t for t in conversion.library["library"]["types"]}
 
@@ -252,7 +256,7 @@ def test_a_negated_source_with_no_production_condition_matches():
         [link("src", "snk", "x")],
     )
     conversion = convert(doc)
-    assert conversion.library["library"]["types"][0]["uses"][0]["fragment"] == "std.bool_source_out"
+    assert conversion.library["library"]["types"][0]["uses"][0]["fragment"] == "muscadet.bool_source_out"
     comparison = compare_routes(doc, conversion, t_max=5000.0, seeds=range(4))
     assert comparison.identical, comparison.detail
 
@@ -842,7 +846,7 @@ def test_a_temporised_output_converts_to_the_tempo_fragment():
     declaration = backup_plant({"cls": "DelayOccDistribution", "time": 3.0}, {"cls": "DelayOccDistribution", "time": 0.5})
     conversion = convert(declaration)
     assert conversion.converted, conversion.refusals
-    (use,) = [u for u in types_of(conversion)["Backup"]["uses"] if u["fragment"] == "std.bool_flow_out_tempo"]
+    (use,) = [u for u in types_of(conversion)["Backup"]["uses"] if u["fragment"] == "muscadet.bool_flow_out_tempo"]
     assert use["with"] == {
         "name": "relief",
         "prod_cond": [["power_fed_in"]],
@@ -870,7 +874,7 @@ def test_a_wrong_enable_delay_is_reported_divergent():
     declaration = backup_plant({"cls": "DelayOccDistribution", "time": 3.0}, {"cls": "DelayOccDistribution", "time": 0.5})
     wrong = copy.deepcopy(convert(declaration))
     for use in types_of(wrong)["Backup"]["uses"]:
-        if use["fragment"] == "std.bool_flow_out_tempo":
+        if use["fragment"] == "muscadet.bool_flow_out_tempo":
             use["with"]["enable_value"] = 3.5
     assert not compare_routes(declaration, wrong, t_max=2000.0, seeds=range(4)).identical
 
@@ -1459,7 +1463,7 @@ def test_a_triggered_output_converts_and_matches(shape):
     doc = trigger_plant(**shape)
     conversion = convert(doc)
     assert conversion.converted, conversion.refusals
-    (use,) = [u for t in types_of(conversion).values() for u in t["uses"] if u["fragment"] == "std.bool_flow_out_trigger"]
+    (use,) = [u for t in types_of(conversion).values() for u in t["uses"] if u["fragment"] == "muscadet.bool_flow_out_trigger"]
     assert conversion.rename["B.power_trigger.power_trigger_up"] == "B.power_trigger.power_trigger_up"
     comparison = compare_routes(doc, conversion, t_max=40.0, seeds=range(10))
     assert comparison.identical, comparison.detail
@@ -1472,7 +1476,7 @@ def test_an_unwired_trigger_is_armed_only_without_a_wait(up):
     conversion = convert(doc)
     assert conversion.converted, conversion.refusals
     backup = next(i for i in conversion.system["system"]["instances"] if i["name"] == "B")
-    (use,) = [u for u in types_of(conversion)[backup["type"]]["uses"] if u["fragment"] == "std.bool_flow_out_trigger"]
+    (use,) = [u for u in types_of(conversion)[backup["type"]]["uses"] if u["fragment"] == "muscadet.bool_flow_out_trigger"]
     armed = {**use["with"], **backup.get("with", {})}.get("armed")
     assert armed is (up == 0.0), (use, backup)
     assert compare_routes(doc, conversion, t_max=10.0, seeds=range(3)).identical
@@ -1483,7 +1487,7 @@ def test_a_wrongly_armed_trigger_is_reported_divergent():
     wrong = copy.deepcopy(convert(doc))
     for ty in wrong.library["library"]["types"]:
         for use in ty["uses"]:
-            if use["fragment"] == "std.bool_flow_out_trigger":
+            if use["fragment"] == "muscadet.bool_flow_out_trigger":
                 use["with"]["armed"] = False
     comparison = compare_routes(doc, wrong, t_max=10.0, seeds=range(3))
     assert not comparison.identical

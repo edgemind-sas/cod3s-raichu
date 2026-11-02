@@ -3,32 +3,32 @@
 //! The muscadet plugin declares `unbounded_rate` on every model whose system
 //! declares a continuous flow, so the engine refuses by name any integrated
 //! rate reaching the magnitude the layer writes for "unbounded". A model
-//! expanded from documents applying the standard continuous flow fragments
+//! expanded from documents applying the continuous flow fragments
 //! is the same network and must carry the same guard; a hand-written system
 //! may state its own magnitude.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use raichu_library::{expand, parse_library, parse_system, standard_library, STD_UNBOUNDED_RATE};
+use raichu_library::{expand, muscadet_library, parse_library, parse_system, STD_UNBOUNDED_RATE};
 use serde_json::{json, Value};
 
 fn library() -> raichu_library::Library {
-    parse_library(
-        &json!({"raichu_library": {"format": 1}, "library": {
-        "name": "plant", "version": "1.0.0", "imports": ["std"],
-        "types": [
-            {"name": "Source", "uses": [
-                {"fragment": "std.continuous_flow_out", "with": {"name": "Q"}},
-                {"fragment": "std.continuous_source", "with": {"name": "Q", "rate": 2.0}}]},
-            {"name": "Sink", "uses": [
-                {"fragment": "std.continuous_flow_in", "with": {"name": "Q", "demand": 2.0}},
-                {"fragment": "std.continuous_sink", "with": {"name": "Q", "demand": 2.0}}]},
-            {"name": "Switch", "uses": [
-                {"fragment": "std.bool_source_out", "with": {"name": "power"}}]}
-        ]}})
-        .to_string(),
-    )
-    .unwrap()
+    parse_library(&library_document().to_string()).unwrap()
+}
+
+fn library_document() -> Value {
+    json!({"raichu_library": {"format": 1}, "library": {
+    "name": "plant", "version": "1.0.0", "imports": ["std"],
+    "types": [
+        {"name": "Source", "uses": [
+            {"fragment": "std.continuous_flow_out", "with": {"name": "Q"}},
+            {"fragment": "std.continuous_source", "with": {"name": "Q", "rate": 2.0}}]},
+        {"name": "Sink", "uses": [
+            {"fragment": "std.continuous_flow_in", "with": {"name": "Q", "demand": 2.0}},
+            {"fragment": "std.continuous_sink", "with": {"name": "Q", "demand": 2.0}}]},
+        {"name": "Switch", "uses": [
+            {"fragment": "std.bool_source_out", "with": {"name": "power"}}]}
+    ]}})
 }
 
 fn system(instances: Value, connections: Value, extra: Value) -> raichu_library::SystemModel {
@@ -50,6 +50,25 @@ fn a_continuous_network_declares_the_standard_magnitude() {
         json!({}),
     );
     let model = expand(&[library()], &system, None).unwrap().model;
+    assert_eq!(model.unbounded_rate, Some(STD_UNBOUNDED_RATE));
+}
+
+/// The `muscadet` spelling of the continuous fragments, which the
+/// converter and the published examples apply, carries the guard too.
+#[test]
+fn a_network_applying_muscadet_by_name_declares_it_too() {
+    let text = library_document()
+        .to_string()
+        .replace("\"std.", "\"muscadet.")
+        .replace("\"imports\":[\"std\"]", "\"imports\":[\"muscadet\"]");
+    let library = parse_library(&text).unwrap();
+    assert_eq!(library.imports, ["muscadet"]);
+    let system = system(
+        json!([{"name": "S", "type": "Source"}, {"name": "C", "type": "Sink"}]),
+        json!([{"from": "S.Q_out", "to": "C.Q_in"}]),
+        json!({}),
+    );
+    let model = expand(&[library], &system, None).unwrap().model;
     assert_eq!(model.unbounded_rate, Some(STD_UNBOUNDED_RATE));
 }
 
@@ -118,18 +137,21 @@ fn a_magnitude_contradicting_the_standard_fragments_is_refused() {
     assert!(error.contains("1e20") && error.contains("1e30"), "{error}");
 }
 
-/// The magnitude the expander declares is the one the standard volume
+/// The magnitude the expander declares is the one the embedded volume
 /// writes for a ceiling nobody set: two spellings of one number would let
 /// the guard pass a rate the volume reports as unbounded.
 #[test]
-fn the_declared_magnitude_is_the_one_std_writes() {
-    let std = serde_json::to_string(&standard_library().unwrap()).unwrap();
-    let written: Vec<f64> = std
+fn the_declared_magnitude_is_the_one_the_volume_writes() {
+    let text = serde_json::to_string(&muscadet_library().unwrap()).unwrap();
+    let written: Vec<f64> = text
         .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == 'e' || c == '+' || c == '-'))
         .filter_map(|token| token.parse::<f64>().ok())
         .filter(|value| *value >= 1.0e15)
         .collect();
-    assert!(!written.is_empty(), "std writes no unbounded magnitude");
+    assert!(
+        !written.is_empty(),
+        "muscadet writes no unbounded magnitude"
+    );
     assert!(
         written.iter().all(|v| *v == STD_UNBOUNDED_RATE),
         "{written:?}"

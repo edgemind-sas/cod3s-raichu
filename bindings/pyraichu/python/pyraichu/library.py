@@ -253,7 +253,7 @@ def derive_evaluation_order(model: Document) -> list[dict[str, str]] | None:
 
 
 def embedded_library(name: str) -> dict[str, Any]:
-    """A library shipped with this engine, by name (``"std"``), as a
+    """A library shipped with this engine, by name (``"std"`` or ``"muscadet"``), as a
     library document; :class:`ModelError` naming the embedded libraries
     for an unknown name."""
     return json.loads(embedded_library_json(name))

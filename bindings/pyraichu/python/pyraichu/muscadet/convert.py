@@ -220,7 +220,7 @@ def _flow_in_use(name: str, keywords: dict) -> dict:
     else:
         with_["logic"] = logic
     with_["default"] = bool(default)
-    return {"fragment": "std.bool_flow_in", "with": with_}
+    return {"fragment": "muscadet.bool_flow_in", "with": with_}
 
 
 def _operand_attribute(output: str, operand: Any, inputs: set[str], outputs: set[str]) -> str:
@@ -233,7 +233,7 @@ def _operand_attribute(output: str, operand: Any, inputs: set[str], outputs: set
         if set(operand) - {"name", "port", "negate"}:
             raise _Refused(
                 "structured production operand",
-                f"output `{output}` reads {operand!r}; the std output reads flow states and their negation only",
+                f"output `{output}` reads {operand!r}; the muscadet output reads flow states and their negation only",
             )
         port, negated, operand = operand.get("port"), bool(operand.get("negate")), operand["name"]
     if port != "out" and operand in inputs:
@@ -278,7 +278,7 @@ def _flow_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]
     condition = keywords.pop("var_prod_cond", None)
     if not condition:
         return {
-            "fragment": "std.bool_source_out",
+            "fragment": "muscadet.bool_source_out",
             "with": {
                 "name": name,
                 "prod_init": produced,
@@ -290,7 +290,7 @@ def _flow_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]
     for group in condition:
         groups.append([_operand_attribute(name, o, inputs, outputs) for o in group])
     return {
-        "fragment": "std.bool_flow_out",
+        "fragment": "muscadet.bool_flow_out",
         "with": {
             "name": name,
             "prod_cond": groups,
@@ -325,7 +325,7 @@ def _tempo_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str
     init_enable = bool(keywords.pop("init_enable", False))
     plain = _flow_out_use(name, keywords, inputs, outputs)
     with_: dict[str, Any] = {"name": name}
-    if plain["fragment"] == "std.bool_flow_out":
+    if plain["fragment"] == "muscadet.bool_flow_out":
         with_["prod_cond"] = plain["with"]["prod_cond"]
     else:
         with_["conditioned"] = False
@@ -334,7 +334,7 @@ def _tempo_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str
     with_["init_enable"] = init_enable
     with_.update(enable)
     with_.update(disable)
-    return {"fragment": "std.bool_flow_out_tempo", "with": with_}
+    return {"fragment": "muscadet.bool_flow_out_tempo", "with": with_}
 
 
 def _trigger_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[str]) -> dict:
@@ -350,7 +350,7 @@ def _trigger_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[s
     if plain["with"].get("negate"):
         raise _Refused("negated triggered output", f"output `{name}`")
     with_: dict[str, Any] = {"name": name}
-    if plain["fragment"] == "std.bool_flow_out":
+    if plain["fragment"] == "muscadet.bool_flow_out":
         with_["prod_cond"] = plain["with"]["prod_cond"]
     else:
         with_["conditioned"] = False
@@ -366,7 +366,7 @@ def _trigger_out_use(name: str, keywords: dict, inputs: set[str], outputs: set[s
     with_["time_up"] = time_up
     with_["time_down"] = time_down
     with_["armed"] = False
-    return {"fragment": "std.bool_flow_out_trigger", "with": with_}
+    return {"fragment": "muscadet.bool_flow_out_trigger", "with": with_}
 
 
 def _arm_triggers(instances: dict[str, dict], connections: list[dict]) -> None:
@@ -376,7 +376,7 @@ def _arm_triggers(instances: dict[str, dict], connections: list[dict]) -> None:
     fed = {connection["to"] for connection in connections}
     for name, instance in instances.items():
         for use in instance["uses"]:
-            if use["fragment"] == "std.bool_flow_out_trigger":
+            if use["fragment"] == "muscadet.bool_flow_out_trigger":
                 with_ = use["with"]
                 wired = f"{name}.{with_['name']}_trigger_in" in fed
                 with_["armed"] = not wired and with_["time_up"] == 0.0
@@ -385,7 +385,7 @@ def _arm_triggers(instances: dict[str, dict], connections: list[dict]) -> None:
 def _flow_uses(
     spec: dict, name: str, network: _Network
 ) -> tuple[list[dict], list[tuple[str, dict]], dict[str, str]]:
-    """The std fragments a flow component's declaration means, in order, the
+    """The fragments a flow component's declaration means, in order, the
     failure modes it declares in its own `failure_modes` section, and the
     transitions its continuous part carries under the same names on both
     routes."""
@@ -427,7 +427,7 @@ def _flow_uses(
 
 
 def _flow_call_use(spec: dict, call: Any, inputs: set[str], outputs: set[str]) -> dict:
-    """The std fragment one `flows` entry means."""
+    """The fragment one `flows` entry means."""
     if call.section != "flows":
         raise _Refused(f"section `{call.section}`", f"entry {call.entry!r}")
     keywords = dict(call.keywords)
@@ -553,7 +553,7 @@ def _rule_set_uses(
     shared: dict[str, list[str]] | None = None,
 ) -> list[dict]:
     """A rule set with one guarded rule and one idle rule, or one rule
-    always on, as `std.rule_set` and its `rule_consumes` / `rule_produces`.
+    always on, as `muscadet.rule_set` and its `rule_consumes` / `rule_produces`.
     The flows in `from_volume` are drawn from a volume upstream of the
     rules. The flows in `shared` are produced by other rule sets too, each
     mapped to the sets declared before this one: served in declaration
@@ -614,7 +614,7 @@ def _rule_set_uses(
     capped = [flow for flow in produces if outputs[flow].max_rate is not None]
     uses = [
         {
-            "fragment": "std.rule_set",
+            "fragment": "muscadet.rule_set",
             "with": {
                 "name": rule_set.name,
                 "active": active.name,
@@ -630,7 +630,7 @@ def _rule_set_uses(
     for flow in consumes:
         uses.append(
             {
-                "fragment": "std.rule_consumes",
+                "fragment": "muscadet.rule_consumes",
                 "with": {
                     "rule_set": rule_set.name,
                     "active": active.name,
@@ -651,12 +651,12 @@ def _rule_set_uses(
             with_["max_rate"] = float(outputs[flow].max_rate)
         if flow in shared:
             with_["shared"] = True
-        uses.append({"fragment": "std.rule_produces", "with": with_})
+        uses.append({"fragment": "muscadet.rule_produces", "with": with_})
     return uses + _cascade_uses(rule_set.name, shared)
 
 
 def _produced_and_cascaded(produces: list[str], shared: dict[str, list[str]]) -> dict[str, list[str]]:
-    """The `produces` and `cascaded` lists of a `std.rule_set`: a flow
+    """The `produces` and `cascaded` lists of a `muscadet.rule_set`: a flow
     other sets produce before this one is asked only what they leave."""
     return {
         "produces": [flow for flow in produces if not shared.get(flow)],
@@ -666,9 +666,9 @@ def _produced_and_cascaded(produces: list[str], shared: dict[str, list[str]]) ->
 
 def _cascade_uses(rule_set: str, shared: dict[str, list[str]]) -> list[dict]:
     """The demand each shared output leaves to `rule_set`, one
-    `std.rule_cascade` per flow with rule sets declared before it."""
+    `muscadet.rule_cascade` per flow with rule sets declared before it."""
     return [
-        {"fragment": "std.rule_cascade", "with": {"rule_set": rule_set, "flow": flow, "before": before}}
+        {"fragment": "muscadet.rule_cascade", "with": {"rule_set": rule_set, "flow": flow, "before": before}}
         for flow, before in shared.items()
         if before
     ]
@@ -681,7 +681,7 @@ def _always_on_uses(
     from_volume: frozenset[str],
     shared: dict[str, list[str]],
 ) -> list[dict]:
-    """One rule always on, as `std.rule_set` with `always_on`."""
+    """One rule always on, as `muscadet.rule_set` with `always_on`."""
     where = f"rule set `{rule_set.name}`"
     rule = rule_set.rules[0]
     if not rule.name:
@@ -706,7 +706,7 @@ def _always_on_uses(
     drawn = [flow for flow in consumes if flow in from_volume]
     uses = [
         {
-            "fragment": "std.rule_set",
+            "fragment": "muscadet.rule_set",
             "with": {
                 "name": rule_set.name,
                 "active": rule.name,
@@ -728,7 +728,7 @@ def _always_on_uses(
         }
         if flow in from_volume:
             with_["from_volume"] = True
-        uses.append({"fragment": "std.rule_consumes", "with": with_})
+        uses.append({"fragment": "muscadet.rule_consumes", "with": with_})
     for flow in produces:
         with_ = {
             "rule_set": rule_set.name,
@@ -739,7 +739,7 @@ def _always_on_uses(
         }
         if flow in shared:
             with_["shared"] = True
-        uses.append({"fragment": "std.rule_produces", "with": with_})
+        uses.append({"fragment": "muscadet.rule_produces", "with": with_})
     return uses + _cascade_uses(rule_set.name, shared)
 
 
@@ -761,8 +761,8 @@ def _volume_refusal(capacity: Any) -> None:
 
 
 def _input_volume_uses(capacity: Any) -> list[dict]:
-    """A volume upstream of the rules, as `std.volume_flow` with side `in`
-    for each flow it holds, `std.volume_total`, and `std.volume_stock` per
+    """A volume upstream of the rules, as `muscadet.volume_flow` with side `in`
+    for each flow it holds, `muscadet.volume_total`, and `muscadet.volume_stock` per
     flow when it holds several (emptiness is judged per flow, fullness on
     the total)."""
     _volume_refusal(capacity)
@@ -780,7 +780,7 @@ def _input_volume_uses(capacity: Any) -> list[dict]:
     for flow in capacity.flow_names:
         uses.append(
             {
-                "fragment": "std.volume_flow",
+                "fragment": "muscadet.volume_flow",
                 "with": {
                     "volume": capacity.name,
                     "flow": flow,
@@ -804,12 +804,12 @@ def _input_volume_uses(capacity: Any) -> list[dict]:
     }
     if multi:
         total_with["ratio_flows"] = list(capacity.flow_names)
-    uses.append({"fragment": "std.volume_total", "with": total_with})
+    uses.append({"fragment": "muscadet.volume_total", "with": total_with})
     if multi:
         for flow in capacity.flow_names:
             uses.append(
                 {
-                    "fragment": "std.volume_stock",
+                    "fragment": "muscadet.volume_stock",
                     "with": {
                         "volume": capacity.name,
                         "flow": flow,
@@ -822,8 +822,8 @@ def _input_volume_uses(capacity: Any) -> list[dict]:
 
 
 def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
-    """A single-flow volume on the output side, as `std.volume_flow`,
-    `std.volume_outlet` and `std.volume_total`."""
+    """A single-flow volume on the output side, as `muscadet.volume_flow`,
+    `muscadet.volume_outlet` and `muscadet.volume_total`."""
     where = f"volume `{capacity.name}`"
     _volume_refusal(capacity)
     if flow_out.profile is not None or flow_out.max_rate is not None:
@@ -842,7 +842,7 @@ def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
     )
     return [
         {
-            "fragment": "std.volume_flow",
+            "fragment": "muscadet.volume_flow",
             "with": {
                 "volume": capacity.name,
                 "flow": flow,
@@ -853,7 +853,7 @@ def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
             },
         },
         {
-            "fragment": "std.volume_outlet",
+            "fragment": "muscadet.volume_outlet",
             "with": {
                 "volume": capacity.name,
                 "flow": flow,
@@ -862,7 +862,7 @@ def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
             },
         },
         {
-            "fragment": "std.volume_total",
+            "fragment": "muscadet.volume_total",
             "with": {"volume": capacity.name, "flows": [flow], "capacity": volume, "initial": initial},
         },
     ]
@@ -1038,14 +1038,14 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
     for flow in inputs.values():
         uses.append(
             {
-                "fragment": "std.continuous_flow_in",
+                "fragment": "muscadet.continuous_flow_in",
                 "with": {"name": flow.name, "demand": float(flow.var_demand_in_default)},
             }
         )
         if flow.name in consumed_by and network.suppliers.get((name, flow.name), 0) >= 2:
-            uses.append({"fragment": "std.surplus_release", "with": {"name": flow.name}})
+            uses.append({"fragment": "muscadet.surplus_release", "with": {"name": flow.name}})
         if flow.publish_rate is not None:
-            uses.append({"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED}})
+            uses.append({"fragment": "muscadet.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED}})
         if obj._passes_through(flow.name) or flow.name in consumed_by:
             continue
         if flow.name in held:
@@ -1055,7 +1055,7 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             uses += _profile_uses(f"{flow.name}_in_profile", flow.profile)
         uses.append(
             {
-                "fragment": "std.continuous_sink",
+                "fragment": "muscadet.continuous_sink",
                 "with": {
                     "name": flow.name,
                     "demand": float(flow.var_demand_in_default),
@@ -1067,12 +1067,12 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         uses += volume_uses
     uses += rule_uses
     for flow, sets in contested.items():
-        uses.append({"fragment": "std.shared_output", "with": {"flow": flow, "producers": sets}})
+        uses.append({"fragment": "muscadet.shared_output", "with": {"flow": flow, "producers": sets}})
     for flow in outputs.values():
         consumers = network.consumers.get((name, flow.name), [])
         out: dict[str, Any] = {"name": flow.name, **_allocation(flow, consumers)}
         if obj._passes_through(flow.name):
-            uses.append({"fragment": "std.pass_through", "with": {"name": flow.name}})
+            uses.append({"fragment": "muscadet.pass_through", "with": {"name": flow.name}})
             out["available"] = "produced"
         elif flow.name in produced_by:
             out["available"] = "produced"
@@ -1089,7 +1089,7 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
                 uses += _profile_uses(f"{flow.name}_out_profile", flow.profile)
             uses.append(
                 {
-                    "fragment": "std.continuous_source",
+                    "fragment": "muscadet.continuous_source",
                     "with": {
                         "name": flow.name,
                         "rate": float(flow.var_fed_default),
@@ -1099,11 +1099,11 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             )
         if flow.publish_rate == authoring.RATE_DELIVERED:
             uses.append(
-                {"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED, "side": "out"}}
+                {"fragment": "muscadet.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED, "side": "out"}}
             )
         elif flow.publish_rate is not None:
-            uses.append({"fragment": "std.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_CAPABILITY}})
-        uses.append({"fragment": "std.continuous_flow_out", "with": out})
+            uses.append({"fragment": "muscadet.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_CAPABILITY}})
+        uses.append({"fragment": "muscadet.continuous_flow_out", "with": out})
         if flow.name in held:
             uses.append(held[flow.name][1][2])
     return uses, rename
@@ -1261,6 +1261,27 @@ def _controller_uses(spec: dict, name: str) -> tuple[list[dict], dict[str, str]]
     return uses, rename
 
 
+def _imported_libraries(types: list[dict]) -> list[str]:
+    """The embedded libraries the converted types apply fragments of:
+    `muscadet` for the flow components, `std` for the generic fragments
+    (profiles, measures, thresholds, negations)."""
+    found: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            fragment = node.get("fragment")
+            if isinstance(fragment, str) and "." in fragment:
+                found.add(fragment.split(".", 1)[0])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(types)
+    return sorted(found, key=lambda name: (name != "muscadet", name)) or ["muscadet"]
+
+
 #: The comparison a `compare` node declares, as `std.threshold_compare`
 #: names it.
 _CTRL_COMPARE = {"<": "lt", "<=": "le", ">": "gt", ">=": "ge"}
@@ -1345,33 +1366,33 @@ def _gate_use(
     with_: dict[str, Any] = {"name": out, "logic": gate["kind"]}
     if gate["kind"] == "k":
         with_["k"] = gate["k"]
-    return [{"fragment": "std.logic_gate", "with": with_}], sources
+    return [{"fragment": "muscadet.logic_gate", "with": with_}], sources
 
 
 #: Which parameters of a std fragment hold a VALUE (a type parameter when it
 #: differs between instances); every other parameter is structure.
 _VALUE_PARAMETERS = {
-    "std.bool_flow_in": ("default", "k"),
-    "std.bool_flow_out": ("fed_available_init", "negate"),
-    "std.bool_source_out": ("prod_init", "fed_available_init", "negate"),
-    "std.logic_gate": ("k",),
-    "std.bool_flow_out_tempo": (
+    "muscadet.bool_flow_in": ("default", "k"),
+    "muscadet.bool_flow_out": ("fed_available_init", "negate"),
+    "muscadet.bool_source_out": ("prod_init", "fed_available_init", "negate"),
+    "muscadet.logic_gate": ("k",),
+    "muscadet.bool_flow_out_tempo": (
         "prod_init",
         "fed_available_init",
         "init_enable",
         "enable_value",
         "disable_value",
     ),
-    "std.continuous_flow_in": ("demand",),
-    "std.continuous_source": ("rate",),
-    "std.continuous_sink": ("demand",),
+    "muscadet.continuous_flow_in": ("demand",),
+    "muscadet.continuous_source": ("rate",),
+    "muscadet.continuous_sink": ("demand",),
     "std.time_profile": ("amplitude", "phase_shift", "period", "offset", "value_min", "initial"),
-    "std.volume_flow": ("capacity", "content_init", "demand", "fill_rate"),
-    "std.volume_outlet": ("rate",),
-    "std.volume_total": ("capacity",),
-    "std.rule_set": ("activate", "release"),
-    "std.rule_consumes": ("rate",),
-    "std.rule_produces": ("rate", "max_rate"),
+    "muscadet.volume_flow": ("capacity", "content_init", "demand", "fill_rate"),
+    "muscadet.volume_outlet": ("rate",),
+    "muscadet.volume_total": ("capacity",),
+    "muscadet.rule_set": ("activate", "release"),
+    "muscadet.rule_consumes": ("rate",),
+    "muscadet.rule_produces": ("rate", "max_rate"),
 }
 
 #: The parameter naming a use, for the type parameter a value becomes.
@@ -1379,13 +1400,13 @@ _USE_LABELS = ("name", "flow", "volume", "target", "rule_set")
 
 #: The fragments carrying a discrete output.
 _OUTPUT_FRAGMENTS = (
-    "std.bool_flow_out",
-    "std.bool_source_out",
-    "std.bool_flow_out_tempo",
-    "std.bool_flow_out_trigger",
+    "muscadet.bool_flow_out",
+    "muscadet.bool_source_out",
+    "muscadet.bool_flow_out_tempo",
+    "muscadet.bool_flow_out_trigger",
 )
 #: The output fragments whose production a flag `conditioned` may leave to a mode.
-_CONDITIONED_FRAGMENTS = ("std.bool_flow_out_tempo", "std.bool_flow_out_trigger")
+_CONDITIONED_FRAGMENTS = ("muscadet.bool_flow_out_tempo", "muscadet.bool_flow_out_trigger")
 
 
 def _persistent_outputs(spec: dict) -> set[str]:
@@ -1453,7 +1474,7 @@ def _targetable(uses: list[dict]) -> set[str]:
         name = use["with"]["name"]
         attributes.add(f"{name}_fed_available_out")
         # The production is a mode's to write only where no condition writes it.
-        if use["fragment"] == "std.bool_source_out" or (
+        if use["fragment"] == "muscadet.bool_source_out" or (
             use["fragment"] in _CONDITIONED_FRAGMENTS and use["with"].get("conditioned") is False
         ):
             attributes.add(f"{name}_prod_available")
@@ -2290,13 +2311,13 @@ def convert(
             "persistent": _persistent_outputs(spec),
         }
         for use in uses:
-            if use["fragment"] == "std.bool_flow_out_tempo":
+            if use["fragment"] == "muscadet.bool_flow_out_tempo":
                 # Both routes name the tempo automaton and its waits alike.
                 flow = use["with"]["name"]
                 for direction in ("enable", "disable"):
                     qualified = f"{name}.{flow}_tempo.{flow}_{direction}"
                     rename[qualified] = qualified
-            if use["fragment"] == "std.bool_flow_out_trigger":
+            if use["fragment"] == "muscadet.bool_flow_out_trigger":
                 # And the trigger automaton and its two delays.
                 flow = use["with"]["name"]
                 for direction in ("up", "down"):
@@ -2447,7 +2468,7 @@ def convert(
         "library": {
             "name": library_name,
             "version": "1.0.0",
-            "imports": ["std"],
+            "imports": _imported_libraries(types),
             "description": f"Types converted from the muscadet declaration `{model_name}`.",
             "types": types,
         },

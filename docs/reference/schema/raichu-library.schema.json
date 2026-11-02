@@ -6532,7 +6532,7 @@
       "description": "The application of a fragment inside a type or another fragment.",
       "properties": {
         "fragment": {
-          "description": "Fragment name: local (`gate`) or from an imported library\n(`std.bool_flow_out`).",
+          "description": "Fragment name: local (`gate`) or from an imported library\n(`muscadet.bool_flow_out`).",
           "type": "string"
         },
         "with": {

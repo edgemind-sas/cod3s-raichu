@@ -114,7 +114,9 @@ def test_a_library_version_mismatch_names_both_versions():
 def test_load_model_routes_a_system_document_to_the_library_loader():
     model = pyraichu.load_model(room_system(), libraries=[lamp_library()])
     assert model.name == "room"
-    assert model.provenance["attribute:L.light_fed_out"]["fragment"] == "std.bool_flow_out"
+    # Provenance names the fragment that declared the element; the `std`
+    # name forwards to it.
+    assert model.provenance["attribute:L.light_fed_out"]["fragment"] == "muscadet.bool_flow_out"
 
 
 def test_a_flat_model_still_loads_and_runs_unchanged():

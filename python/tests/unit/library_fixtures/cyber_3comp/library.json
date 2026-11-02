@@ -6,7 +6,7 @@
     "name": "stra_cyber",
     "version": "1.0.0",
     "imports": [
-      "std"
+      "muscadet"
     ],
     "description": "The three components of the STRA cyber example (muscadet `examples/isimu/cyber_3comp`), re-authored as a component type library.",
     "types": [
@@ -15,7 +15,7 @@
         "description": "A power supply: a constant source.",
         "uses": [
           {
-            "fragment": "std.bool_source_out",
+            "fragment": "muscadet.bool_source_out",
             "with": {
               "name": "power"
             }
@@ -27,14 +27,14 @@
         "description": "A server fed by power, with two mission outputs and a dormant service function a compromise mode can start.",
         "uses": [
           {
-            "fragment": "std.bool_flow_in",
+            "fragment": "muscadet.bool_flow_in",
             "with": {
               "name": "power",
               "logic": "and"
             }
           },
           {
-            "fragment": "std.bool_flow_out",
+            "fragment": "muscadet.bool_flow_out",
             "with": {
               "name": "f_orange",
               "prod_cond": [
@@ -45,7 +45,7 @@
             }
           },
           {
-            "fragment": "std.bool_flow_out",
+            "fragment": "muscadet.bool_flow_out",
             "with": {
               "name": "f_blue",
               "prod_cond": [
@@ -56,7 +56,7 @@
             }
           },
           {
-            "fragment": "std.bool_source_out",
+            "fragment": "muscadet.bool_source_out",
             "with": {
               "name": "f_service",
               "prod_init": false
@@ -87,28 +87,28 @@
         "description": "An industrial process with two functions, inhibited by a compromise reached through the service function.",
         "uses": [
           {
-            "fragment": "std.bool_flow_in",
+            "fragment": "muscadet.bool_flow_in",
             "with": {
               "name": "f_orange",
               "logic": "and"
             }
           },
           {
-            "fragment": "std.bool_flow_in",
+            "fragment": "muscadet.bool_flow_in",
             "with": {
               "name": "f_blue",
               "logic": "and"
             }
           },
           {
-            "fragment": "std.bool_flow_in",
+            "fragment": "muscadet.bool_flow_in",
             "with": {
               "name": "f_service",
               "logic": "or"
             }
           },
           {
-            "fragment": "std.bool_flow_out",
+            "fragment": "muscadet.bool_flow_out",
             "with": {
               "name": "F1",
               "prod_cond": [
@@ -119,7 +119,7 @@
             }
           },
           {
-            "fragment": "std.bool_flow_out",
+            "fragment": "muscadet.bool_flow_out",
             "with": {
               "name": "F2",
               "prod_cond": [

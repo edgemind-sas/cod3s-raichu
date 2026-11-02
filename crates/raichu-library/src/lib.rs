@@ -53,4 +53,7 @@ pub use expand::{expand, Expansion};
 pub use instantiate::CombineRule;
 pub use order::derive_evaluation_order;
 pub use provenance::{Origin, Provenance};
-pub use std_library::{embedded_library, standard_library, EMBEDDED, STD, STD_UNBOUNDED_RATE};
+pub use std_library::{
+    embedded_library, muscadet_library, standard_library, EMBEDDED, MUSCADET, STD,
+    STD_UNBOUNDED_RATE,
+};

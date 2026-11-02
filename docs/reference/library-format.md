@@ -47,9 +47,9 @@ reserved for the templating grammar.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `name` | string | library name; it prefixes its fragments when another library imports them (`std.bool_flow_in`) |
+| `name` | string | library name; it prefixes its fragments when another library imports them (`muscadet.bool_flow_in`) |
 | `version` | string | matched exactly by the systems that use the library |
-| `imports` | list of strings | libraries whose fragments this one applies (`["std"]`) |
+| `imports` | list of strings | libraries whose fragments this one applies (`["muscadet", "std"]`) |
 | `fragments` | list | named, parameterised pieces of behaviour |
 | `types` | list | component types |
 
@@ -59,7 +59,7 @@ reserved for the templating grammar.
 |---|---|---|
 | `name` | both | unique in the library |
 | `parameters` | both | declared parameters (below) |
-| `uses` | both | fragment applications: `{"fragment": "std.bool_flow_in", "with": {"name": "power"}}` |
+| `uses` | both | fragment applications: `{"fragment": "muscadet.bool_flow_in", "with": {"name": "power"}}` |
 | `body` | both | core constructs, templated: `attributes`, `ports`, `interfaces`, `automata`, `sensitive_functions`, `equations`, `allocations`, in the shapes of the model schema |
 | `targetable` | both | attributes a mode may target, each with its combination rule |
 | `modes` | type | the mode catalogue |
@@ -167,18 +167,33 @@ the attribute's kind, an effect value the rule cannot hold (`true` under
 targeted attribute is written by its modes only. Effects are released on
 repair.
 
-## The standard library
+## The embedded libraries
 
-`std` is written in this format and shipped with the engine; its version is
-the engine's, and the expanded model records it. A library imports it with
-`"imports": ["std"]`.
+Two libraries are written in this format and shipped with the engine:
+`muscadet`, the fragments that reproduce the muscadet knowledge base, and
+`std`, the generic fragments. Their version is the engine's, and the
+expanded model records the version of each embedded library it drew on. A
+library imports them with `"imports": ["muscadet", "std"]`, or only the one
+it applies.
 
-`std` is the first library of the engine's registry of embedded libraries
+They form the engine's registry of embedded libraries
 (`pyraichu.embedded_library(name)`). An embedded library is imported, never
 supplied: a library imported by another one comes with it (a library
 importing only a library that imports `std` gets `std`), a supplied library
 named after an embedded one is refused unless it is that very library, and
-libraries importing each other in a cycle are refused.
+libraries importing each other in a cycle are refused. `muscadet` imports no
+library.
+
+The fragments of `muscadet` were part of `std` until 0.126.0. `std` keeps
+each of their names as a forwarding fragment, with the same parameters,
+that applies its `muscadet` counterpart unchanged: a library written against
+`std.bool_flow_in` expands to the same model as one applying
+`muscadet.bool_flow_in`, except that its model also records `std` among the
+embedded libraries it drew on. The provenance of an element names the
+fragment that declared it, `muscadet.bool_flow_in` in both cases. The
+forwarding names are withdrawn at the next major release.
+
+### `muscadet`
 
 | Fragment | Parameters | Builds |
 |---|---|---|
@@ -188,8 +203,6 @@ libraries importing each other in a cycle are refused.
 | `bool_flow_out_tempo` | `name`, `prod_cond`, `conditioned`, `prod_init`, `fed_available_init`, `init_enable`, `enable_law` (`delay`, `exp`), `enable_value`, `disable_law`, `disable_value` | a temporised output (muscadet `FlowOutTempo`): `<name>_fed_out` is true while the automaton `<name>_tempo` is `enabled` and `<name>_fed_available_out` holds; the transitions `<name>_enable` and `<name>_disable` wait on their law once the production condition holds or fails, and restart when it changes again first. `conditioned: false` leaves `<name>_prod_available` at `prod_init` |
 | `bool_flow_out_trigger` | `name`, `prod_cond`, `conditioned`, `prod_init`, `fed_available_init`, `logic` (`and`, `or`, `k`), `k`, `time_up`, `time_down`, `armed` | a triggered output (muscadet `FlowOutOnTrigger`): `<name>_fed_out` is true while the automaton `<name>_trigger` is `up`, the production holds and `<name>_fed_available_out` holds. The trigger inhibits: `<name>_trigger_up` waits `time_up` once the aggregate over the in port `<name>_trigger_in` is false, `<name>_trigger_down` waits `time_down` once it is true (`and` over an unconnected port is false). `armed: true` starts the automaton `up`, which the declaration route does when nothing feeds the trigger and `time_up` is zero |
 | `logic_gate` | `name`, `logic`, `k`, `default` | a boolean input re-exported on the out port `<name>_out` |
-| `state_out` | `name`, `automaton`, `states`, `init` | whether `automaton` is in one of `states`, as the boolean `<name>` on the out port `<name>_out`: how a neighbour reads a state (`any`, `all`, or `sum` to count) |
-| `bool_not` | `of`, `init` | the attribute `<of>_not`, the negation of the boolean attribute `<of>` of the instance: how a production condition, which reads attributes only, reads a flow being absent (`[["ctrl_fed_in_not"]]`) |
 
 The continuous fragments build a conservative flow network out of
 component-local declarations: each output publishes, on every connection,
@@ -206,7 +219,6 @@ plugin's continuous objects, and each is characterised against it.
 | `surplus_release` | `name` | the input hands back, pro rata of offers, what two suppliers or more offer beyond its demand, a supplier that has run out being accepted first |
 | `continuous_source` | `name`, `rate`, `profiled` | the capability of a source output, times `<name>_out_profile` when profiled |
 | `continuous_sink` | `name`, `demand`, `profiled` | the demand of a consumer input, times `<name>_in_profile` when profiled |
-| `time_profile` | `target`, `amplitude`, `phase_shift`, `period`, `offset`, `value_min`, `initial` | a sinusoidal profile written into `target` |
 | `rate_publisher` | `name`, `of` (`capability`, `delivered`), `side` (`in`, `out`) | out port `<name>_rate_out` exporting `<name>_rate`: the capability of an output, or what a flow delivers, an input (`side: in`) or an output (`side: out`) |
 | `pass_through` | `name` | the flow crosses the component unchanged: the input asks what the output is asked, the output can deliver what could arrive and hands on what did arrive (`<name>_produced_out`, so the output is `available: produced`) |
 | `volume_flow` | `volume`, `flow`, `capacity`, `content_init`, `demand`, `fill_rate`, `fill_unbounded`, `outlet`, `side` (`out`, `in`), `empty_automaton` | one flow held in a volume: its content (an ODE), its fill fraction, and the demand of the input; with `fill_unbounded` the volume claims without bound while it is not full (JSON has no infinity, so a flag rather than a rate); with side `in` the volume sits upstream of a rule that draws from it (`rule_consumes` with `from_volume`), serving what the rule needs while the flow is stocked and what arrives once `empty_automaton` is `empty` |
@@ -219,6 +231,14 @@ plugin's continuous objects, and each is characterised against it.
 | `shared_output` | `flow`, `producers` | the capability and production of an output two rule sets or more produce, the sums of their contributions |
 | `rule_cascade` | `rule_set`, `flow`, `before` | `<rule_set>_<flow>_left`, the output's demand less what the sets declared before it are expected to make, never below zero |
 | `tap` | `flow`, `outlets` | leaks taken from an output into the outlets, each the fraction `<outlet>_pct`, targetable with `max` |
+
+### `std`
+
+| Fragment | Parameters | Builds |
+|---|---|---|
+| `state_out` | `name`, `automaton`, `states`, `init` | whether `automaton` is in one of `states`, as the boolean `<name>` on the out port `<name>_out`: how a neighbour reads a state (`any`, `all`, or `sum` to count) |
+| `bool_not` | `of`, `init` | the attribute `<of>_not`, the negation of the boolean attribute `<of>` of the instance: how a production condition, which reads attributes only, reads a flow being absent (`[["ctrl_fed_in_not"]]`) |
+| `time_profile` | `target`, `amplitude`, `phase_shift`, `period`, `offset`, `value_min`, `initial` | a sinusoidal profile written into `target` |
 | `aggregate_measure` | `name`, `agg` (`sum`, `mean`, `median`), `initial` | attribute `<name>`, the values connected to the in port `<name>_in` reduced by `agg` (the median of an even count is the mean of the two central values) |
 | `threshold_compare` | `name`, `input`, `operator`, `threshold` | boolean output `<name>` true while `input` compares to the threshold |
 | `threshold_band` | `name`, `input`, `direction` (`below`, `above`), `activate`, `release` | boolean output `<name>` with a hysteresis band |
@@ -260,9 +280,10 @@ against the system file's directory (the working directory for a system
 given as a string or a dictionary), and loading a system that declares an
 FMU unit needs `allow_fmu_import=True`, as a flat model does.
 
-A system with an instance applying `std.continuous_flow_out`,
-`std.continuous_flow_in` or `std.volume_flow` is a continuous network, and its model declares
-`unbounded_rate` at 1e30, the magnitude the standard fragments write for a
+A system with an instance applying `muscadet.continuous_flow_out`,
+`muscadet.continuous_flow_in` or `muscadet.volume_flow` (or their `std`
+forwarding names) is a continuous network, and its model declares
+`unbounded_rate` at 1e30, the magnitude the embedded volume fragments write for a
 ceiling nobody set (a volume's `serve_rate`), as the muscadet plugin does on
 every system with a continuous flow. The engine then refuses by name any
 integrated rate reaching it, instead of draining a stock at that magnitude.

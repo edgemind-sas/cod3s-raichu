@@ -1083,7 +1083,7 @@
           "type": "array"
         },
         "unbounded_rate": {
-          "description": "The model's `unbounded_rate`: the magnitude no integrated rate may\nreach. A system applying the standard continuous flow fragments\ngets the standard one without stating it, and may state only that\none; any other system declares none unless it states it here.",
+          "description": "The model's `unbounded_rate`: the magnitude no integrated rate may\nreach. A system applying the continuous flow fragments of\n`muscadet` gets their magnitude without stating it, and may state only that\none; any other system declares none unless it states it here.",
           "format": "double",
           "type": [
             "number",

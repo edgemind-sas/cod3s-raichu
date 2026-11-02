@@ -160,13 +160,13 @@ def machine_plant() -> dict:
 def test_a_bus_hands_on_what_arrives():
     conversion = proved(bus_plant())
     bus = next(t for t in conversion.library["library"]["types"] if t["name"] == "Bus")
-    assert {"fragment": "std.pass_through", "with": {"name": "E"}} in bus["uses"]
+    assert {"fragment": "muscadet.pass_through", "with": {"name": "E"}} in bus["uses"]
 
 
 def test_a_split_names_each_consumer_by_its_own_input():
     conversion = proved(split_plant())
     source = next(t for t in conversion.library["library"]["types"] if t["name"] == "Source")
-    out = next(u for u in source["uses"] if u["fragment"] == "std.continuous_flow_out")
+    out = next(u for u in source["uses"] if u["fragment"] == "muscadet.continuous_flow_out")
     assert {(s["to"]["component"], s["to"]["port"]) for s in out["with"]["shares"]} == {
         ("D", "H2_in"),
         ("F", "Fuel_in"),
@@ -178,7 +178,7 @@ def test_a_conditioned_rule_set_with_a_band_converts():
     machine = next(t for t in conversion.library["library"]["types"] if t["name"] == "Machine")
     fragments = [u["fragment"] for u in machine["uses"]]
     # Two suppliers on a consumed input: the surplus goes back.
-    assert fragments.count("std.surplus_release") == 1
+    assert fragments.count("muscadet.surplus_release") == 1
 
 
 def test_instances_of_one_class_share_a_type_with_their_rates_as_parameters():
@@ -188,13 +188,20 @@ def test_instances_of_one_class_share_a_type_with_their_rates_as_parameters():
     assert sorted(next(iter(i["parameters"].values())) for i in loads) == [2.0, 9.0]
 
 
+def test_a_conversion_imports_muscadet_and_std_for_the_generic_fragments_it_applies():
+    """The bus plant's profiled source applies `std.time_profile` beside
+    the `muscadet` flow fragments: the library imports both, `muscadet`
+    first."""
+    assert convert(bus_plant()).library["library"]["imports"] == ["muscadet", "std"]
+
+
 def test_a_converted_rate_altered_is_reported_divergent():
     """Negative control: the comparison is not vacuous."""
     declaration = bus_plant()
     conversion = convert(declaration)
     altered = copy.deepcopy(conversion)
     generator = next(t for t in altered.library["library"]["types"] if t["name"] == "Generator")
-    source = next(u for u in generator["uses"] if u["fragment"] == "std.continuous_source")
+    source = next(u for u in generator["uses"] if u["fragment"] == "muscadet.continuous_source")
     source["with"]["rate"] = 3.5
     assert not compare_routes(declaration, altered, t_max=24.0).identical
 
@@ -300,8 +307,8 @@ def ventilation_plant() -> dict:
 def test_an_output_produced_by_two_rule_sets_converts():
     conversion = proved(ventilation_plant())
     vent = next(t for t in conversion.library["library"]["types"] if t["name"] == "Ventilation")
-    assert {"fragment": "std.shared_output", "with": {"flow": "Exhaust", "producers": ["extraction", "renewal"]}} in vent["uses"]
-    assert {"fragment": "std.rule_cascade",
+    assert {"fragment": "muscadet.shared_output", "with": {"flow": "Exhaust", "producers": ["extraction", "renewal"]}} in vent["uses"]
+    assert {"fragment": "muscadet.rule_cascade",
             "with": {"rule_set": "renewal", "flow": "Exhaust", "before": ["extraction"]}} in vent["uses"]
 
 
@@ -321,7 +328,7 @@ def test_a_third_producer_is_asked_what_both_earlier_ones_leave():
     conversion = proved(declaration)
     types = conversion.library["library"]["types"]
     uses = next(t for t in types if t["name"] == "Ventilation")["uses"]
-    assert {"fragment": "std.rule_cascade",
+    assert {"fragment": "muscadet.rule_cascade",
             "with": {"rule_set": "draft", "flow": "Exhaust", "before": ["extraction", "renewal"]}} in uses
 
 
@@ -332,9 +339,9 @@ def test_a_cascade_served_in_the_other_order_is_reported_divergent():
     altered = copy.deepcopy(conversion)
     vent = next(t for t in altered.library["library"]["types"] if t["name"] == "Ventilation")
     for use in vent["uses"]:
-        if use["fragment"] == "std.rule_cascade":
+        if use["fragment"] == "muscadet.rule_cascade":
             use["with"].update(rule_set="extraction", before=["renewal"])
-        elif use["fragment"] == "std.rule_set":
+        elif use["fragment"] == "muscadet.rule_set":
             produced = use["with"]["produces"] + use["with"]["cascaded"]
             first = use["with"]["name"] == "renewal"
             use["with"]["produces"] = [f for f in produced if first or f != "Exhaust"]
@@ -388,7 +395,7 @@ def always_on_plant() -> dict:
 def test_an_always_on_rule_set_converts():
     conversion = proved(always_on_plant())
     machine = next(t for t in conversion.library["library"]["types"] if t["name"] == "Machine")
-    rule_set = next(u for u in machine["uses"] if u["fragment"] == "std.rule_set")
+    rule_set = next(u for u in machine["uses"] if u["fragment"] == "muscadet.rule_set")
     assert rule_set["with"]["always_on"] is True
 
 
@@ -432,7 +439,7 @@ def test_a_membrane_altered_is_reported_divergent():
     altered = copy.deepcopy(convert(declaration))
     membrane = next(t for t in altered.library["library"]["types"] if t["name"] == "Membrane")
     for use in membrane["uses"]:
-        if use["fragment"] in ("std.volume_flow", "std.volume_total", "std.volume_stock"):
+        if use["fragment"] in ("muscadet.volume_flow", "muscadet.volume_total", "muscadet.volume_stock"):
             use["with"]["capacity"] *= 1.0 + 1e-3
     assert not compare_routes(declaration, altered, t_max=23.3).identical
 
@@ -470,7 +477,7 @@ def test_a_store_capacity_altered_by_a_millionth_is_reported_divergent(fill):
     altered = copy.deepcopy(convert(declaration))
     tank = next(t for t in altered.library["library"]["types"] if t["name"] == "Tank")
     for use in tank["uses"]:
-        if use["fragment"] in ("std.volume_flow", "std.volume_total"):
+        if use["fragment"] in ("muscadet.volume_flow", "muscadet.volume_total"):
             use["with"]["capacity"] *= 1.0 + 1e-6
     comparison = compare_routes(declaration, altered, t_max=40.0)
     assert not comparison.identical, comparison.detail
@@ -482,7 +489,7 @@ def test_a_network_without_an_ode_gets_no_integrator_spread():
     declaration = bus_plant()
     altered = copy.deepcopy(convert(declaration))
     generator = next(t for t in altered.library["library"]["types"] if t["name"] == "Generator")
-    source = next(u for u in generator["uses"] if u["fragment"] == "std.continuous_source")
+    source = next(u for u in generator["uses"] if u["fragment"] == "muscadet.continuous_source")
     source["with"]["rate"] *= 1.0 + 1e-10
     comparison = compare_routes(declaration, altered, t_max=24.0)
     assert not comparison.identical, comparison.detail
@@ -520,7 +527,7 @@ def test_a_store_output_keeps_its_published_rate():
     _flow(declaration, "T", "FlowContinuousOut", "H2").update(publish_rate="capability")
     conversion = proved(declaration, levels=VOLUME_LEVELS)
     tank = next(t for t in conversion.library["library"]["types"] if t["name"] == "Tank")
-    assert {"fragment": "std.rate_publisher", "with": {"name": "H2", "of": "capability"}} in tank["uses"]
+    assert {"fragment": "muscadet.rate_publisher", "with": {"name": "H2", "of": "capability"}} in tank["uses"]
 
 
 def _flow(declaration: dict, component: str, cls: str, name: str) -> dict:
@@ -707,7 +714,7 @@ def test_instruments_on_a_store_convert():
     types = {t["name"]: t for t in conversion.library["library"]["types"]}
     assert {"fragment": "std.aggregate_measure",
             "with": {"name": "tank_reading_level", "agg": "median", "initial": 1.0}} in types["AP"]["uses"]
-    assert {"fragment": "std.rate_publisher",
+    assert {"fragment": "muscadet.rate_publisher",
             "with": {"name": "H2", "of": "delivered", "side": "out"}} in types["Source"]["uses"]
 
 
