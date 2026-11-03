@@ -214,9 +214,9 @@ plugin's continuous objects, and each is characterised against it.
 
 | Fragment | Parameters | Builds |
 |---|---|---|
-| `continuous_flow_out` | `name`, `available` (`capability`, `produced`), `allocation` (`proportional`, `shares`), `shares`, `held`, `empty_automaton` | out port `<name>_out` with its channels, the totals `<name>_demand_out` and `<name>_fed_out`, the claims and the distribution operator `<name>_alloc`; `held` makes a volume that has run out pass on what arrives |
-| `continuous_flow_in` | `name`, `demand` | in port `<name>_in`, `<name>_capability_in`, `<name>_fed_in`, and the demand and shares it publishes |
-| `surplus_release` | `name` | the input hands back, pro rata of offers, what two suppliers or more offer beyond its demand, a supplier that has run out being accepted first |
+| `continuous_flow_out` | `name`, `available` (`capability`, `produced`, `pooled`), `allocation` (`proportional`, `shares`), `shares`, `held`, `empty_automaton` | out port `<name>_out` with its channels, the totals `<name>_demand_out` and `<name>_fed_out`, the claims and the distribution operator `<name>_alloc`; `held` makes a volume that has run out pass on what arrives; `pooled` serves the pooled draw of a mixed volume (`volume_pooled_flow`) and sets the channel `pooled` to 1 on every connection |
+| `continuous_flow_in` | `name`, `demand` | in port `<name>_in`, `<name>_capability_in`, `<name>_fed_in`, `<name>_consumed_in` (0 unless a rule consuming the input writes it), and the demand and shares it publishes |
+| `surplus_release` | `name` | the input hands back, pro rata of offers, what two suppliers or more offer beyond its demand, a supplier that has run out being accepted first; fed by a pooled draw (channel `pooled`), it releases with a single supplier too, against what the rule consumes at its draw (`<name>_consumed_in`) |
 | `continuous_source` | `name`, `rate`, `profiled` | the capability of a source output, times `<name>_out_profile` when profiled |
 | `continuous_sink` | `name`, `demand`, `profiled` | the demand of a consumer input, times `<name>_in_profile` when profiled |
 | `rate_publisher` | `name`, `of` (`capability`, `delivered`), `side` (`in`, `out`) | out port `<name>_rate_out` exporting `<name>_rate`: the capability of an output, or what a flow delivers, an input (`side: in`) or an output (`side: out`) |
@@ -225,8 +225,10 @@ plugin's continuous objects, and each is characterised against it.
 | `volume_outlet` | `volume`, `flow`, `rate`, `empty_automaton` | the capability of an output leaving a volume, bounded by what arrives while it is empty |
 | `volume_stock` | `volume`, `flow`, `capacity`, `initial` | automaton `<volume>_stock_<flow>` (`empty`, `stocked`) for one flow of a multi-flow volume |
 | `volume_total` | `volume`, `flows`, `capacity`, `initial`, `ratio_flows` | total content and fill, the bounds automaton `<volume>_bounds` (`empty`, `partial`, `full`), and each listed flow's share |
+| `volume_pooled` | `volume`, `flows` | `<volume>_beyond`, what the consumers of a volume holding several flows downstream of the transfer ask of it beyond what transits it, summed over the held flows |
+| `volume_pooled_flow` | `volume`, `flow` | `<flow>_pooled_out`: while the flow is stocked, what transits it plus its share of the excess in proportion to its raw content (`ratio_flows`), never more than the output's capability; once it has run out, the capability |
 | `rule_set` | `name`, `active`, `idle`, `consumes`, `from_volume`, `produces`, `cascaded`, `capped`, `conditions`, `threshold` (`none`, `band`), `threshold_flow`, `activate`, `release`, `always_on` | automaton `<name>_mode` running the producing rule while its boolean inputs are fed (and its band holds), and the three scales `<name>_capability_scale`, `<name>_scale`, `<name>_draw_scale`; `from_volume` lists the flows drawn from a volume upstream; `cascaded` lists the shared outputs bounded by what the sets declared before it leave; with `always_on`, one rule and no automaton |
-| `rule_consumes` | `rule_set`, `active`, `flow`, `rate`, `from_volume`, `always_on` | the demand of a consumed input, or with `from_volume` the need and draw a volume upstream serves |
+| `rule_consumes` | `rule_set`, `active`, `flow`, `rate`, `from_volume`, `always_on` | the demand of a consumed input and `<flow>_consumed_in`, what the rule consumes at its draw; with `from_volume`, the need and draw a volume upstream serves |
 | `rule_produces` | `rule_set`, `active`, `flow`, `rate`, `capped`, `max_rate`, `tapped`, `always_on`, `shared` | the capability and production of an output; with `shared`, the set's contributions `<rule_set>_<flow>_capability`, `_production` and `_served` instead |
 | `shared_output` | `flow`, `producers` | the capability and production of an output two rule sets or more produce, the sums of their contributions |
 | `rule_cascade` | `rule_set`, `flow`, `before` | `<rule_set>_<flow>_left`, the output's demand less what the sets declared before it are expected to make, never below zero |
@@ -244,9 +246,20 @@ plugin's continuous objects, and each is characterised against it.
 | `threshold_band` | `name`, `input`, `direction` (`below`, `above`), `activate`, `release` | boolean output `<name>` with a hysteresis band |
 | `republish` | `name`, `input`, `gain`, `initial` | value output `<name>_level` on the out port `<name>_level_out`: `input` times `<name>_level_gain`, or `<name>_forced_value` times the gain while `<name>_forced` holds |
 
-The muscadet plugin's mixture serving and ring tearing need a pass over the
-whole connection graph and have no fragment: a plant that needs them stays
-on the plugin route.
+A volume holding several flows downstream of the transfer serves them as a
+mixture, as the muscadet plugin does: it pools what its consumers ask
+beyond what transits it and hands each held flow a share of that excess in
+proportion to its raw content. A type writes it with `volume_total`
+(listing every held flow in `ratio_flows`), one `volume_stock`, one
+`volume_outlet` and one `volume_pooled_flow` per held flow, `volume_pooled`,
+and each output `available: pooled`. A rule fed by such a volume runs at
+the draw its scarcest arrival allows, and `surplus_release` on its input
+hands the rest back to the volume. That release is required on every rule
+input a pooled output feeds: without it the input keeps the whole offer
+and the volume drains for nothing.
+
+The plugin's mixture groups and ring tearing have no fragment yet: a plant
+that needs them stays on the plugin route.
 
 The production condition `prod_cond` is a disjunction of conjunctions,
 stated explicitly: a list of groups, each a list of attribute names of the

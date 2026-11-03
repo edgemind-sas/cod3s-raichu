@@ -1466,7 +1466,8 @@
             "kind": "enum",
             "values": [
               "capability",
-              "produced"
+              "produced",
+              "pooled"
             ],
             "default": "capability",
             "description": "What the operator distributes: the capability (a source, a volume) or what a rule set actually produced, `<name>_produced_out`."
@@ -1565,6 +1566,9 @@
                 },
                 {
                   "name": "held"
+                },
+                {
+                  "name": "pooled"
                 }
               ],
               "equations": [
@@ -1605,6 +1609,13 @@
                             "attr": {
                               "component": "$self",
                               "attribute": "${name}_produced_out"
+                            }
+                          },
+                          "pooled": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_pooled_out"
                             }
                           }
                         }
@@ -1703,6 +1714,35 @@
                       }
                     ]
                   }
+                },
+                {
+                  "channel": "pooled",
+                  "expr": {
+                    "$choose": "available",
+                    "cases": {
+                      "capability": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      "produced": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      "pooled": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 1.0
+                        }
+                      }
+                    }
+                  }
                 }
               ]
             }
@@ -1758,6 +1798,13 @@
                           "component": "$self",
                           "attribute": "${name}_produced_out"
                         }
+                      },
+                      "pooled": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_pooled_out"
+                        }
                       }
                     }
                   },
@@ -1784,6 +1831,13 @@
                           "component": "$self",
                           "attribute": "${name}_produced_out"
                         }
+                      },
+                      "pooled": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_pooled_out"
+                        }
                       }
                     }
                   },
@@ -1801,7 +1855,7 @@
       },
       {
         "name": "continuous_flow_in",
-        "description": "A continuous input flow `<name>` of a conservative network: the in port `<name>_in`, the capability `<name>_capability_in` its suppliers offer, and `<name>_fed_in`, what it receives. It publishes its demand `<name>_demand_in` (written by the fragment that consumes the flow) and the shares it accepts on every connection feeding it; the shares stay 1 unless `surplus_release` applies. An input no connection feeds receives zero.",
+        "description": "A continuous input flow `<name>` of a conservative network: the in port `<name>_in`, the capability `<name>_capability_in` its suppliers offer, and `<name>_fed_in`, what it receives. It publishes its demand `<name>_demand_in` (written by the fragment that consumes the flow) and the shares it accepts on every connection feeding it; the shares stay 1 unless `surplus_release` applies. An input no connection feeds receives zero; `<name>_consumed_in` stays 0 until a rule consuming the input writes it (`rule_consumes`).",
         "parameters": [
           {
             "name": "name",
@@ -1865,6 +1919,14 @@
               "init": {
                 "kind": "float",
                 "value": 1.0
+              }
+            },
+            {
+              "name": "${name}_consumed_in",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
               }
             }
           ],
@@ -1938,7 +2000,7 @@
       },
       {
         "name": "surplus_release",
-        "description": "Makes the input `<name>` (a `continuous_flow_in`) hand back what it does not need when two suppliers or more offer more than its demand, pro rata of what each offered. A supplier whose volume has run out (`held` on its `continuous_flow_out`) passes on what arrives and is accepted first; the others share what is left. With a single supplier both shares stay 1. Apply it to an input a rule set consumes and no volume holds.",
+        "description": "Makes the input `<name>` (a `continuous_flow_in`) hand back what it does not need when two suppliers or more offer more than its demand, pro rata of what each offered. A supplier whose volume has run out (`held` on its `continuous_flow_out`) passes on what arrives and is accepted first; the others share what is left. With a single supplier both shares stay 1. Apply it to an input a rule set consumes and no volume holds. A supplier serving the pooled draw of a mixed volume (channel `pooled`) makes the input release with a single supplier too, against what the rule consumes at its draw (`<name>_consumed_in`, written by `rule_consumes`): the rule runs at the draw its scarcest arrival allows, and what it does not consume stays in the volume. A rule input fed by a pooled output must apply it: without it the input keeps the whole offer and the volume drains for nothing.",
         "parameters": [
           {
             "name": "name",
@@ -1967,23 +2029,49 @@
               "expr": {
                 "op": "if",
                 "cond": {
-                  "op": "cmp",
-                  "cmp": "ge",
-                  "lhs": {
-                    "op": "port_agg",
-                    "port": {
-                      "component": "$self",
-                      "port": "${name}_in"
+                  "op": "bool",
+                  "bool_op": "or",
+                  "args": [
+                    {
+                      "op": "cmp",
+                      "cmp": "ge",
+                      "lhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "${name}_in"
+                        },
+                        "agg": "count"
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "int",
+                          "value": 2
+                        }
+                      }
                     },
-                    "agg": "count"
-                  },
-                  "rhs": {
-                    "op": "const",
-                    "value": {
-                      "kind": "int",
-                      "value": 2
+                    {
+                      "op": "cmp",
+                      "cmp": "gt",
+                      "lhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "${name}_in"
+                        },
+                        "agg": "sum",
+                        "channel": "pooled"
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      }
                     }
-                  }
+                  ]
                 },
                 "then": {
                   "op": "if",
@@ -1998,20 +2086,80 @@
                       }
                     },
                     "rhs": {
-                      "op": "attr",
-                      "attr": {
-                        "component": "$self",
-                        "attribute": "${name}_demand_in"
+                      "op": "if",
+                      "cond": {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "${name}_in"
+                          },
+                          "agg": "sum",
+                          "channel": "pooled"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      },
+                      "then": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_consumed_in"
+                        }
+                      },
+                      "otherwise": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_demand_in"
+                        }
                       }
                     }
                   },
                   "then": {
                     "op": "div",
                     "lhs": {
-                      "op": "attr",
-                      "attr": {
-                        "component": "$self",
-                        "attribute": "${name}_demand_in"
+                      "op": "if",
+                      "cond": {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "${name}_in"
+                          },
+                          "agg": "sum",
+                          "channel": "pooled"
+                        },
+                        "rhs": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
+                        }
+                      },
+                      "then": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_consumed_in"
+                        }
+                      },
+                      "otherwise": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_demand_in"
+                        }
                       }
                     },
                     "rhs": {
@@ -2045,23 +2193,49 @@
               "expr": {
                 "op": "if",
                 "cond": {
-                  "op": "cmp",
-                  "cmp": "ge",
-                  "lhs": {
-                    "op": "port_agg",
-                    "port": {
-                      "component": "$self",
-                      "port": "${name}_in"
+                  "op": "bool",
+                  "bool_op": "or",
+                  "args": [
+                    {
+                      "op": "cmp",
+                      "cmp": "ge",
+                      "lhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "${name}_in"
+                        },
+                        "agg": "count"
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "int",
+                          "value": 2
+                        }
+                      }
                     },
-                    "agg": "count"
-                  },
-                  "rhs": {
-                    "op": "const",
-                    "value": {
-                      "kind": "int",
-                      "value": 2
+                    {
+                      "op": "cmp",
+                      "cmp": "gt",
+                      "lhs": {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "${name}_in"
+                        },
+                        "agg": "sum",
+                        "channel": "pooled"
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      }
                     }
-                  }
+                  ]
                 },
                 "then": {
                   "op": "if",
@@ -2100,10 +2274,40 @@
                         {
                           "op": "sub",
                           "lhs": {
-                            "op": "attr",
-                            "attr": {
-                              "component": "$self",
-                              "attribute": "${name}_demand_in"
+                            "op": "if",
+                            "cond": {
+                              "op": "cmp",
+                              "cmp": "gt",
+                              "lhs": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "${name}_in"
+                                },
+                                "agg": "sum",
+                                "channel": "pooled"
+                              },
+                              "rhs": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${name}_consumed_in"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${name}_demand_in"
+                              }
                             }
                           },
                           "rhs": {
@@ -2132,10 +2336,40 @@
                         {
                           "op": "sub",
                           "lhs": {
-                            "op": "attr",
-                            "attr": {
-                              "component": "$self",
-                              "attribute": "${name}_demand_in"
+                            "op": "if",
+                            "cond": {
+                              "op": "cmp",
+                              "cmp": "gt",
+                              "lhs": {
+                                "op": "port_agg",
+                                "port": {
+                                  "component": "$self",
+                                  "port": "${name}_in"
+                                },
+                                "agg": "sum",
+                                "channel": "pooled"
+                              },
+                              "rhs": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${name}_consumed_in"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${name}_demand_in"
+                              }
                             }
                           },
                           "rhs": {
@@ -3731,6 +3965,176 @@
         }
       },
       {
+        "name": "volume_pooled",
+        "description": "The pooled draw of the volume `<volume>` holding the flows `<flows>` downstream of the transfer: `<volume>_beyond`, what the consumers ask of its outputs over and above what transits them, summed over the held flows. Each held output takes its share of it through `volume_pooled_flow`.",
+        "parameters": [
+          {
+            "name": "volume",
+            "kind": "string",
+            "description": "Volume name."
+          },
+          {
+            "name": "flows",
+            "kind": "list",
+            "items": "string",
+            "description": "Held flows served out of the pooled draw, each a `volume_pooled_flow`."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${volume}_beyond",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${volume}_beyond",
+              "kind": "explicit",
+              "expr": {
+                "op": "add",
+                "args": [
+                  {
+                    "$for_each": "flows",
+                    "as": "f",
+                    "items": [
+                      {
+                        "op": "max",
+                        "args": [
+                          {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
+                            }
+                          },
+                          {
+                            "op": "sub",
+                            "lhs": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${f}_demand_out"
+                              }
+                            },
+                            "rhs": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${f}_fed_in"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "volume_pooled_flow",
+        "description": "What the volume `<volume>`, holding several flows downstream of the transfer, hands the output `<flow>` out of its pooled draw (`volume_pooled`): while `<flow>` is stocked (`volume_stock`), what arrives on the input `<flow>` (which transits the volume) plus the flow's share of the excess in proportion to its raw content (`ratio_flows` on `volume_total`), never more than the output's capability (`volume_outlet`); once `<flow>` has run out, the capability. It writes `<flow>_pooled_out`, which `continuous_flow_out` serves with `available: pooled`. A rule input it feeds applies `surplus_release`, which hands back what the rule does not consume.",
+        "parameters": [
+          {
+            "name": "volume",
+            "kind": "string",
+            "description": "Volume name."
+          },
+          {
+            "name": "flow",
+            "kind": "string",
+            "description": "Held flow, an output of the instance."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${flow}_pooled_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${flow}_pooled_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "if",
+                "cond": {
+                  "op": "state_active",
+                  "state": {
+                    "component": "$self",
+                    "automaton": "${volume}_stock_${flow}",
+                    "state": "empty"
+                  }
+                },
+                "then": {
+                  "op": "attr",
+                  "attr": {
+                    "component": "$self",
+                    "attribute": "${flow}_capability_out"
+                  }
+                },
+                "otherwise": {
+                  "op": "min",
+                  "args": [
+                    {
+                      "op": "attr",
+                      "attr": {
+                        "component": "$self",
+                        "attribute": "${flow}_capability_out"
+                      }
+                    },
+                    {
+                      "op": "add",
+                      "args": [
+                        {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${flow}_fed_in"
+                          }
+                        },
+                        {
+                          "op": "mul",
+                          "args": [
+                            {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${volume}_beyond"
+                              }
+                            },
+                            {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${volume}_ratio_${flow}"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
         "name": "rule_set",
         "description": "A rule set `<name>` with one producing rule `<active>` and one idle rule `<idle>`: the automaton `<name>_mode` runs `<active>` while every boolean input in `conditions` is fed (and, with a `band` threshold, while the capability of `<threshold_flow>` has reached `activate` and not fallen below `release`). The rule's scale is the largest fraction of its nominal rates the inputs' capabilities allow (`<name>_capability_scale`), bounded by what the outputs are asked (`<name>_scale`) and by what actually arrives (`<name>_draw_scale`). With `always_on`, the set has its producing rule only, with no condition and no automaton, as a rule declared without a condition. Each consumed flow is a `rule_consumes`, each produced one a `rule_produces`. The outputs in `cascaded` are produced by another rule set too and served in declaration order: this set is bounded by what those declared before it leave (`<name>_<flow>_left`, a `rule_cascade`) instead of by the whole demand.",
         "parameters": [
@@ -4512,7 +4916,7 @@
       },
       {
         "name": "rule_consumes",
-        "description": "The producing rule `<active>` of the rule set `<rule_set>` consumes the input `<flow>` (a `continuous_flow_in`) at `rate` per unit of scale: it writes the input's demand, or, with `from_volume`, the need and the draw a volume upstream of it serves.",
+        "description": "The producing rule `<active>` of the rule set `<rule_set>` consumes the input `<flow>` (a `continuous_flow_in`) at `rate` per unit of scale: it writes the input's demand, or, with `from_volume`, the need and the draw a volume upstream of it serves; it also writes `<flow>_consumed_in`, what the rule consumes at its draw (what `surplus_release` keeps of a pooled supply).",
         "parameters": [
           {
             "name": "rule_set",
@@ -4646,6 +5050,65 @@
               "items": [
                 {
                   "target": "${flow}_drawn_in",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "$choose": "always_on",
+                        "cases": {
+                          "false": {
+                            "op": "if",
+                            "cond": {
+                              "op": "state_active",
+                              "state": {
+                                "component": "$self",
+                                "automaton": "${rule_set}_mode",
+                                "state": "${active}"
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${rule_set}_cons_${flow}"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          },
+                          "true": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_cons_${flow}"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${rule_set}_draw_scale"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "$when": "from_volume",
+              "is": false,
+              "items": [
+                {
+                  "target": "${flow}_consumed_in",
                   "kind": "explicit",
                   "expr": {
                     "op": "mul",

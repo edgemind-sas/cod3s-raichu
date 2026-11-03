@@ -592,7 +592,8 @@
             "kind": "enum",
             "values": [
               "capability",
-              "produced"
+              "produced",
+              "pooled"
             ],
             "default": "capability",
             "description": "What the operator distributes: the capability (a source, a volume) or what a rule set actually produced, `<name>_produced_out`."
