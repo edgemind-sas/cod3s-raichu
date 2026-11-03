@@ -226,6 +226,7 @@ point accepts and the other refuses does not exist.
 | `flows_continuous_out` | a real-valued output: `var_fed_default`, a `max_rate` ceiling, a `profile` (a declared function of time), `publish_rate` to make what it delivers observable, and the `allocation` policy splitting a shortage (`proportional`, `shares`, `priority`); each consumer's claim is truncated at the quantity available before the split weighs it, as muscadet does since 5.11.0, while the demand it publishes stays as declared |
 | `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `transmits`, `serve_rate`, `serve_cond` (the discharge command), `makeup_flow` (a volume open to the atmosphere, muscadet 5.17.0), `side`, `hysteresis`. A volume holding more than one flow also publishes each constituent's `ratio`, its fraction of the mixture |
 | `measurements_in` | the reading side of a measurement link: a channel observing a published level, carrying no quantity |
+| `mixtures` | a group of continuous inputs drawn together at one volumetric rate (`name`, `flows`, `flow_rate`, and the run command `run_cond` with its negations, comparisons and inner mode): each input takes the rate times its constituent's share of the volume drawn |
 | `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow |
 | `transfers` | a transfer pair: a quantity moved because a gradient drives it, under a `ConductiveTransfer` equation |
 

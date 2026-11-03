@@ -214,7 +214,7 @@ plugin's continuous objects, and each is characterised against it.
 
 | Fragment | Parameters | Builds |
 |---|---|---|
-| `continuous_flow_out` | `name`, `available` (`capability`, `produced`, `pooled`), `allocation` (`proportional`, `shares`), `shares`, `held`, `empty_automaton` | out port `<name>_out` with its channels, the totals `<name>_demand_out` and `<name>_fed_out`, the claims and the distribution operator `<name>_alloc`; `held` makes a volume that has run out pass on what arrives; `pooled` serves the pooled draw of a mixed volume (`volume_pooled_flow`) and sets the channel `pooled` to 1 on every connection |
+| `continuous_flow_out` | `name`, `available` (`capability`, `produced`, `pooled`, `mixture`), `allocation` (`proportional`, `shares`), `shares`, `held`, `empty_automaton` | out port `<name>_out` with its channels, the totals `<name>_demand_out` and `<name>_fed_out`, the claims and the distribution operator `<name>_alloc`; `held` makes a volume that has run out pass on what arrives; `pooled` serves the pooled draw of a mixed volume (`volume_pooled_flow`) and sets the channel `pooled` to 1 on every connection; `mixture` serves that draw to mixture groups, scales each claim to what the volume delivers and publishes `<name>_composition_out` on the channel `composition` |
 | `continuous_flow_in` | `name`, `demand` | in port `<name>_in`, `<name>_capability_in`, `<name>_fed_in`, `<name>_consumed_in` (0 unless a rule consuming the input writes it), and the demand and shares it publishes |
 | `surplus_release` | `name` | the input hands back, pro rata of offers, what two suppliers or more offer beyond its demand, a supplier that has run out being accepted first; fed by a pooled draw (channel `pooled`), it releases with a single supplier too, against what the rule consumes at its draw (`<name>_consumed_in`) |
 | `continuous_source` | `name`, `rate`, `profiled` | the capability of a source output, times `<name>_out_profile` when profiled |
@@ -226,7 +226,8 @@ plugin's continuous objects, and each is characterised against it.
 | `volume_stock` | `volume`, `flow`, `capacity`, `initial` | automaton `<volume>_stock_<flow>` (`empty`, `stocked`) for one flow of a multi-flow volume |
 | `volume_total` | `volume`, `flows`, `capacity`, `initial`, `ratio_flows` | total content and fill, the bounds automaton `<volume>_bounds` (`empty`, `partial`, `full`), and each listed flow's share |
 | `volume_pooled` | `volume`, `flows` | `<volume>_beyond`, what the consumers of a volume holding several flows downstream of the transfer ask of it beyond what transits it, summed over the held flows |
-| `volume_pooled_flow` | `volume`, `flow` | `<flow>_pooled_out`: while the flow is stocked, what transits it plus its share of the excess in proportion to its raw content (`ratio_flows`), never more than the output's capability; once it has run out, the capability |
+| `volume_pooled_flow` | `volume`, `flow`, `drawn` | `<flow>_pooled_out`: while the flow is stocked, what transits it plus its share of the excess in proportion to its raw content (`ratio_flows`), never more than the output's capability; once it has run out, the capability. With `drawn`, what the mixture groups ask of the output, never more than its capability, and `<flow>_composition_out`, the flow's share of the raw content |
+| `mixture_in` | `name`, `flows`, `flow_rate`, `run` | `<name>_flow_rate` (a failure mode clamps it by name) and, for each input of `flows`, its demand: the rate, 0 when negative, times the composition its supplier publishes; with `run`, only while the automaton `<name>_run`, written in the type body, is in `running` |
 | `rule_set` | `name`, `active`, `idle`, `consumes`, `from_volume`, `produces`, `cascaded`, `capped`, `conditions`, `threshold` (`none`, `band`), `threshold_flow`, `activate`, `release`, `always_on` | automaton `<name>_mode` running the producing rule while its boolean inputs are fed (and its band holds), and the three scales `<name>_capability_scale`, `<name>_scale`, `<name>_draw_scale`; `from_volume` lists the flows drawn from a volume upstream; `cascaded` lists the shared outputs bounded by what the sets declared before it leave; with `always_on`, one rule and no automaton |
 | `rule_consumes` | `rule_set`, `active`, `flow`, `rate`, `from_volume`, `always_on` | the demand of a consumed input and `<flow>_consumed_in`, what the rule consumes at its draw; with `from_volume`, the need and draw a volume upstream serves |
 | `rule_produces` | `rule_set`, `active`, `flow`, `rate`, `capped`, `max_rate`, `tapped`, `always_on`, `shared` | the capability and production of an output; with `shared`, the set's contributions `<rule_set>_<flow>_capability`, `_production` and `_served` instead |
@@ -258,8 +259,27 @@ hands the rest back to the volume. That release is required on every rule
 input a pooled output feeds: without it the input keeps the whole offer
 and the volume drains for nothing.
 
-The plugin's mixture groups and ring tearing have no fragment yet: a plant
-that needs them stays on the plugin route.
+A machine drawing a mixture (a ventilation extractor, a pump on a line
+carrying a mixture) moves one volume per unit of time of whatever the
+volume it draws holds. A type writes the machine with one
+`continuous_flow_in` per drawn flow and `mixture_in`. The volume it draws
+writes each held flow as above, with `drawn` on `volume_pooled_flow` and
+each output `available: mixture`. Several groups on one volume are served
+pro rata of their composed requests. The plugin refuses arrangements the
+expander does not check, so a library keeps clear of them: a group input
+fed by anything but one connection from an output `available: mixture`
+(such an input asks nothing, or twice its share), a group leaving out a
+constituent of the volume it draws, a volume drawn by groups that also
+serves another consumer, a volume drawn by several groups whose outputs
+allocate other than proportionally, a fed volume drawn at a zero fill rate,
+`surplus_release` on a group input, and a rule consuming a flow its group
+draws (the last one is refused anyway, as two equations writing the
+input's demand). A volume written `drawn` serves its outputs as groups ask,
+so it is drawn by groups only. Volume
+weights have no fragment: the composition is the raw share of the content.
+
+Ring tearing has no fragment yet: a plant that needs it stays on the plugin
+route.
 
 The production condition `prod_cond` is a disjunction of conjunctions,
 stated explicitly: a list of groups, each a list of attribute names of the
