@@ -1123,6 +1123,37 @@ TYPES += [
     ventilation("Ventilation", torn=["AIR"]),
 ]
 
+
+def cascaded_ventilation(name):
+    """The same fan, both rule sets guarded by nothing and exhausting into
+    one output: the extraction, ahead in the cascade and fed by the pooled
+    room, is subtracted at the scale it can be expected to run at."""
+    return {"name": name, "uses": [
+        mu("continuous_flow_in", name="H2_leak"), mu("continuous_flow_in", name="AIR"),
+        mu("surplus_release", name="H2_leak"), mu("surplus_release", name="AIR"),
+        mu("rule_set", name="extraction", active="go", idle="none", consumes=["H2_leak"],
+           produces=["exhaust"], always_on=True),
+        mu("rule_consumes", rule_set="extraction", active="go", flow="H2_leak", rate=25.0, always_on=True),
+        mu("rule_produces", rule_set="extraction", active="go", flow="exhaust", rate=25.0, always_on=True,
+           shared=True, expected=True),
+        mu("rule_expected", rule_set="extraction", active="go", flows=["H2_leak"], always_on=True),
+        mu("rule_set", name="renewal", active="go", idle="none", consumes=["AIR"], produces=["AIR"],
+           cascaded=["exhaust"], always_on=True, torn=["AIR"]),
+        mu("rule_consumes", rule_set="renewal", active="go", flow="AIR", rate=25.0, always_on=True),
+        mu("rule_produces", rule_set="renewal", active="go", flow="exhaust", rate=25.0, always_on=True,
+           shared=True),
+        mu("rule_produces", rule_set="renewal", active="go", flow="AIR", rate=25.0, always_on=True),
+        mu("rule_cascade", rule_set="renewal", flow="exhaust", before=["extraction"]),
+        mu("shared_output", flow="exhaust", producers=["extraction", "renewal"]),
+        mu("continuous_flow_out", name="exhaust", available="produced"),
+        mu("continuous_flow_out", name="AIR", available="produced")]}
+
+
+TYPES += [
+    {"name": "StockedVentilatedRoom", "uses": ventilated_room_uses({"H2_leak": 2.0, "AIR": 88.0}, 100.0)},
+    cascaded_ventilation("CascadedVentilation"),
+]
+
 RING_OBJECTS = [
     {"type": "ObjFlow", "name": "LEAK", "flows_continuous_out": [flow_out("H2_leak", 0.05)]},
     {"type": "ObjFlow", "name": "LOCAL", "flows_continuous_in": [{"name": "H2_leak"}, {"name": "AIR"}],
@@ -1156,6 +1187,18 @@ BENCHES.update({
     # through the room is torn at the fan's return output, and the room
     # holds 90 of air.
     "ventilation_ring": (RING_OBJECTS, RING_INSTANCES, RING_CONNECTIONS, [], 10.0),
+    # Fragment: rule_expected, rule_produces `expected`. Hydrogen stocked
+    # in the room: the extraction asks the whole exhaust demand but makes
+    # only what the pooled draw hands it, so the renewal is asked the rest.
+    "ventilation_ring_cascade": (
+        [RING_OBJECTS[0],
+         {**RING_OBJECTS[1], "capacities": [{**RING_OBJECTS[1]["capacities"][0],
+                                             "content_init": {"H2_leak": 2.0, "AIR": 88.0}}]},
+         RING_OBJECTS[2], RING_OBJECTS[3]],
+        [RING_INSTANCES[0], {"name": "LOCAL", "type": "StockedVentilatedRoom"},
+         {"name": "VENTILATION", "type": "CascadedVentilation"}, RING_INSTANCES[3]],
+        RING_CONNECTIONS, [], 10.0,
+    ),
 })
 
 def plugin_model(name, objects, connections):

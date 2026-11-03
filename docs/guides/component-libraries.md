@@ -363,7 +363,9 @@ converts to pooled serving (`muscadet.volume_pooled`,
 (`muscadet.mixture_in`) when the declaration declares them, and a volume
 with a through-path takes `transmits`. A recirculation ring through a
 volume is torn where the declaration route tears it: the output is listed
-in the `torn` parameter of the rule set making it. The converter reads each
+in the `torn` parameter of the rule set making it, and a rule set ahead in a
+cascade that a mixed volume feeds is subtracted at the scale it can be
+expected to run at (`muscadet.rule_expected`). The converter reads each
 component with the declaration route's own reader and asks it what each
 flow is, so a flow is a pass-through, a volume's or a rule set's on both
 routes alike; the rings and the mixture groups, which only the whole flow
@@ -372,7 +374,8 @@ mixture group that route refuses is refused with its reason.
 
 It refuses by name the continuous constructs no bench proves yet: a mixed
 volume whose flows lack an inlet or an outlet, a mixture group with a run
-command, a ring torn at an output two rule sets produce, a volume
+command, a ring torn at an output two rule sets produce, a rule set ahead
+in a cascade whose mixed-volume input has another supplier, a volume
 starting full, with a finite serve rate, a discharge command, a make-up
 flow, a hysteresis or a flow weight, a volume on the input side holding a
 flow no rule draws or fed by two suppliers or more, a conditioned rule set

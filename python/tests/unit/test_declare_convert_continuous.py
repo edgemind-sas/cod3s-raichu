@@ -317,12 +317,23 @@ def test_a_recirculation_ring_converts_torn_where_the_declaration_route_tears_it
     assert released == {"Leak", "Air"}
 
 
-def test_a_cascade_after_a_set_fed_by_a_mixed_volume_is_refused():
-    """With hydrogen stocked in the room, the extraction asks the whole
+def test_a_cascade_after_a_set_fed_by_a_mixed_volume_converts():
+    """With the leak stocked in the room, the extraction asks the whole
     exhaust demand but makes only what the pooled draw hands it; the
-    declaration route asks the renewal what the extraction is expected to
-    make, which no fragment carries yet."""
-    assert refusals(ring_plant(cascade=True)) == ["output produced by two rule sets, an earlier one fed by a mixed volume"]
+    renewal is asked what the extraction is expected to make."""
+    conversion = proved(ring_plant(cascade=True), t_max=10.0, levels=VOLUME_LEVELS)
+    vent = uses_of(conversion, "Ventilation")
+    assert {"fragment": "muscadet.rule_expected",
+            "with": {"rule_set": "extraction", "active": "go", "flows": ["Leak"], "always_on": True}} in vent
+    shared = [u["with"] for u in vent if u["fragment"] == "muscadet.rule_produces" and u["with"].get("shared")]
+    assert [w["rule_set"] for w in shared if w.get("expected")] == ["extraction"]
+
+
+def test_a_cascade_input_fed_by_a_mixed_volume_and_another_supplier_is_refused():
+    declaration = ring_plant(cascade=True)
+    declaration["components"]["TOPUP"] = component("TOPUP", [c_out("Leak", 0.01)], class_name="Leak")
+    declaration["connections"].append(link("TOPUP", "VENT", "Leak"))
+    assert refusals(declaration) == ["mixed-volume input fed by two suppliers or more, ahead in a cascade"]
 
 
 def group_plant(extra_consumer: bool = False, run_cond: list | None = None) -> dict:
