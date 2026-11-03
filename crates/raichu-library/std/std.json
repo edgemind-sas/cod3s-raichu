@@ -1066,6 +1066,12 @@
             "kind": "string",
             "default": "",
             "description": "With side `in`: the automaton whose `empty` state says the flow has run out (`<volume>_bounds` for a single-flow volume, `<volume>_stock_<flow>` for a multi-flow one)."
+          },
+          {
+            "name": "transmits",
+            "kind": "bool",
+            "default": false,
+            "description": "With side `out`: the volume has a through-path, so the input also asks what the volume's consumers ask (`<flow>_demand_out`) when that is more than its nominal demand."
           }
         ],
         "uses": [
@@ -1101,6 +1107,9 @@
               },
               "empty_automaton": {
                 "$param": "empty_automaton"
+              },
+              "transmits": {
+                "$param": "transmits"
               }
             }
           }
@@ -1130,6 +1139,12 @@
             "name": "empty_automaton",
             "kind": "string",
             "description": "Automaton whose `empty` state says the flow has run out."
+          },
+          {
+            "name": "transmits",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the volume has a through-path: an output declaring no rate of its own (`rate` 0) then serves whatever is asked, up to the serve rate, and once empty what arrives; a declared rate still caps it."
           }
         ],
         "uses": [
@@ -1147,6 +1162,9 @@
               },
               "empty_automaton": {
                 "$param": "empty_automaton"
+              },
+              "transmits": {
+                "$param": "transmits"
               }
             }
           }
@@ -1299,6 +1317,13 @@
             "description": "Flows the producing rule produces."
           },
           {
+            "name": "torn",
+            "kind": "list",
+            "items": "string",
+            "default": [],
+            "description": "Produced outputs whose demand does not bound the scale: the outputs at which a recirculation ring through a volume is torn. Each is one of `produces`."
+          },
+          {
             "name": "cascaded",
             "kind": "list",
             "items": "string",
@@ -1379,6 +1404,9 @@
               },
               "produces": {
                 "$param": "produces"
+              },
+              "torn": {
+                "$param": "torn"
               },
               "cascaded": {
                 "$param": "cascaded"

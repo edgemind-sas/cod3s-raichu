@@ -3260,12 +3260,15 @@
     },
     "ForEach_Allocation": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3294,12 +3297,15 @@
     },
     "ForEach_Assignment": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3328,12 +3334,15 @@
     },
     "ForEach_Attribute": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3362,12 +3371,15 @@
     },
     "ForEach_Automaton": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3396,12 +3408,15 @@
     },
     "ForEach_CatalogueMode": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3430,12 +3445,15 @@
     },
     "ForEach_Channel": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3464,12 +3482,15 @@
     },
     "ForEach_Condition": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3498,12 +3519,15 @@
     },
     "ForEach_ConsumerParam": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3532,12 +3556,15 @@
     },
     "ForEach_EdgeEffect": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3566,12 +3593,15 @@
     },
     "ForEach_Effect": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3600,12 +3630,15 @@
     },
     "ForEach_Equation": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3634,12 +3667,15 @@
     },
     "ForEach_Expr": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3668,12 +3704,15 @@
     },
     "ForEach_Interface": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3702,12 +3741,15 @@
     },
     "ForEach_Port": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3736,12 +3778,15 @@
     },
     "ForEach_PortEquation": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3770,12 +3815,15 @@
     },
     "ForEach_SensitiveFunction": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3804,12 +3852,15 @@
     },
     "ForEach_Targetable": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3838,12 +3889,15 @@
     },
     "ForEach_Transition": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3872,12 +3926,15 @@
     },
     "ForEach_Transition_points": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3959,12 +4016,15 @@
     },
     "ForEach_number": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {
@@ -3993,12 +4053,15 @@
     },
     "ForEach_string": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
       "properties": {
         "$for_each": {
           "type": "string"
         },
         "as": {
+          "type": "string"
+        },
+        "except": {
           "type": "string"
         },
         "items": {

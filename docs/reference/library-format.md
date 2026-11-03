@@ -101,7 +101,7 @@ four forms are resolved against the instance's parameter values:
 |---|---|
 | `{"$param": "capacity"}` | the parameter's value, anywhere a value goes |
 | `"${flow}_fed_out"` | interpolates a string, number or boolean parameter, or a `$for_each` variable, into a string; an integral number reads without a fraction (`2`, not `2.0`) |
-| `{"$for_each": "flow_types", "as": "f", "items": [...]}` | as an item of an array: repeats `items` once per element of a list (or of a loop variable that is itself a list) |
+| `{"$for_each": "flow_types", "as": "f", "items": [...]}` | as an item of an array: repeats `items` once per element of a list (or of a loop variable that is itself a list); `"except": "torn"` skips the elements another list parameter holds, each of which the repeated list must hold |
 | `{"$law": "failure", "name": "fail", "source": "ok", "targets": ["ko"]}` | the keys of a `law` parameter (`distrib`, `rate`, ...) written onto the object beside its other keys, the way a transition carries its law; a key both write is refused |
 | `{"$choose": "method", "cases": {"mean": ..., "median": ...}}` | the case named by an `enum`, `string` or `bool` parameter (`"true"`, `"false"`) |
 | `{"$when": "ccf", "items": [...]}`, `{"$when": "rule", "is": ["printed", "tables"], "items": [...]}` | as an item of an array: keeps `items` in place when the parameter's value is one of `is` (a value or a list), drops them otherwise; without `is`, the parameter is a `bool` and `items` are kept when it is true. `$choose` replaces a whole value; `$when` keeps or drops one item among its siblings (an optional transition). A value in `is` that an `enum` or `bool` parameter never takes is refused, and the items are expanded even when dropped, so a misspelling or an error in them is reported on every instance |
@@ -221,14 +221,14 @@ plugin's continuous objects, and each is characterised against it.
 | `continuous_sink` | `name`, `demand`, `profiled` | the demand of a consumer input, times `<name>_in_profile` when profiled |
 | `rate_publisher` | `name`, `of` (`capability`, `delivered`), `side` (`in`, `out`) | out port `<name>_rate_out` exporting `<name>_rate`: the capability of an output, or what a flow delivers, an input (`side: in`) or an output (`side: out`) |
 | `pass_through` | `name` | the flow crosses the component unchanged: the input asks what the output is asked, the output can deliver what could arrive and hands on what did arrive (`<name>_produced_out`, so the output is `available: produced`) |
-| `volume_flow` | `volume`, `flow`, `capacity`, `content_init`, `demand`, `fill_rate`, `fill_unbounded`, `outlet`, `side` (`out`, `in`), `empty_automaton` | one flow held in a volume: its content (an ODE), its fill fraction, and the demand of the input; with `fill_unbounded` the volume claims without bound while it is not full (JSON has no infinity, so a flag rather than a rate); with side `in` the volume sits upstream of a rule that draws from it (`rule_consumes` with `from_volume`), serving what the rule needs while the flow is stocked and what arrives once `empty_automaton` is `empty` |
-| `volume_outlet` | `volume`, `flow`, `rate`, `empty_automaton` | the capability of an output leaving a volume, bounded by what arrives while it is empty |
+| `volume_flow` | `volume`, `flow`, `capacity`, `content_init`, `demand`, `fill_rate`, `fill_unbounded`, `outlet`, `side` (`out`, `in`), `empty_automaton`, `transmits` | one flow held in a volume: its content (an ODE), its fill fraction, and the demand of the input; with `fill_unbounded` the volume claims without bound while it is not full (JSON has no infinity, so a flag rather than a rate); with side `in` the volume sits upstream of a rule that draws from it (`rule_consumes` with `from_volume`), serving what the rule needs while the flow is stocked and what arrives once `empty_automaton` is `empty`; with `transmits` (side `out`) the volume has a through-path, and the input also asks what the volume's consumers ask |
+| `volume_outlet` | `volume`, `flow`, `rate`, `empty_automaton`, `transmits` | the capability of an output leaving a volume, bounded by what arrives while it is empty; with `transmits` and a `rate` of 0 the volume replaces the output's rate instead of being capped by it; a declared rate still caps it |
 | `volume_stock` | `volume`, `flow`, `capacity`, `initial` | automaton `<volume>_stock_<flow>` (`empty`, `stocked`) for one flow of a multi-flow volume |
 | `volume_total` | `volume`, `flows`, `capacity`, `initial`, `ratio_flows` | total content and fill, the bounds automaton `<volume>_bounds` (`empty`, `partial`, `full`), and each listed flow's share |
 | `volume_pooled` | `volume`, `flows` | `<volume>_beyond`, what the consumers of a volume holding several flows downstream of the transfer ask of it beyond what transits it, summed over the held flows |
 | `volume_pooled_flow` | `volume`, `flow`, `drawn` | `<flow>_pooled_out`: while the flow is stocked, what transits it plus its share of the excess in proportion to its raw content (`ratio_flows`), never more than the output's capability; once it has run out, the capability. With `drawn`, what the mixture groups ask of the output, never more than its capability, and `<flow>_composition_out`, the flow's share of the raw content |
 | `mixture_in` | `name`, `flows`, `flow_rate`, `run` | `<name>_flow_rate` (a failure mode clamps it by name) and, for each input of `flows`, its demand: the rate, 0 when negative, times the composition its supplier publishes; with `run`, only while the automaton `<name>_run`, written in the type body, is in `running` |
-| `rule_set` | `name`, `active`, `idle`, `consumes`, `from_volume`, `produces`, `cascaded`, `capped`, `conditions`, `threshold` (`none`, `band`), `threshold_flow`, `activate`, `release`, `always_on` | automaton `<name>_mode` running the producing rule while its boolean inputs are fed (and its band holds), and the three scales `<name>_capability_scale`, `<name>_scale`, `<name>_draw_scale`; `from_volume` lists the flows drawn from a volume upstream; `cascaded` lists the shared outputs bounded by what the sets declared before it leave; with `always_on`, one rule and no automaton |
+| `rule_set` | `name`, `active`, `idle`, `consumes`, `from_volume`, `produces`, `torn`, `cascaded`, `capped`, `conditions`, `threshold` (`none`, `band`), `threshold_flow`, `activate`, `release`, `always_on` | automaton `<name>_mode` running the producing rule while its boolean inputs are fed (and its band holds), and the three scales `<name>_capability_scale`, `<name>_scale`, `<name>_draw_scale`; `from_volume` lists the flows drawn from a volume upstream; `cascaded` lists the shared outputs bounded by what the sets declared before it leave; `torn` lists produced outputs whose demand does not bound the scale; with `always_on`, one rule and no automaton |
 | `rule_consumes` | `rule_set`, `active`, `flow`, `rate`, `from_volume`, `always_on` | the demand of a consumed input and `<flow>_consumed_in`, what the rule consumes at its draw; with `from_volume`, the need and draw a volume upstream serves |
 | `rule_produces` | `rule_set`, `active`, `flow`, `rate`, `capped`, `max_rate`, `tapped`, `always_on`, `shared` | the capability and production of an output; with `shared`, the set's contributions `<rule_set>_<flow>_capability`, `_production` and `_served` instead |
 | `shared_output` | `flow`, `producers` | the capability and production of an output two rule sets or more produce, the sums of their contributions |
@@ -278,8 +278,30 @@ input's demand). A volume written `drawn` serves its outputs as groups ask,
 so it is drawn by groups only. Volume
 weights have no fragment: the composition is the raw share of the content.
 
-Ring tearing has no fragment yet: a plant that needs it stays on the plugin
-route.
+A fan drawing air out of a room and blowing it back closes a ring of
+instantaneous values through the room: the fan's rule is bounded by the
+demand on its return output, which carries the fan's own demand for room
+air through the room's transit. The ring is torn at the return output:
+list it in the `torn` parameter of the rule set making it, and the rule is
+no longer bounded there, the room absorbing what the two ends momentarily
+disagree on. The muscadet plugin tears the same edge on its own; a library
+tears it by hand, and the expander searches no ring. Left untorn, the
+model is refused: the refusal names the instances and the rule sets the
+cycle runs through, and the `torn` parameter. A tear is the author's
+statement: an output torn off any ring is accepted, and only that output
+stops bounding its rule.
+
+The tear conserves matter when the volume absorbs the disagreement: the
+torn output feeds the volume and nothing else, the volume hands the same
+flow straight back, every rule making the torn output draws at least as
+much of it as it makes, and makes something else a consumer reads. The
+plugin tears a ring only then; a library keeps to the same shape.
+
+A volume with a through-path (`transmits` on `volume_flow` and
+`volume_outlet`) passes on what crosses it and carries its consumers'
+demand upstream. The two routes order the cycle that demand closes
+differently, so they agree to the integrator's accuracy rather than to the
+last bit.
 
 The production condition `prod_cond` is a disjunction of conjunctions,
 stated explicitly: a list of groups, each a list of attribute names of the

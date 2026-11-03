@@ -99,6 +99,17 @@ TYPES = [
                   empty_automaton="${volume}_bounds"),
               use("continuous_flow_out", name="${flow}", held=True, empty_automaton="${volume}_bounds"),
               use("volume_total", volume="${volume}", flows=["${flow}"], capacity=P("capacity"))]},
+    {"name": "TransmittingStore",
+     "parameters": [p("volume", "string"), p("flow", "string"), p("capacity", "number"),
+                    p("content", "number"), p("fill_rate", "number"), p("rate", "number", default=0.0)],
+     "uses": [use("continuous_flow_in", name="${flow}"),
+              use("volume_flow", volume="${volume}", flow="${flow}", capacity=P("capacity"),
+                  content_init=P("content"), fill_rate=P("fill_rate"), transmits=True),
+              use("volume_outlet", volume="${volume}", flow="${flow}", rate=P("rate"),
+                  empty_automaton="${volume}_bounds", transmits=True),
+              use("continuous_flow_out", name="${flow}", held=True, empty_automaton="${volume}_bounds"),
+              use("volume_total", volume="${volume}", flows=["${flow}"], capacity=P("capacity"),
+                  initial="partial")]},
     {"name": "Bus", "parameters": [p("flow", "string")],
      "uses": [use("continuous_flow_in", name="${flow}"),
               use("pass_through", name="${flow}"),
@@ -233,6 +244,50 @@ BENCHES = {
          {"name": "C", "type": "ProfiledSink", "parameters": {**at_zero(DAY), "flow": "H2"}}],
         [("S.H2_out", "T.H2_in"), ("T.H2_out", "C.H2_in")],
         [], 24.0,
+    ),
+    # Option: volume_flow and volume_outlet `transmits`. A buffer with a
+    # through-path between a profiled source and a profiled consumer: it
+    # passes on what crosses it, carries the consumer's demand upstream,
+    # runs empty while the demand peaks and refills.
+    "transmitting_buffer": (
+        [{"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out(
+            "H2", 1.0, profile=profile(SUN), publish_rate="capability", allocation="shares",
+            allocation_shares={"T": 1.0})]},
+         {"type": "ObjFlow", "name": "T", "flows_continuous_in": [{"name": "H2"}],
+          "flows_continuous_out": [{"name": "H2"}],
+          "capacities": [{"name": "buffer", "flow": "H2", "capacity": 4.0, "transmits": True,
+                          "content_init": {"H2": 1.0}, "fill_rate": 0.5}]},
+         {"type": "ObjFlow", "name": "C", "flows_continuous_in": [flow_in(
+             "H2", 1.0, profile=profile(DAY), publish_rate="delivered")]}],
+        [{"name": "S", "type": "ProfiledSource",
+          "parameters": {**at_zero(SUN), "flow": "H2", "shares": shares(("T", "H2_in", 1.0))}},
+         {"name": "T", "type": "TransmittingStore",
+          "parameters": {"volume": "buffer", "flow": "H2", "capacity": 4.0, "content": 1.0,
+                         "fill_rate": 0.5}},
+         {"name": "C", "type": "ProfiledSink", "parameters": {**at_zero(DAY), "flow": "H2"}}],
+        [("S.H2_out", "T.H2_in"), ("T.H2_out", "C.H2_in")],
+        [], 48.0,
+    ),
+    # The same buffer whose output declares a rate of its own, 0.8: the
+    # rate still caps what the volume serves.
+    "transmitting_buffer_rated": (
+        [{"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out(
+            "H2", 1.0, profile=profile(SUN), publish_rate="capability", allocation="shares",
+            allocation_shares={"T": 1.0})]},
+         {"type": "ObjFlow", "name": "T", "flows_continuous_in": [{"name": "H2"}],
+          "flows_continuous_out": [flow_out("H2", 0.8)],
+          "capacities": [{"name": "buffer", "flow": "H2", "capacity": 4.0, "transmits": True,
+                          "content_init": {"H2": 1.0}, "fill_rate": 0.5}]},
+         {"type": "ObjFlow", "name": "C", "flows_continuous_in": [flow_in(
+             "H2", 1.0, profile=profile(DAY), publish_rate="delivered")]}],
+        [{"name": "S", "type": "ProfiledSource",
+          "parameters": {**at_zero(SUN), "flow": "H2", "shares": shares(("T", "H2_in", 1.0))}},
+         {"name": "T", "type": "TransmittingStore",
+          "parameters": {"volume": "buffer", "flow": "H2", "capacity": 4.0, "content": 1.0,
+                         "fill_rate": 0.5, "rate": 0.8}},
+         {"name": "C", "type": "ProfiledSink", "parameters": {**at_zero(DAY), "flow": "H2"}}],
+        [("S.H2_out", "T.H2_in"), ("T.H2_out", "C.H2_in")],
+        [], 48.0,
     ),
     # Fragment: pass_through. Two sources feed a bus the sink draws from
     # through it. A rival consumer on the first source takes part of what
@@ -1017,6 +1072,92 @@ BENCHES.update({
     ),
 })
 
+
+# --- a recirculation ring through a transmitting volume -------------------------
+
+
+def ventilated_room_uses(contents, capacity):
+    """A room holding several flows with a through-path, fed without bound
+    and served pooled: the ring's volume."""
+    uses = [mu("volume_total", volume="room", flows=list(contents), capacity=capacity, initial="partial",
+               ratio_flows=list(contents))]
+    for flow, content in contents.items():
+        stock = f"room_stock_{flow}"
+        uses += [mu("continuous_flow_in", name=flow),
+                 mu("volume_flow", volume="room", flow=flow, capacity=capacity, content_init=content,
+                    fill_unbounded=True, transmits=True),
+                 mu("volume_stock", volume="room", flow=flow, capacity=capacity,
+                    initial="stocked" if content > 0 else "empty"),
+                 mu("volume_outlet", volume="room", flow=flow, rate=0.0, empty_automaton=stock, transmits=True),
+                 mu("volume_pooled_flow", volume="room", flow=flow),
+                 mu("continuous_flow_out", name=flow, available="pooled", held=True, empty_automaton=stock)]
+    return uses + [mu("volume_pooled", volume="room", flows=list(contents))]
+
+
+def ventilation(name, torn, extraction_torn=()):
+    """A fan extracting the leak and renewing the air: both rule sets
+    exhaust, in declaration order, and the renewal blows the air it drew
+    back into the room, the output `torn` names."""
+    return {"name": name, "uses": [
+        mu("continuous_flow_in", name="H2_leak"), mu("continuous_flow_in", name="AIR"),
+        mu("surplus_release", name="H2_leak"), mu("surplus_release", name="AIR"),
+        mu("rule_set", name="extraction", active="go", idle="none", consumes=["H2_leak"],
+           produces=["exhaust"], always_on=True, torn=list(extraction_torn)),
+        mu("rule_consumes", rule_set="extraction", active="go", flow="H2_leak", rate=25.0, always_on=True),
+        mu("rule_produces", rule_set="extraction", active="go", flow="exhaust", rate=25.0, always_on=True,
+           shared=True),
+        mu("rule_set", name="renewal", active="go", idle="none", consumes=["AIR"], produces=["AIR"],
+           cascaded=["exhaust"], always_on=True, torn=list(torn)),
+        mu("rule_consumes", rule_set="renewal", active="go", flow="AIR", rate=25.0, always_on=True),
+        mu("rule_produces", rule_set="renewal", active="go", flow="exhaust", rate=25.0, always_on=True,
+           shared=True),
+        mu("rule_produces", rule_set="renewal", active="go", flow="AIR", rate=25.0, always_on=True),
+        mu("rule_cascade", rule_set="renewal", flow="exhaust", before=["extraction"]),
+        mu("shared_output", flow="exhaust", producers=["extraction", "renewal"]),
+        mu("continuous_flow_out", name="exhaust", available="produced"),
+        mu("continuous_flow_out", name="AIR", available="produced")]}
+
+
+TYPES += [
+    {"name": "VentilatedRoom", "uses": ventilated_room_uses({"H2_leak": 0.0, "AIR": 90.0}, 100.0)},
+    ventilation("Ventilation", torn=["AIR"]),
+]
+
+RING_OBJECTS = [
+    {"type": "ObjFlow", "name": "LEAK", "flows_continuous_out": [flow_out("H2_leak", 0.05)]},
+    {"type": "ObjFlow", "name": "LOCAL", "flows_continuous_in": [{"name": "H2_leak"}, {"name": "AIR"}],
+     "flows_continuous_out": [{"name": "H2_leak"}, {"name": "AIR"}],
+     "capacities": [{"name": "room", "flows": ["H2_leak", "AIR"], "capacity": 100.0, "transmits": True,
+                     "content_init": {"H2_leak": 0.0, "AIR": 90.0}, "fill_rate": None, "side": "out"}]},
+    {"type": "ObjFlow", "name": "VENTILATION", "flows_continuous_in": [{"name": "H2_leak"}, {"name": "AIR"}],
+     "flows_continuous_out": [{"name": "exhaust"}, {"name": "AIR"}],
+     "rules": [{"name": "extraction", "rules": [{"name": "go", "cons": {"H2_leak": 25.0},
+                                                 "prod": {"exhaust": 25.0}}]},
+               {"name": "renewal", "rules": [{"name": "go", "cons": {"AIR": 25.0},
+                                              "prod": {"exhaust": 25.0, "AIR": 25.0}}]}]},
+    {"type": "ObjFlow", "name": "ATMOSPHERE", "flows_continuous_in": [flow_in("exhaust", 50.0)]},
+]
+RING_INSTANCES = [
+    {"name": "LEAK", "type": "Source", "parameters": {"flow": "H2_leak", "rate": 0.05}},
+    {"name": "LOCAL", "type": "VentilatedRoom"},
+    {"name": "VENTILATION", "type": "Ventilation"},
+    {"name": "ATMOSPHERE", "type": "Sink", "parameters": {"flow": "exhaust", "demand": 50.0}},
+]
+RING_CONNECTIONS = [
+    ("LEAK.H2_leak_out", "LOCAL.H2_leak_in"), ("LOCAL.H2_leak_out", "VENTILATION.H2_leak_in"),
+    ("LOCAL.AIR_out", "VENTILATION.AIR_in"), ("VENTILATION.AIR_out", "LOCAL.AIR_in"),
+    ("VENTILATION.exhaust_out", "ATMOSPHERE.exhaust_in"),
+]
+
+BENCHES.update({
+    # Options: rule_set `torn`, volume_flow and volume_outlet `transmits`
+    # on a pooled room. A leak into a room of 100 holding 90 of air, a fan
+    # extracting it and renewing the air, blowing the air back: the ring
+    # through the room is torn at the fan's return output, and the room
+    # holds 90 of air.
+    "ventilation_ring": (RING_OBJECTS, RING_INSTANCES, RING_CONNECTIONS, [], 10.0),
+})
+
 def plugin_model(name, objects, connections):
     def end(written):
         component, port = written.split(".", 1)
@@ -1067,10 +1208,45 @@ def test_the_fragment_agrees_with_its_plugin_counterpart(bench):
     assert guards[0] == guards[1] is not None
     plugin_events, plugin_samples = run(plugin, t_max)
     library_events, library_samples = run(library, t_max)
-    assert library_events == plugin_events
     assert library_samples.keys() == plugin_samples.keys()
+    if bench in INTEGRATOR_BENCHES:
+        spread = integrator_spread(plugin, t_max, plugin_events)
+        assert [name for _, name in library_events] == [name for _, name in plugin_events]
+        for (mine, name), (theirs, _) in zip(library_events, plugin_events):
+            assert abs(mine - theirs) <= max(spread.dates.get(name, 0.0), 1e-12 * abs(theirs)), name
+        qualified = indicator_attributes(plugin)
+        for name, expected in plugin_samples.items():
+            bound = spread.values.get(qualified.get(name), 0.0)
+            for mine, theirs in zip(library_samples[name], expected):
+                assert mine == theirs or abs(mine - theirs) <= max(bound, 1e-12 * abs(theirs)), name
+        return
+    assert library_events == plugin_events
     for name, expected in plugin_samples.items():
         assert library_samples[name] == expected, name
+
+
+#: Benches whose two routes order a cycle through a volume differently, so
+#: they agree to the integrator's accuracy and not to the last bit: event
+#: dates and samples are compared within the integrator's spread, measured
+#: on the plugin route between two runs that stop at different instants
+#: (the `integrator` level of `compare_routes`).
+INTEGRATOR_BENCHES = {"transmitting_buffer", "transmitting_buffer_rated"}
+
+
+def indicator_attributes(model):
+    return {
+        indicator["name"]: f"{indicator['attr']['component']}.{indicator['attr']['attribute']}"
+        for indicator in pyraichu.model_body(model).get("indicators", [])
+        if indicator.get("target") == "attribute"
+    }
+
+
+def integrator_spread(model, t_max, events):
+    from pyraichu.muscadet.convert import _integrator_spread
+
+    attributes = sorted(set(indicator_attributes(model).values()))
+    names = {name: name for _, name in events}
+    return _integrator_spread(model, t_max, attributes, names)
 
 
 #: The fragments of `std` that are not continuous, left out of the guard below.

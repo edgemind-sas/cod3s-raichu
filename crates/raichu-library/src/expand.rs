@@ -8,10 +8,10 @@ use crate::names::split_public;
 use crate::provenance::{Origin, Provenance};
 use crate::std_library::{CONTINUOUS_FLOW_FRAGMENTS, STD_UNBOUNDED_RATE};
 use crate::strict::typed;
-use raichu_expr::PortRef;
+use raichu_expr::{AttrRef, PortRef};
 use raichu_model::{
-    Connection, FmuUnit, Indicator, InterfaceConnection, InterfaceRef, Model, ModelSource, PortDir,
-    Program,
+    Connection, FmuUnit, Indicator, InterfaceConnection, InterfaceRef, Model, ModelError,
+    ModelSource, PortDir, Program,
 };
 
 /// The result of an expansion.
@@ -190,11 +190,57 @@ pub fn expand(
     if let Ok(order) = crate::order::derive_evaluation_order(&expansion.model) {
         expansion.model.evaluation_order = order;
     }
-    expansion
-        .model
-        .validate()
-        .map_err(|e| restate(&e.to_string(), &expansion.provenance))?;
+    expansion.model.validate().map_err(|e| {
+        let mut message = e.to_string();
+        if let ModelError::AlgebraicNonlinear {
+            component,
+            attribute,
+            ..
+        } = &e
+        {
+            message.push_str(&ring_hint(&expansion.model, component, attribute));
+        }
+        restate(&message, &expansion.provenance)
+    })?;
     Ok(expansion)
+}
+
+/// What the author of a library needs beside the core's refusal of a
+/// nonlinear cycle: the instances the cycle runs through, and, when rule
+/// sets sit on it, the parameter that tears a recirculation ring. The
+/// expander searches no ring itself: it reads back the cycle
+/// the core refused.
+fn ring_hint(model: &Model, component: &str, attribute: &str) -> String {
+    let written = AttrRef {
+        component: component.to_owned(),
+        attribute: attribute.to_owned(),
+    };
+    let Some(members) = crate::order::cycle_through(model, &written) else {
+        return String::new();
+    };
+    let mut instances: Vec<&str> = members.iter().map(|(c, _)| c.as_str()).collect();
+    instances.sort_unstable();
+    instances.dedup();
+    let mut rule_sets: Vec<String> = members
+        .iter()
+        .filter_map(|(c, step)| {
+            step.strip_suffix("_scale")
+                .filter(|set| !set.ends_with("_capability") && !set.ends_with("_draw"))
+                .map(|set| format!("`{c}.{set}`"))
+        })
+        .collect();
+    rule_sets.sort_unstable();
+    rule_sets.dedup();
+    let named: Vec<String> = instances.iter().map(|i| format!("`{i}`")).collect();
+    let mut hint = format!(". The cycle runs through instances {}", named.join(", "));
+    if !rule_sets.is_empty() {
+        hint.push_str(&format!(
+            ", and through rule {} {}: a recirculation ring through a volume is torn by listing, in the `torn` parameter of `muscadet.rule_set`, the output a rule set feeds back into the volume",
+            if rule_sets.len() > 1 { "sets" } else { "set" },
+            rule_sets.join(", ")
+        ));
+    }
+    hint
 }
 
 /// Restates an error the core raised on the flat model with the origin of

@@ -9,7 +9,8 @@
 //!   parameter (or a `$for_each` variable): `"${flow}_fed_out"`;
 //! - `{"$for_each": "list", "as": "var", "items": [...]}`, as an item of
 //!   an array, repeats `items` once per element of a list parameter, with
-//!   `var` bound to the element;
+//!   `var` bound to the element; `"except": "other"` skips the elements
+//!   the list parameter `other` holds, each of which `list` must hold;
 //! - `{"$law": "law_param", ...}` writes the keys of a law parameter
 //!   (`distrib`, `rate`, ...) onto the object beside its other keys, the
 //!   way a transition carries its law;
@@ -372,11 +373,11 @@ fn for_each(
     };
     if let Some(extra) = map
         .keys()
-        .find(|k| !matches!(k.as_str(), "$for_each" | "as" | "items"))
+        .find(|k| !matches!(k.as_str(), "$for_each" | "as" | "items" | "except"))
     {
         return Err(ctx.err(
             &pointer_key(pointer, extra),
-            format!("unknown field `{extra}` in `$for_each` (fields: `$for_each`, `as`, `items`)"),
+            format!("unknown field `{extra}` in `$for_each` (fields: `$for_each`, `as`, `items`, `except`)"),
         ));
     }
     let list_name = list_name
@@ -403,8 +404,43 @@ fn for_each(
             format!("`$for_each` repeats over a list; `{list_name}` is not one"),
         )
     })?;
+    let skipped = match map.get("except") {
+        None => Vec::new(),
+        Some(except) => {
+            let except_name = except.as_str().ok_or_else(|| {
+                ctx.err(
+                    &pointer_key(pointer, "except"),
+                    "`except` names a list parameter by a string",
+                )
+            })?;
+            let listed = env
+                .get(except_name)
+                .ok_or_else(|| {
+                    ctx.err(
+                        &pointer_key(pointer, "except"),
+                        format!("unknown parameter `{except_name}`"),
+                    )
+                })?
+                .as_array()
+                .ok_or_else(|| {
+                    ctx.err(
+                        &pointer_key(pointer, "except"),
+                        format!("`except` names a list; `{except_name}` is not one"),
+                    )
+                })?;
+            // An element the repeated list does not hold skips nothing:
+            // refused, since it is a misspelling or a stale name.
+            if let Some(stray) = listed.iter().find(|e| !elements.contains(e)) {
+                return Err(ctx.err(
+                    &pointer_key(pointer, "except"),
+                    format!("`{except_name}` holds {stray}, which `{list_name}` does not"),
+                ));
+            }
+            listed.clone()
+        }
+    };
     let mut out = Vec::new();
-    for element in elements {
+    for element in elements.iter().filter(|e| !skipped.contains(e)) {
         let inner = env.with(var, element.clone());
         let items_pointer = pointer_key(pointer, "items");
         let expanded = substitute(&Value::Array(items.clone()), &inner, ctx, &items_pointer)?;
@@ -677,6 +713,46 @@ mod tests {
         assert_eq!(
             out,
             Some(json!([{"name": "H2_content"}, {"name": "O2_content"}]))
+        );
+    }
+
+    #[test]
+    fn for_each_except_skips_the_elements_of_another_list() {
+        let spec = json!([{"name": "made", "kind": "list"}, {"name": "torn", "kind": "list"}]);
+        let body = json!([{"$for_each": "made", "as": "f", "except": "torn", "items": ["${f}"]}]);
+        let env = env_of(
+            spec.clone(),
+            json!({"made": ["exhaust", "AIR"], "torn": ["AIR"]}),
+        )
+        .unwrap_or_default();
+        assert_eq!(
+            substitute(&body, &env, &ctx(), "").ok(),
+            Some(json!(["exhaust"]))
+        );
+        let none =
+            env_of(spec, json!({"made": ["exhaust", "AIR"], "torn": []})).unwrap_or_default();
+        assert_eq!(
+            substitute(&body, &none, &ctx(), "").ok(),
+            Some(json!(["exhaust", "AIR"]))
+        );
+    }
+
+    #[test]
+    fn for_each_except_refuses_an_element_the_list_does_not_hold() {
+        let env = env_of(
+            json!([{"name": "made", "kind": "list"}, {"name": "torn", "kind": "list"}]),
+            json!({"made": ["exhaust"], "torn": ["AIRR"]}),
+        )
+        .unwrap_or_default();
+        let body = json!([{"$for_each": "made", "as": "f", "except": "torn", "items": ["${f}"]}]);
+        let error = substitute(&body, &env, &ctx(), "")
+            .err()
+            .map(|e| e.to_string());
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|e| e.contains("AIRR") && e.contains("made")),
+            "{error:?}"
         );
     }
 

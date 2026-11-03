@@ -2907,7 +2907,7 @@
       },
       {
         "name": "volume_flow",
-        "description": "One flow `<flow>` held in the volume `<volume>`: its content (an ODE: what arrives less what leaves), its fill fraction, and the demand of the input `<flow>` (a `continuous_flow_in`), which asks its nominal demand plus the fill rate while the volume is not full (with `fill_unbounded`, whatever its suppliers can deliver) and no more than leaves once it is. The volume's bounds come from `volume_total`; an outlet adds `volume_outlet`. With side `in`, the volume sits upstream of a rule set: the rule draws from it (`rule_consumes` with `from_volume`, which writes `<flow>_need_in` and `<flow>_drawn_in`), whatever it needs while the flow is stocked and what arrives once it has run out (`<flow>_serve_capability_in`, `<flow>_serve_fed_in`); the input asks the rule's need plus the fill while the volume is not full, and the need alone once it is.",
+        "description": "One flow `<flow>` held in the volume `<volume>`: its content (an ODE: what arrives less what leaves), its fill fraction, and the demand of the input `<flow>` (a `continuous_flow_in`), which asks its nominal demand plus the fill rate while the volume is not full (with `fill_unbounded`, whatever its suppliers can deliver) and no more than leaves once it is. The volume's bounds come from `volume_total`; an outlet adds `volume_outlet`. With side `in`, the volume sits upstream of a rule set: the rule draws from it (`rule_consumes` with `from_volume`, which writes `<flow>_need_in` and `<flow>_drawn_in`), whatever it needs while the flow is stocked and what arrives once it has run out (`<flow>_serve_capability_in`, `<flow>_serve_fed_in`); the input asks the rule's need plus the fill while the volume is not full, and the need alone once it is. With `transmits` (side `out`), the volume has a through-path: the input also asks what the volume's consumers ask.",
         "parameters": [
           {
             "name": "volume",
@@ -2969,6 +2969,12 @@
             "kind": "string",
             "default": "",
             "description": "With side `in`: the automaton whose `empty` state says the flow has run out (`<volume>_bounds` for a single-flow volume, `<volume>_stock_<flow>` for a multi-flow one)."
+          },
+          {
+            "name": "transmits",
+            "kind": "bool",
+            "default": false,
+            "description": "With side `out`: the volume has a through-path, so the input also asks what the volume's consumers ask (`<flow>_demand_out`) when that is more than its nominal demand."
           }
         ],
         "body": {
@@ -3058,11 +3064,37 @@
                           "op": "min",
                           "args": [
                             {
-                              "op": "const",
-                              "value": {
-                                "kind": "float",
-                                "value": {
-                                  "$param": "demand"
+                              "$choose": "transmits",
+                              "cases": {
+                                "false": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": {
+                                      "$param": "demand"
+                                    }
+                                  }
+                                },
+                                "true": {
+                                  "op": "max",
+                                  "args": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "demand"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${flow}_demand_out"
+                                      }
+                                    }
+                                  ]
                                 }
                               }
                             },
@@ -3106,11 +3138,37 @@
                               "op": "min",
                               "args": [
                                 {
-                                  "op": "const",
-                                  "value": {
-                                    "kind": "float",
-                                    "value": {
-                                      "$param": "demand"
+                                  "$choose": "transmits",
+                                  "cases": {
+                                    "false": {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "demand"
+                                        }
+                                      }
+                                    },
+                                    "true": {
+                                      "op": "max",
+                                      "args": [
+                                        {
+                                          "op": "const",
+                                          "value": {
+                                            "kind": "float",
+                                            "value": {
+                                              "$param": "demand"
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "op": "attr",
+                                          "attr": {
+                                            "component": "$self",
+                                            "attribute": "${flow}_demand_out"
+                                          }
+                                        }
+                                      ]
                                     }
                                   }
                                 },
@@ -3141,11 +3199,37 @@
                               "op": "min",
                               "args": [
                                 {
-                                  "op": "const",
-                                  "value": {
-                                    "kind": "float",
-                                    "value": {
-                                      "$param": "demand"
+                                  "$choose": "transmits",
+                                  "cases": {
+                                    "false": {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": {
+                                          "$param": "demand"
+                                        }
+                                      }
+                                    },
+                                    "true": {
+                                      "op": "max",
+                                      "args": [
+                                        {
+                                          "op": "const",
+                                          "value": {
+                                            "kind": "float",
+                                            "value": {
+                                              "$param": "demand"
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "op": "attr",
+                                          "attr": {
+                                            "component": "$self",
+                                            "attribute": "${flow}_demand_out"
+                                          }
+                                        }
+                                      ]
                                     }
                                   }
                                 },
@@ -3455,7 +3539,7 @@
       },
       {
         "name": "volume_outlet",
-        "description": "Writes the capability of the output `<flow>` (a `continuous_flow_out`) leaving the volume `<volume>`: its rate, bounded by what the volume serves, and by what arrives while the automaton `<empty_automaton>` is `empty`.",
+        "description": "Writes the capability of the output `<flow>` (a `continuous_flow_out`) leaving the volume `<volume>`: its rate, bounded by what the volume serves, and by what arrives while the automaton `<empty_automaton>` is `empty`. With `transmits` and a `rate` of 0, the volume replaces the output's rate instead of being capped by it.",
         "parameters": [
           {
             "name": "volume",
@@ -3476,6 +3560,12 @@
             "name": "empty_automaton",
             "kind": "string",
             "description": "Automaton whose `empty` state says the flow has run out."
+          },
+          {
+            "name": "transmits",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the volume has a through-path: an output declaring no rate of its own (`rate` 0) then serves whatever is asked, up to the serve rate, and once empty what arrives; a declared rate still caps it."
           }
         ],
         "body": {
@@ -3484,19 +3574,77 @@
               "target": "${flow}_capability_out",
               "kind": "explicit",
               "expr": {
-                "op": "min",
-                "args": [
-                  {
-                    "op": "mul",
+                "$choose": "transmits",
+                "cases": {
+                  "false": {
+                    "op": "min",
                     "args": [
                       {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${flow}_out_rate"
-                        }
+                        "op": "mul",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${flow}_out_rate"
+                            }
+                          },
+                          {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": {
+                                "$param": "rate"
+                              }
+                            }
+                          }
+                        ]
                       },
                       {
+                        "op": "if",
+                        "cond": {
+                          "op": "state_active",
+                          "state": {
+                            "component": "$self",
+                            "automaton": "${empty_automaton}",
+                            "state": "empty"
+                          }
+                        },
+                        "then": {
+                          "op": "min",
+                          "args": [
+                            {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${volume}_serve_rate_${flow}"
+                              }
+                            },
+                            {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${flow}_fed_in"
+                              }
+                            }
+                          ]
+                        },
+                        "otherwise": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${volume}_serve_rate_${flow}"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "true": {
+                    "op": "if",
+                    "cond": {
+                      "op": "cmp",
+                      "cmp": "eq",
+                      "lhs": {
                         "op": "const",
                         "value": {
                           "kind": "float",
@@ -3504,47 +3652,117 @@
                             "$param": "rate"
                           }
                         }
-                      }
-                    ]
-                  },
-                  {
-                    "op": "if",
-                    "cond": {
-                      "op": "state_active",
-                      "state": {
-                        "component": "$self",
-                        "automaton": "${empty_automaton}",
-                        "state": "empty"
+                      },
+                      "rhs": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
                       }
                     },
                     "then": {
+                      "op": "if",
+                      "cond": {
+                        "op": "state_active",
+                        "state": {
+                          "component": "$self",
+                          "automaton": "${empty_automaton}",
+                          "state": "empty"
+                        }
+                      },
+                      "then": {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${volume}_serve_rate_${flow}"
+                            }
+                          },
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${flow}_fed_in"
+                            }
+                          }
+                        ]
+                      },
+                      "otherwise": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${volume}_serve_rate_${flow}"
+                        }
+                      }
+                    },
+                    "otherwise": {
                       "op": "min",
                       "args": [
                         {
-                          "op": "attr",
-                          "attr": {
-                            "component": "$self",
-                            "attribute": "${volume}_serve_rate_${flow}"
-                          }
+                          "op": "mul",
+                          "args": [
+                            {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${flow}_out_rate"
+                              }
+                            },
+                            {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": {
+                                  "$param": "rate"
+                                }
+                              }
+                            }
+                          ]
                         },
                         {
-                          "op": "attr",
-                          "attr": {
-                            "component": "$self",
-                            "attribute": "${flow}_fed_in"
+                          "op": "if",
+                          "cond": {
+                            "op": "state_active",
+                            "state": {
+                              "component": "$self",
+                              "automaton": "${empty_automaton}",
+                              "state": "empty"
+                            }
+                          },
+                          "then": {
+                            "op": "min",
+                            "args": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${volume}_serve_rate_${flow}"
+                                }
+                              },
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${flow}_fed_in"
+                                }
+                              }
+                            ]
+                          },
+                          "otherwise": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${volume}_serve_rate_${flow}"
+                            }
                           }
                         }
                       ]
-                    },
-                    "otherwise": {
-                      "op": "attr",
-                      "attr": {
-                        "component": "$self",
-                        "attribute": "${volume}_serve_rate_${flow}"
-                      }
                     }
                   }
-                ]
+                }
               }
             }
           ]
@@ -4466,7 +4684,7 @@
       },
       {
         "name": "rule_set",
-        "description": "A rule set `<name>` with one producing rule `<active>` and one idle rule `<idle>`: the automaton `<name>_mode` runs `<active>` while every boolean input in `conditions` is fed (and, with a `band` threshold, while the capability of `<threshold_flow>` has reached `activate` and not fallen below `release`). The rule's scale is the largest fraction of its nominal rates the inputs' capabilities allow (`<name>_capability_scale`), bounded by what the outputs are asked (`<name>_scale`) and by what actually arrives (`<name>_draw_scale`). With `always_on`, the set has its producing rule only, with no condition and no automaton, as a rule declared without a condition. Each consumed flow is a `rule_consumes`, each produced one a `rule_produces`. The outputs in `cascaded` are produced by another rule set too and served in declaration order: this set is bounded by what those declared before it leave (`<name>_<flow>_left`, a `rule_cascade`) instead of by the whole demand.",
+        "description": "A rule set `<name>` with one producing rule `<active>` and one idle rule `<idle>`: the automaton `<name>_mode` runs `<active>` while every boolean input in `conditions` is fed (and, with a `band` threshold, while the capability of `<threshold_flow>` has reached `activate` and not fallen below `release`). The rule's scale is the largest fraction of its nominal rates the inputs' capabilities allow (`<name>_capability_scale`), bounded by what the outputs are asked (`<name>_scale`) and by what actually arrives (`<name>_draw_scale`). With `always_on`, the set has its producing rule only, with no condition and no automaton, as a rule declared without a condition. Each consumed flow is a `rule_consumes`, each produced one a `rule_produces`. The outputs in `cascaded` are produced by another rule set too and served in declaration order: this set is bounded by what those declared before it leave (`<name>_<flow>_left`, a `rule_cascade`) instead of by the whole demand. `torn` lists produced outputs whose demand no longer bounds the scale: a recirculation ring through a volume is torn there, the volume absorbing what the two ends momentarily disagree on.",
         "parameters": [
           {
             "name": "name",
@@ -4494,6 +4712,13 @@
             "kind": "list",
             "items": "string",
             "description": "Flows the producing rule produces."
+          },
+          {
+            "name": "torn",
+            "kind": "list",
+            "items": "string",
+            "default": [],
+            "description": "Produced outputs whose demand does not bound the scale: the outputs at which a recirculation ring through a volume is torn. Each is one of `produces`."
           },
           {
             "name": "cascaded",
@@ -4808,7 +5033,8 @@
                                 }
                               }
                             }
-                          ]
+                          ],
+                          "except": "torn"
                         },
                         {
                           "$for_each": "cascaded",
@@ -4874,7 +5100,8 @@
                               }
                             }
                           }
-                        ]
+                        ],
+                        "except": "torn"
                       },
                       {
                         "$for_each": "cascaded",

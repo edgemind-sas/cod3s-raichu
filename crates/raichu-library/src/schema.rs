@@ -507,11 +507,12 @@ fn choose(case: Value) -> Value {
 
 fn for_each(item: Value) -> Value {
     json!({
-        "description": "Repeats `items` once per element of a list parameter, bound to `as`.",
+        "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
         "type": "object",
         "properties": {
             "$for_each": {"type": "string"},
             "as": {"type": "string"},
+            "except": {"type": "string"},
             "items": {"type": "array", "items": item}
         },
         "required": ["$for_each", "as", "items"],
