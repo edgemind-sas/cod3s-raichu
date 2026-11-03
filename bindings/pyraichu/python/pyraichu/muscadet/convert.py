@@ -937,7 +937,7 @@ class _MixedVolume:
     drawn: bool
     inlet: list[dict]
     outlets: dict[str, list[dict]]
-    pooled: dict
+    pooled: dict | None
     emitted: bool = False
 
 
@@ -1024,6 +1024,64 @@ def _mixed_volume_uses(capacity: Any, inputs: dict[str, Any], outputs: dict[str,
     return _MixedVolume(capacity, drawn, inlet, outlets, pooled)
 
 
+def _accumulator_uses(capacity: Any, inputs: dict[str, Any]) -> _MixedVolume:
+    """A volume holding inputs only, which no rule draws, as `volume_flow`
+    with no outlet per flow, `volume_total`, and `volume_stock` per flow
+    when it holds several: what it receives fills it, nothing leaves it.
+    Emitted by the inputs pass, like a mixed volume's inlet; it has no
+    outlets and no pooled draw."""
+    where = f"volume `{capacity.name}`"
+    _volume_refusal(capacity)
+    flows = list(capacity.flow_names)
+    volume = float(capacity.volume)
+    contents = {flow: float(capacity.content_init.get(flow, 0.0)) for flow in flows}
+    total = sum(contents.values())
+    if total >= volume:
+        raise _Refused("volume starting full", where)
+    fill: dict[str, Any] = (
+        {"fill_unbounded": True} if math.isinf(capacity.fill_rate) else {"fill_rate": float(capacity.fill_rate)}
+    )
+    total_with: dict[str, Any] = {
+        "volume": capacity.name,
+        "flows": flows,
+        "capacity": volume,
+        "initial": "partial" if total > 0.0 else "empty",
+    }
+    multi = len(flows) > 1
+    if multi:
+        total_with["ratio_flows"] = flows
+    inlet: list[dict] = [{"fragment": "muscadet.volume_total", "with": total_with}]
+    for flow in flows:
+        inlet.append(
+            {
+                "fragment": "muscadet.volume_flow",
+                "with": {
+                    "volume": capacity.name,
+                    "flow": flow,
+                    "capacity": volume,
+                    "content_init": contents[flow],
+                    "demand": float(inputs[flow].var_demand_in_default),
+                    "outlet": False,
+                    **fill,
+                },
+            }
+        )
+    if multi:
+        for flow in flows:
+            inlet.append(
+                {
+                    "fragment": "muscadet.volume_stock",
+                    "with": {
+                        "volume": capacity.name,
+                        "flow": flow,
+                        "capacity": volume,
+                        "initial": "stocked" if contents[flow] > 0.0 else "empty",
+                    },
+                }
+            )
+    return _MixedVolume(capacity, False, inlet, {}, None)
+
+
 def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dict], dict[str, str]]:
     """The std fragments a component's continuous part means, and the
     transitions they carry under the declaration route's names.
@@ -1069,6 +1127,29 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             for flow in capacity.flow_names:
                 stock = f"{capacity.name}_stock_{flow}"
                 automata[stock] = (stock, ("leave_empty", "reach_empty"))
+            for automaton, (prefix, transitions) in automata.items():
+                for transition in transitions:
+                    qualified = f"{name}.{automaton}.{prefix}_{transition}"
+                    rename[qualified] = qualified
+        elif (
+            capacity.side == "in"
+            and all(flow in inputs and flow not in outputs for flow in capacity.flow_names)
+            and not any(set(capacity.flow_names) & set(r.consumed()) for r in obj.rule_sets)
+        ):
+            # A volume holding inputs only, which no rule draws: an
+            # accumulator, written as output-side flows with no outlet.
+            try:
+                entry = _accumulator_uses(capacity, inputs)
+            except _Refused as error:
+                refused.append(error)
+                continue
+            for flow in capacity.flow_names:
+                mixed_held[flow] = entry
+            automata = {f"{capacity.name}_bounds": (capacity.name, ("leave_empty", "reach_empty", "reach_full", "leave_full"))}
+            if len(capacity.flow_names) > 1:
+                for flow in capacity.flow_names:
+                    stock = f"{capacity.name}_stock_{flow}"
+                    automata[stock] = (stock, ("leave_empty", "reach_empty"))
             for automaton, (prefix, transitions) in automata.items():
                 for transition in transitions:
                     qualified = f"{name}.{automaton}.{prefix}_{transition}"
@@ -1353,7 +1434,8 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         if flow.name in held:
             uses.append(held[flow.name][1][2])
     for entry in {id(e): e for e in mixed_held.values()}.values():
-        uses.append(entry.pooled)
+        if entry.pooled is not None:
+            uses.append(entry.pooled)
     return uses, rename
 
 

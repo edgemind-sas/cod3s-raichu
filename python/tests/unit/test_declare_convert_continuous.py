@@ -279,6 +279,26 @@ def test_a_transmitting_volume_converts():
     assert volume_uses and all(u["with"]["transmits"] is True for u in volume_uses)
 
 
+def accumulator_plant(flows=("q",), fill_rate=0.5) -> dict:
+    """Sources filling a tank that holds its inputs only and that no rule
+    draws: it accumulates until full."""
+    tank = component("TANK", [c_in(f, 1.0) for f in flows], class_name="Tank") | {
+        "capacities": [volume("tank", list(flows), 10.0, {f: 1.0 for f in flows}, fill_rate, side="in")]}
+    sources = [component(f"S{f}", [c_out(f, 1.5)], class_name="Source") for f in flows]
+    return document(sources + [tank], [link(f"S{f}", "TANK", f) for f in flows])
+
+
+@pytest.mark.parametrize(
+    "flows, fill_rate",
+    [(("q",), 0.5), (("q",), float("inf")), (("a", "b"), 2.0)],
+    ids=["bounded-fill", "unbounded-fill", "two-flows"],
+)
+def test_an_accumulator_no_rule_draws_converts(flows, fill_rate):
+    conversion = proved(accumulator_plant(flows, fill_rate), t_max=30.0, levels=VOLUME_LEVELS)
+    tank = uses_of(conversion, "Tank")
+    assert all(u["with"]["outlet"] is False for u in tank if u["fragment"] == "muscadet.volume_flow")
+
+
 def ring_plant(held=("Leak", "Air"), cascade: bool = False, leak_init: float = 1.0) -> dict:
     """A leak into a room with a through-path, a fan extracting it to a
     purge and renewing the air, blowing the air it drew back into the room.
