@@ -1471,7 +1471,7 @@
               "mixture"
             ],
             "default": "capability",
-            "description": "What the operator distributes: the capability (a source, a volume), what a rule set actually produced (`<name>_produced_out`), a mixed volume's pooled draw (`<name>_pooled_out`, `volume_pooled_flow`), or that draw for mixture groups (`mixture`: `volume_pooled_flow` with `drawn`), which hands each connection its composed request scaled to what the volume delivers and publishes the composition `<name>_composition_out` on the `composition` channel."
+            "description": "What the operator distributes: the capability (a source, a volume), what a rule set actually produced (`<name>_produced_out`), a mixed volume's pooled draw (`<name>_pooled_out`, `volume_pooled_flow`), or that draw for mixture groups (`mixture`: `volume_pooled_flow` with `drawn`), which hands each connection its composed request scaled to what the volume delivers and publishes the composition `<name>_composition_out` on the `composition` channel. A pooled or mixture output also publishes on its `transit` channel what reaches the volume on the input of the same name (`<name>_capability_in`), which `rule_expected` reads."
           },
           {
             "name": "allocation",
@@ -1573,6 +1573,9 @@
                 },
                 {
                   "name": "composition"
+                },
+                {
+                  "name": "transit"
                 }
               ],
               "equations": [
@@ -1856,10 +1859,10 @@
                         }
                       },
                       "pooled": {
-                        "op": "const",
-                        "value": {
-                          "kind": "float",
-                          "value": 0.0
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_composition_out"
                         }
                       },
                       "mixture": {
@@ -1867,6 +1870,42 @@
                         "attr": {
                           "component": "$self",
                           "attribute": "${name}_composition_out"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "channel": "transit",
+                  "expr": {
+                    "$choose": "available",
+                    "cases": {
+                      "capability": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      "produced": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      "pooled": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_capability_in"
+                        }
+                      },
+                      "mixture": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_capability_in"
                         }
                       }
                     }
@@ -4401,7 +4440,7 @@
       },
       {
         "name": "volume_pooled_flow",
-        "description": "What the volume `<volume>`, holding several flows downstream of the transfer, hands the output `<flow>` out of its pooled draw (`volume_pooled`): while `<flow>` is stocked (`volume_stock`), what arrives on the input `<flow>` (which transits the volume) plus the flow's share of the excess in proportion to its raw content (`ratio_flows` on `volume_total`), never more than the output's capability (`volume_outlet`); once `<flow>` has run out, the capability. It writes `<flow>_pooled_out`, which `continuous_flow_out` serves with `available: pooled`. A rule input it feeds applies `surplus_release`, which hands back what the rule does not consume. With `drawn`, mixture groups draw the volume: `<flow>_pooled_out` is what they ask of the output, never more than its capability, and `<flow>_composition_out` is the flow's share of the raw content (`ratio_flows` on `volume_total`), which `continuous_flow_out` with `available: mixture` publishes.",
+        "description": "What the volume `<volume>`, holding several flows downstream of the transfer, hands the output `<flow>` out of its pooled draw (`volume_pooled`): while `<flow>` is stocked (`volume_stock`), what arrives on the input `<flow>` (which transits the volume) plus the flow's share of the excess in proportion to its raw content (`ratio_flows` on `volume_total`), never more than the output's capability (`volume_outlet`); once `<flow>` has run out, the capability. It writes `<flow>_pooled_out`, which `continuous_flow_out` serves with `available: pooled`. A rule input it feeds applies `surplus_release`, which hands back what the rule does not consume. `<flow>_composition_out` is the flow's share of the raw content (`ratio_flows` on `volume_total`), which `continuous_flow_out` publishes with `available: pooled` or `mixture`. With `drawn`, mixture groups draw the volume: `<flow>_pooled_out` is what they ask of the output, never more than its capability.",
         "parameters": [
           {
             "name": "volume",
@@ -4417,7 +4456,7 @@
             "name": "drawn",
             "kind": "bool",
             "default": false,
-            "description": "Whether mixture groups (`mixture_in`) draw the volume: the output then hands out what its groups ask, already composed, never more than its capability, and publishes the flow's share of the content as `<flow>_composition_out`."
+            "description": "Whether mixture groups (`mixture_in`) draw the volume: the output then hands out what its groups ask, already composed, never more than its capability."
           }
         ],
         "body": {
@@ -4431,17 +4470,12 @@
               }
             },
             {
-              "$when": "drawn",
-              "items": [
-                {
-                  "name": "${flow}_composition_out",
-                  "kind": "float",
-                  "init": {
-                    "kind": "float",
-                    "value": 0.0
-                  }
-                }
-              ]
+              "name": "${flow}_composition_out",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
             }
           ],
           "equations": [
@@ -4535,20 +4569,15 @@
               }
             },
             {
-              "$when": "drawn",
-              "items": [
-                {
-                  "target": "${flow}_composition_out",
-                  "kind": "explicit",
-                  "expr": {
-                    "op": "attr",
-                    "attr": {
-                      "component": "$self",
-                      "attribute": "${volume}_ratio_${flow}"
-                    }
-                  }
+              "target": "${flow}_composition_out",
+              "kind": "explicit",
+              "expr": {
+                "op": "attr",
+                "attr": {
+                  "component": "$self",
+                  "attribute": "${volume}_ratio_${flow}"
                 }
-              ]
+              }
             }
           ]
         }
@@ -5724,7 +5753,7 @@
       },
       {
         "name": "rule_produces",
-        "description": "The producing rule `<active>` of the rule set `<rule_set>` produces the output `<flow>` (a `continuous_flow_out` with `available: produced`) at `rate` per unit of scale: its capability at the capability scale and `<flow>_produced_out` at the draw scale, bounded by `max_rate` when `capped`. With `tapped`, they are written before a `tap` takes its leaks (`<flow>_pre_tap_capability_out`, `<flow>_pre_tap_produced_out`). With `shared`, another rule set produces the flow too: the set writes its contributions `<rule_set>_<flow>_capability`, `<rule_set>_<flow>_production` and `<rule_set>_<flow>_served` (what it is expected to make, at its scale), which a `shared_output` sums onto the output and a `rule_cascade` subtracts from the demand left to the sets declared after it; `capped` and `tapped` do not apply.",
+        "description": "The producing rule `<active>` of the rule set `<rule_set>` produces the output `<flow>` (a `continuous_flow_out` with `available: produced`) at `rate` per unit of scale: its capability at the capability scale and `<flow>_produced_out` at the draw scale, bounded by `max_rate` when `capped`. With `tapped`, they are written before a `tap` takes its leaks (`<flow>_pre_tap_capability_out`, `<flow>_pre_tap_produced_out`). With `shared`, another rule set produces the flow too: the set writes its contributions `<rule_set>_<flow>_capability`, `<rule_set>_<flow>_production` and `<rule_set>_<flow>_served` (what it is expected to make, at its scale, or at its expected scale `<rule_set>_expected_scale` with `expected`), which a `shared_output` sums onto the output and a `rule_cascade` subtracts from the demand left to the sets declared after it; `capped` and `tapped` do not apply.",
         "parameters": [
           {
             "name": "rule_set",
@@ -5775,6 +5804,12 @@
             "kind": "bool",
             "default": false,
             "description": "Whether another rule set produces the flow too (`shared_output`)."
+          },
+          {
+            "name": "expected",
+            "kind": "bool",
+            "default": false,
+            "description": "With `shared`: what the rule set serves of the flow is taken at its expected scale (`rule_expected`) rather than its scale, for the sets declared after it in the cascade."
           }
         ],
         "body": {
@@ -6301,16 +6336,399 @@
                         }
                       },
                       {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${rule_set}_scale"
+                        "$choose": "expected",
+                        "cases": {
+                          "false": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_scale"
+                            }
+                          },
+                          "true": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${rule_set}_expected_scale"
+                            }
+                          }
                         }
                       }
                     ]
                   }
                 }
               ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "rule_expected",
+        "description": "The scale `<rule_set>_expected_scale` the rule set can be expected to run at: its scale, bounded on each input of `flows` (fed by one pooled or mixture output of a mixed volume) by what the volume will hand it, what transits the volume plus the excess of its need over that transit in proportion to the flow's share of the content, never more than its need. A cascade subtracts what an earlier set will make at that scale (`rule_produces` with `expected`) rather than what it asks.",
+        "parameters": [
+          {
+            "name": "rule_set",
+            "kind": "string",
+            "description": "Rule set."
+          },
+          {
+            "name": "active",
+            "kind": "string",
+            "description": "The active rule's state."
+          },
+          {
+            "name": "flows",
+            "kind": "list",
+            "items": "string",
+            "description": "Consumed inputs fed by a mixed volume."
+          },
+          {
+            "name": "always_on",
+            "kind": "bool",
+            "default": false,
+            "description": "As on `rule_set`."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${rule_set}_expected_scale",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": 0.0
+              }
+            }
+          ],
+          "equations": [
+            {
+              "target": "${rule_set}_expected_scale",
+              "kind": "explicit",
+              "expr": {
+                "op": "min",
+                "args": [
+                  {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${rule_set}_scale"
+                    }
+                  },
+                  {
+                    "$for_each": "flows",
+                    "as": "f",
+                    "items": [
+                      {
+                        "op": "if",
+                        "cond": {
+                          "op": "cmp",
+                          "cmp": "gt",
+                          "lhs": {
+                            "$choose": "always_on",
+                            "cases": {
+                              "false": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "state_active",
+                                  "state": {
+                                    "component": "$self",
+                                    "automaton": "${rule_set}_mode",
+                                    "state": "${active}"
+                                  }
+                                },
+                                "then": {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${rule_set}_cons_${f}"
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              },
+                              "true": {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${rule_set}_cons_${f}"
+                                }
+                              }
+                            }
+                          },
+                          "rhs": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
+                            }
+                          }
+                        },
+                        "then": {
+                          "op": "div",
+                          "lhs": {
+                            "op": "min",
+                            "args": [
+                              {
+                                "op": "mul",
+                                "args": [
+                                  {
+                                    "$choose": "always_on",
+                                    "cases": {
+                                      "false": {
+                                        "op": "if",
+                                        "cond": {
+                                          "op": "state_active",
+                                          "state": {
+                                            "component": "$self",
+                                            "automaton": "${rule_set}_mode",
+                                            "state": "${active}"
+                                          }
+                                        },
+                                        "then": {
+                                          "op": "attr",
+                                          "attr": {
+                                            "component": "$self",
+                                            "attribute": "${rule_set}_cons_${f}"
+                                          }
+                                        },
+                                        "otherwise": {
+                                          "op": "const",
+                                          "value": {
+                                            "kind": "float",
+                                            "value": 0.0
+                                          }
+                                        }
+                                      },
+                                      "true": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${rule_set}_cons_${f}"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "op": "attr",
+                                    "attr": {
+                                      "component": "$self",
+                                      "attribute": "${rule_set}_scale"
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "min",
+                                "args": [
+                                  {
+                                    "op": "mul",
+                                    "args": [
+                                      {
+                                        "$choose": "always_on",
+                                        "cases": {
+                                          "false": {
+                                            "op": "if",
+                                            "cond": {
+                                              "op": "state_active",
+                                              "state": {
+                                                "component": "$self",
+                                                "automaton": "${rule_set}_mode",
+                                                "state": "${active}"
+                                              }
+                                            },
+                                            "then": {
+                                              "op": "attr",
+                                              "attr": {
+                                                "component": "$self",
+                                                "attribute": "${rule_set}_cons_${f}"
+                                              }
+                                            },
+                                            "otherwise": {
+                                              "op": "const",
+                                              "value": {
+                                                "kind": "float",
+                                                "value": 0.0
+                                              }
+                                            }
+                                          },
+                                          "true": {
+                                            "op": "attr",
+                                            "attr": {
+                                              "component": "$self",
+                                              "attribute": "${rule_set}_cons_${f}"
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${rule_set}_scale"
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "op": "add",
+                                    "args": [
+                                      {
+                                        "op": "port_agg",
+                                        "port": {
+                                          "component": "$self",
+                                          "port": "${f}_in"
+                                        },
+                                        "agg": "sum",
+                                        "channel": "transit"
+                                      },
+                                      {
+                                        "op": "mul",
+                                        "args": [
+                                          {
+                                            "op": "max",
+                                            "args": [
+                                              {
+                                                "op": "const",
+                                                "value": {
+                                                  "kind": "float",
+                                                  "value": 0.0
+                                                }
+                                              },
+                                              {
+                                                "op": "sub",
+                                                "lhs": {
+                                                  "op": "mul",
+                                                  "args": [
+                                                    {
+                                                      "$choose": "always_on",
+                                                      "cases": {
+                                                        "false": {
+                                                          "op": "if",
+                                                          "cond": {
+                                                            "op": "state_active",
+                                                            "state": {
+                                                              "component": "$self",
+                                                              "automaton": "${rule_set}_mode",
+                                                              "state": "${active}"
+                                                            }
+                                                          },
+                                                          "then": {
+                                                            "op": "attr",
+                                                            "attr": {
+                                                              "component": "$self",
+                                                              "attribute": "${rule_set}_cons_${f}"
+                                                            }
+                                                          },
+                                                          "otherwise": {
+                                                            "op": "const",
+                                                            "value": {
+                                                              "kind": "float",
+                                                              "value": 0.0
+                                                            }
+                                                          }
+                                                        },
+                                                        "true": {
+                                                          "op": "attr",
+                                                          "attr": {
+                                                            "component": "$self",
+                                                            "attribute": "${rule_set}_cons_${f}"
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "op": "attr",
+                                                      "attr": {
+                                                        "component": "$self",
+                                                        "attribute": "${rule_set}_scale"
+                                                      }
+                                                    }
+                                                  ]
+                                                },
+                                                "rhs": {
+                                                  "op": "port_agg",
+                                                  "port": {
+                                                    "component": "$self",
+                                                    "port": "${f}_in"
+                                                  },
+                                                  "agg": "sum",
+                                                  "channel": "transit"
+                                                }
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "op": "port_agg",
+                                            "port": {
+                                              "component": "$self",
+                                              "port": "${f}_in"
+                                            },
+                                            "agg": "sum",
+                                            "channel": "composition"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          "rhs": {
+                            "$choose": "always_on",
+                            "cases": {
+                              "false": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "state_active",
+                                  "state": {
+                                    "component": "$self",
+                                    "automaton": "${rule_set}_mode",
+                                    "state": "${active}"
+                                  }
+                                },
+                                "then": {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${rule_set}_cons_${f}"
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                }
+                              },
+                              "true": {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${rule_set}_cons_${f}"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "otherwise": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${rule_set}_scale"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
             }
           ]
         }

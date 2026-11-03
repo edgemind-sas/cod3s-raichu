@@ -122,3 +122,23 @@ def test_a_transmitting_buffer_passes_on_what_crosses_it_once_empty():
     events, s = run(library, t_max)
     assert any(name.endswith("reach_empty") for _, name in events)
     assert any(name.endswith("leave_empty") for _, name in events)
+
+
+def test_a_cascade_after_a_pooled_extraction_asks_the_renewal_the_rest():
+    """The extraction asks the whole exhaust demand, 50, but makes only
+    what the pooled room hands it; the renewal is asked what is left, so
+    the exhaust is served whole."""
+    plugin, library, t_max = models("ventilation_ring_cascade")
+    _, s = run(library, t_max)
+    assert s["ATMOSPHERE_exhaust_fed_in"][-1] == pytest.approx(50.0, rel=1e-9)
+    assert s["VENTILATION_AIR_fed_in"][-1] > 40.0
+
+
+def test_the_comparison_sees_the_expected_scale_missing():
+    types = copy.deepcopy(TYPES)
+    ty = next(t for t in types if t["name"] == "CascadedVentilation")
+    ty["uses"] = [u for u in ty["uses"] if u["fragment"] != "muscadet.rule_expected"]
+    for u in ty["uses"]:
+        u["with"].pop("expected", None)
+    plugin, library, t_max = models("ventilation_ring_cascade", types=types)
+    assert run(library, t_max) != run(plugin, t_max)

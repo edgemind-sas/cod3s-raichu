@@ -597,7 +597,7 @@
               "mixture"
             ],
             "default": "capability",
-            "description": "What the operator distributes: the capability (a source, a volume), what a rule set actually produced (`<name>_produced_out`), a mixed volume's pooled draw (`<name>_pooled_out`, `volume_pooled_flow`), or that draw for mixture groups (`mixture`: `volume_pooled_flow` with `drawn`), which hands each connection its composed request scaled to what the volume delivers and publishes the composition `<name>_composition_out` on the `composition` channel."
+            "description": "What the operator distributes: the capability (a source, a volume), what a rule set actually produced (`<name>_produced_out`), a mixed volume's pooled draw (`<name>_pooled_out`, `volume_pooled_flow`), or that draw for mixture groups (`mixture`: `volume_pooled_flow` with `drawn`), which hands each connection its composed request scaled to what the volume delivers and publishes the composition `<name>_composition_out` on the `composition` channel. A pooled or mixture output also publishes on its `transit` channel what reaches the volume on the input of the same name (`<name>_capability_in`), which `rule_expected` reads."
           },
           {
             "name": "allocation",
@@ -1506,7 +1506,7 @@
       },
       {
         "name": "rule_produces",
-        "description": "Forwards to `muscadet.rule_produces`, which this name applies unchanged; withdrawn at the next major release. The producing rule `<active>` of the rule set `<rule_set>` produces the output `<flow>` (a `continuous_flow_out` with `available: produced`) at `rate` per unit of scale: its capability at the capability scale and `<flow>_produced_out` at the draw scale, bounded by `max_rate` when `capped`. With `tapped`, they are written before a `tap` takes its leaks (`<flow>_pre_tap_capability_out`, `<flow>_pre_tap_produced_out`). With `shared`, another rule set produces the flow too: the set writes its contributions `<rule_set>_<flow>_capability`, `<rule_set>_<flow>_production` and `<rule_set>_<flow>_served` (what it is expected to make, at its scale), which a `shared_output` sums onto the output and a `rule_cascade` subtracts from the demand left to the sets declared after it; `capped` and `tapped` do not apply.",
+        "description": "Forwards to `muscadet.rule_produces`, which this name applies unchanged; withdrawn at the next major release. The producing rule `<active>` of the rule set `<rule_set>` produces the output `<flow>` (a `continuous_flow_out` with `available: produced`) at `rate` per unit of scale: its capability at the capability scale and `<flow>_produced_out` at the draw scale, bounded by `max_rate` when `capped`. With `tapped`, they are written before a `tap` takes its leaks (`<flow>_pre_tap_capability_out`, `<flow>_pre_tap_produced_out`). With `shared`, another rule set produces the flow too: the set writes its contributions `<rule_set>_<flow>_capability`, `<rule_set>_<flow>_production` and `<rule_set>_<flow>_served` (what it is expected to make, at its scale, or at its expected scale `<rule_set>_expected_scale` with `expected`), which a `shared_output` sums onto the output and a `rule_cascade` subtracts from the demand left to the sets declared after it; `capped` and `tapped` do not apply.",
         "parameters": [
           {
             "name": "rule_set",
@@ -1557,6 +1557,12 @@
             "kind": "bool",
             "default": false,
             "description": "Whether another rule set produces the flow too (`shared_output`)."
+          },
+          {
+            "name": "expected",
+            "kind": "bool",
+            "default": false,
+            "description": "With `shared`: what the rule set serves of the flow is taken at its expected scale (`rule_expected`) rather than its scale, for the sets declared after it in the cascade."
           }
         ],
         "uses": [
@@ -1589,6 +1595,9 @@
               },
               "shared": {
                 "$param": "shared"
+              },
+              "expected": {
+                "$param": "expected"
               }
             }
           }

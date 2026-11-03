@@ -1139,6 +1139,8 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
     # the plugin route's cascade does, unless a producer apportions it.
     contested = {flow: sets for flow, sets in produced_by.items() if len(sets) > 1}
     pooled_inputs = {flow for component, flow in network.pooled_fed if component == name}
+    #: Rule sets ahead in a cascade fed by a mixed volume, with those inputs.
+    expecting: dict[str, list[str]] = {}
     shared_by: dict[str, dict[str, list[str]]] = {}
     for flow, sets in contested.items():
         where = f"output `{flow}` by {sets}"
@@ -1149,11 +1151,19 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             refused.append(_Refused("maximum rate on an output produced by two rule sets", where))
         elif any(set(r.consumed()) & drawn for r in producers):
             refused.append(_Refused("output produced by two rule sets drawing from a volume", where))
-        elif any(set(r.consumed()) & pooled_inputs for r in producers[:-1]):
+        for earlier in producers[:-1]:
             # The declaration route subtracts what such a set is expected
-            # to make out of the pooled offer, not what it asks: no
-            # fragment carries that estimate yet.
-            refused.append(_Refused("output produced by two rule sets, an earlier one fed by a mixed volume", where))
+            # to make out of the pooled offer, not what it asks
+            # (`muscadet.rule_expected`), read off its one supplier.
+            fed = sorted(set(earlier.consumed()) & pooled_inputs)
+            twice = [f for f in fed if network.suppliers.get((name, f), 0) >= 2]
+            if twice:
+                refused.append(
+                    _Refused("mixed-volume input fed by two suppliers or more, ahead in a cascade",
+                             f"rule set `{earlier.name}`: {twice}")
+                )
+            elif fed:
+                expecting[earlier.name] = fed
         for position, rule_set in enumerate(sets):
             shared_by.setdefault(rule_set, {})[flow] = sets[:position]
     for flow, sets in consumed_by.items():
@@ -1221,6 +1231,22 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             for use in these:
                 if use["fragment"] == "muscadet.rule_set":
                     use["with"]["torn"] = [flow for flow in use["with"]["produces"] if flow in made]
+        if rule_set.name in expecting:
+            head = next(u["with"] for u in these if u["fragment"] == "muscadet.rule_set")
+            for use in these:
+                if use["fragment"] == "muscadet.rule_produces" and use["with"].get("shared"):
+                    use["with"]["expected"] = True
+            these.append(
+                {
+                    "fragment": "muscadet.rule_expected",
+                    "with": {
+                        "rule_set": rule_set.name,
+                        "active": head["active"],
+                        "flows": expecting[rule_set.name],
+                        "always_on": bool(head.get("always_on", False)),
+                    },
+                }
+            )
         rule_uses += these
         if _always_on(rule_set):
             continue
