@@ -455,11 +455,7 @@ def _flow_call_use(spec: dict, call: Any, inputs: set[str], outputs: set[str]) -
 #: The authoring methods of the continuous flow classes.
 _CONTINUOUS_METHODS = ("add_flow_continuous_in", "add_flow_continuous_out")
 #: Sections read whole, per component, by :func:`_continuous_uses`.
-_CONTINUOUS_SECTIONS = ("capacities", "rules")
-#: Construct named for a volume the declaration route serves as a mixture
-#: (:meth:`pyraichu.muscadet.ObjFlow._mixed_volume`): pooled serving is a
-#: generic format mechanism the library does not have yet.
-_POOLED = "pooled serving (mixed volume)"
+_CONTINUOUS_SECTIONS = ("capacities", "rules", "mixtures")
 
 
 @dataclass(frozen=True)
@@ -471,6 +467,21 @@ class _Network:
     suppliers: dict[tuple[str, str], int]
     consumers: dict[tuple[str, str], list[tuple[str, str]]]
     wired: dict[str, set[str]]
+    #: What only the whole flow graph decides, read off the declaration
+    #: route's own system (:func:`_graph_shapes`): per component, the rule
+    #: outputs a recirculation ring is torn at; the (component, volume) pairs
+    #: mixture groups draw; the (component, input) pairs a mixed volume's
+    #: pooled draw feeds; and why the declaration route refuses the mixture
+    #: groups, when it does.
+    torn: dict[str, set[str]] = field(default_factory=dict)
+    drawn: frozenset[tuple[str, str]] = frozenset()
+    pooled_fed: frozenset[tuple[str, str]] = frozenset()
+    group_refusal: str | None = None
+    #: Why the declaration route's reader refuses the flow system as a
+    #: whole (a dangling connection, a box wired to the wrong kind), when
+    #: it does: without the system the graph shapes are unknown, so nothing
+    #: converts.
+    system_refusal: str | None = None
 
     @classmethod
     def of(cls, declaration: dict, components: dict) -> _Network:
@@ -484,7 +495,50 @@ class _Network:
             if box.endswith("_out") and inbox.endswith("_in"):
                 consumers.setdefault((source, box[: -len("_out")]), []).append((target, inbox[: -len("_in")]))
         wired = declare._wired_rate_channels(components, declaration.get("connections"))
-        return cls(dict(suppliers), consumers, wired)
+        return cls(dict(suppliers), consumers, wired, *_graph_shapes(declaration))
+
+
+def _graph_shapes(
+    declaration: dict,
+) -> tuple[dict[str, set[str]], frozenset[tuple[str, str]], frozenset[tuple[str, str]], str | None, str | None]:
+    """The torn outputs, drawn volumes, pooled-fed inputs, group refusal
+    and system refusal of :class:`_Network`, computed by the declaration
+    route's system on the whole flow graph, so the two routes cannot
+    disagree on a ring or a group. A declaration the reader refuses as a
+    system yields no shapes and the reader's reason, which refuses the
+    whole conversion; any other error is not the reader's and propagates."""
+    try:
+        flows, controllers, gates, modes = declare._split_kinds(declaration)
+        controller_objects = {
+            obj["name"]: obj for obj in (declare.controller_object(e, name=n) for n, e in controllers.items())
+        }
+        declared = {**flows, **controllers, **gates, **modes}
+        gate_objects = {
+            obj["name"]: obj
+            for obj in (declare.logic_gate_object(e, name=n, components=declared) for n, e in gates.items())
+        }
+        system = declare._build_flow_system(flows, declaration, None, None, controller_objects, gate_objects)
+        edges = system._continuous_edges()
+    except (declare.SystemSpecError, declare.ComponentSpecError, ValueError) as error:
+        return {}, frozenset(), frozenset(), None, f"{type(error).__name__}: {error}"
+    refusal = None
+    try:
+        system._resolve_mixture_groups(edges)
+    except ValueError as error:
+        refusal = str(error)
+    torn = system._ring_torn_outputs(edges)
+    drawn = frozenset(
+        (name, capacity.name)
+        for name, obj in system.comp.items()
+        for capacity in obj.capacities
+        if capacity.serves_mixture
+    )
+    pooled_fed = frozenset(
+        (edge.consumer, edge.flow_in)
+        for edge in edges
+        if system.comp[edge.producer]._mixed_volume(edge.flow_out) is not None
+    )
+    return torn, drawn, pooled_fed, refusal, None
 
 
 def _is_continuous(call: Any) -> bool:
@@ -823,7 +877,8 @@ def _input_volume_uses(capacity: Any) -> list[dict]:
 
 def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
     """A single-flow volume on the output side, as `muscadet.volume_flow`,
-    `muscadet.volume_outlet` and `muscadet.volume_total`."""
+    `muscadet.volume_outlet` and `muscadet.volume_total`, with `transmits`
+    on the first two when the volume has a through-path."""
     where = f"volume `{capacity.name}`"
     _volume_refusal(capacity)
     if flow_out.profile is not None or flow_out.max_rate is not None:
@@ -849,6 +904,7 @@ def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
                 "capacity": volume,
                 "content_init": content,
                 "demand": float(flow_in.var_demand_in_default),
+                "transmits": bool(capacity.transmits),
                 **fill,
             },
         },
@@ -859,6 +915,7 @@ def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
                 "flow": flow,
                 "rate": float(flow_out.var_fed_default),
                 "empty_automaton": f"{capacity.name}_bounds",
+                "transmits": bool(capacity.transmits),
             },
         },
         {
@@ -866,6 +923,105 @@ def _volume_uses(capacity: Any, flow_in: Any, flow_out: Any) -> list[dict]:
             "with": {"volume": capacity.name, "flows": [flow], "capacity": volume, "initial": initial},
         },
     ]
+
+
+@dataclass
+class _MixedVolume:
+    """A volume holding several flows on the output side, served pooled:
+    the uses the inputs pass emits (`volume_total`, then per flow
+    `volume_flow` and `volume_stock`), the uses each output emits
+    (`volume_outlet`, `volume_pooled_flow`), and `volume_pooled`, emitted
+    after the outputs."""
+
+    capacity: Any
+    drawn: bool
+    inlet: list[dict]
+    outlets: dict[str, list[dict]]
+    pooled: dict
+    emitted: bool = False
+
+
+def _mixed_volume_uses(capacity: Any, inputs: dict[str, Any], outputs: dict[str, Any], drawn: bool) -> _MixedVolume:
+    """A mixed volume as the pooled-serving fragments, with `drawn` when
+    mixture groups draw it and `transmits` when it has a through-path."""
+    where = f"volume `{capacity.name}`"
+    _volume_refusal(capacity)
+    flows = list(capacity.flow_names)
+    missing = [flow for flow in flows if flow not in inputs or flow not in outputs]
+    if missing:
+        raise _Refused("mixed volume flow without an inlet and an outlet", f"{where}: {missing}")
+    for flow in flows:
+        if outputs[flow].profile is not None or outputs[flow].max_rate is not None:
+            raise _Refused("factor on a volume's output", f"{where}, output `{flow}`")
+    volume = float(capacity.volume)
+    contents = {flow: float(capacity.content_init.get(flow, 0.0)) for flow in flows}
+    total = sum(contents.values())
+    if total >= volume:
+        raise _Refused("volume starting full", where)
+    fill: dict[str, Any] = (
+        {"fill_unbounded": True} if math.isinf(capacity.fill_rate) else {"fill_rate": float(capacity.fill_rate)}
+    )
+    transmits = bool(capacity.transmits)
+    inlet: list[dict] = [
+        {
+            "fragment": "muscadet.volume_total",
+            "with": {
+                "volume": capacity.name,
+                "flows": flows,
+                "capacity": volume,
+                "initial": "partial" if total > 0.0 else "empty",
+                "ratio_flows": flows,
+            },
+        }
+    ]
+    for flow in flows:
+        inlet.append(
+            {
+                "fragment": "muscadet.volume_flow",
+                "with": {
+                    "volume": capacity.name,
+                    "flow": flow,
+                    "capacity": volume,
+                    "content_init": contents[flow],
+                    "demand": float(inputs[flow].var_demand_in_default),
+                    "transmits": transmits,
+                    **fill,
+                },
+            }
+        )
+    for flow in flows:
+        inlet.append(
+            {
+                "fragment": "muscadet.volume_stock",
+                "with": {
+                    "volume": capacity.name,
+                    "flow": flow,
+                    "capacity": volume,
+                    "initial": "stocked" if contents[flow] > 0.0 else "empty",
+                },
+            }
+        )
+    outlets = {
+        flow: [
+            {
+                "fragment": "muscadet.volume_outlet",
+                "with": {
+                    "volume": capacity.name,
+                    "flow": flow,
+                    "rate": float(outputs[flow].var_fed_default),
+                    "empty_automaton": f"{capacity.name}_stock_{flow}",
+                    "transmits": transmits,
+                },
+            },
+            {
+                "fragment": "muscadet.volume_pooled_flow",
+                "with": {"volume": capacity.name, "flow": flow, "drawn": drawn},
+            },
+        ]
+        for flow in flows
+    }
+    pooled = {"fragment": "muscadet.volume_pooled", "with": {"volume": capacity.name, "flows": flows}}
+    return _MixedVolume(capacity, drawn, inlet, outlets, pooled)
 
 
 def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dict], dict[str, str]]:
@@ -895,13 +1051,28 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
 
     # Volumes first: a mixture is the one refusal no other reading explains.
     held: dict[str, tuple[Any, list[dict]]] = {}
+    mixed_held: dict[str, _MixedVolume] = {}
     upstream: list[list[dict]] = []
     drawn: set[str] = set()
     for capacity in obj.capacities:
         where = f"volume `{capacity.name}`"
         mixed = [flow for flow in capacity.flow_names if flow in outputs and obj._mixed_volume(flow) is not None]
         if mixed:
-            refused.append(_Refused(_POOLED, f"{where} serves {mixed} as a mixture"))
+            try:
+                entry = _mixed_volume_uses(capacity, inputs, outputs, (name, capacity.name) in network.drawn)
+            except _Refused as error:
+                refused.append(error)
+                continue
+            for flow in capacity.flow_names:
+                mixed_held[flow] = entry
+            automata = {f"{capacity.name}_bounds": (capacity.name, ("leave_empty", "reach_empty", "reach_full", "leave_full"))}
+            for flow in capacity.flow_names:
+                stock = f"{capacity.name}_stock_{flow}"
+                automata[stock] = (stock, ("leave_empty", "reach_empty"))
+            for automaton, (prefix, transitions) in automata.items():
+                for transition in transitions:
+                    qualified = f"{name}.{automaton}.{prefix}_{transition}"
+                    rename[qualified] = qualified
         elif capacity.side == "in":
             # Upstream of the rules: every flow it holds is an input a rule
             # set draws from it (the reader refuses a flow carried twice).
@@ -945,8 +1116,6 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             refused.append(_Refused("volume not on an input and an output", where))
         elif obj._beside_rules(capacity.flow_names[0], "out") is not None:
             refused.append(_Refused("volume beside a rule set", where))
-        elif capacity.transmits:
-            refused.append(_Refused("transmitting volume (`transmits`)", where))
         else:
             # Once the volume leaves a bound, the two routes date that
             # departure about 3e-11 apart and their contents part at about
@@ -969,6 +1138,7 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
     # An output two rule sets produce is served in declaration order, as
     # the plugin route's cascade does, unless a producer apportions it.
     contested = {flow: sets for flow, sets in produced_by.items() if len(sets) > 1}
+    pooled_inputs = {flow for component, flow in network.pooled_fed if component == name}
     shared_by: dict[str, dict[str, list[str]]] = {}
     for flow, sets in contested.items():
         where = f"output `{flow}` by {sets}"
@@ -979,21 +1149,36 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             refused.append(_Refused("maximum rate on an output produced by two rule sets", where))
         elif any(set(r.consumed()) & drawn for r in producers):
             refused.append(_Refused("output produced by two rule sets drawing from a volume", where))
+        elif any(set(r.consumed()) & pooled_inputs for r in producers[:-1]):
+            # The declaration route subtracts what such a set is expected
+            # to make out of the pooled offer, not what it asks: no
+            # fragment carries that estimate yet.
+            refused.append(_Refused("output produced by two rule sets, an earlier one fed by a mixed volume", where))
         for position, rule_set in enumerate(sets):
             shared_by.setdefault(rule_set, {})[flow] = sets[:position]
     for flow, sets in consumed_by.items():
         if len(sets) > 1:
             refused.append(_Refused("input consumed by two rule sets", f"input `{flow}` by {sets}"))
 
+    grouped = {flow for group in obj.mixtures for flow in group.flows}
+    if obj.mixtures and network.group_refusal:
+        refused.append(_Refused("mixture group shape", network.group_refusal))
+    for group in obj.mixtures:
+        if group.commanded:
+            refused.append(_Refused("mixture group run command", f"mixture group `{group.name}`"))
     for flow in inputs.values():
         where = f"input `{flow.name}`"
         if flow.var_in_default:
             refused.append(_Refused("value of an unconnected continuous input", where))
         if flow.demand_expr is not None:
             refused.append(_Refused("demand equation", where))
-        if flow.mixture_demand is not None:
-            refused.append(_Refused(_POOLED, f"{where} draws a mixture"))
-        sink = not (obj._passes_through(flow.name) or flow.name in held or flow.name in consumed_by)
+        sink = not (
+            obj._passes_through(flow.name)
+            or flow.name in held
+            or flow.name in mixed_held
+            or flow.name in consumed_by
+            or flow.name in grouped
+        )
         if flow.profile is not None and not sink:
             refused.append(_Refused("profile on an input that is not a sink", where))
         refused += _profile_refusal(flow.profile, where)
@@ -1017,14 +1202,26 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             refused.append(_Refused("tap routed into an output", where))
 
     rule_uses: list[dict] = []
+    torn = network.torn.get(name, set())
     for rule_set in obj.rule_sets:
         try:
-            rule_uses += _rule_set_uses(
+            these = _rule_set_uses(
                 rule_set, inputs, outputs, bool_inputs, frozenset(drawn), shared_by.get(rule_set.name)
             )
         except _Refused as error:
             refused.append(error)
             continue
+        made = set(rule_set.produced()) & torn
+        if made & set(contested):
+            refused.append(
+                _Refused("ring torn at an output two rule sets produce", f"rule set `{rule_set.name}`: {sorted(made)}")
+            )
+            continue
+        if made:
+            for use in these:
+                if use["fragment"] == "muscadet.rule_set":
+                    use["with"]["torn"] = [flow for flow in use["with"]["produces"] if flow in made]
+        rule_uses += these
         if _always_on(rule_set):
             continue
         guarded = next(rule for rule in rule_set.rules if not rule.is_default)
@@ -1042,14 +1239,24 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
                 "with": {"name": flow.name, "demand": float(flow.var_demand_in_default)},
             }
         )
-        if flow.name in consumed_by and network.suppliers.get((name, flow.name), 0) >= 2:
+        if flow.name in consumed_by and (
+            network.suppliers.get((name, flow.name), 0) >= 2 or (name, flow.name) in network.pooled_fed
+        ):
+            # A rule input a mixed volume feeds hands back what the rule
+            # does not consume, as one with two suppliers does.
             uses.append({"fragment": "muscadet.surplus_release", "with": {"name": flow.name}})
         if flow.publish_rate is not None:
             uses.append({"fragment": "muscadet.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED}})
-        if obj._passes_through(flow.name) or flow.name in consumed_by:
+        if obj._passes_through(flow.name) or flow.name in consumed_by or flow.name in grouped:
             continue
         if flow.name in held:
             uses.append(held[flow.name][1][0])
+            continue
+        if flow.name in mixed_held:
+            entry = mixed_held[flow.name]
+            if not entry.emitted:
+                uses += entry.inlet
+                entry.emitted = True
             continue
         if flow.profile is not None:
             uses += _profile_uses(f"{flow.name}_in_profile", flow.profile)
@@ -1061,6 +1268,13 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
                     "demand": float(flow.var_demand_in_default),
                     "profiled": flow.profile is not None,
                 },
+            }
+        )
+    for group in obj.mixtures:
+        uses.append(
+            {
+                "fragment": "muscadet.mixture_in",
+                "with": {"name": group.name, "flows": list(group.flows), "flow_rate": float(group.flow_rate)},
             }
         )
     for volume_uses in upstream:
@@ -1076,6 +1290,12 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             out["available"] = "produced"
         elif flow.name in produced_by:
             out["available"] = "produced"
+        elif flow.name in mixed_held:
+            entry = mixed_held[flow.name]
+            uses += entry.outlets[flow.name]
+            out["available"] = "mixture" if entry.drawn else "pooled"
+            out["held"] = True
+            out["empty_automaton"] = f"{entry.capacity.name}_stock_{flow.name}"
         elif flow.name in held:
             capacity, volume_uses = held[flow.name]
             uses.append(volume_uses[1])
@@ -1106,6 +1326,8 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         uses.append({"fragment": "muscadet.continuous_flow_out", "with": out})
         if flow.name in held:
             uses.append(held[flow.name][1][2])
+    for entry in {id(e): e for e in mixed_held.values()}.values():
+        uses.append(entry.pooled)
     return uses, rename
 
 
@@ -2453,6 +2675,10 @@ def convert(
             "the study declares none"
         )
 
+    if network.system_refusal and not refusals:
+        # Every component read, but the flow system did not build: the
+        # rings and groups are unknown, so nothing converts.
+        refuse("system", _Refused("declaration refused by the reader", network.system_refusal))
     if refusals:
         return Conversion(None, None, None, refusals, {}, notes, unverified)
 

@@ -357,18 +357,27 @@ are bands, comparisons or republished readings and its inputs read a level, a
 constituent's share or a rate, summed, averaged or taken at their median
 (`std.aggregate_measure`, `std.threshold_band`, `std.threshold_compare`,
 `std.republish`); an output may publish what it delivers (`muscadet.rate_publisher`
-with side `out`). The converter reads each component with the
-declaration route's own reader and asks it what each flow is, so a flow is
-a pass-through, a volume's or a rule set's on both routes alike.
+with side `out`). A volume holding several flows on the output side
+converts to pooled serving (`muscadet.volume_pooled`,
+`muscadet.volume_pooled_flow`), drawn by mixture groups
+(`muscadet.mixture_in`) when the declaration declares them, and a volume
+with a through-path takes `transmits`. A recirculation ring through a
+volume is torn where the declaration route tears it: the output is listed
+in the `torn` parameter of the rule set making it. The converter reads each
+component with the declaration route's own reader and asks it what each
+flow is, so a flow is a pass-through, a volume's or a rule set's on both
+routes alike; the rings and the mixture groups, which only the whole flow
+graph decides, are read off the declaration route's own system, and a
+mixture group that route refuses is refused with its reason.
 
-It refuses by name the continuous constructs no bench proves yet: a volume
-served as a mixture (`pooled serving (mixed volume)`, several flows in one
-volume on the output side), a transmitting volume (`transmits`), a volume
+It refuses by name the continuous constructs no bench proves yet: a mixed
+volume whose flows lack an inlet or an outlet, a mixture group with a run
+command, a ring torn at an output two rule sets produce, a volume
 starting full, with a finite serve rate, a discharge command, a make-up
 flow, a hysteresis or a flow weight, a volume on the input side holding a
 flow no rule draws or fed by two suppliers or more, a conditioned rule set
 drawing from a volume, a maximum rate on an always-on rule's output,
-output-side volumes beside rule sets or holding several flows, multi-rule
+output-side volumes beside rule sets, multi-rule
 rule sets, an output two rule sets produce when a producer apportions it,
 caps it with a maximum rate or draws from a volume, an input two rule sets
 consume, demand and capability

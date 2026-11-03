@@ -222,8 +222,8 @@ def test_a_converted_profile_period_altered_is_reported_divergent():
 # --- what is refused by name ---------------------------------------------------
 
 
-def test_a_mixed_volume_is_refused_and_a_single_flow_one_converts():
-    mixed = document(
+def mixed_room_plant() -> dict:
+    return document(
         [
             component("S", [c_out("A", 2.0), c_out("B", 1.0)], class_name="Source"),
             component("T", [c_in("A"), c_in("B"), c_out("A"), c_out("B")], class_name="Room")
@@ -232,10 +232,30 @@ def test_a_mixed_volume_is_refused_and_a_single_flow_one_converts():
         ],
         [link("S", "T", "A"), link("S", "T", "B"), link("T", "C", "A"), link("T", "C", "B")],
     )
-    found = refusals(mixed)
-    assert "pooled serving (mixed volume)" in found
-    # Checked first: a mixed volume is not also refused for its shape.
-    assert "multi-flow volume" not in found
+
+
+def uses_of(conversion, type_name: str) -> list[dict]:
+    return next(t for t in conversion.library["library"]["types"] if t["name"] == type_name)["uses"]
+
+
+def test_a_mixed_volume_converts_to_pooled_serving():
+    conversion = proved(mixed_room_plant(), levels=VOLUME_LEVELS)
+    fragments = [use["fragment"] for use in uses_of(conversion, "Room")]
+    assert "muscadet.volume_pooled" in fragments
+    assert fragments.count("muscadet.volume_pooled_flow") == 2
+
+
+def test_a_mixed_volume_flow_without_an_outlet_is_refused():
+    declaration = mixed_room_plant()
+    declaration["components"]["T"]["flows"] = [
+        f for f in declaration["components"]["T"]["flows"] if not (f["name"] == "B" and f["cls"] == "FlowContinuousOut")
+    ]
+    declaration["connections"] = [c for c in declaration["connections"] if not (c["source"] == "T" and c["source_box"] == "B_out")]
+    # The declaration route's reader refuses it before the converter asks.
+    assert refusals(declaration) == ["declaration refused by the reader"]
+
+
+def test_a_single_flow_volume_converts():
     single = document(
         [
             component("S", [c_out("A", 2.0)], class_name="Source"),
@@ -248,10 +268,114 @@ def test_a_mixed_volume_is_refused_and_a_single_flow_one_converts():
     proved(single, levels=VOLUME_LEVELS)
 
 
-def test_a_transmitting_volume_is_refused():
+def test_a_transmitting_volume_converts():
     declaration = store_plant(0.5)
     declaration["components"]["T"]["capacities"][0]["transmits"] = True
-    assert refusals(declaration) == ["transmitting volume (`transmits`)"]
+    conversion = proved(declaration, levels=VOLUME_LEVELS)
+    volume_uses = [
+        u for ty in conversion.library["library"]["types"] for u in ty["uses"]
+        if u["fragment"] in ("muscadet.volume_flow", "muscadet.volume_outlet")
+    ]
+    assert volume_uses and all(u["with"]["transmits"] is True for u in volume_uses)
+
+
+def ring_plant(held=("Leak", "Air"), cascade: bool = False, leak_init: float = 1.0) -> dict:
+    """A leak into a room with a through-path, a fan extracting it to a
+    purge and renewing the air, blowing the air it drew back into the room.
+    With `cascade`, the extraction exhausts into the renewal's exhaust
+    instead, ahead of it."""
+    local = component("LOCAL", [c_in("Leak"), c_in("Air"), c_out("Leak"), c_out("Air")], class_name="Room") | {
+        "capacities": [volume("room", list(held), 100.0, {f: (89.0 if f == "Air" else leak_init) for f in held},
+                              float("inf"), transmits=True)]}
+    purge = "Exhaust" if cascade else "Purge"
+    vent = component("VENT", [c_in("Leak"), c_in("Air"), c_out("Exhaust"), c_out("Air")]
+                     + ([] if cascade else [c_out("Purge")]), class_name="Ventilation")
+    vent["rules"] = [
+        {"name": "extraction", "rules": [rule("go", [], {"Leak": 2.0}, {purge: 2.0})]},
+        {"name": "renewal", "rules": [rule("go", [], {"Air": 25.0}, {"Exhaust": 25.0, "Air": 25.0})]},
+    ]
+    components = [component("LEAK", [c_out("Leak", 0.05)], class_name="Leak"), local, vent,
+                  component("ATM", [c_in("Exhaust", 50.0)], class_name="Outside")]
+    links = [link("LEAK", "LOCAL", "Leak"), link("LOCAL", "VENT", "Leak"), link("LOCAL", "VENT", "Air"),
+             link("VENT", "LOCAL", "Air"), link("VENT", "ATM", "Exhaust")]
+    if not cascade:
+        components.append(component("STACK", [c_in("Purge", 1.0)], class_name="Outside"))
+        links.append(link("VENT", "STACK", "Purge"))
+    return document(components, links)
+
+
+def test_a_recirculation_ring_converts_torn_where_the_declaration_route_tears_it():
+    conversion = proved(ring_plant(), t_max=10.0, levels=VOLUME_LEVELS)
+    vent = uses_of(conversion, "Ventilation")
+    renewal = next(u for u in vent if u["fragment"] == "muscadet.rule_set" and u["with"]["name"] == "renewal")
+    assert renewal["with"]["torn"] == ["Air"]
+    extraction = next(u for u in vent if u["fragment"] == "muscadet.rule_set" and u["with"]["name"] == "extraction")
+    assert "torn" not in extraction["with"]
+    # The fan's inputs come out of a pooled room: each hands back what its
+    # rule does not consume.
+    released = {u["with"]["name"] for u in vent if u["fragment"] == "muscadet.surplus_release"}
+    assert released == {"Leak", "Air"}
+
+
+def test_a_cascade_after_a_set_fed_by_a_mixed_volume_is_refused():
+    """With hydrogen stocked in the room, the extraction asks the whole
+    exhaust demand but makes only what the pooled draw hands it; the
+    declaration route asks the renewal what the extraction is expected to
+    make, which no fragment carries yet."""
+    assert refusals(ring_plant(cascade=True)) == ["output produced by two rule sets, an earlier one fed by a mixed volume"]
+
+
+def group_plant(extra_consumer: bool = False, run_cond: list | None = None) -> dict:
+    """A room fed without bound, drawn by one extractor at a volumetric
+    rate; optionally a per-flow consumer beside it, which the declaration
+    route refuses."""
+    room = component("ROOM", [c_in("H2"), c_in("AIR"), c_out("H2"), c_out("AIR")], class_name="Room") | {
+        "capacities": [volume("room", ["H2", "AIR"], 100.0, {"H2": 1.0, "AIR": 49.0}, float("inf"))]}
+    group = {"name": "extraction", "flows": ["H2", "AIR"], "flow_rate": 5.0}
+    if run_cond is not None:
+        group["run_cond"] = run_cond
+    fan = component("FAN", [c_in("H2"), c_in("AIR")] + ([flow_in("vent")] if run_cond else []), class_name="Fan") | {
+        "mixtures": [group]}
+    components = [component("SH2", [c_out("H2", 0.5)], class_name="Source"),
+                  component("SAIR", [c_out("AIR", 4.0)], class_name="Source"), room, fan]
+    links = [link("SH2", "ROOM", "H2"), link("SAIR", "ROOM", "AIR"), link("ROOM", "FAN", "H2"),
+             link("ROOM", "FAN", "AIR")]
+    if extra_consumer:
+        components.append(component("K", [c_in("H2", 1.0)], class_name="Load"))
+        links.append(link("ROOM", "K", "H2"))
+    return document(components, links)
+
+
+def test_a_mixture_group_converts():
+    conversion = proved(group_plant(), t_max=20.0, levels=VOLUME_LEVELS)
+    fan = uses_of(conversion, "Fan")
+    assert {"fragment": "muscadet.mixture_in",
+            "with": {"name": "extraction", "flows": ["H2", "AIR"], "flow_rate": 5.0}} in fan
+    room = uses_of(conversion, "Room")
+    outs = [u["with"] for u in room if u["fragment"] == "muscadet.continuous_flow_out"]
+    assert {o["available"] for o in outs} == {"mixture"}
+    assert all(u["with"]["drawn"] for u in room if u["fragment"] == "muscadet.volume_pooled_flow")
+
+
+def test_a_group_the_declaration_route_refuses_is_refused_with_its_reason():
+    conversion = convert(group_plant(extra_consumer=True))
+    assert not conversion.converted
+    shape = [r for r in conversion.refusals if r.construct == "mixture group shape"]
+    assert shape and "also serves ['K']" in shape[0].detail
+
+
+def test_a_flow_system_the_reader_refuses_converts_nothing():
+    """Every component reads, but a connection names a component nobody
+    declares: the whole-graph shapes are unknown, so nothing converts."""
+    declaration = group_plant()
+    declaration["connections"].append(link("ROOM", "GHOST", "H2"))
+    conversion = convert(declaration)
+    assert not conversion.converted
+    assert ("system", "declaration refused by the reader") in [(r.component, r.construct) for r in conversion.refusals]
+
+
+def test_a_mixture_group_run_command_is_refused():
+    assert "mixture group run command" in refusals(group_plant(run_cond=[["vent"]]))
 
 
 def test_a_contested_output_converts_unless_capped():
