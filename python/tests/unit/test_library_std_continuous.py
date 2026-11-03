@@ -715,6 +715,161 @@ BENCHES["median_of_instruments"] = median_of_instruments()
 BENCHES["level_sensor_and_delivered_rate"] = level_sensor_and_delivered_rate()
 
 
+# --- pooled serving out of a mixed volume -------------------------------------
+
+
+def mu(fragment, **with_):
+    return {"fragment": f"muscadet.{fragment}", "with": with_}
+
+
+def mixed_room_uses(contents, capacity, rate):
+    """A volume holding several flows downstream of the transfer, each
+    served to its own output out of the pooled draw."""
+    total = sum(contents.values())
+    uses = [mu("volume_total", volume="room", flows=list(contents), capacity=capacity,
+               initial="full" if total >= capacity else "partial", ratio_flows=list(contents))]
+    for flow, content in contents.items():
+        stock = f"room_stock_{flow}"
+        uses += [mu("continuous_flow_in", name=flow),
+                 mu("volume_flow", volume="room", flow=flow, capacity=capacity, content_init=content,
+                    fill_rate=0.0),
+                 mu("volume_stock", volume="room", flow=flow, capacity=capacity,
+                    initial="stocked" if content > 0 else "empty"),
+                 mu("volume_outlet", volume="room", flow=flow, rate=rate, empty_automaton=stock),
+                 mu("volume_pooled_flow", volume="room", flow=flow),
+                 mu("continuous_flow_out", name=flow, available="pooled", held=True, empty_automaton=stock)]
+    return uses + [mu("volume_pooled", volume="room", flows=list(contents))]
+
+
+def mixed_room_object(contents, capacity, rate):
+    return {"type": "ObjFlow", "name": "ROOM",
+            "flows_continuous_in": [{"name": flow} for flow in contents],
+            "flows_continuous_out": [flow_out(flow, rate) for flow in contents],
+            "capacities": [{"name": "room", "flows": list(contents), "capacity": capacity,
+                            "content_init": dict(contents), "fill_rate": 0.0, "side": "out"}]}
+
+
+TYPES += [
+    # A room of 1 hydrogen in 99 of air, full; and one whose hydrogen has
+    # run out (its input is connected to nothing).
+    {"name": "MixedRoom", "uses": mixed_room_uses({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0)},
+    {"name": "MixedStore", "uses": mixed_room_uses({"H2": 0.0, "AIR": 50.0}, 100.0, 50.0)},
+    {"name": "MixedRoomLowCeiling", "uses": mixed_room_uses({"H2": 1.0, "AIR": 99.0}, 100.0, 1.0)},
+    # One rule consuming 10 of hydrogen and 10 of air into 20 of mixture,
+    # handing back what it does not consume.
+    {"name": "Mixer",
+     "uses": [mu("continuous_flow_in", name="H2"), mu("continuous_flow_in", name="AIR"),
+              mu("surplus_release", name="H2"), mu("surplus_release", name="AIR"),
+              mu("rule_set", name="r", active="run", idle="none", consumes=["H2", "AIR"],
+                 produces=["mix"], always_on=True),
+              mu("rule_consumes", rule_set="r", active="run", flow="H2", rate=10.0, always_on=True),
+              mu("rule_consumes", rule_set="r", active="run", flow="AIR", rate=10.0, always_on=True),
+              mu("rule_produces", rule_set="r", active="run", flow="mix", rate=20.0, always_on=True),
+              mu("continuous_flow_out", name="mix", available="produced")]},
+]
+
+MIXER = {"type": "ObjFlow", "name": "MIX", "flows_continuous_in": [{"name": "H2"}, {"name": "AIR"}],
+         "flows_continuous_out": [{"name": "mix"}],
+         "rules": [{"name": "r", "rules": [{"name": "run", "cons": {"H2": 10.0, "AIR": 10.0},
+                                            "prod": {"mix": 20.0}}]}]}
+
+BENCHES.update({
+    # Fragments: volume_pooled, volume_pooled_flow, continuous_flow_out
+    # `available: pooled`, volume_total starting full. Hydrogen asked 2 and
+    # air 3 share the excess of 5 in proportion to the raw contents, until
+    # both run out together at t = 33.
+    "pooled_draw": (
+        [mixed_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0),
+         {"type": "ObjFlow", "name": "CH2", "flows_continuous_in": [flow_in("H2", 2.0)]},
+         {"type": "ObjFlow", "name": "CAIR", "flows_continuous_in": [flow_in("AIR", 3.0)]}],
+        [{"name": "ROOM", "type": "MixedRoom"},
+         {"name": "CH2", "type": "Sink", "parameters": {"flow": "H2", "demand": 2.0}},
+         {"name": "CAIR", "type": "Sink", "parameters": {"flow": "AIR", "demand": 3.0}}],
+        [("ROOM.H2_out", "CH2.H2_in"), ("ROOM.AIR_out", "CAIR.AIR_in")],
+        [], 32.0,
+    ),
+    # A constituent that has run out (hydrogen, whose input nothing feeds)
+    # serves only what arrives of it, nothing; the air takes the whole
+    # excess.
+    "pooled_draw_one_constituent_empty": (
+        [mixed_room_object({"H2": 0.0, "AIR": 50.0}, 100.0, 50.0),
+         {"type": "ObjFlow", "name": "CH2", "flows_continuous_in": [flow_in("H2", 2.0)]},
+         {"type": "ObjFlow", "name": "CAIR", "flows_continuous_in": [flow_in("AIR", 3.0)]}],
+        [{"name": "ROOM", "type": "MixedStore"},
+         {"name": "CH2", "type": "Sink", "parameters": {"flow": "H2", "demand": 2.0}},
+         {"name": "CAIR", "type": "Sink", "parameters": {"flow": "AIR", "demand": 3.0}}],
+        [("ROOM.H2_out", "CH2.H2_in"), ("ROOM.AIR_out", "CAIR.AIR_in")],
+        [], 24.0,
+    ),
+    # Fragments: rule_consumes `consumed_in`, surplus_release on a pooled
+    # supplier. The room hands the rule 0.2 of hydrogen and 10 of air; it
+    # runs at the draw the hydrogen allows and the air it does not consume
+    # stays in the room.
+    "pooled_draw_feeds_a_rule": (
+        [mixed_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0), MIXER,
+         {"type": "ObjFlow", "name": "SINK", "flows_continuous_in": [flow_in("mix", 20.0)]}],
+        [{"name": "ROOM", "type": "MixedRoom"}, {"name": "MIX", "type": "Mixer"},
+         {"name": "SINK", "type": "Sink", "parameters": {"flow": "mix", "demand": 20.0}}],
+        [("ROOM.H2_out", "MIX.H2_in"), ("ROOM.AIR_out", "MIX.AIR_in"), ("MIX.mix_out", "SINK.mix_in")],
+        [], 5.0,
+    ),
+    # A room both of whose constituents arrive and transit it: the excess
+    # is what the consumers ask over what transits.
+    "pooled_draw_with_transit": (
+        [mixed_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0),
+         {"type": "ObjFlow", "name": "SH2", "flows_continuous_out": [flow_out("H2", 0.5)]},
+         {"type": "ObjFlow", "name": "SAIR", "flows_continuous_out": [flow_out("AIR", 1.0)]},
+         {"type": "ObjFlow", "name": "CH2", "flows_continuous_in": [flow_in("H2", 2.0)]},
+         {"type": "ObjFlow", "name": "CAIR", "flows_continuous_in": [flow_in("AIR", 3.0)]}],
+        [{"name": "ROOM", "type": "MixedRoom"},
+         {"name": "SH2", "type": "Source", "parameters": {"flow": "H2", "rate": 0.5}},
+         {"name": "SAIR", "type": "Source", "parameters": {"flow": "AIR", "rate": 1.0}},
+         {"name": "CH2", "type": "Sink", "parameters": {"flow": "H2", "demand": 2.0}},
+         {"name": "CAIR", "type": "Sink", "parameters": {"flow": "AIR", "demand": 3.0}}],
+        [("SH2.H2_out", "ROOM.H2_in"), ("SAIR.AIR_out", "ROOM.AIR_in"),
+         ("ROOM.H2_out", "CH2.H2_in"), ("ROOM.AIR_out", "CAIR.AIR_in")],
+        [], 40.0,
+    ),
+    # Outlets of 1 below requests of 2 and 3: the capability caps each share.
+    "pooled_draw_under_a_ceiling": (
+        [mixed_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 1.0),
+         {"type": "ObjFlow", "name": "CH2", "flows_continuous_in": [flow_in("H2", 2.0)]},
+         {"type": "ObjFlow", "name": "CAIR", "flows_continuous_in": [flow_in("AIR", 3.0)]}],
+        [{"name": "ROOM", "type": "MixedRoomLowCeiling"},
+         {"name": "CH2", "type": "Sink", "parameters": {"flow": "H2", "demand": 2.0}},
+         {"name": "CAIR", "type": "Sink", "parameters": {"flow": "AIR", "demand": 3.0}}],
+        [("ROOM.H2_out", "CH2.H2_in"), ("ROOM.AIR_out", "CAIR.AIR_in")],
+        [], 40.0,
+    ),
+    # Two consumers on one pooled output share its delivery pro rata.
+    "pooled_output_with_two_consumers": (
+        [mixed_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0),
+         {"type": "ObjFlow", "name": "CH2", "flows_continuous_in": [flow_in("H2", 2.0)]},
+         {"type": "ObjFlow", "name": "CH2B", "flows_continuous_in": [flow_in("H2", 1.0)]},
+         {"type": "ObjFlow", "name": "CAIR", "flows_continuous_in": [flow_in("AIR", 3.0)]}],
+        [{"name": "ROOM", "type": "MixedRoom"},
+         {"name": "CH2", "type": "Sink", "parameters": {"flow": "H2", "demand": 2.0}},
+         {"name": "CH2B", "type": "Sink", "parameters": {"flow": "H2", "demand": 1.0}},
+         {"name": "CAIR", "type": "Sink", "parameters": {"flow": "AIR", "demand": 3.0}}],
+        [("ROOM.H2_out", "CH2.H2_in"), ("ROOM.H2_out", "CH2B.H2_in"), ("ROOM.AIR_out", "CAIR.AIR_in")],
+        [], 30.0,
+    ),
+    # A rule input fed by the room and by a plain source: the release
+    # measures both offers against what the rule consumes.
+    "pooled_and_plain_suppliers": (
+        [mixed_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0), MIXER,
+         {"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out("H2", 0.1)]},
+         {"type": "ObjFlow", "name": "SINK", "flows_continuous_in": [flow_in("mix", 20.0)]}],
+        [{"name": "ROOM", "type": "MixedRoom"}, {"name": "MIX", "type": "Mixer"},
+         {"name": "S", "type": "Source", "parameters": {"flow": "H2", "rate": 0.1}},
+         {"name": "SINK", "type": "Sink", "parameters": {"flow": "mix", "demand": 20.0}}],
+        [("ROOM.H2_out", "MIX.H2_in"), ("S.H2_out", "MIX.H2_in"), ("ROOM.AIR_out", "MIX.AIR_in"),
+         ("MIX.mix_out", "SINK.mix_in")],
+        [], 5.0,
+    ),
+})
+
+
 def plugin_model(name, objects, connections):
     def end(written):
         component, port = written.split(".", 1)
@@ -731,7 +886,7 @@ def plugin_model(name, objects, connections):
 
 def library_model(name, instances, connections, modes, indicators):
     library = {"raichu_library": {"format": 1},
-               "library": {**LIBRARY, "imports": ["std"], "types": TYPES}}
+               "library": {**LIBRARY, "imports": ["std", "muscadet"], "types": TYPES}}
     system = {"raichu_system": {"format": 1},
               "system": {"name": name, "library": LIBRARY, "instances": instances,
                          "connections": [{"from": f, "to": t} for f, t in connections],
@@ -792,7 +947,6 @@ UNBENCHED_VALUES = {
     ("threshold_compare", "operator", "le"): "mirror of `lt`, benched",
     ("threshold_compare", "operator", "gt"): "mirror of `lt`, benched",
     ("threshold_compare", "operator", "ge"): "mirror of `lt`, benched",
-    ("volume_total", "initial", "full"): "no declaration starts a volume full",
 }
 
 
@@ -807,7 +961,7 @@ def applied_uses():
             given = instance.get("parameters", {})
             defaults = {q["name"]: q.get("default") for q in ty.get("parameters", [])}
             for u in ty["uses"]:
-                fragment = u["fragment"].removeprefix("std.")
+                fragment = u["fragment"].removeprefix("std.").removeprefix("muscadet.")
                 applied.add((fragment, None, None))
                 for key, value in u["with"].items():
                     if isinstance(value, dict) and "$param" in value:
@@ -817,11 +971,14 @@ def applied_uses():
 
 
 def test_the_benches_exercise_every_continuous_fragment():
-    """No fragment of the continuous part of std, and no value of one of its
+    """No continuous fragment of std or muscadet, and no value of one of its
     options other than the default, goes uncharacterised: an option of an
     already benched fragment needs a bench of its own."""
-    std = pyraichu.standard_library()["library"]["fragments"]
-    continuous = [f for f in std if f["name"] not in BOOLEAN_FRAGMENTS]
+    # `muscadet` holds the continuous fragments, `std` the generic ones and
+    # the names forwarding to `muscadet`, which take the same options.
+    embedded = {f["name"]: f for f in pyraichu.standard_library()["library"]["fragments"]}
+    embedded.update({f["name"]: f for f in pyraichu.embedded_library("muscadet")["library"]["fragments"]})
+    continuous = [f for f in embedded.values() if f["name"] not in BOOLEAN_FRAGMENTS]
     applied = applied_uses()
     missing = {f["name"] for f in continuous} - {f for f, _, _ in applied}
     assert not missing, missing

@@ -39,6 +39,34 @@ fn the_embedded_libraries_import_each_other_without_a_cycle() {
     }
 }
 
+/// The fragments that moved from `std` to `muscadet` in 0.126.0. Those
+/// `muscadet` gained since have no `std` name.
+const MOVED: [&str; 23] = [
+    "bool_flow_in",
+    "bool_flow_out",
+    "bool_source_out",
+    "bool_flow_out_tempo",
+    "bool_flow_out_trigger",
+    "logic_gate",
+    "continuous_flow_out",
+    "continuous_flow_in",
+    "surplus_release",
+    "continuous_source",
+    "continuous_sink",
+    "rate_publisher",
+    "pass_through",
+    "volume_flow",
+    "volume_outlet",
+    "volume_stock",
+    "volume_total",
+    "rule_set",
+    "rule_consumes",
+    "rule_produces",
+    "shared_output",
+    "rule_cascade",
+    "tap",
+];
+
 /// Each moved fragment keeps a `std` name with the same parameters, an
 /// empty body, and one application of its `muscadet` counterpart passing
 /// every parameter through; `std` holds nothing else but generic
@@ -47,7 +75,12 @@ fn the_embedded_libraries_import_each_other_without_a_cycle() {
 fn every_moved_fragment_keeps_a_forwarding_std_name() {
     let std = standard_library().unwrap();
     let muscadet = muscadet_library().unwrap();
-    for moved in &muscadet.fragments {
+    for name in MOVED {
+        let moved = muscadet
+            .fragments
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("muscadet has no `{name}`"));
         let forward = std
             .fragments
             .iter()
