@@ -593,10 +593,11 @@
             "values": [
               "capability",
               "produced",
-              "pooled"
+              "pooled",
+              "mixture"
             ],
             "default": "capability",
-            "description": "What the operator distributes: the capability (a source, a volume) or what a rule set actually produced, `<name>_produced_out`."
+            "description": "What the operator distributes: the capability (a source, a volume), what a rule set actually produced (`<name>_produced_out`), a mixed volume's pooled draw (`<name>_pooled_out`, `volume_pooled_flow`), or that draw for mixture groups (`mixture`: `volume_pooled_flow` with `drawn`), which hands each connection its composed request scaled to what the volume delivers and publishes the composition `<name>_composition_out` on the `composition` channel."
           },
           {
             "name": "allocation",

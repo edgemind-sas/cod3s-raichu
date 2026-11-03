@@ -870,6 +870,153 @@ BENCHES.update({
 })
 
 
+
+# --- mixture groups -----------------------------------------------------------
+
+
+def drawn_room_uses(contents, capacity, rate, fill_unbounded=False):
+    """A volume holding several flows that mixture groups draw: each output
+    hands out what its groups ask, already composed, and publishes its
+    share of the content."""
+    total = sum(contents.values())
+    uses = [mu("volume_total", volume="room", flows=list(contents), capacity=capacity,
+               initial="full" if total >= capacity else "partial", ratio_flows=list(contents))]
+    for flow, content in contents.items():
+        stock = f"room_stock_{flow}"
+        fill = {"fill_unbounded": True} if fill_unbounded else {"fill_rate": 0.0}
+        uses += [mu("continuous_flow_in", name=flow),
+                 mu("volume_flow", volume="room", flow=flow, capacity=capacity, content_init=content, **fill),
+                 mu("volume_stock", volume="room", flow=flow, capacity=capacity,
+                    initial="stocked" if content > 0 else "empty"),
+                 mu("volume_outlet", volume="room", flow=flow, rate=rate, empty_automaton=stock),
+                 mu("volume_pooled_flow", volume="room", flow=flow, drawn=True),
+                 mu("continuous_flow_out", name=flow, available="mixture", held=True, empty_automaton=stock)]
+    return uses + [mu("volume_pooled", volume="room", flows=list(contents))]
+
+
+def drawn_room_object(contents, capacity, rate, fill_unbounded=False):
+    room = mixed_room_object(contents, capacity, rate)
+    if fill_unbounded:
+        room["capacities"][0]["fill_rate"] = None
+    return room
+
+
+def fan_object(name, rate, flows=("H2", "AIR"), **group):
+    return {"type": "ObjFlow", "name": name, "flows_continuous_in": [{"name": f} for f in flows],
+            "mixtures": [{"name": "extraction", "flows": list(flows), "flow_rate": rate, **group}]}
+
+
+#: The automaton commanding a group from a boolean input `vent`.
+RUN_GATE = {"name": "extraction_run", "states": ["running", "stopped"], "init": "stopped",
+            "transitions": [
+                {"name": "extraction_run_opens", "source": "stopped", "targets": ["running"],
+                 "distrib": "inst", "probs": [],
+                 "guard": {"op": "attr", "attr": {"component": "$self", "attribute": "vent_fed_in"}}},
+                {"name": "extraction_run_shuts", "source": "running", "targets": ["stopped"],
+                 "distrib": "inst", "probs": [],
+                 "guard": {"op": "bool", "bool_op": "not", "args": [
+                     {"op": "attr", "attr": {"component": "$self", "attribute": "vent_fed_in"}}]}}]}
+
+TYPES += [
+    {"name": "DrawnRoom", "uses": drawn_room_uses({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0)},
+    {"name": "DrawnStore", "uses": drawn_room_uses({"H2": 0.0, "AIR": 50.0}, 100.0, 50.0)},
+    {"name": "DrawnRoomLowCeiling", "uses": drawn_room_uses({"H2": 1.0, "AIR": 99.0}, 100.0, 2.0)},
+    {"name": "FedDrawnRoom",
+     "uses": drawn_room_uses({"H2": 1.0, "AIR": 49.0}, 100.0, 50.0, fill_unbounded=True)},
+    {"name": "Extractor", "parameters": [p("rate", "number")],
+     "uses": [mu("continuous_flow_in", name="H2"), mu("continuous_flow_in", name="AIR"),
+              mu("mixture_in", name="extraction", flows=["H2", "AIR"], flow_rate=P("rate"))]},
+    {"name": "CommandedExtractor", "parameters": [p("rate", "number")],
+     "uses": [use("bool_flow_in", name="vent", logic="and"),
+              mu("continuous_flow_in", name="H2"), mu("continuous_flow_in", name="AIR"),
+              mu("mixture_in", name="extraction", flows=["H2", "AIR"], flow_rate=P("rate"), run=True)],
+     "body": {"automata": [RUN_GATE]}},
+]
+
+BENCHES.update({
+    # Fragments: mixture_in, volume_pooled_flow `drawn`, continuous_flow_out
+    # `available: mixture`. One extractor of 5 out of a room nothing feeds:
+    # each constituent leaves at 5 times its share, which stays put.
+    "mixture_group": (
+        [drawn_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0), fan_object("FAN", 5.0)],
+        [{"name": "ROOM", "type": "DrawnRoom"},
+         {"name": "FAN", "type": "Extractor", "parameters": {"rate": 5.0}}],
+        [("ROOM.H2_out", "FAN.H2_in"), ("ROOM.AIR_out", "FAN.AIR_in")],
+        [], 15.0,
+    ),
+    # A room fed without bound while an extractor draws it: what arrives
+    # enters the composition rather than passing straight on.
+    "mixture_group_fed": (
+        [{"type": "ObjFlow", "name": "SH2", "flows_continuous_out": [flow_out("H2", 0.5)]},
+         {"type": "ObjFlow", "name": "SAIR", "flows_continuous_out": [flow_out("AIR", 4.0)]},
+         drawn_room_object({"H2": 1.0, "AIR": 49.0}, 100.0, 50.0, fill_unbounded=True),
+         fan_object("FAN", 5.0)],
+        [{"name": "SH2", "type": "Source", "parameters": {"flow": "H2", "rate": 0.5}},
+         {"name": "SAIR", "type": "Source", "parameters": {"flow": "AIR", "rate": 4.0}},
+         {"name": "ROOM", "type": "FedDrawnRoom"},
+         {"name": "FAN", "type": "Extractor", "parameters": {"rate": 5.0}}],
+        [("SH2.H2_out", "ROOM.H2_in"), ("SAIR.AIR_out", "ROOM.AIR_in"),
+         ("ROOM.H2_out", "FAN.H2_in"), ("ROOM.AIR_out", "FAN.AIR_in")],
+        [], 20.0,
+    ),
+    # A constituent that has run out (hydrogen, whose input nothing feeds)
+    # is drawn at its share, nothing; the air takes the whole rate. Run up
+    # to 9: the room empties at 10, where both routes stop alike on a step
+    # size underflow.
+    "mixture_group_one_constituent_empty": (
+        [drawn_room_object({"H2": 0.0, "AIR": 50.0}, 100.0, 50.0), fan_object("FAN", 5.0)],
+        [{"name": "ROOM", "type": "DrawnStore"},
+         {"name": "FAN", "type": "Extractor", "parameters": {"rate": 5.0}}],
+        [("ROOM.H2_out", "FAN.H2_in"), ("ROOM.AIR_out", "FAN.AIR_in")],
+        [], 9.0,
+    ),
+    # Two extractors on one room: the draws add up.
+    "two_mixture_groups": (
+        [drawn_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 50.0), fan_object("FAN", 3.0),
+         fan_object("DRAFT", 1.0)],
+        [{"name": "ROOM", "type": "DrawnRoom"},
+         {"name": "FAN", "type": "Extractor", "parameters": {"rate": 3.0}},
+         {"name": "DRAFT", "type": "Extractor", "parameters": {"rate": 1.0}}],
+        [("ROOM.H2_out", "FAN.H2_in"), ("ROOM.AIR_out", "FAN.AIR_in"),
+         ("ROOM.H2_out", "DRAFT.H2_in"), ("ROOM.AIR_out", "DRAFT.AIR_in")],
+        [], 15.0,
+    ),
+    # Extractors of 100 and 1 behind outlets of 2: each is served pro rata
+    # of its composed share, the claims scaled to what the room delivers.
+    "two_mixture_groups_under_a_ceiling": (
+        [drawn_room_object({"H2": 1.0, "AIR": 99.0}, 100.0, 2.0), fan_object("FAN", 100.0),
+         fan_object("DRAFT", 1.0)],
+        [{"name": "ROOM", "type": "DrawnRoomLowCeiling"},
+         {"name": "FAN", "type": "Extractor", "parameters": {"rate": 100.0}},
+         {"name": "DRAFT", "type": "Extractor", "parameters": {"rate": 1.0}}],
+        [("ROOM.H2_out", "FAN.H2_in"), ("ROOM.AIR_out", "FAN.AIR_in"),
+         ("ROOM.H2_out", "DRAFT.H2_in"), ("ROOM.AIR_out", "DRAFT.AIR_in")],
+        [], 15.0,
+    ),
+    # Option: mixture_in `run`. A band on the hydrogen share of a fed room
+    # starts the extractor when the share passes 0.05.
+    "commanded_mixture_group": (
+        [{"type": "ObjFlow", "name": "SH2", "flows_continuous_out": [flow_out("H2", 0.5)]},
+         {"type": "ObjFlow", "name": "SAIR", "flows_continuous_out": [flow_out("AIR", 4.0)]},
+         drawn_room_object({"H2": 1.0, "AIR": 49.0}, 100.0, 50.0, fill_unbounded=True),
+         {"type": "ObjCtrl", "name": "AP", "controls_in": [{"name": "room", "kind": "ratio", "flows": ["H2"]}],
+          "controls_out": [{"name": "vent", "kind": "bool", "emit": {
+              "op": "band", "input": "room", "direction": "above", "activate": 0.05, "release": 0.02}}]},
+         {**fan_object("FAN", 5.0, run_cond=[["vent"]]), "flows_in": [{"name": "vent", "logic": "and"}]}],
+        [{"name": "SH2", "type": "Source", "parameters": {"flow": "H2", "rate": 0.5}},
+         {"name": "SAIR", "type": "Source", "parameters": {"flow": "AIR", "rate": 4.0}},
+         {"name": "ROOM", "type": "FedDrawnRoom"},
+         {"name": "AP", "type": "Band", "parameters": {
+             "measure": "room_ratio_H2", "output": "vent", "direction": "above",
+             "activate": 0.05, "release": 0.02}},
+         {"name": "FAN", "type": "CommandedExtractor", "parameters": {"rate": 5.0}}],
+        [("SH2.H2_out", "ROOM.H2_in"), ("SAIR.AIR_out", "ROOM.AIR_in"),
+         ("ROOM.H2_out", "FAN.H2_in"), ("ROOM.AIR_out", "FAN.AIR_in"),
+         ("ROOM.room_ratio_H2_out", "AP.room_ratio_H2_in"), ("AP.vent_out", "FAN.vent_in")],
+        [], 20.0,
+    ),
+})
+
 def plugin_model(name, objects, connections):
     def end(written):
         component, port = written.split(".", 1)

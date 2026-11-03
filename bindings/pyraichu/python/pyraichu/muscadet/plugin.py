@@ -1196,6 +1196,8 @@ _OBJFLOW_SECTIONS: tuple[tuple[str, str | None], ...] = (
     ("flows_continuous_in", "FlowContinuousIn"),
     ("flows_continuous_out", "FlowContinuousOut"),
     ("capacities", "capacities"),
+    # After the continuous inputs a group draws.
+    ("mixtures", "mixtures"),
     ("deratings", "deratings"),
     ("failure_modes", None),
     ("rules", "rules"),
@@ -2818,6 +2820,22 @@ class MuscadetPlugin:
                 for component in model["components"]
                 if component["name"] not in declarations
             ]
+            # Each component built exactly as the first pass built it,
+            # connectivity included: `_carry_grafts` reads the difference as
+            # the graft, so a build differing by anything else would report
+            # that difference as one. Built BEFORE the network is generated,
+            # which binds mixture groups onto the volumes they draw: built
+            # after, a drawn volume would differ from its first pass by that
+            # binding, and the difference would be carried as a graft.
+            first_pass = {
+                placeholder["name"]: declarations[placeholder["name"]]._build(
+                    connected_in=authoring.connected_in_flows(
+                        model["connections"], placeholder["name"]
+                    )
+                )
+                for placeholder in model["components"]
+                if placeholder["name"] in declarations
+            }
             components, order = system.generate(foreign)
 
             built = {component["name"]: component for component in components}
@@ -2825,19 +2843,7 @@ class MuscadetPlugin:
                 final = built.get(placeholder["name"])
                 if final is None:
                     continue
-                # Built exactly as the first pass built it, connectivity
-                # included: `_carry_grafts` reads the difference as the graft,
-                # so a build differing by anything else would report that
-                # difference as one.
-                _carry_grafts(
-                    placeholder,
-                    declarations[placeholder["name"]]._build(
-                        connected_in=authoring.connected_in_flows(
-                            model["connections"], placeholder["name"]
-                        )
-                    ),
-                    final,
-                )
+                _carry_grafts(placeholder, first_pass[placeholder["name"]], final)
                 model["components"][index] = final
         else:
             # Nothing to rebuild, so the components stay exactly as the first

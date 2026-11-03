@@ -1467,10 +1467,11 @@
             "values": [
               "capability",
               "produced",
-              "pooled"
+              "pooled",
+              "mixture"
             ],
             "default": "capability",
-            "description": "What the operator distributes: the capability (a source, a volume) or what a rule set actually produced, `<name>_produced_out`."
+            "description": "What the operator distributes: the capability (a source, a volume), what a rule set actually produced (`<name>_produced_out`), a mixed volume's pooled draw (`<name>_pooled_out`, `volume_pooled_flow`), or that draw for mixture groups (`mixture`: `volume_pooled_flow` with `drawn`), which hands each connection its composed request scaled to what the volume delivers and publishes the composition `<name>_composition_out` on the `composition` channel."
           },
           {
             "name": "allocation",
@@ -1569,6 +1570,9 @@
                 },
                 {
                   "name": "pooled"
+                },
+                {
+                  "name": "composition"
                 }
               ],
               "equations": [
@@ -1585,42 +1589,123 @@
                 {
                   "channel": "claim",
                   "expr": {
-                    "op": "min",
-                    "args": [
-                      {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$edge",
-                          "attribute": "demand"
-                        }
-                      },
-                      {
-                        "$choose": "available",
-                        "cases": {
-                          "capability": {
+                    "$choose": "available",
+                    "cases": {
+                      "capability": {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$edge",
+                              "attribute": "demand"
+                            }
+                          },
+                          {
                             "op": "attr",
                             "attr": {
                               "component": "$self",
                               "attribute": "${name}_capability_out"
                             }
+                          }
+                        ]
+                      },
+                      "produced": {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$edge",
+                              "attribute": "demand"
+                            }
                           },
-                          "produced": {
+                          {
                             "op": "attr",
                             "attr": {
                               "component": "$self",
                               "attribute": "${name}_produced_out"
                             }
+                          }
+                        ]
+                      },
+                      "pooled": {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$edge",
+                              "attribute": "demand"
+                            }
                           },
-                          "pooled": {
+                          {
                             "op": "attr",
                             "attr": {
                               "component": "$self",
                               "attribute": "${name}_pooled_out"
                             }
                           }
+                        ]
+                      },
+                      "mixture": {
+                        "op": "if",
+                        "cond": {
+                          "op": "cmp",
+                          "cmp": "gt",
+                          "lhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_demand_out"
+                            }
+                          },
+                          "rhs": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
+                            }
+                          }
+                        },
+                        "then": {
+                          "op": "div",
+                          "lhs": {
+                            "op": "mul",
+                            "args": [
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$edge",
+                                  "attribute": "demand"
+                                }
+                              },
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_pooled_out"
+                                }
+                              }
+                            ]
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_demand_out"
+                            }
+                          }
+                        },
+                        "otherwise": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 0.0
+                          }
                         }
                       }
-                    ]
+                    }
                   }
                 },
                 {
@@ -1740,6 +1825,49 @@
                           "kind": "float",
                           "value": 1.0
                         }
+                      },
+                      "mixture": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 1.0
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "channel": "composition",
+                  "expr": {
+                    "$choose": "available",
+                    "cases": {
+                      "capability": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      "produced": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      "pooled": {
+                        "op": "const",
+                        "value": {
+                          "kind": "float",
+                          "value": 0.0
+                        }
+                      },
+                      "mixture": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_composition_out"
+                        }
                       }
                     }
                   }
@@ -1805,6 +1933,13 @@
                           "component": "$self",
                           "attribute": "${name}_pooled_out"
                         }
+                      },
+                      "mixture": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_pooled_out"
+                        }
                       }
                     }
                   },
@@ -1833,6 +1968,13 @@
                         }
                       },
                       "pooled": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_pooled_out"
+                        }
+                      },
+                      "mixture": {
                         "op": "attr",
                         "attr": {
                           "component": "$self",
@@ -4041,7 +4183,7 @@
       },
       {
         "name": "volume_pooled_flow",
-        "description": "What the volume `<volume>`, holding several flows downstream of the transfer, hands the output `<flow>` out of its pooled draw (`volume_pooled`): while `<flow>` is stocked (`volume_stock`), what arrives on the input `<flow>` (which transits the volume) plus the flow's share of the excess in proportion to its raw content (`ratio_flows` on `volume_total`), never more than the output's capability (`volume_outlet`); once `<flow>` has run out, the capability. It writes `<flow>_pooled_out`, which `continuous_flow_out` serves with `available: pooled`. A rule input it feeds applies `surplus_release`, which hands back what the rule does not consume.",
+        "description": "What the volume `<volume>`, holding several flows downstream of the transfer, hands the output `<flow>` out of its pooled draw (`volume_pooled`): while `<flow>` is stocked (`volume_stock`), what arrives on the input `<flow>` (which transits the volume) plus the flow's share of the excess in proportion to its raw content (`ratio_flows` on `volume_total`), never more than the output's capability (`volume_outlet`); once `<flow>` has run out, the capability. It writes `<flow>_pooled_out`, which `continuous_flow_out` serves with `available: pooled`. A rule input it feeds applies `surplus_release`, which hands back what the rule does not consume. With `drawn`, mixture groups draw the volume: `<flow>_pooled_out` is what they ask of the output, never more than its capability, and `<flow>_composition_out` is the flow's share of the raw content (`ratio_flows` on `volume_total`), which `continuous_flow_out` with `available: mixture` publishes.",
         "parameters": [
           {
             "name": "volume",
@@ -4052,6 +4194,12 @@
             "name": "flow",
             "kind": "string",
             "description": "Held flow, an output of the instance."
+          },
+          {
+            "name": "drawn",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether mixture groups (`mixture_in`) draw the volume: the output then hands out what its groups ask, already composed, never more than its capability, and publishes the flow's share of the content as `<flow>_composition_out`."
           }
         ],
         "body": {
@@ -4063,6 +4211,19 @@
                 "kind": "float",
                 "value": 0.0
               }
+            },
+            {
+              "$when": "drawn",
+              "items": [
+                {
+                  "name": "${flow}_composition_out",
+                  "kind": "float",
+                  "init": {
+                    "kind": "float",
+                    "value": 0.0
+                  }
+                }
+              ]
             }
           ],
           "equations": [
@@ -4070,66 +4231,235 @@
               "target": "${flow}_pooled_out",
               "kind": "explicit",
               "expr": {
-                "op": "if",
-                "cond": {
-                  "op": "state_active",
-                  "state": {
-                    "component": "$self",
-                    "automaton": "${volume}_stock_${flow}",
-                    "state": "empty"
-                  }
-                },
-                "then": {
-                  "op": "attr",
-                  "attr": {
-                    "component": "$self",
-                    "attribute": "${flow}_capability_out"
-                  }
-                },
-                "otherwise": {
-                  "op": "min",
-                  "args": [
-                    {
+                "$choose": "drawn",
+                "cases": {
+                  "false": {
+                    "op": "if",
+                    "cond": {
+                      "op": "state_active",
+                      "state": {
+                        "component": "$self",
+                        "automaton": "${volume}_stock_${flow}",
+                        "state": "empty"
+                      }
+                    },
+                    "then": {
                       "op": "attr",
                       "attr": {
                         "component": "$self",
                         "attribute": "${flow}_capability_out"
                       }
                     },
-                    {
-                      "op": "add",
+                    "otherwise": {
+                      "op": "min",
                       "args": [
                         {
                           "op": "attr",
                           "attr": {
                             "component": "$self",
-                            "attribute": "${flow}_fed_in"
+                            "attribute": "${flow}_capability_out"
                           }
                         },
                         {
-                          "op": "mul",
+                          "op": "add",
                           "args": [
                             {
                               "op": "attr",
                               "attr": {
                                 "component": "$self",
-                                "attribute": "${volume}_beyond"
+                                "attribute": "${flow}_fed_in"
                               }
                             },
                             {
-                              "op": "attr",
-                              "attr": {
-                                "component": "$self",
-                                "attribute": "${volume}_ratio_${flow}"
-                              }
+                              "op": "mul",
+                              "args": [
+                                {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${volume}_beyond"
+                                  }
+                                },
+                                {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${volume}_ratio_${flow}"
+                                  }
+                                }
+                              ]
                             }
                           ]
                         }
                       ]
                     }
-                  ]
+                  },
+                  "true": {
+                    "op": "min",
+                    "args": [
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${flow}_capability_out"
+                        }
+                      },
+                      {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${flow}_demand_out"
+                        }
+                      }
+                    ]
+                  }
                 }
               }
+            },
+            {
+              "$when": "drawn",
+              "items": [
+                {
+                  "target": "${flow}_composition_out",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "attr",
+                    "attr": {
+                      "component": "$self",
+                      "attribute": "${volume}_ratio_${flow}"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "mixture_in",
+        "description": "Continuous inputs drawn together at one volumetric rate, `<name>_flow_rate` (a failure mode clamps it by name): each input `<f>` of `flows` asks `rate . c_f`, `c_f` being the composition its supplier publishes (`continuous_flow_out` with `available: mixture`), so the volume extracted is the rate. A negative rate asks nothing. With `run`, the automaton `<name>_run` commands the group: it asks only while that automaton is in `running`. Every input is declared by `continuous_flow_in` and fed by one connection from the one volume the group draws, which names every constituent of that volume.",
+        "parameters": [
+          {
+            "name": "name",
+            "kind": "string",
+            "description": "Group name."
+          },
+          {
+            "name": "flows",
+            "kind": "list",
+            "items": "string",
+            "description": "The inputs drawn together."
+          },
+          {
+            "name": "flow_rate",
+            "kind": "number",
+            "description": "Volumetric rate of the whole group, the initial `<name>_flow_rate`."
+          },
+          {
+            "name": "run",
+            "kind": "bool",
+            "default": false,
+            "description": "Whether the automaton `<name>_run` (states `running`, `stopped`) commands the group."
+          }
+        ],
+        "body": {
+          "attributes": [
+            {
+              "name": "${name}_flow_rate",
+              "kind": "float",
+              "init": {
+                "kind": "float",
+                "value": {
+                  "$param": "flow_rate"
+                }
+              }
+            }
+          ],
+          "equations": [
+            {
+              "$for_each": "flows",
+              "as": "f",
+              "items": [
+                {
+                  "target": "${f}_demand_in",
+                  "kind": "explicit",
+                  "expr": {
+                    "op": "mul",
+                    "args": [
+                      {
+                        "$choose": "run",
+                        "cases": {
+                          "false": {
+                            "op": "max",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              },
+                              {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_flow_rate"
+                                }
+                              }
+                            ]
+                          },
+                          "true": {
+                            "op": "if",
+                            "cond": {
+                              "op": "state_active",
+                              "state": {
+                                "component": "$self",
+                                "automaton": "${name}_run",
+                                "state": "running"
+                              }
+                            },
+                            "then": {
+                              "op": "max",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                },
+                                {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${name}_flow_rate"
+                                  }
+                                }
+                              ]
+                            },
+                            "otherwise": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "op": "port_agg",
+                        "port": {
+                          "component": "$self",
+                          "port": "${f}_in"
+                        },
+                        "agg": "sum",
+                        "channel": "composition"
+                      }
+                    ]
+                  }
+                }
+              ]
             }
           ]
         }
