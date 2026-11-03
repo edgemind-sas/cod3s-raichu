@@ -110,6 +110,56 @@ pub fn derive_evaluation_order(model: &Model) -> Result<Option<Vec<AttrRef>>, Mo
     Ok(Some(order))
 }
 
+/// The steps of the cycle (strongly connected part of the read relation)
+/// holding the step that writes `written`, as `(component, step)` pairs in
+/// positional order; `None` when no step writes it or it is on no cycle.
+/// What the expander names when the core refuses a nonlinear cycle: the
+/// core reports one equation, the author needs the whole ring.
+pub(crate) fn cycle_through(model: &Model, written: &AttrRef) -> Option<Vec<(String, String)>> {
+    // Explicit equations only, as the core builds the cycle it refuses: a
+    // distribution operator writes several channels and is solved by its
+    // own step, so a cycle through one is not the one the core named.
+    let steps: Vec<_> = model
+        .evaluation_step_reads()
+        .ok()?
+        .into_iter()
+        .filter(|s| s.writes.len() == 1 && s.writes[0].attribute == s.step)
+        .collect();
+    let mut writer: HashMap<&AttrRef, usize> = HashMap::new();
+    for (index, step) in steps.iter().enumerate() {
+        for attr in &step.writes {
+            writer.insert(attr, index);
+        }
+    }
+    let target = *writer.get(written)?;
+    let depends_on: Vec<Vec<usize>> = steps
+        .iter()
+        .map(|step| {
+            let mut deps: Vec<usize> = step
+                .reads
+                .iter()
+                .filter_map(|read| writer.get(read).copied())
+                .collect();
+            deps.sort_unstable();
+            deps.dedup();
+            deps
+        })
+        .collect();
+    let mut members = strongly_connected_components(&depends_on)
+        .into_iter()
+        .find(|part| part.contains(&target))?;
+    if members.len() < 2 && !depends_on[target].contains(&target) {
+        return None;
+    }
+    members.sort_unstable();
+    Some(
+        members
+            .into_iter()
+            .map(|m| (steps[m].component.clone(), steps[m].step.clone()))
+            .collect(),
+    )
+}
+
 /// The members of one strongly connected part, in sweep order: a
 /// depth-first walk over what each member reads, from the positionally
 /// first member, emitting a member after everything it reads. Every read
