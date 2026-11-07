@@ -356,6 +356,7 @@ fn grid_with_state_dependent_hazard_and_competing_target() {
             samples: vec![],
             threads: Some(4),
             quantiles: vec![],
+            quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
             confidence: 0.95,
             ode: Default::default(),
             stop_at_targets: true,

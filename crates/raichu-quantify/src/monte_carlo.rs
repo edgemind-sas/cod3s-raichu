@@ -25,6 +25,7 @@ impl MonteCarloSettings {
             samples: study.reporting_instants(),
             threads: study.threads,
             quantiles: self.quantiles.clone(),
+            quantile_rank_error: self.quantile_rank_error,
             confidence: self.confidence,
             ode: SolverParams::default(),
             stop_at_targets: true,

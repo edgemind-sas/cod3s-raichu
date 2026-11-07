@@ -4,6 +4,8 @@ __version__: str
 
 #: Confidence level applied when a study states none (0.95).
 DEFAULT_CONFIDENCE: float
+#: Rank error of the quantiles when a run states none (0.001).
+DEFAULT_QUANTILE_RANK_ERROR: float
 
 class ModelError(Exception): ...
 class SimulationError(Exception): ...
@@ -80,6 +82,7 @@ def monte_carlo_json(
     allow_fmu_import: bool = False,
     fmu_base_dir: str | None = None,
     require_parallel: bool = False,
+    quantile_rank_error: float | None = None,
 ) -> str: ...
 def analyse_sequences_json(
     model_json: str,

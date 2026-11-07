@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any, Iterable, Mapping, Sequence
 
 from .. import MODEL_ENVELOPE_KEY, Model, load_model, model_body, monte_carlo, seal
@@ -80,9 +81,11 @@ __all__ = [
     "ENGINE_DESCRIPTION",
     "ENGINE_NAME",
     "MEASURE_EXTREMES",
+    "MEASURE_QUANTILES",
     "MEASURE_SERIES",
     "RUN_TARGETS",
     "build_model",
+    "percentile_order",
     "isimu_start",
     "register",
     "simulate",
@@ -163,6 +166,35 @@ MEASURE_EXTREMES: dict[str, str] = {
     "value": "extremes",
     "had_value": "nonzero_reached_extremes",
 }
+
+#: A cod3s/muscadet study measure -> the quantile field carrying its
+#: ``P<N>`` statistics (a dict keyed by order, see
+#: :func:`percentile_order`), on the same pairing as :data:`MEASURE_SERIES`.
+#: The campaign computes them only for the orders passed as ``quantiles=``.
+MEASURE_QUANTILES: dict[str, str] = {
+    "nb-occurrences": "zero_departures_quantiles",
+    "sojourn-time": "sojourn_quantiles",
+    "value": "quantiles",
+    "had_value": "nonzero_reached_quantiles",
+}
+
+_PERCENTILE_STAT = re.compile(r"P(\d{1,3})")
+
+
+def percentile_order(stat: str) -> float | None:
+    """The quantile order a cod3s percentile statistic names, else ``None``.
+
+    ``P<N>`` (``P5``, ``P95``, ``P99``...) is the nearest-rank quantile of
+    order ``N / 100`` of the per-replica values, ``N`` from 0 to 100: the
+    order to pass in ``quantiles=`` and the key to read in the field
+    :data:`MEASURE_QUANTILES` names. Any other statistic (``mean``,
+    ``stddev``, ``min``, ``P101``) is not a percentile and answers ``None``.
+    """
+    match = _PERCENTILE_STAT.fullmatch(stat)
+    if match is None or int(match.group(1)) > 100:
+        return None
+    return int(match.group(1)) / 100
+
 
 #: Run-parameter keys that describe HOW the reference engine draws its
 #: replicas, TRACES them or REPORTS them, rather than what is computed, and

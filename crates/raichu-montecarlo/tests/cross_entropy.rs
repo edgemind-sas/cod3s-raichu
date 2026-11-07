@@ -290,6 +290,7 @@ fn factors_of_one_without_fitting_reproduce_the_monte_carlo_campaign_bit_for_bit
             samples: vec![HORIZON],
             threads: None,
             quantiles: vec![],
+            quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
             confidence: DEFAULT_CONFIDENCE,
             ode: SolverParams::default(),
             stop_at_targets: true,

@@ -58,6 +58,7 @@ fn config() -> McConfig {
         samples: vec![0.5, 2.0, 4.0],
         threads: None,
         quantiles: vec![0.5],
+        quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
         confidence: DEFAULT_CONFIDENCE,
         ode: Default::default(),
         stop_at_targets: false,
@@ -121,6 +122,22 @@ fn a_measure_is_named_by_its_member_in_the_document() {
             |i| i.sojourn_quantiles[0].values[0] = f64::NAN,
             "sojourn_quantiles[q=0.5]",
         ),
+        (
+            |i| i.nb_occurrences_quantiles[0].values[0] = f64::NAN,
+            "nb_occurrences_quantiles[q=0.5]",
+        ),
+        (
+            |i| i.reached_quantiles[0].values[0] = f64::NAN,
+            "reached_quantiles[q=0.5]",
+        ),
+        (
+            |i| i.zero_departures_quantiles[0].values[0] = f64::NAN,
+            "zero_departures_quantiles[q=0.5]",
+        ),
+        (
+            |i| i.nonzero_reached_quantiles[0].values[0] = f64::NAN,
+            "nonzero_reached_quantiles[q=0.5]",
+        ),
     ] {
         let mut indicator = finite.clone();
         indicator.name = "planted".into();
@@ -149,6 +166,9 @@ fn an_input_that_would_write_a_non_finite_number_is_refused_up_front() {
         (|c| c.quantiles = vec![f64::NAN], "quantiles"),
         (|c| c.quantiles = vec![1.5], "quantiles"),
         (|c| c.quantiles = vec![-0.1], "quantiles"),
+        (|c| c.quantile_rank_error = -0.1, "quantile_rank_error"),
+        (|c| c.quantile_rank_error = 0.6, "quantile_rank_error"),
+        (|c| c.quantile_rank_error = f64::NAN, "quantile_rank_error"),
     ] {
         let mut config = config();
         change(&mut config);

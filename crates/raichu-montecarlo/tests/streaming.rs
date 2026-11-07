@@ -143,6 +143,7 @@ fn config(threads: Option<usize>) -> McConfig {
         samples: vec![0.0, HORIZON / 2.0, HORIZON],
         threads,
         quantiles: vec![0.25, 0.5, 0.75],
+        quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
         confidence: DEFAULT_CONFIDENCE,
         ode: SolverParams::default(),
         stop_at_targets: false,

@@ -60,6 +60,7 @@ fn config(threads: Option<usize>) -> McConfig {
         samples: Vec::new(),
         threads,
         quantiles: Vec::new(),
+        quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
         confidence: DEFAULT_CONFIDENCE,
         ode: SolverParams::default(),
         stop_at_targets: false,

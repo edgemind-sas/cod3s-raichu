@@ -14,9 +14,10 @@
 //!   statistically equal numbers;
 //! - the replicas run in parallel **chunks** whose samples are folded,
 //!   in replica order, as each chunk completes: a campaign's memory does
-//!   not grow with its number of replicas (quantiles excepted, which need
-//!   the whole column), and the fold is the same sequence of additions as
-//!   over the whole campaign at once;
+//!   not grow with its number of replicas (quantiles aside: each one is a
+//!   summary of its column at a stated rank error, growing only with the
+//!   logarithm of the replica count, see [`quantile`]), and the fold is the same sequence of additions as over
+//!   the whole campaign at once;
 //! - `rayon` only parallelises the embarrassingly parallel trajectory
 //!   loop: the single-trajectory engine stays single-threaded.
 //!
@@ -32,7 +33,10 @@
 
 pub mod confidence;
 pub mod cross_entropy;
+pub mod quantile;
 pub mod splitting;
+pub use quantile::DEFAULT_QUANTILE_RANK_ERROR;
+use quantile::{bernoulli_quantile, QuantileSketch};
 pub use splitting::*;
 
 pub use confidence::{
@@ -77,10 +81,22 @@ pub struct McConfig {
     /// Thread count (`None` = rayon default). The result is
     /// byte-identical whatever the value: see the crate docs.
     pub threads: Option<usize>,
-    /// Quantile orders to estimate (e.g. `[0.25, 0.75]`), on both the
-    /// sampled value and the cumulated sojourn, nearest-rank across
-    /// replicas (M4; quantile stats, e.g. P25/P75).
+    /// Quantile orders to estimate (e.g. `[0.05, 0.95]` for the P5 and
+    /// P95 statistics), nearest-rank across replicas, on every measure:
+    /// sampled value, cumulated sojourn, occurrence count, reached,
+    /// departures from zero and non-zero reached.
     pub quantiles: Vec<f64>,
+    /// Rank error `ε` of [`Self::quantiles`], in `[0, 0.5]`: each reported
+    /// quantile is a replica value whose rank in the sorted column is
+    /// within `⌊ε · nb_runs⌋` of the requested nearest rank, and it is
+    /// exactly the nearest-rank value below `1/ε` replicas. The memory
+    /// a quantile column takes then grows only with the logarithm of the
+    /// number of replicas.
+    /// `0` keeps every replica value and answers exactly, at a memory that
+    /// grows with the campaign. [`DEFAULT_QUANTILE_RANK_ERROR`] is the
+    /// conventional value. The two 0/1 measures (reached, non-zero
+    /// reached) are exact whatever `ε`: their count of ones decides them.
+    pub quantile_rank_error: f64,
     /// Confidence level of the intervals reported on every estimator,
     /// strictly inside `(0, 1)`.
     ///
@@ -114,7 +130,8 @@ pub struct McConfig {
 pub struct QuantileSeries {
     /// Quantile order in (0, 1).
     pub q: f64,
-    /// Nearest-rank quantile at each schedule instant.
+    /// Nearest-rank quantile at each schedule instant, within the rank
+    /// error the result states ([`McEstimates::quantile_rank_error`]).
     pub values: Vec<f64>,
 }
 
@@ -242,6 +259,21 @@ pub struct IndicatorEstimate {
     pub quantiles: Vec<QuantileSeries>,
     /// Requested quantiles of the cumulated sojourn.
     pub sojourn_quantiles: Vec<QuantileSeries>,
+    // The quantiles below default when absent, like the departure
+    // measures: a document written before they existed still reads.
+    /// Requested quantiles of the occurrence count.
+    #[serde(default)]
+    pub nb_occurrences_quantiles: Vec<QuantileSeries>,
+    /// Requested quantiles of the reached indicator: 0 or 1, exact.
+    #[serde(default)]
+    pub reached_quantiles: Vec<QuantileSeries>,
+    /// Requested quantiles of the departure count.
+    #[serde(default)]
+    pub zero_departures_quantiles: Vec<QuantileSeries>,
+    /// Requested quantiles of the non-zero-reached indicator: 0 or 1,
+    /// exact.
+    #[serde(default)]
+    pub nonzero_reached_quantiles: Vec<QuantileSeries>,
 }
 
 /// The interval a document written before the departure measures existed
@@ -278,6 +310,12 @@ pub struct McEstimates {
     /// count. A result states its precision *and* the level that
     /// precision is claimed at.
     pub confidence: f64,
+    /// Rank error every quantile of this result was computed at
+    /// ([`McConfig::quantile_rank_error`]): `0` is exact. A document
+    /// written before the bounded summary read back as `0`, which is what
+    /// its quantiles were.
+    #[serde(default)]
+    pub quantile_rank_error: f64,
     /// Engine version.
     pub engine_version: String,
     /// Imported co-simulation units, omitted for native-only campaigns.
@@ -364,6 +402,10 @@ impl IndicatorEstimate {
             nonzero_reached_extremes,
             quantiles,
             sojourn_quantiles,
+            nb_occurrences_quantiles,
+            reached_quantiles,
+            zero_departures_quantiles,
+            nonzero_reached_quantiles,
         } = self;
         let refused = |measure: String, k: usize, value: f64| NonFiniteEstimate {
             indicator: name.clone(),
@@ -437,6 +479,10 @@ impl IndicatorEstimate {
         for (family, series) in [
             ("quantiles", quantiles),
             ("sojourn_quantiles", sojourn_quantiles),
+            ("nb_occurrences_quantiles", nb_occurrences_quantiles),
+            ("reached_quantiles", reached_quantiles),
+            ("zero_departures_quantiles", zero_departures_quantiles),
+            ("nonzero_reached_quantiles", nonzero_reached_quantiles),
         ] {
             for QuantileSeries { q, values } in series {
                 if let Some((k, value)) = first_non_finite(values) {
@@ -943,6 +989,15 @@ fn check_config(config: &McConfig) -> Result<(), EngineError> {
             format!("a quantile order lies in [0, 1], got {q}"),
         );
     }
+    if !(0.0..=0.5).contains(&config.quantile_rank_error) {
+        return refuse(
+            "quantile_rank_error",
+            format!(
+                "a quantile rank error lies in [0, 0.5] (0 is exact), got {}",
+                config.quantile_rank_error
+            ),
+        );
+    }
     Ok(())
 }
 
@@ -1153,7 +1208,8 @@ where
 /// Budget for retained sample payload in one chunk, excluding worker state,
 /// model data, allocation metadata and final estimates. One replica is the
 /// unavoidable lower bound, even if its payload exceeds this budget.
-/// Quantile columns additionally retain values across all replicas.
+/// Quantile summaries add a bounded amount per indicator, instant and
+/// measure (see [`quantile`]).
 const CHUNK_BYTES: usize = 64 << 20;
 
 /// The most replicas in one chunk, reached by models with few or no samples.
@@ -1237,11 +1293,13 @@ struct IndicatorFold {
     reached_extremes: Extremes,
     zero_departures_extremes: Extremes,
     nonzero_reached_extremes: Extremes,
-    /// `[instant][replica]` sampled values and sojourns, in replica order,
-    /// kept only when quantiles are asked: a quantile needs the whole
-    /// column, every other estimator running moments.
-    value_columns: Vec<Vec<f64>>,
-    sojourn_columns: Vec<Vec<f64>>,
+    /// One quantile summary per instant for each measure that is not 0/1,
+    /// fed in replica order, kept only when quantiles are asked (empty
+    /// otherwise). The two 0/1 measures need only their sums.
+    value_columns: Vec<QuantileSketch>,
+    sojourn_columns: Vec<QuantileSketch>,
+    occurrence_columns: Vec<QuantileSketch>,
+    departure_columns: Vec<QuantileSketch>,
 }
 
 /// The serial, replica-ordered reduction of a campaign's samples into its
@@ -1263,6 +1321,12 @@ impl Reducer {
     fn new(model: &CompiledModel, config: &McConfig) -> Self {
         let n_instants = config.samples.len();
         let keep_columns = !config.quantiles.is_empty();
+        let columns = || {
+            vec![
+                QuantileSketch::new(config.quantile_rank_error);
+                if keep_columns { n_instants } else { 0 }
+            ]
+        };
         let folds = model
             .indicators
             .iter()
@@ -1274,8 +1338,10 @@ impl Reducer {
                 reached_extremes: Extremes::empty(n_instants),
                 zero_departures_extremes: Extremes::empty(n_instants),
                 nonzero_reached_extremes: Extremes::empty(n_instants),
-                value_columns: vec![Vec::new(); if keep_columns { n_instants } else { 0 }],
-                sojourn_columns: vec![Vec::new(); if keep_columns { n_instants } else { 0 }],
+                value_columns: columns(),
+                sojourn_columns: columns(),
+                occurrence_columns: columns(),
+                departure_columns: columns(),
             })
             .collect();
         Self {
@@ -1329,6 +1395,8 @@ impl Reducer {
                 if self.keep_columns {
                     fold.value_columns[k].push(value);
                     fold.sojourn_columns[k].push(sojourn);
+                    fold.occurrence_columns[k].push(nb_occ);
+                    fold.departure_columns[k].push(zero_departures);
                 }
             }
         }
@@ -1359,6 +1427,8 @@ impl Reducer {
                 nonzero_reached_extremes,
                 mut value_columns,
                 mut sojourn_columns,
+                mut occurrence_columns,
+                mut departure_columns,
             } = fold;
             let mut mean = vec![0.0; n_instants];
             let mut std = vec![0.0; n_instants];
@@ -1395,34 +1465,40 @@ impl Reducer {
                         .sqrt();
                 }
             }
-            // Nearest-rank quantiles (deterministic: total_cmp sort over the
-            // replica-ordered column).
-            let mut quantiles = Vec::new();
-            let mut sojourn_quantiles = Vec::new();
-            for column in value_columns.iter_mut().chain(sojourn_columns.iter_mut()) {
-                column.sort_unstable_by(f64::total_cmp);
-            }
-            for &q in &config.quantiles {
-                let mut value_rows = vec![0.0; n_instants];
-                let mut sojourn_rows = vec![0.0; n_instants];
-                for k in 0..n_instants {
-                    let column = &value_columns[k];
-                    let sj_column = &sojourn_columns[k];
-                    let rank = ((q * column.len() as f64).ceil() as usize)
-                        .saturating_sub(1)
-                        .min(column.len().saturating_sub(1));
-                    value_rows[k] = column[rank];
-                    sojourn_rows[k] = sj_column[rank];
-                }
-                quantiles.push(QuantileSeries {
-                    q,
-                    values: value_rows,
-                });
-                sojourn_quantiles.push(QuantileSeries {
-                    q,
-                    values: sojourn_rows,
-                });
-            }
+            // Nearest-rank quantiles, read off each column's summary (exact
+            // below 1/ε replicas, within ⌊ε·n⌋ ranks beyond), and off the
+            // count of ones for the two 0/1 measures.
+            let nb_runs = config.nb_runs;
+            let series = |columns: &mut [QuantileSketch]| -> Vec<QuantileSeries> {
+                config
+                    .quantiles
+                    .iter()
+                    .map(|&q| QuantileSeries {
+                        q,
+                        values: columns.iter_mut().map(|c| c.quantile(q)).collect(),
+                    })
+                    .collect()
+            };
+            let quantiles = series(&mut value_columns);
+            let sojourn_quantiles = series(&mut sojourn_columns);
+            let nb_occurrences_quantiles = series(&mut occurrence_columns);
+            let zero_departures_quantiles = series(&mut departure_columns);
+            // A 0/1 sum is an exact integer count well below 2^53.
+            let bernoulli = |ones: fn(&InstantMoments) -> f64| -> Vec<QuantileSeries> {
+                config
+                    .quantiles
+                    .iter()
+                    .map(|&q| QuantileSeries {
+                        q,
+                        values: sums
+                            .iter()
+                            .map(|s| bernoulli_quantile(q, nb_runs, ones(s) as u64))
+                            .collect(),
+                    })
+                    .collect()
+            };
+            let reached_quantiles = bernoulli(|s| s.reached_sum);
+            let nonzero_reached_quantiles = bernoulli(|s| s.nonzero_sum);
             let level = config.confidence;
             // The declared kind decides both the construction and, where a
             // campaign observed no dispersion at all, the size of the
@@ -1499,6 +1575,10 @@ impl Reducer {
                 nonzero_reached_extremes,
                 quantiles,
                 sojourn_quantiles,
+                nb_occurrences_quantiles,
+                reached_quantiles,
+                zero_departures_quantiles,
+                nonzero_reached_quantiles,
             });
         }
 
@@ -1507,6 +1587,7 @@ impl Reducer {
             nb_runs: config.nb_runs,
             seed: config.seed,
             confidence: config.confidence,
+            quantile_rank_error: config.quantile_rank_error,
             engine_version: env!("CARGO_PKG_VERSION").to_owned(),
             fmu_units,
             serial_fallback_unit,
@@ -2017,6 +2098,7 @@ mod variance_tests {
             samples: vec![1.0],
             threads: Some(1),
             quantiles: vec![],
+            quantile_rank_error: DEFAULT_QUANTILE_RANK_ERROR,
             confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             stop_at_targets: false,

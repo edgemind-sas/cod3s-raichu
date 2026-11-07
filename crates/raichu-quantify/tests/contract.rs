@@ -386,6 +386,27 @@ fn the_monte_carlo_detail_is_the_stop_at_targets_campaign_byte_for_byte() {
 }
 
 #[test]
+fn the_quantile_rank_error_reaches_the_campaign_and_defaults_when_absent() {
+    let model = parallel_pair(A, B);
+    let study = study("both_down");
+    let settings = MonteCarloSettings {
+        quantiles: vec![0.5],
+        quantile_rank_error: 0.0,
+        ..MonteCarloSettings::new(1_500)
+    };
+    let q = quantify(&model, &study, &Method::MonteCarlo(settings)).unwrap();
+    let Detail::MonteCarlo(detail) = &q.detail else {
+        panic!("expected a Monte-Carlo detail");
+    };
+    assert_eq!(detail.quantile_rank_error, 0.0);
+    let read: MonteCarloSettings = serde_json::from_str(r#"{"nb_runs": 10}"#).unwrap();
+    assert_eq!(
+        read.quantile_rank_error,
+        raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR
+    );
+}
+
+#[test]
 fn the_exploration_details_are_the_explorers_results_byte_for_byte() {
     let model = parallel_pair(A, B);
     let compiled = compile(&model);
