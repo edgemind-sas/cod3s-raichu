@@ -372,13 +372,16 @@ routes alike; the rings and the mixture groups, which only the whole flow
 graph decides, are read off the declaration route's own system, and a
 mixture group that route refuses is refused with its reason.
 
+A volume holding inputs only, which no rule draws, converts to an
+accumulator (`muscadet.volume_flow` with no outlet).
+
 It refuses by name the continuous constructs no bench proves yet: a mixed
 volume whose flows lack an inlet or an outlet, a mixture group with a run
 command, a ring torn at an output two rule sets produce, a rule set ahead
 in a cascade whose mixed-volume input has another supplier, a volume
 starting full, with a finite serve rate, a discharge command, a make-up
-flow, a hysteresis or a flow weight, a volume on the input side holding a
-flow no rule draws or fed by two suppliers or more, a conditioned rule set
+flow, a hysteresis or a flow weight, a volume on the input side fed by two suppliers
+or more, or holding a flow no rule draws beside one a rule draws, a conditioned rule set
 drawing from a volume, a maximum rate on an always-on rule's output,
 output-side volumes beside rule sets, multi-rule
 rule sets, an output two rule sets produce when a producer apportions it,
