@@ -133,16 +133,19 @@ impl ContinuousSystem<'_> {
 }
 
 impl ContinuousSystem<'_> {
-    /// The [`EngineError::UnboundedRate`] refusal a solver failure at
-    /// `(t, y)` really is, if any.
+    /// The [`EngineError::UnboundedRate`] refusal the state `(t, y)`
+    /// carries, if any: an integrated rate set by the stand-in.
     ///
     /// `evolC` refuses a rate that *reaches* the magnitude the model
     /// reserves for "unbounded". The same draw can arrive diluted: a
     /// volume holding a mixture serves each constituent at its share of
     /// the stand-in, so an unbounded draw on a 2 % constituent integrates
-    /// at 2e28, under the magnitude and far beyond what any step can
-    /// follow. The step controller then collapses, and its report
-    /// ("too stiff") names a symptom rather than the model's statement.
+    /// at 2e28, under the magnitude and far beyond what a step should
+    /// follow. Left to the solver, such a rate either collapses the step
+    /// controller, whose report ("too stiff") names a symptom rather than
+    /// the model's statement, or is followed with steps of 1e-28 that
+    /// empty the stock at once: the instantaneous transfer the refusal
+    /// exists to keep out.
     ///
     /// The test is the one the reservation implies: a physical rate does
     /// not depend on the value chosen for "unbounded". The stand-in is
@@ -150,46 +153,31 @@ impl ContinuousSystem<'_> {
     /// literal of the continuous section, the explicit sweep is settled
     /// again, and a rate that moves with it is set by the stand-in. One
     /// that does not (a stand-in a `min` takes away) is untouched, so a
-    /// genuinely stiff model keeps the solver's error. Called only on a
-    /// failed integration: a trajectory the solver could follow costs
-    /// nothing and reads nothing new.
+    /// genuinely stiff model keeps the solver's error.
+    ///
+    /// Called at the start state of a segment that advanced time, and at
+    /// the last accepted state of a failed integration. A model that
+    /// writes no stand-in, in a literal or an attribute, costs one scan of
+    /// its attribute values.
     pub(super) fn unbounded_dependence(&self, t: f64, y: &[f64]) -> Option<EngineError> {
         let unbounded = self.model.unbounded_rate?;
-        let mut doubled_model = self.model.clone();
-        let mut moved = false;
-        for (_, expr) in &mut doubled_model.ode {
-            moved |= double_stand_in(expr, unbounded);
-        }
-        for step in &mut doubled_model.explicit {
-            match step {
-                CStep::Equation { expr, .. } => moved |= double_stand_in(expr, unbounded),
-                CStep::Allocate(allocation) => {
-                    moved |= double_stand_in(&mut allocation.available, unbounded);
-                }
-                CStep::Block(block) => {
-                    for constant in &mut block.constants {
-                        moved |= double_stand_in(constant, unbounded);
-                    }
-                    for (_, coefficient) in block.coefficients.iter_mut().flatten() {
-                        moved |= double_stand_in(coefficient, unbounded);
-                    }
-                }
-            }
-        }
-        let mut doubled_vars = self.vars.clone();
-        for value in &mut doubled_vars {
-            if let Value::Float(v) = value {
-                if v.abs() >= unbounded {
-                    *v *= 2.0;
-                    moved = true;
-                }
-            }
-        }
-        if !moved {
+        let holds_stand_in =
+            |value: &Value| matches!(value, Value::Float(v) if v.abs() >= unbounded);
+        let doubled_model = self.model.stand_in_doubled.as_deref();
+        if doubled_model.is_none() && !self.vars.iter().any(holds_stand_in) {
             return None;
         }
+        let mut doubled_vars = self.vars.clone();
+        for value in doubled_vars
+            .iter_mut()
+            .filter(|value| holds_stand_in(value))
+        {
+            if let Value::Float(v) = value {
+                *v *= 2.0;
+            }
+        }
         let base = self.rates_at(self.model, self.vars.clone(), t, y)?;
-        let doubled = self.rates_at(&doubled_model, doubled_vars, t, y)?;
+        let doubled = self.rates_at(doubled_model.unwrap_or(self.model), doubled_vars, t, y)?;
         // What is refused is a stock drained without bound, so a draining
         // rate is named first: the stock it fills downstream moves by the
         // same magnitude, and naming it would point at the wrong volume.
@@ -252,43 +240,6 @@ impl ContinuousSystem<'_> {
             .iter()
             .map(|(_, expr)| eval_f64(model, &vars, &self.states, t, expr).ok())
             .collect()
-    }
-}
-
-/// Double, in place, every float literal of `expr` at or beyond the
-/// declared `unbounded` magnitude; whether any was found.
-fn double_stand_in(expr: &mut CExpr, unbounded: f64) -> bool {
-    match expr {
-        CExpr::Const(Value::Float(v)) if v.abs() >= unbounded => {
-            *v *= 2.0;
-            true
-        }
-        CExpr::Const(_)
-        | CExpr::Var(_)
-        | CExpr::StateActive { .. }
-        | CExpr::PortAgg { .. }
-        | CExpr::Time => false,
-        CExpr::Cmp { lhs, rhs, .. } | CExpr::Sub { lhs, rhs } | CExpr::Div { lhs, rhs } => {
-            let left = double_stand_in(lhs, unbounded);
-            double_stand_in(rhs, unbounded) | left
-        }
-        CExpr::Bool { args, .. }
-        | CExpr::Add { args }
-        | CExpr::Mul { args }
-        | CExpr::Min { args }
-        | CExpr::Max { args } => args
-            .iter_mut()
-            .fold(false, |found, arg| double_stand_in(arg, unbounded) | found),
-        CExpr::If {
-            cond,
-            then,
-            otherwise,
-        } => {
-            let found = double_stand_in(cond, unbounded);
-            let found = double_stand_in(then, unbounded) | found;
-            double_stand_in(otherwise, unbounded) | found
-        }
-        CExpr::Sin(arg) | CExpr::Exp(arg) => double_stand_in(arg, unbounded),
     }
 }
 

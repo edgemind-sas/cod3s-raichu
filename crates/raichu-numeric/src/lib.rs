@@ -299,8 +299,11 @@ pub trait OdeSolver {
 /// and bisection event location (default backend).
 ///
 /// Short intervals use the same error-controlled steps as other intervals.
-/// Twenty consecutive rejected trials return [`OdeError::StepSizeUnderflow`];
-/// an accepted step resets this retry budget, regardless of its duration.
+/// A rejected trial shrinks the step and retries, down to one representable
+/// time increment: only when that shortest step is itself rejected does
+/// integration return [`OdeError::StepSizeUnderflow`]. A right-hand side
+/// that jumps inside a step (an `if`, `min` or `max`) makes the error shrink
+/// like `h` rather than `h^5`, and needs these extra retries.
 /// A step sized to the remaining span lands on the endpoint exactly, and no
 /// evaluation passes it.
 /// With a finite `max_step`, a progress window of `min(max_step, remaining
@@ -441,6 +444,12 @@ fn next_up(t: f64) -> f64 {
     } else {
         f64::from_bits(t.to_bits() - 1)
     }
+}
+
+/// The largest double below a finite `t` (`f64::next_down`, stable only
+/// from Rust 1.86, above this crate's MSRV).
+fn next_down(t: f64) -> f64 {
+    -next_up(-t)
 }
 
 /// Index of the first margin that is **already satisfied** (`≥ 0`), if any.
@@ -711,9 +720,8 @@ impl OdeSolver for DormandPrince45 {
         // The work window needs a finite step cap to be a time scale: an
         // infinite `max_step` ("no cap") leaves accepted work unbounded.
         let work_window = p.max_step.is_finite();
-        let mut rejected_in_row = 0;
         let mut work_window_end = (t0 + h).min(t_end);
-        let mut window_trials = 0;
+        let mut window_trials: u64 = 0;
         let mut sample_cursor = 0usize;
         while sample_cursor < samples.len() && samples[sample_cursor] <= t0 {
             sample_cursor += 1;
@@ -808,14 +816,23 @@ impl OdeSolver for DormandPrince45 {
 
             if err > 1.0 {
                 self.stats.rejected += 1;
-                rejected_in_row += 1;
-                if rejected_in_row >= 20 {
+                let shortest_end = next_up(t);
+                if next_t <= shortest_end {
                     return Err(OdeError::StepSizeUnderflow { t, h });
                 }
-                h *= (0.9 * err.powf(-0.2)).clamp(0.2, 1.0);
+                let shrunk = h * (0.9 * err.powf(-0.2)).clamp(0.2, 1.0);
+                // A few time increments from `t`, rounding can carry the
+                // shrunk step back onto the endpoint just rejected, and the
+                // same trial would repeat forever: the retry then ends one
+                // increment earlier, and never earlier than one past `t`.
+                h = if t + shrunk < next_t {
+                    shrunk
+                } else {
+                    next_down(next_t) - t
+                };
+                h = h.max(shortest_end - t);
                 continue;
             }
-            rejected_in_row = 0;
             self.stats.accepted += 1;
 
             // Accepted: build the dense interpolant, unless nothing reads

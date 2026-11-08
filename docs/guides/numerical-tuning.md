@@ -176,11 +176,15 @@ at `t = 1e12`, a proposal of 1.5 time ULPs can round to 2 ULPs. Scan spacing
 is also subject to the resolution of the time axis. A step sized to the
 remaining span lands on the endpoint exactly: neither the right-hand side,
 nor an event margin, nor an observation is evaluated past it. If `max_step`
-is below the next representable time increment, or 20 consecutive
-trials fail the state-error check, integration fails with
-`StepSizeUnderflow`; it does not report the horizon reached with an
-unevolved state. This retry budget bounds an unsuccessful adaptive search,
-not the number of accepted steps; it resets after each accepted step.
+is below the next representable time increment, or a trial of that
+shortest step, one time increment, fails the state-error check,
+integration fails with `StepSizeUnderflow`; it does not report the horizon
+reached with an unevolved state. Short of that, a rejected trial shrinks
+the step and retries. A right-hand side that jumps inside a step (an `if`,
+`min` or `max` switching branch) makes the step error shrink like the step
+itself rather than its fifth power, so crossing the jump can take many
+retries: a jump of `1e4` at `t = 0` is crossed with a step of a few
+`1e-11`.
 With a finite `max_step`, a progress window of `min(max_step, remaining
 duration)` allows 10,000 trials, including accepted steps. The window stays
 fixed until covered; then its budget resets. This bounds stiff flows that keep

@@ -691,6 +691,13 @@ pub struct CompiledModel {
     /// may reach it (`evolC` refuses with
     /// [`crate::EngineError::UnboundedRate`]). `None`: nothing reserved.
     pub unbounded_rate: Option<f64>,
+    /// This model with every literal at or beyond [`Self::unbounded_rate`]
+    /// doubled, in the continuous section (ODE right-hand sides and the
+    /// explicit sweep). `None` when no such literal is written. Built once
+    /// here so the per-segment stand-in test reads it rather than cloning
+    /// the model; attribute values holding the stand-in are doubled at the
+    /// test itself, since they change with the discrete state.
+    pub(crate) stand_in_doubled: Option<Box<CompiledModel>>,
     /// The explicit sweep: equations and distribution operators in
     /// evaluation order (run before ODE right-hand sides at every
     /// evaluation point). Positional unless the model declares an
@@ -2462,6 +2469,7 @@ impl CompiledModel {
             targets,
             ode,
             unbounded_rate: model.unbounded_rate,
+            stand_in_doubled: None,
             explicit_reads_time: explicit.iter().any(|step| match step {
                 CStep::Equation { expr, .. } => expr.reads_time(),
                 // An allocation distributes a quantity it is handed; it
@@ -2515,6 +2523,81 @@ impl CompiledModel {
                 tracing::info!(model = %compiled.name, "{line}");
             }
         }
+        compiled.stand_in_doubled = stand_in_doubled(&compiled).map(Box::new);
         Ok(compiled)
+    }
+}
+
+/// `model` with every float literal of its continuous section at or beyond
+/// the declared unbounded magnitude doubled, or `None` when there is no
+/// such literal (or no declared magnitude).
+fn stand_in_doubled(model: &CompiledModel) -> Option<CompiledModel> {
+    let unbounded = model.unbounded_rate?;
+    let mut doubled = model.clone();
+    let mut moved = false;
+    for (_, expr) in &mut doubled.ode {
+        moved |= double_stand_in(expr, unbounded);
+    }
+    for step in &mut doubled.explicit {
+        match step {
+            CStep::Equation { expr, .. } => moved |= double_stand_in(expr, unbounded),
+            CStep::Allocate(allocation) => {
+                moved |= double_stand_in(&mut allocation.available, unbounded);
+            }
+            CStep::Block(block) => {
+                for constant in &mut block.constants {
+                    moved |= double_stand_in(constant, unbounded);
+                }
+                let mut coefficient_moved = false;
+                for (_, coefficient) in block.coefficients.iter_mut().flatten() {
+                    coefficient_moved |= double_stand_in(coefficient, unbounded);
+                }
+                // The factorization of constant coefficients was computed
+                // from the undoubled values: drop it so the doubled
+                // coefficients are the ones solved.
+                if coefficient_moved {
+                    block.constant_factorization = None;
+                }
+                moved |= coefficient_moved;
+            }
+        }
+    }
+    moved.then_some(doubled)
+}
+
+/// Double, in place, every float literal of `expr` at or beyond the
+/// declared `unbounded` magnitude; whether any was found.
+fn double_stand_in(expr: &mut CExpr, unbounded: f64) -> bool {
+    match expr {
+        CExpr::Const(Value::Float(v)) if v.abs() >= unbounded => {
+            *v *= 2.0;
+            true
+        }
+        CExpr::Const(_)
+        | CExpr::Var(_)
+        | CExpr::StateActive { .. }
+        | CExpr::PortAgg { .. }
+        | CExpr::Time => false,
+        CExpr::Cmp { lhs, rhs, .. } | CExpr::Sub { lhs, rhs } | CExpr::Div { lhs, rhs } => {
+            let left = double_stand_in(lhs, unbounded);
+            double_stand_in(rhs, unbounded) | left
+        }
+        CExpr::Bool { args, .. }
+        | CExpr::Add { args }
+        | CExpr::Mul { args }
+        | CExpr::Min { args }
+        | CExpr::Max { args } => args
+            .iter_mut()
+            .fold(false, |found, arg| double_stand_in(arg, unbounded) | found),
+        CExpr::If {
+            cond,
+            then,
+            otherwise,
+        } => {
+            let found = double_stand_in(cond, unbounded);
+            let found = double_stand_in(then, unbounded) | found;
+            double_stand_in(otherwise, unbounded) | found
+        }
+        CExpr::Sin(arg) | CExpr::Exp(arg) => double_stand_in(arg, unbounded),
     }
 }

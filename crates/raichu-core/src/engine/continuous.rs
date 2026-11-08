@@ -470,6 +470,7 @@ impl<'m> Engine<'m> {
                 recorded.push((t, values));
             };
 
+            let state_before_solve = self.model.unbounded_rate.map(|_| (self.time, y.clone()));
             let outcome = self.solver.integrate(
                 &mut system,
                 self.time,
@@ -505,15 +506,21 @@ impl<'m> Engine<'m> {
                 }
                 // A solver failure on a rate the "unbounded" stand-in
                 // sets is the `evolC` refusal arriving diluted, and is
-                // reported as that refusal (`unbounded_dependence`). `y`
-                // holds the last accepted state, the one the failed step
-                // started from.
+                // reported as that refusal (`unbounded_dependence`), dated
+                // at the segment start when the rate was already set by the
+                // stand-in there. Otherwise `y` holds the last accepted
+                // state, the one the failed step started from.
                 (Err(error), _) => {
                     let failed_at = match error {
                         raichu_numeric::OdeError::StepSizeUnderflow { t, .. }
                         | raichu_numeric::OdeError::NonFinite { t } => t,
                     };
-                    if let Some(refusal) = system.unbounded_dependence(failed_at, &y) {
+                    let at_start = state_before_solve.as_ref().and_then(|(t_start, y_start)| {
+                        system.unbounded_dependence(*t_start, y_start)
+                    });
+                    if let Some(refusal) =
+                        at_start.or_else(|| system.unbounded_dependence(failed_at, &y))
+                    {
                         return Err(refusal);
                     }
                     // Preserve the historical solver-error priority for
@@ -522,7 +529,21 @@ impl<'m> Engine<'m> {
                     return Err(error.into());
                 }
                 (Ok(_), Some(error)) => return Err(error),
-                (Ok(outcome), None) => outcome,
+                (Ok(outcome), None) => {
+                    // A solver that follows a rate the stand-in sets does
+                    // so with steps the stand-in sizes, and empties the
+                    // stock at once: the instantaneous transfer `evolC`
+                    // refuses.
+                    let (Outcome::Reached { t } | Outcome::Event { t, .. }) = outcome;
+                    if let Some((t_start, y_start)) = &state_before_solve {
+                        if t > *t_start {
+                            if let Some(refusal) = system.unbounded_dependence(*t_start, y_start) {
+                                return Err(refusal);
+                            }
+                        }
+                    }
+                    outcome
+                }
             };
 
             if let (Some(recorded), Some((_, samples))) =
