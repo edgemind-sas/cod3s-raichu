@@ -997,3 +997,64 @@ fn time_read_in_a_block_marks_the_final_sweep_table() {
     assert!(c.explicit_reads_time);
     assert!((value(&run(&c, 2.0), "x", 2.0) - 4.0).abs() < 1e-12);
 }
+
+#[test]
+fn a_stand_in_in_a_constant_block_coefficient_is_refused() {
+    // `i = v + (1e30 x 2.5e-31) w`, `w = 0.5 i`: a share of the stand-in
+    // as a coupling coefficient. The block solves to `i = v / 0.875`, and
+    // the stand-in sets it (doubled, `i = v / 0.75`). The coefficients are
+    // constants, so the block is factorized at build time; the probe must
+    // solve the doubled coefficients rather than reuse that factorization,
+    // or the drain `v' = -i` passes as a physical rate.
+    let mut body = document(
+        vec![
+            component(
+                "cap",
+                &[("v", 1.0), ("i", 0.0)],
+                vec![
+                    json!({"target":"v","kind":"ode","expr":mul(vec![number(-1.0),attr("cap","i")])}),
+                    equation(
+                        "i",
+                        add(vec![
+                            attr("cap", "v"),
+                            mul(vec![number(1e30), number(2.5e-31), attr("res", "w")]),
+                        ]),
+                    ),
+                ],
+            ),
+            component(
+                "res",
+                &[("w", 0.0)],
+                vec![equation("w", mul(vec![number(0.5), attr("cap", "i")]))],
+            ),
+        ],
+        &[("v", "cap", "v")],
+    );
+    body["unbounded_rate"] = json!(1e30);
+    let sealed = json!({
+        "raichu_model": {"format": 1, "requires": ["unbounded_rate"]},
+        "model": body,
+    });
+    let compiled = compile_json(sealed);
+    let blocks = blocks_of(&compiled);
+    assert_eq!(blocks.len(), 1, "one block on i and w");
+    assert!(
+        blocks[0].constant_factorization.is_some(),
+        "constant coefficients are factorized at build time"
+    );
+    let error = Engine::new(
+        &compiled,
+        EngineConfig {
+            t_max: 1.0,
+            samples: vec![1.0],
+            ..EngineConfig::default()
+        },
+    )
+    .unwrap()
+    .run()
+    .expect_err("a rate the stand-in sets");
+    assert!(
+        matches!(error, EngineError::UnboundedRate { ref variable, time, .. } if variable == "cap.v" && time == 0.0),
+        "expected UnboundedRate on cap.v at t = 0, got {error:?}"
+    );
+}

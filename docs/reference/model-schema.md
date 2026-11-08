@@ -908,16 +908,20 @@ it.
 The stand-in can also arrive diluted. A volume holding a mixture serves
 each constituent at its share, so an unbounded draw on a constituent at
 2 % integrates at 2e28: under the magnitude, and far beyond anything a
-step can follow. The step controller then collapses ("step size
-underflow ... too stiff"). When an integration fails that way, the
-engine doubles the stand-in wherever the model writes it (an
+step should follow. Left to the solver, such a rate either collapses the
+step controller ("step size underflow ... too stiff") or is followed
+with steps of 1e-28 that empty the stock at once. So at the start of
+every segment that advances time, and again when an integration fails,
+the engine doubles the stand-in wherever the model writes it (an
 attribute's value or a literal of the continuous section) and evaluates
 the rates again; a rate that moves with it is set by the stand-in, and
-the failure is reported as the same refusal, naming that rate (a
+the run is refused with the same error, naming that rate (a
 draining one first, the stock that empties). A physical
 rate does not depend on the value chosen for "unbounded", so a model
-that is genuinely stiff keeps the solver's error, and a run that
-integrates is not touched. The physics of such a draw is an instantaneous transfer, which a
+that is genuinely stiff keeps the solver's error, and a stand-in that a
+`min` takes away is not touched. An event located at the segment start,
+such as an empty stock switching its mode, integrates nothing and is not
+refused. The physics of such a draw is an instantaneous transfer, which a
 rate cannot express; the modeller bounds one of the two sides (a finite
 fill or serve rate, or a finite demand). From Python the refusal is a
 `pyraichu.UnboundedRateError`, a `SimulationError` whose `variable`,

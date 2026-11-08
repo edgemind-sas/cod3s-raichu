@@ -211,3 +211,92 @@ fn the_stand_in_written_as_a_literal_is_found_too() {
         "expected UnboundedRate on C.x, got {error:?}"
     );
 }
+
+/// A stock `x` drained at `u x 1e-25` while its automaton is `draining`,
+/// at zero once a watched transition has switched it to `empty` (`x <= 0`).
+/// `u` holds the stand-in, so the drain is set by it: 1e5 per unit time,
+/// a rate the solver follows without trouble.
+fn switched_drain(x0: f64) -> String {
+    let attr = |name: &str| serde_json::json!({"op": "attr", "attr": {"component": "C", "attribute": name}});
+    let float =
+        |value: f64| serde_json::json!({"op": "const", "value": {"kind": "float", "value": value}});
+    let body = serde_json::json!({
+        "unbounded_rate": 1e30,
+        "name": "switched_drain",
+        "components": [{
+            "name": "C",
+            "attributes": [
+                {"name": "x", "kind": "float", "init": {"kind": "float", "value": x0}},
+                {"name": "u", "kind": "float", "init": {"kind": "float", "value": 1e30}}
+            ],
+            "equations": [{"target": "x", "kind": "ode", "expr": {
+                "op": "if",
+                "cond": {"op": "state_active", "state": {"component": "C", "automaton": "stock", "state": "draining"}},
+                "then": {"op": "sub", "lhs": float(0.0), "rhs": {"op": "mul", "args": [attr("u"), float(1e-25)]}},
+                "otherwise": float(0.0)
+            }}],
+            "automata": [{"name": "stock", "states": ["draining", "empty"], "init": "draining", "transitions": [{
+                "name": "emptied", "source": "draining", "targets": ["empty"], "distrib": "watched",
+                "guard": {"op": "cmp", "cmp": "le", "lhs": attr("x"), "rhs": float(0.0)}
+            }]}]
+        }],
+        "indicators": [{"name": "x", "target": "attribute", "attr": {"component": "C", "attribute": "x"}}]
+    });
+    sealed(&body.to_string())
+}
+
+#[test]
+fn a_rate_the_stand_in_sets_is_refused_even_when_the_solver_follows_it() {
+    // Without the test at the segment start, the solver empties the stock
+    // in 5e-5 time units, the watched transition switches the drain off,
+    // and the run completes: an instantaneous transfer, integrated.
+    let error = run(&switched_drain(5.0)).expect_err("a rate set by the stand-in");
+    let EngineError::UnboundedRate {
+        variable,
+        rate,
+        time,
+        ..
+    } = error
+    else {
+        panic!("expected UnboundedRate, got {error:?}");
+    };
+    assert_eq!(variable, "C.x");
+    assert_eq!(time, 0.0);
+    assert!((rate + 1e5).abs() < 1e-6, "the drain, got {rate}");
+}
+
+#[test]
+fn an_event_at_the_segment_start_integrates_nothing_and_is_not_refused() {
+    // The stock starts empty: the watched transition fires at t = 0,
+    // before any step, and the drain it switches off is never integrated.
+    assert_eq!(final_x(&switched_drain(0.0)), 0.0);
+}
+
+#[test]
+fn a_stand_in_a_min_takes_away_integrates_as_written() {
+    // `x' = -min(u, 2)` with `u` holding the stand-in: the rate is -2
+    // whatever value stands for "unbounded", so the probe at the segment
+    // start leaves it alone and the stock drains as written.
+    let body = serde_json::json!({
+        "unbounded_rate": 1e30,
+        "name": "capped_drain",
+        "components": [{
+            "name": "C",
+            "attributes": [
+                {"name": "x", "kind": "float", "init": {"kind": "float", "value": 5.0}},
+                {"name": "u", "kind": "float", "init": {"kind": "float", "value": 1e30}}
+            ],
+            "equations": [{"target": "x", "kind": "ode", "expr": {
+                "op": "sub",
+                "lhs": {"op": "const", "value": {"kind": "float", "value": 0.0}},
+                "rhs": {"op": "min", "args": [
+                    {"op": "attr", "attr": {"component": "C", "attribute": "u"}},
+                    {"op": "const", "value": {"kind": "float", "value": 2.0}}
+                ]}
+            }}]
+        }],
+        "indicators": [{"name": "x", "target": "attribute", "attr": {"component": "C", "attribute": "x"}}]
+    });
+    let x = final_x(&sealed(&body.to_string()));
+    assert!((x - 3.0).abs() < 1e-9, "5 - 2 x 1 = 3, got {x}");
+}

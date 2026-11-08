@@ -554,11 +554,12 @@ pub enum EngineError {
     #[error("continuous evolution failed: {0}")]
     Ode(#[from] raichu_numeric::OdeError),
     /// An ODE right-hand side reached the magnitude the model declares
-    /// as "unbounded" ([`raichu_model::Model::unbounded_rate`]), or, on a
-    /// solver failure, moves with it: a stand-in for "no ceiling" became
-    /// the rate of a stock, whole or scaled by a share. Integrated, it
-    /// steps the stock far past its bound before any event is located,
-    /// or collapses the step controller, so the run is refused instead of
+    /// as "unbounded" ([`raichu_model::Model::unbounded_rate`]), or moves
+    /// with it at the start of an integrated segment or on a solver
+    /// failure: a stand-in for "no ceiling" became the rate of a stock,
+    /// whole or scaled by a share. Integrated, it steps the stock far past
+    /// its bound before any event is located, empties it at once, or
+    /// collapses the step controller, so the run is refused instead of
     /// answering a non-physical number or reporting stiffness.
     #[error(
         "`{variable}` would change at {rate:e} per unit time at t={time}, \
