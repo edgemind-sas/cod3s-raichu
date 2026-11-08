@@ -50,6 +50,7 @@ fn estimate(model: &Model, nb_runs: u64, samples: Vec<f64>, threads: usize) -> M
             samples,
             threads: Some(threads),
             quantiles: vec![],
+            quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
             confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             stop_at_targets: false,

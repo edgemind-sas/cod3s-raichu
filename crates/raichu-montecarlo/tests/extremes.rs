@@ -43,6 +43,7 @@ fn estimate(nb_runs: u64, threads: usize) -> McEstimates {
             samples: vec![0.5, 2.0, 4.0],
             threads: Some(threads),
             quantiles: vec![],
+            quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
             confidence: DEFAULT_CONFIDENCE,
             ode: Default::default(),
             stop_at_targets: false,

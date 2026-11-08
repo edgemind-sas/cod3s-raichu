@@ -41,10 +41,13 @@ they are summed in do not depend on it.
   the reduction order or the result.
   This is a limit on retained sample payload, not process RSS. Compiled
   model memory, worker state and temporary allocations, vector metadata,
-  final estimates and quantile columns are outside this budget. Those
+  final estimates and quantile summaries are outside this budget. Those
   categories can grow with model size, sampling grids or thread count.
-  Quantiles retain one value per replica, indicator and instant for each
-  requested measure, so their storage still grows with the campaign size.
+  A quantile summary per indicator, instant and measure grows only with
+  the logarithm of the campaign size, under 10 000 values at a million
+  replicas and the default rank error
+  (see [Quantiles and their rank error](confidence-intervals.md#quantiles-and-their-rank-error));
+  only `quantile_rank_error=0` keeps one value per replica.
   A probability of reaching a target is a count, and
   `quantify(..., method="monte_carlo")` keeps only the count.
 

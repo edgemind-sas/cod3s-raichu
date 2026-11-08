@@ -95,7 +95,14 @@ declaration carries it too:
 statistics read (`extremes`, `sojourn_extremes`,
 `zero_departures_extremes`, `nonzero_reached_extremes`): the smallest and
 the largest value that measure took across the replicas at each instant.
-A launcher imports them rather than restating them.
+`MEASURE_QUANTILES` names the field carrying each measure's percentiles
+(`quantiles`, `sojourn_quantiles`, `zero_departures_quantiles`,
+`nonzero_reached_quantiles`), a dict keyed by order, and
+`percentile_order` reads the order off a study statistic: `P5` is
+`0.05`, `P95` is `0.95`, `mean` is not a percentile (`None`). The campaign
+computes only the orders passed as `quantiles=`, at the rank error the
+result states (`McEstimates.quantile_rank_error`, exact below 1 000
+replicas by default). A launcher imports these rather than restating them.
 
 The initial state is the fixpoint of the deterministic interactions at
 `t = 0`, whatever the declaration order, and a predicate true there is

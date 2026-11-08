@@ -93,6 +93,7 @@ fn campaign(bencher: divan::Bencher, nb_runs: u64) {
                 samples: samples.clone(),
                 threads: None,
                 quantiles: vec![],
+                quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
                 confidence: DEFAULT_CONFIDENCE,
                 ode: Default::default(),
                 stop_at_targets: false,

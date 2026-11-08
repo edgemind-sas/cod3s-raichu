@@ -96,6 +96,7 @@ fn mc_config(flow: FlowConfig) -> McConfig {
         samples: vec![0.0, 1.0],
         threads: Some(1),
         quantiles: Vec::new(),
+        quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
         confidence: DEFAULT_CONFIDENCE,
         ode: raichu_core::SolverParams::default(),
         stop_at_targets: false,

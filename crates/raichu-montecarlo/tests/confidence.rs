@@ -101,6 +101,7 @@ fn config(nb_runs: u64, seed: u64, instants: &[f64], confidence: f64) -> McConfi
         samples: instants.to_vec(),
         threads: None,
         quantiles: vec![],
+        quantile_rank_error: raichu_montecarlo::DEFAULT_QUANTILE_RANK_ERROR,
         confidence,
         ode: Default::default(),
         stop_at_targets: false,

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use raichu_montecarlo::{
     CrossEntropySettings, ImportanceSource, SplittingSettings, DEFAULT_CONFIDENCE,
+    DEFAULT_QUANTILE_RANK_ERROR,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -150,15 +151,25 @@ pub struct MonteCarloSettings {
     /// Quantile orders estimated in the detailed result. Default none.
     #[serde(default)]
     pub quantiles: Vec<f64>,
+    /// Rank error of those quantiles, in `[0, 0.5]` (`0` is exact, at a
+    /// memory growing with the campaign). Default
+    /// [`DEFAULT_QUANTILE_RANK_ERROR`].
+    #[serde(default = "default_quantile_rank_error")]
+    pub quantile_rank_error: f64,
 }
 
 fn default_confidence() -> f64 {
     DEFAULT_CONFIDENCE
 }
 
+fn default_quantile_rank_error() -> f64 {
+    DEFAULT_QUANTILE_RANK_ERROR
+}
+
 impl MonteCarloSettings {
     /// The setting names, as serialized.
-    pub const NAMES: &'static [&'static str] = &["nb_runs", "confidence", "quantiles"];
+    pub const NAMES: &'static [&'static str] =
+        &["nb_runs", "confidence", "quantiles", "quantile_rank_error"];
 
     /// `nb_runs` replicas at the default confidence level, no quantile.
     #[must_use]
@@ -167,6 +178,7 @@ impl MonteCarloSettings {
             nb_runs,
             confidence: DEFAULT_CONFIDENCE,
             quantiles: Vec::new(),
+            quantile_rank_error: DEFAULT_QUANTILE_RANK_ERROR,
         }
     }
 }

@@ -128,7 +128,7 @@ One JSON document.
 
 | `name` | Engine | `settings` |
 |---|---|---|
-| `monte_carlo` | Monte-Carlo simulation | `nb_runs` (at least 1, required), `confidence` (default `0.95`), `quantiles` (default none) |
+| `monte_carlo` | Monte-Carlo simulation | `nb_runs` (at least 1, required), `confidence` (default `0.95`), `quantiles` (default none), `quantile_rank_error` (in `[0, 0.5]`, default `0.001`, `0` exact) |
 | `exact` | exact exploration (Markov family) | `min_probability`, `max_length`, `max_failures`, `max_branches` (cut-offs, each optional), `gap_tolerance`, `rel_precision`, `max_terms` |
 | `discretised` | discretised exploration | the four cut-offs (`max_branches` defaults to 1 000 000), `gap_tolerance`, `level` (default 8), `refine` (default `true`) |
 | `cross_entropy` | biased Monte-Carlo, factors fitted by cross-entropy | `nb_runs` (final replicas, at least 1, required), `pilot_runs` (default 1 000), `max_iterations` (default 20), `smoothing` (default 0.7), `tolerance` (default 0.02), `confidence` (default `0.95`), `initial_factor` (default 10), `escalation_ratio` (default 10), `factor_min` (default 0.01), `factor_max` (default 10 000), `fit` (default `true`), `min_effective_sample_size` (default 50), `families` (qualified transition name to family label, default none) |
@@ -251,8 +251,8 @@ An object with a single key naming the engine kind:
 
 - `{"monte_carlo": {...}}`: the Monte-Carlo estimates of the
   stop-at-targets campaign, identical to a direct Monte-Carlo run with the
-  stop at targets on and the same seed, replicas, level, quantiles, horizon
-  and instants. Every estimate there is finite: a campaign with a NaN or
+  stop at targets on and the same seed, replicas, level, quantiles and
+  their rank error, horizon and instants. Every estimate there is finite: a campaign with a NaN or
   an infinite estimate is refused by name (indicator, measure, instant)
   instead of quantified, since JSON cannot carry the value;
 - `{"exploration": {...}}`: the exploration result, a `raichu.exploration`

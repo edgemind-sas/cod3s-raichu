@@ -110,10 +110,13 @@ the user manual V1.3.7.2 describes `res_time`, `nb_visits` and
 | `nb_visits` | zero departures (`zero_departures_mean`, …) | identical: both count the departures from exactly 0 to any non-zero value, a non-zero initial value not counted, a transition firing at `t = 0` counted. RAICHU's own occurrences (`nb_occurrences_mean`, …) count every rise from ≤ 0 to > 0, an active initial value included: a state active from `t = 0` and never re-entered counts 0 departures and 1 occurrence |
 | `realized` | non-zero reached (`nonzero_reached_mean`, …) | identical: 1 once the value has been non-zero, the initial value included. RAICHU's own reached (`reached_mean`, …) holds once the value has been positive |
 
-PyCATSHOO's `distribution` (bounded histogram) and `pctQuantile` restitutions,
-an indicator computed by an arbitrary method and its restriction by
-`setCondFct` have no equivalent: an indicator observes an attribute, a
-state or a comparison.
+PyCATSHOO's quantile restitutions, the `P<N>` statistics of a cod3s
+study, map to RAICHU's nearest-rank quantiles (`quantiles=[…]`, one series
+per measure); numerical parity of the two definitions is not claimed.
+PyCATSHOO's `distribution` (bounded histogram) restitution, an indicator
+computed by an arbitrary method and its restriction by `setCondFct` have
+no equivalent: an indicator observes an attribute, a state or a
+comparison.
 
 A study authored through cod3s or muscadet reads `nb-occurrences`
 (`nb_visits`) on zero departures and `had_value` (`realized`) on non-zero

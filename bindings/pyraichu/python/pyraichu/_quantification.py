@@ -477,9 +477,10 @@ def quantify(
     :data:`QUANTIFICATION_METHODS`:
 
     - ``"monte_carlo"``, Monte-Carlo simulation: ``nb_runs`` (required),
-      ``confidence`` (default 0.95), ``quantiles``. One campaign stopped at
-      the targets; the probability is the proportion of replicas whose
-      first target reached is the study's, with a Wilson interval.
+      ``confidence`` (default 0.95), ``quantiles``, ``quantile_rank_error``
+      (default 0.001, ``0`` exact). One campaign stopped at the targets;
+      the probability is the proportion of replicas whose first target
+      reached is the study's, with a Wilson interval.
     - ``"exact"``, exact exploration (the Markov family):
       ``min_probability``, ``max_length``, ``max_failures``,
       ``max_branches``, ``gap_tolerance``, ``rel_precision``,

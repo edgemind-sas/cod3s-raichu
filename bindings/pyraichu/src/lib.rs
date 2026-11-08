@@ -44,7 +44,7 @@ use raichu::raichu_model::{Indicator, IndicatorTarget};
 use raichu::raichu_montecarlo::{
     run as mc_run, run_importance as mc_run_importance,
     run_sequences_streamed as mc_run_sequences_streamed, run_with_fmu as mc_run_with_fmu, McConfig,
-    SequenceObservation, DEFAULT_CONFIDENCE,
+    SequenceObservation, DEFAULT_CONFIDENCE, DEFAULT_QUANTILE_RANK_ERROR,
 };
 use raichu::raichu_quantify::{
     quantify as quantify_study, quantify_with_fmu as quantify_study_with_fmu, read_quantification,
@@ -601,8 +601,14 @@ fn solver_params(
 /// carries, a study parameter in `(0, 1)`; omitted, it is
 /// `DEFAULT_CONFIDENCE` (0.95). The level applied is reported back with
 /// the result, so an artefact never leaves it to be assumed.
+///
+/// `quantile_rank_error` is the rank error of the `quantiles`, in
+/// `[0, 0.5]`: exact below `1 / quantile_rank_error` replicas, within
+/// that fraction of the campaign size in rank beyond, at a bounded memory;
+/// `0` keeps every replica value and answers exactly. Omitted, it is
+/// `DEFAULT_QUANTILE_RANK_ERROR` (0.001), reported back with the result.
 #[pyfunction]
-#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, confidence = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false, flow = None, event_resolution = None, allow_fmu_import = false, fmu_base_dir = None, require_parallel = false))]
+#[pyo3(signature = (model_json, nb_runs, t_max, samples, seed = 0, threads = None, quantiles = None, confidence = None, rtol = None, atol = None, max_step = None, tol_event = None, sub_samples = None, stop_at_targets = false, flow = None, event_resolution = None, allow_fmu_import = false, fmu_base_dir = None, require_parallel = false, quantile_rank_error = None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn monte_carlo_json(
     py: Python<'_>,
@@ -625,6 +631,7 @@ fn monte_carlo_json(
     allow_fmu_import: bool,
     fmu_base_dir: Option<&str>,
     require_parallel: bool,
+    quantile_rank_error: Option<f64>,
 ) -> PyResult<String> {
     let ode = solver_params(
         rtol,
@@ -644,6 +651,7 @@ fn monte_carlo_json(
             samples,
             threads,
             quantiles: quantiles.unwrap_or_default(),
+            quantile_rank_error: quantile_rank_error.unwrap_or(DEFAULT_QUANTILE_RANK_ERROR),
             confidence: confidence.unwrap_or(DEFAULT_CONFIDENCE),
             ode,
             stop_at_targets,
@@ -706,6 +714,7 @@ fn analyse_sequences_json(
             samples: Vec::new(),
             threads,
             quantiles: Vec::new(),
+            quantile_rank_error: DEFAULT_QUANTILE_RANK_ERROR,
             // Reports sequences, not estimators: no interval is produced.
             confidence: DEFAULT_CONFIDENCE,
             ode: SolverParams::default(),
@@ -957,6 +966,7 @@ fn run_sequences_json(
             samples: Vec::new(),
             threads,
             quantiles: Vec::new(),
+            quantile_rank_error: DEFAULT_QUANTILE_RANK_ERROR,
             confidence: DEFAULT_CONFIDENCE,
             ode: SolverParams::default(),
             stop_at_targets: false,
@@ -1126,6 +1136,7 @@ fn importance_json(
             samples: instants,
             threads,
             quantiles: Vec::new(),
+            quantile_rank_error: DEFAULT_QUANTILE_RANK_ERROR,
             // Reports importance measures, not estimators: no interval is produced.
             confidence: DEFAULT_CONFIDENCE,
             ode: SolverParams::default(),
@@ -2148,6 +2159,7 @@ fn _pyraichu(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", raichu::VERSION)?;
     module.add("MODEL_ENVELOPE_KEY", raichu::raichu_model::ENVELOPE_KEY)?;
     module.add("DEFAULT_CONFIDENCE", DEFAULT_CONFIDENCE)?;
+    module.add("DEFAULT_QUANTILE_RANK_ERROR", DEFAULT_QUANTILE_RANK_ERROR)?;
     module.add(
         "MODEL_FORMAT_REVISION",
         raichu::raichu_model::FORMAT_REVISION,

@@ -238,6 +238,40 @@ width of zero is an identity, not a claim.
   [reproducibility contract](reproducibility.md) guarantees: replica *k*
   draws from its own substream of the master seed.
 
+## Quantiles and their rank error
+
+A quantile is a dispersion statistic, not an interval: `quantiles=[0.05,
+0.95]` asks, at each instant and for every measure, the nearest-rank
+5th and 95th percentiles of the per-replica values, the `P5` and `P95` of
+a study. The value series carries them as `quantiles`, the other measures
+as `sojourn_quantiles`, `nb_occurrences_quantiles`, `reached_quantiles`,
+`zero_departures_quantiles` and `nonzero_reached_quantiles`, each a map
+from order to series.
+
+An exact quantile needs every replica value at once, so its memory grows
+with the campaign: a million replicas over a hundred instants, ten
+indicators and four measures is 32 GB. Each column is instead reduced, in
+replica order, to the deterministic summary of Greenwald and Khanna
+(2001), at a **rank error** `ε` the run states (`quantile_rank_error`,
+default `0.001`):
+
+- below `1/ε` replicas (1 000 by default) no value is ever merged and the
+  quantile is the exact nearest-rank value;
+- beyond, it is a replica value whose rank in the sorted column is within
+  `⌊ε · nb_runs⌋` of the requested one: at 20 000 replicas and the
+  default, the P5 is one of the values ranked 980th to 1 020th instead of
+  exactly the 1 000th;
+- the memory of a column grows only with the logarithm of the replica
+  count: under 10 000 values at a million replicas and the default, the
+  count columns (occurrences, departures) being the largest.
+
+The two 0/1 measures (`reached`, `nonzero_reached`) need no summary: the
+count of ones decides every quantile exactly. `quantile_rank_error=0`
+keeps every replica value and answers exactly, at the memory that grows
+with the campaign. The rank error applied comes back with the result
+(`McEstimates.quantile_rank_error`), and the summary, fed in replica
+order, keeps the result byte-identical whatever the thread count.
+
 ## Cost
 
 The intervals are closed forms over sums the reduction already holds:
@@ -257,6 +291,10 @@ studies grow.
 
 ## References
 
+- Greenwald, M., Khanna, S. (2001). Space-efficient online computation of
+  quantile summaries. *Proceedings of the 2001 ACM SIGMOD International
+  Conference on Management of Data*, 58-66. DOI
+  [10.1145/375663.375670](https://doi.org/10.1145/375663.375670).
 - Wilson, E. B. (1927). Probable inference, the law of succession, and
   statistical inference. *Journal of the American Statistical Association*
   22(158), 209-212. DOI [10.1080/01621459.1927.10502953](https://doi.org/10.1080/01621459.1927.10502953).

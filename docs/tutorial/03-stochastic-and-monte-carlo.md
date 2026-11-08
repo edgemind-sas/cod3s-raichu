@@ -112,7 +112,9 @@ see [Numerical tuning](../guides/numerical-tuning.md).
 
 - **`mean`** and **`std`**: the estimate and its dispersion across
   replicas;
-- **`quantiles`**: request them with `quantiles=[…]`;
+- **`quantiles`**: request them with `quantiles=[…]` (`[0.05, 0.95]` for
+  a P5-P95 band); every measure below then carries its own
+  `*_quantiles`, keyed by order;
 - **`sojourn_mean` / `sojourn_std` / `sojourn_quantiles`**: the
   time-integral of the indicator up to each instant. For a 0/1 state
   indicator, that is the **cumulated time spent in the state**: e.g.

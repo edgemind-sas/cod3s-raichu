@@ -17,6 +17,7 @@ from typing import Any, Union
 
 from ._pyraichu import (
     DEFAULT_CONFIDENCE,
+    DEFAULT_QUANTILE_RANK_ERROR,
     MODEL_ENVELOPE_KEY,
     MODEL_FORMAT_REVISION,
     FlowConfig,
@@ -66,6 +67,7 @@ from .library import (
 
 __all__ = [
     "DEFAULT_CONFIDENCE",
+    "DEFAULT_QUANTILE_RANK_ERROR",
     "FAULT_TREE_FORMAT",
     "FAULT_TREE_MEASURES",
     "FAULT_TREE_STRUCTURE_FORMAT",
@@ -507,6 +509,13 @@ class IndicatorEstimate:
     nonzero_reached_std: list[float] = field(default_factory=list)
     nonzero_reached_ci: ConfidenceInterval = field(default_factory=lambda: _absent_interval())
     nonzero_reached_extremes: Extremes = field(default_factory=lambda: Extremes(min=[], max=[]))
+    #: Requested quantiles of the other four measures, keyed by order like
+    #: ``quantiles``: the ``P<N>`` statistics of a study. The two 0/1
+    #: measures (reached, non-zero reached) are exact whatever the rank error.
+    nb_occurrences_quantiles: dict[float, list[float]] = field(default_factory=dict)
+    reached_quantiles: dict[float, list[float]] = field(default_factory=dict)
+    zero_departures_quantiles: dict[float, list[float]] = field(default_factory=dict)
+    nonzero_reached_quantiles: dict[float, list[float]] = field(default_factory=dict)
 
 
 def _absent_interval() -> ConfidenceInterval:
@@ -534,6 +543,10 @@ class McEstimates:
     engine_version: str
     fmu_units: list[dict[str, Any]] = field(default_factory=list)
     serial_fallback_unit: str | None = None
+    #: Rank error every quantile was computed at (``0`` is exact): see
+    #: :func:`monte_carlo`. A result written before it existed reads ``0``,
+    #: which is what its quantiles were.
+    quantile_rank_error: float = 0.0
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
@@ -565,8 +578,8 @@ def _mc_estimates(raw: dict[str, Any]) -> McEstimates:
             sojourn_extremes=Extremes(**e["sojourn_extremes"]),
             nb_occurrences_extremes=Extremes(**e["nb_occurrences_extremes"]),
             reached_extremes=Extremes(**e["reached_extremes"]),
-            quantiles={s["q"]: s["values"] for s in e["quantiles"]},
-            sojourn_quantiles={s["q"]: s["values"] for s in e["sojourn_quantiles"]},
+            quantiles=_quantile_map(e["quantiles"]),
+            sojourn_quantiles=_quantile_map(e["sojourn_quantiles"]),
             # Read with a fallback: a result document written before the
             # departure measures existed (a Monte-Carlo detail of an older
             # quantification envelope) carries none of them.
@@ -578,6 +591,10 @@ def _mc_estimates(raw: dict[str, Any]) -> McEstimates:
             nonzero_reached_std=e.get("nonzero_reached_std", []),
             nonzero_reached_ci=_optional_interval(e.get("nonzero_reached_ci")),
             nonzero_reached_extremes=_optional_extremes(e.get("nonzero_reached_extremes")),
+            nb_occurrences_quantiles=_quantile_map(e.get("nb_occurrences_quantiles")),
+            reached_quantiles=_quantile_map(e.get("reached_quantiles")),
+            zero_departures_quantiles=_quantile_map(e.get("zero_departures_quantiles")),
+            nonzero_reached_quantiles=_quantile_map(e.get("nonzero_reached_quantiles")),
         )
         for e in raw["indicators"]
     }
@@ -589,7 +606,14 @@ def _mc_estimates(raw: dict[str, Any]) -> McEstimates:
         engine_version=raw["engine_version"],
         fmu_units=raw.get("fmu_units", []),
         serial_fallback_unit=raw.get("serial_fallback_unit"),
+        quantile_rank_error=raw.get("quantile_rank_error", 0.0),
     )
+
+
+def _quantile_map(raw: list[dict[str, Any]] | None) -> dict[float, list[float]]:
+    """Quantile series keyed by order; none in a result written before
+    the measure carried them."""
+    return {s["q"]: s["values"] for s in raw or []}
 
 
 def monte_carlo(
@@ -610,14 +634,26 @@ def monte_carlo(
     flow: FlowConfig | None = None,
     event_resolution: float | None = None,
     require_parallel: bool = False,
+    quantile_rank_error: float | None = None,
 ) -> McEstimates:
     """Estimate indicator statistics over ``nb_runs`` replicas.
 
     Replica ``r`` uses RNG substream ``r`` of ``seed``; the reduction is
     index-ordered, so the result is byte-identical for any ``threads``
-    value. ``quantiles`` (e.g. ``[0.25, 0.75]``) adds nearest-rank
-    quantile series on both the sampled value and the cumulated
-    sojourn. The GIL is released while the replicas run.
+    value. The GIL is released while the replicas run.
+
+    ``quantiles`` (e.g. ``[0.05, 0.95]``, a study's ``P5`` and ``P95``) adds
+    nearest-rank quantile series on every measure: ``quantiles`` (sampled
+    value), ``sojourn_quantiles``, ``nb_occurrences_quantiles``,
+    ``reached_quantiles``, ``zero_departures_quantiles`` and
+    ``nonzero_reached_quantiles``. Their memory grows only with the logarithm
+    of ``nb_runs`` when ``quantile_rank_error`` is positive. That rank error
+    (``ε``, in ``[0, 0.5]``, default :data:`DEFAULT_QUANTILE_RANK_ERROR`,
+    0.001) makes each quantile exact below ``1/ε`` replicas, and beyond it a replica value whose rank is
+    within ``ε · nb_runs`` of the requested one. ``0`` keeps every replica
+    value and answers exactly, at a memory that grows with the campaign.
+    The two 0/1 measures are exact whatever ``ε``. The rank error applied
+    comes back on :attr:`McEstimates.quantile_rank_error`.
 
     A replica whose run fails refuses the whole campaign: an estimate over
     the other replicas would leave out the trajectory that failed, which
@@ -687,6 +723,7 @@ def monte_carlo(
             model.allow_fmu_import,
             str(model.base_dir),
             require_parallel,
+            quantile_rank_error,
         )
     )
     return _mc_estimates(raw)
