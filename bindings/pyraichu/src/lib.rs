@@ -2018,10 +2018,10 @@ impl Interactive {
         event.map(|e| Self::json(&e)).transpose()
     }
 
-    /// JSON array of the stochastic transitions armed without a date in a
-    /// session opened with `deferred_draws=True`
-    /// (`{index, transition, law, armed_at, age, paused, hazard}`); empty in
-    /// any other session. `law` restates the compiled occurrence law with
+    /// JSON array of the stochastic transitions armed without a draw in a
+    /// session opened with `deferred_draws=True` or `operator_control=True`
+    /// (`{index, transition, law, armed_at, age, paused, hazard}`), an
+    /// operator date set or not; empty in a drawn session. `law` restates the compiled occurrence law with
     /// its parameters, so a caller can check the law it is about to fire.
     fn deferred(&mut self) -> PyResult<String> {
         let armed: Vec<serde_json::Value> = self

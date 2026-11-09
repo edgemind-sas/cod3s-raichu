@@ -293,6 +293,8 @@ def _law(spec: dict) -> dict:
         return {"distrib": "delay", "time": float(spec["time"])}
     if kind == "exp":
         return {"distrib": "exp", "rate": float(spec.get("rate", spec.get("lambda", 0.0)))}
+    if kind == "uniform":
+        return {"distrib": "uniform", "low": float(spec["low"]), "high": float(spec["high"])}
     raise ValueError(f"unsupported law specification: {spec}")
 
 
