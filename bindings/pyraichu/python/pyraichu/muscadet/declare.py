@@ -887,6 +887,9 @@ _MODE_PARAM_NAMES = {
     "exp": ("lambda", "mu"),
     "delay": ("ttf", "ttr"),
     "inst": ("gamma", "mu"),
+    # Two parameters per direction, its bounds (cod3s 1.24.0): the names the
+    # COD3S Platform derives, one tuple per direction.
+    "uniform": (("ttf_low", "ttf_high"), ("ttr_low", "ttr_high")),
 }
 
 #: The field each occurrence law states its value under, which is also what
@@ -894,7 +897,19 @@ _MODE_PARAM_NAMES = {
 #: from an exponential names it ``occ_rate`` where the ``ObjFM`` façade names
 #: it ``lambda``. Two defaults for one law, and a document carries whichever
 #: its writer derived.
-_MODE_LAW_FIELD = {"exp": "rate", "delay": "time", "inst": "prob"}
+_MODE_LAW_FIELD = {"exp": "rate", "delay": "time", "inst": "prob", "uniform": ("low", "high")}
+
+
+def _law_arity(law: Any) -> int:
+    """How many parameters one common-cause order of ``law`` carries."""
+    field = _MODE_LAW_FIELD.get(law)
+    return len(field) if isinstance(field, tuple) else 1
+
+
+def _law_names(names: Any) -> list:
+    """A parameter-name entry of the tables above, as the list a document
+    carries (one name, or the names of a multi-parameter law)."""
+    return list(names) if isinstance(names, tuple) else [names]
 
 #: What a mode's naming templates are when nobody has renamed anything. A
 #: common-cause automaton is named after them, and this layer names its own
@@ -2335,7 +2350,7 @@ def _mode_class(spec: dict, where: str) -> _ModeClass:
     return mode_class
 
 
-def _mode_order_vector(where: str, key: str, declared: Any) -> list:
+def _mode_order_vector(where: str, key: str, declared: Any, arity: int = 1) -> list:
     """A per-common-cause-order parameter vector, as one value per order.
 
     **A document has no tuples, and the engine reads one.** ``ObjMode2S``
@@ -2345,9 +2360,10 @@ def _mode_order_vector(where: str, key: str, declared: Any) -> list:
     per order. A list at an order therefore MEANS what the tuple means, and
     the one parameter each law of this layer takes is read out of it.
 
-    A vector of more than one parameter at an order is refused rather than
-    truncated: none of the three laws here reads a second one, so a mode
-    declaring one is a mode whose law is not the one its class carries.
+    A vector of more parameters at an order than its law takes is refused
+    rather than truncated: a mode declaring one is a mode whose law is not the
+    one its class carries. ``arity`` is that number, 1 for every law but the
+    uniform, whose order carries its two bounds (kept as a tuple).
     """
     if declared is None:
         return []
@@ -2356,13 +2372,18 @@ def _mode_order_vector(where: str, key: str, declared: Any) -> list:
     orders = []
     for index, entry in enumerate(declared):
         if isinstance(entry, (list, tuple)):
-            if len(entry) != 1:
+            if len(entry) != arity:
                 raise ComponentSpecError(
                     f"{where} declares `{key}` order {index + 1} as "
-                    f"{list(entry)!r}: an order carries the one parameter its "
-                    f"law takes, and no law read here takes {len(entry)}"
+                    f"{list(entry)!r}: an order carries the {arity} "
+                    f"parameter(s) its law takes, not {len(entry)}"
                 )
-            entry = entry[0]
+            entry = entry[0] if arity == 1 else tuple(entry)
+        elif arity != 1 and entry is not None:
+            raise ComponentSpecError(
+                f"{where} declares `{key}` order {index + 1} as {entry!r}: its "
+                f"law takes {arity} parameters per order"
+            )
         orders.append(entry)
     return orders
 
@@ -2876,16 +2897,16 @@ def _mode_param_names(spec: dict, laws: tuple, where: str) -> None:
         declared = spec.get(key)
         if declared is None or law not in _MODE_PARAM_NAMES:
             continue
-        expected = {
-            _MODE_PARAM_NAMES[law][direction != "occ"],
-            f"{direction}_{_MODE_LAW_FIELD[law]}",
-        }
-        if len(list(declared)) != 1 or list(declared)[0] not in expected:
+        expected = [
+            _law_names(_MODE_PARAM_NAMES[law][direction != "occ"]),
+            [f"{direction}_{field}" for field in _law_names(_MODE_LAW_FIELD[law])],
+        ]
+        if list(declared) not in expected:
             raise ComponentSpecError(
                 f"{where} declares {key}={declared!r} while its "
                 f"{'occurrence' if direction == 'occ' else 'return'} is drawn "
-                f"from a `{law}` law, whose parameter is named "
-                f"{sorted(expected)}"
+                f"from a `{law}` law, whose parameters are named "
+                f"{' or '.join(str(names) for names in expected)}"
             )
 
 
@@ -3101,9 +3122,15 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
         wire["targets"] = targets
 
     # The occurrence and return laws, one entry per common-cause order.
-    for key in ("failure_param", "repair_param", "occ_param", "not_occ_param"):
+    laws = _mode_laws(spec, mode_class)
+    for key, law in (
+        ("failure_param", laws[0]),
+        ("repair_param", laws[1]),
+        ("occ_param", laws[0]),
+        ("not_occ_param", laws[1]),
+    ):
         if key in wire:
-            wire[key] = _mode_order_vector(where, key, wire[key])
+            wire[key] = _mode_order_vector(where, key, wire[key], _law_arity(law))
 
     spellings = _mode_spellings(components)
     for key in ("failure_cond", "repair_cond", "occ_cond", "not_occ_cond", "cond"):

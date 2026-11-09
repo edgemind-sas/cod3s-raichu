@@ -1007,3 +1007,40 @@ def test_a_refusal_about_an_event_calls_it_an_event():
     with pytest.raises(declare.ComponentSpecError) as refused:
         declare.build_document(document)
     assert str(refused.value).startswith("Event DEGRADED")
+
+
+# --- the uniform law: two parameters per order (cod3s 1.24.0) -----------
+
+
+def _uniform_mode(**overrides):
+    fields = {
+        "occ_law": {"cls": "uniform", "low": [2.0], "high": [12.0]},
+        "occ_param_name": ["occ_low", "occ_high"],
+        "occ_param": [[2.0, 12.0]],
+        "not_occ_law": {"cls": "exp", "rate": [0.5]},
+        "not_occ_param_name": ["not_occ_rate"],
+        "not_occ_param": [0.5],
+    }
+    fields.update(overrides)
+    return a_mode_2s(**fields)
+
+
+def test_a_uniform_law_reads_its_two_bounds_per_order():
+    obj = declare.mode_object(_uniform_mode())
+    assert obj["failure"] == [{"law": "uniform", "low": 2.0, "high": 12.0}]
+    assert obj["repair"] == [{"law": "exp", "rate": 0.5}]
+
+
+def test_both_spellings_of_the_uniform_parameter_names_are_accepted():
+    """The engine names them after the direction and the fields
+    (`occ_low` / `occ_high`), the COD3S Platform after the law (`ttf_low` /
+    `ttf_high`)."""
+    declare.check_mode_spec(_uniform_mode())
+    declare.check_mode_spec(_uniform_mode(occ_param_name=["ttf_low", "ttf_high"]))
+    with pytest.raises(declare.ComponentSpecError, match="occ_param_name"):
+        declare.check_mode_spec(_uniform_mode(occ_param_name=["occ_low"]))
+
+
+def test_a_uniform_order_declaring_one_bound_is_refused():
+    with pytest.raises(declare.ComponentSpecError, match="order 1"):
+        declare.mode_object(_uniform_mode(occ_param=[[2.0]]))

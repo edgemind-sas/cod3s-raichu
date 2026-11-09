@@ -2543,7 +2543,14 @@ class Interactive:
         (``{"distrib": "exp", "rate": 0.5}``), ``age`` the time spent armed
         and running, ``hazard`` the cumulative hazard of a state-dependent
         rate (``None`` otherwise). Empty unless the session was opened with
-        ``deferred_draws=True``.
+        ``deferred_draws=True`` or ``operator_control=True``.
+
+        An operator session lists EVERY armed stochastic transition here, a
+        date set with :meth:`set_date` or not: the date the operator gave is
+        on :meth:`fireable`, the instant it armed is ``armed_at``. That is
+        what lets an operator bound a date by the support of its law (a
+        uniform on ``[low, high]`` fires between ``armed_at + low`` and
+        ``armed_at + high``).
         """
         return json.loads(self._raw.deferred())
 

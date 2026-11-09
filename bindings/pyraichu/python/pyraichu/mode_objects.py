@@ -57,10 +57,28 @@ _FM_LAWS = {"ObjFMExp": ("exp", "rate"), "ObjFMDelay": ("delay", "time")}
 # the repair). The names are decorative here (RAICHU bakes the values, it
 # has no parameter variables), but a name that disagrees with the declared
 # law is a wire inconsistency worth refusing rather than ignoring.
-_LAW_KINDS = ("exp", "delay", "inst")
-_LAW_VALUE_KEY = {"exp": "rate", "delay": "time", "inst": "prob"}
-_OCC_PARAM_NAMES = {"exp": "lambda", "delay": "ttf", "inst": "gamma"}
-_REP_PARAM_NAMES = {"exp": "mu", "delay": "ttr", "inst": "repair_gamma"}
+_LAW_KINDS = ("exp", "delay", "inst", "uniform")
+_LAW_VALUE_KEY = {"exp": "rate", "delay": "time", "inst": "prob", "uniform": "low"}
+#: Every value key of a law, in order. The uniform (cod3s 1.24.0) is the one
+#: law with two per CC order, its two bounds.
+_LAW_VALUE_KEYS = {
+    "exp": ("rate",),
+    "delay": ("time",),
+    "inst": ("prob",),
+    "uniform": ("low", "high"),
+}
+_OCC_PARAM_NAMES = {
+    "exp": ["lambda"],
+    "delay": ["ttf"],
+    "inst": ["gamma"],
+    "uniform": ["ttf_low", "ttf_high"],
+}
+_REP_PARAM_NAMES = {
+    "exp": ["mu"],
+    "delay": ["ttr"],
+    "inst": ["repair_gamma"],
+    "uniform": ["ttr_low", "ttr_high"],
+}
 
 
 def _one_shot_effects(fm: dict, spec: dict, pairs: tuple[tuple[str, str], ...]) -> None:
@@ -86,6 +104,8 @@ def _order_law(kind: str, raw: Any, where: str) -> dict | None:
     and an *inst* prob of 0 is a valid never-drawing mode."""
     if raw is None:
         return None
+    if kind == "uniform":
+        return _uniform_order_law(raw, where)
     try:
         value = float(raw)
     except (TypeError, ValueError):
@@ -101,6 +121,42 @@ def _order_law(kind: str, raw: Any, where: str) -> dict | None:
     return {"law": kind, _LAW_VALUE_KEY[kind]: value}
 
 
+def _uniform_order_law(raw: Any, where: str) -> dict | None:
+    """One order of a uniform law: the `(low, high)` pair, `None` (or a pair
+    of `None`) for an inactive order. Always active otherwise, like a delay."""
+    low, high = raw
+    if low is None and high is None:
+        return None
+    try:
+        low, high = float(low), float(high)
+    except (TypeError, ValueError):
+        raise TranslationError(f"{where}: invalid uniform bounds {raw!r}") from None
+    if low < 0.0 or high <= low:
+        # The core draws on [low, high) and refuses an empty interval: say it
+        # here, on the mode, rather than from the model validation.
+        raise TranslationError(
+            f"{where}: uniform law needs 0 <= low < high, got low={low}, high={high}"
+        )
+    return {"law": "uniform", "low": low, "high": high}
+
+
+def _law_vector(law: dict, kind: str, where: str) -> list:
+    """The per-CC-order vector of a native law. A multi-parameter law (the
+    uniform) zips its value keys into one tuple per order."""
+    keys = _LAW_VALUE_KEYS[kind]
+    columns = []
+    for key in keys:
+        raw = law.get(key)
+        if raw is None:
+            raise TranslationError(f"{where}: `{kind}` law carries no {key!r} value")
+        columns.append(raw if isinstance(raw, list) else [raw])
+    if len(keys) == 1:
+        return columns[0]
+    if len({len(column) for column in columns}) != 1:
+        raise TranslationError(f"{where}: the {kind} law vectors {list(keys)} differ in length")
+    return [tuple(entry) for entry in zip(*columns)]
+
+
 def _direction_laws(law: Any, n_targets: int, where: str) -> tuple[str, list[dict | None]]:
     """One native per-direction law (`{cls, rate|time|prob: [vector]}`) →
     `(kind, per-order law list)`. The vector is the per-CC-order one, padded
@@ -113,12 +169,7 @@ def _direction_laws(law: Any, n_targets: int, where: str) -> tuple[str, list[dic
         raise TranslationError(
             f"{where}: law cls {kind!r} not supported (expected one of {list(_LAW_KINDS)})"
         )
-    raw = law.get(_LAW_VALUE_KEY[kind])
-    if raw is None:
-        raise TranslationError(
-            f"{where}: `{kind}` law carries no {_LAW_VALUE_KEY[kind]!r} value"
-        )
-    vector = raw if isinstance(raw, list) else [raw]
+    vector = _law_vector(law, kind, where)
     if len(vector) > n_targets:
         raise TranslationError(
             f"{where}: the {kind} law vector has {len(vector)} entries for "
@@ -140,10 +191,10 @@ def _check_param_names(fm: dict, occ_kind: str, rep_kind: str, where: str) -> No
         names = fm.get(key)
         if names is None:
             continue
-        if list(names) != [expected[kind]]:
+        if list(names) != expected[kind]:
             raise TranslationError(
                 f"{where}: {key} {names!r} disagrees with the {kind!r} law "
-                f"(expected {[expected[kind]]})"
+                f"(expected {expected[kind]})"
             )
 
 
