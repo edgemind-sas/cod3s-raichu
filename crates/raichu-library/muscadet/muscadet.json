@@ -678,10 +678,11 @@
             "values": [
               "delay",
               "exp",
+              "uniform",
               "never"
             ],
             "default": "delay",
-            "description": "Law of the wait before enabling: a fixed delay or an exponential draw; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
+            "description": "Law of the wait before enabling: a fixed delay, an exponential draw or a uniform draw in [`enable_low`, `enable_high`]; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
           },
           {
             "name": "enable_value",
@@ -690,21 +691,46 @@
             "description": "The delay (`delay`) or the rate (`exp`, positive) of the enable wait."
           },
           {
+            "name": "enable_low",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Lower bound of the enable wait under `uniform` (non-negative); unused by the other laws."
+          },
+          {
+            "name": "enable_high",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Upper bound of the enable wait under `uniform`, strictly above `enable_low`; unused by the other laws."
+          },
+          {
             "name": "disable_law",
             "kind": "enum",
             "values": [
               "delay",
               "exp",
+              "uniform",
               "never"
             ],
             "default": "delay",
-            "description": "Law of the wait before disabling; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
+            "description": "Law of the wait before disabling: a fixed delay, an exponential draw or a uniform draw in [`disable_low`, `disable_high`]; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
           },
           {
             "name": "disable_value",
             "kind": "number",
             "default": 0.0,
             "description": "The delay (`delay`) or the rate (`exp`, positive) of the disable wait."
+          },
+          {
+            "name": "disable_low",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Lower bound of the disable wait under `uniform` (non-negative); unused by the other laws."
+          },
+          {
+            "name": "disable_high",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Upper bound of the disable wait under `uniform`, strictly above `disable_low`; unused by the other laws."
           }
         ],
         "body": {
@@ -809,6 +835,33 @@
                   ]
                 },
                 {
+                  "$when": "enable_law",
+                  "is": "uniform",
+                  "items": [
+                    {
+                      "name": "${name}_enable",
+                      "source": "disabled",
+                      "targets": [
+                        "enabled"
+                      ],
+                      "guard": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_prod_available"
+                        }
+                      },
+                      "distrib": "uniform",
+                      "low": {
+                        "$param": "enable_low"
+                      },
+                      "high": {
+                        "$param": "enable_high"
+                      }
+                    }
+                  ]
+                },
+                {
                   "$when": "disable_law",
                   "is": "delay",
                   "items": [
@@ -864,6 +917,39 @@
                       "distrib": "exp",
                       "rate": {
                         "$param": "disable_value"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "$when": "disable_law",
+                  "is": "uniform",
+                  "items": [
+                    {
+                      "name": "${name}_disable",
+                      "source": "enabled",
+                      "targets": [
+                        "disabled"
+                      ],
+                      "guard": {
+                        "op": "bool",
+                        "bool_op": "not",
+                        "args": [
+                          {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_prod_available"
+                            }
+                          }
+                        ]
+                      },
+                      "distrib": "uniform",
+                      "low": {
+                        "$param": "disable_low"
+                      },
+                      "high": {
+                        "$param": "disable_high"
                       }
                     }
                   ]

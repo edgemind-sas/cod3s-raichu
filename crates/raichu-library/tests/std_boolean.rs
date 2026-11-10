@@ -481,6 +481,33 @@ fn a_temporised_output_may_start_enabled_and_draw_its_waits() {
 }
 
 #[test]
+fn a_temporised_output_may_draw_its_waits_uniformly() {
+    let lib = tempo_library(json!({"name": "y", "prod_cond": [["x_fed_in"]],
+        "enable_law": "uniform", "enable_low": 1.0, "enable_high": 4.0,
+        "disable_law": "uniform", "disable_low": 0.5, "disable_high": 2.0}));
+    let s = system(json!({"name": "s", "library": binding(),
+        "instances": [{"name": "S", "type": "Source"}, {"name": "B", "type": "Backup"}],
+        "connections": [{"from": "S.x_out", "to": "B.x_in"}]}));
+    let model = expand(&[lib], &s, None).unwrap().model;
+    let backup = model.components.iter().find(|c| c.name == "B").unwrap();
+    let tempo = backup
+        .automata
+        .iter()
+        .find(|a| a.name == "y_tempo")
+        .unwrap();
+    let names: Vec<_> = tempo.transitions.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["y_enable", "y_disable"]);
+    assert!(matches!(
+        tempo.transitions[0].distrib,
+        raichu_model::Distrib::Uniform { low, high } if low == 1.0 && high == 4.0
+    ));
+    assert!(matches!(
+        tempo.transitions[1].distrib,
+        raichu_model::Distrib::Uniform { low, high } if low == 0.5 && high == 2.0
+    ));
+}
+
+#[test]
 fn a_negation_feeds_a_production_condition_while_its_source_is_false() {
     // A backup produces only while the command does NOT arrive.
     let lib = library(

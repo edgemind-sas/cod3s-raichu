@@ -313,6 +313,10 @@ def _tempo_law(output: str, direction: str, law: dict) -> dict[str, Any]:
             return {f"{direction}_law": "never"}
         if rate > 0.0:
             return {f"{direction}_law": "exp", f"{direction}_value": rate}
+    if kind == "uniform":
+        low, high = float(law["low"]), float(law["high"])
+        if 0.0 <= low < high:
+            return {f"{direction}_law": "uniform", f"{direction}_low": low, f"{direction}_high": high}
     raise _Refused("temporised output law", f"output `{output}` waits on {law!r} to {direction}")
 
 
@@ -1711,7 +1715,11 @@ _VALUE_PARAMETERS = {
         "fed_available_init",
         "init_enable",
         "enable_value",
+        "enable_low",
+        "enable_high",
         "disable_value",
+        "disable_low",
+        "disable_high",
     ),
     "muscadet.continuous_flow_in": ("demand",),
     "muscadet.continuous_source": ("rate",),

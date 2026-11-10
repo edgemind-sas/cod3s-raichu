@@ -1555,10 +1555,11 @@ _COD3S_LAW_NAMES = {
     "DelayOccDistribution": "delay",
     "InstOccDistribution": "inst",
     "ExpOccDistribution": "exp",
+    "UniformOccDistribution": "uniform",
 }
 
-#: Short law name -> the one parameter it carries beside `cls`.
-_TEMPO_LAW_PARAMETERS = {"delay": "time", "exp": "rate"}
+#: Short law name -> the parameters it carries beside `cls`.
+_TEMPO_LAW_PARAMETERS = {"delay": ("time",), "exp": ("rate",), "uniform": ("low", "high")}
 
 
 def _tempo_law(where: str, key: str, declared: Any) -> dict[str, Any]:
@@ -1567,9 +1568,9 @@ def _tempo_law(where: str, key: str, declared: Any) -> dict[str, Any]:
     A fixed delay waits `time`; an exponential law draws the wait at `rate`,
     which is the reference engine's reading (measured 2026-09-24: the
     switch-on probability t hours after the condition holds is
-    1 - exp(-rate * t)). An instantaneous law is a zero delay when it surely
-    fires; any other law is refused by name rather than reduced to something
-    it is not.
+    1 - exp(-rate * t)). A uniform law draws the wait in `[low, high]`. An
+    instantaneous law is a zero delay when it surely fires; any other law is
+    refused by name rather than reduced to something it is not.
     """
     if declared is None:
         return {"distrib": "delay", "time": 0.0}
@@ -1594,26 +1595,39 @@ def _tempo_law(where: str, key: str, declared: Any) -> dict[str, Any]:
                 f"fires surely, so only a sure firing is carried"
             )
         return {"distrib": "delay", "time": 0.0}
-    parameter = _TEMPO_LAW_PARAMETERS.get(law)
-    if parameter is None:
+    parameters = _TEMPO_LAW_PARAMETERS.get(law)
+    if parameters is None:
         raise ComponentSpecError(
             f"{where} declares `{key}` under the occurrence law '{law}'; a "
-            f"temporised output here waits on 'delay', 'exp' or 'inst'"
+            f"temporised output here waits on 'delay', 'exp', 'uniform' or 'inst'"
         )
-    unknown = sorted(set(declared) - {"cls", parameter})
+    unknown = sorted(set(declared) - {"cls", *parameters})
     if unknown:
+        carried = ", ".join(f"`{name}`" for name in parameters)
         raise ComponentSpecError(
             f"{where} declares `{key}` carrying unknown keys {unknown}; a "
-            f"{law} law carries `cls` and `{parameter}`"
+            f"{law} law carries `cls` and {carried}"
         )
-    if law == "exp" and parameter not in declared:
+    if law == "exp" and "rate" not in declared:
         raise ComponentSpecError(f"{where} declares `{key}` as an exponential law with no `rate`")
-    value = declared.get(parameter, 0.0)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+    if law == "uniform":
+        missing = [name for name in parameters if name not in declared]
+        if missing:
+            raise ComponentSpecError(f"{where} declares `{key}` as a uniform law with no {missing}")
+    values = {}
+    for name in parameters:
+        value = declared.get(name, 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ComponentSpecError(
+                f"{where} declares `{key}` with `{name}`={value!r}; it must be a finite non-negative number"
+            )
+        values[name] = float(value)
+    if law == "uniform" and values["high"] <= values["low"]:
         raise ComponentSpecError(
-            f"{where} declares `{key}` with `{parameter}`={value!r}; it must be a finite non-negative number"
+            f"{where} declares `{key}` as a uniform law on the empty interval "
+            f"[{values['low']}, {values['high']}]; `high` must be strictly above `low`"
         )
-    return {"distrib": law, parameter: float(value)}
+    return {"distrib": law, **values}
 
 
 # --- the declared shapes a mapping can carry --------------------------------

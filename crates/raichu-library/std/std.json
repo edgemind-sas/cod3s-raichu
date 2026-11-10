@@ -208,10 +208,11 @@
             "values": [
               "delay",
               "exp",
+              "uniform",
               "never"
             ],
             "default": "delay",
-            "description": "Law of the wait before enabling: a fixed delay or an exponential draw; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
+            "description": "Law of the wait before enabling: a fixed delay, an exponential draw or a uniform draw in [`enable_low`, `enable_high`]; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
           },
           {
             "name": "enable_value",
@@ -220,21 +221,46 @@
             "description": "The delay (`delay`) or the rate (`exp`, positive) of the enable wait."
           },
           {
+            "name": "enable_low",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Lower bound of the enable wait under `uniform` (non-negative); unused by the other laws."
+          },
+          {
+            "name": "enable_high",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Upper bound of the enable wait under `uniform`, strictly above `enable_low`; unused by the other laws."
+          },
+          {
             "name": "disable_law",
             "kind": "enum",
             "values": [
               "delay",
               "exp",
+              "uniform",
               "never"
             ],
             "default": "delay",
-            "description": "Law of the wait before disabling; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
+            "description": "Law of the wait before disabling: a fixed delay, an exponential draw or a uniform draw in [`disable_low`, `disable_high`]; `never` builds no transition (a wait that never ends, as an exponential wait of rate zero)."
           },
           {
             "name": "disable_value",
             "kind": "number",
             "default": 0.0,
             "description": "The delay (`delay`) or the rate (`exp`, positive) of the disable wait."
+          },
+          {
+            "name": "disable_low",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Lower bound of the disable wait under `uniform` (non-negative); unused by the other laws."
+          },
+          {
+            "name": "disable_high",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Upper bound of the disable wait under `uniform`, strictly above `disable_low`; unused by the other laws."
           }
         ],
         "uses": [
@@ -265,11 +291,23 @@
               "enable_value": {
                 "$param": "enable_value"
               },
+              "enable_low": {
+                "$param": "enable_low"
+              },
+              "enable_high": {
+                "$param": "enable_high"
+              },
               "disable_law": {
                 "$param": "disable_law"
               },
               "disable_value": {
                 "$param": "disable_value"
+              },
+              "disable_low": {
+                "$param": "disable_low"
+              },
+              "disable_high": {
+                "$param": "disable_high"
               }
             }
           }
