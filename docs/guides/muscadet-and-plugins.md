@@ -58,8 +58,9 @@ with `system.build_dict()`. An `add_flow_in(name=…, logic="and")` (or an
 integer *k* for k-out-of-n) changes the aggregation; `add_flow_out_tempo`
 and `add_flow_out_on_trigger` add delayed and inhibition-driven flows. A
 temporised output waits a fixed time (`enable_time`, `disable_time`) or on a
-law (`enable_law={"distrib": "exp", "rate": r}`, and likewise
-`disable_law`), in which case the switch-on or switch-off instant is drawn.
+law (`enable_law={"distrib": "exp", "rate": r}` or
+`{"distrib": "uniform", "low": a, "high": b}`, and likewise `disable_law`),
+in which case the switch-on or switch-off instant is drawn.
 
 !!! note "What a flow input reads while nothing feeds it"
 

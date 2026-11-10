@@ -15,13 +15,21 @@ probability of being switched on t hours after the production condition
 starts to hold is 1 - exp(-t/400) at every sample, within one standard error.
 That closed form is what the simulation test below holds the engine to.
 
+A temporised output may as well wait on a UNIFORM law (`uniform`, or the
+cod3s `UniformOccDistribution`) drawn in `[low, high]`, the law the platform
+offers on modes since cod3s 1.24.0 and on temporised outputs since. Its closed
+form is linear: the probability of being switched on t hours after the
+condition starts to hold is (t - low) / (high - low) inside the interval.
+
 What is pinned:
 
 - the cod3s name of a delay builds the same law as the short name, and an
   instantaneous law is a zero delay unless it may not fire;
 - an exponential law builds an exponential transition, under either
   spelling, and a malformed one is refused naming what is wrong;
-- simulated, the switch-on probability follows the closed form.
+- a uniform law builds a uniform transition under either spelling, and an
+  empty or malformed interval is refused naming what is wrong;
+- simulated, the switch-on probability follows the closed form of each law.
 """
 
 import math
@@ -146,6 +154,43 @@ def test_the_check_accepts_what_the_build_accepts():
     """The data-only check and the build read the law through one path."""
     assert declare.check_spec(a_relay({"cls": "DelayOccDistribution", "time": 2.0})) == "RELAY"
     assert declare.check_spec(a_relay({"cls": "ExpOccDistribution", "rate": 0.1})) == "RELAY"
+    assert declare.check_spec(a_relay({"cls": "UniformOccDistribution", "low": 1.0, "high": 2.0})) == "RELAY"
+
+
+# --- the uniform law -------------------------------------------------------
+
+
+@pytest.mark.parametrize("law", ["uniform", "UniformOccDistribution"])
+def test_a_uniform_law_builds_a_uniform_transition(law):
+    tempo = tempo_of(a_relay({"cls": law, "low": 100.0, "high": 500.0}, {"cls": law, "low": 0.0, "high": 2.0}))
+    assert tempo["enable"] == {"distrib": "uniform", "low": 100.0, "high": 500.0}
+    assert tempo["disable"] == {"distrib": "uniform", "low": 0.0, "high": 2.0}
+
+
+@pytest.mark.parametrize(
+    ("declared", "named"),
+    [
+        ({"cls": "uniform", "low": 1.0}, "high"),
+        ({"cls": "uniform", "high": 1.0}, "low"),
+        ({"cls": "uniform", "low": -1.0, "high": 1.0}, "low"),
+        ({"cls": "uniform", "low": 2.0, "high": 2.0}, "empty interval"),
+        ({"cls": "uniform", "low": 3.0, "high": 2.0}, "empty interval"),
+        ({"cls": "uniform", "low": 1.0, "high": 2.0, "time": 3.0}, "time"),
+    ],
+    ids=["no-high", "no-low", "negative-low", "zero-width", "inverted", "unknown-key"],
+)
+def test_a_malformed_uniform_law_is_refused_naming_what_is_wrong(declared, named):
+    with pytest.raises(declare.ComponentSpecError, match=named):
+        tempo_of(a_relay(declared))
+
+
+def test_the_authoring_call_takes_a_uniform_law_and_refuses_an_empty_one():
+    law = {"distrib": "uniform", "low": 1.0, "high": 3.0}
+    assert authored_tempo(disable_law=law)["disable"] == law
+    with pytest.raises(ValueError, match="empty"):
+        authored_tempo(enable_law={"distrib": "uniform", "low": 3.0, "high": 3.0})
+    with pytest.raises(ValueError, match="carries"):
+        authored_tempo(enable_law={"distrib": "uniform", "low": 1.0})
 
 
 # --- simulated against the closed form ------------------------------------
@@ -155,8 +200,9 @@ SAMPLES = (250.0, 1000.0)
 NB_RUNS = 4000
 
 
-def _relay_document() -> dict:
-    """A source always feeding a relay whose output switches on at `RATE`."""
+def _relay_document(enable: dict | None = None) -> dict:
+    """A source always feeding a relay whose output switches on at `RATE`,
+    or on the law `enable` when given."""
     flow_common = {"var_type": "bool", "var_fed_default": False, "component_authorized": [{"class_name_bkd": ".*"}]}
 
     def component(name, flows):
@@ -188,7 +234,7 @@ def _relay_document() -> dict:
                         "cls": "FlowOutTempo",
                         "name": "out",
                         "var_prod_cond": [["cmd"]],
-                        "occ_enable_flow": {"cls": "ExpOccDistribution", "rate": RATE},
+                        "occ_enable_flow": enable or {"cls": "ExpOccDistribution", "rate": RATE},
                         "occ_disable_flow": {"cls": "DelayOccDistribution", "time": 0.0},
                     },
                 ],
@@ -216,6 +262,31 @@ def test_the_switch_on_instant_is_exponential():
         assert abs(mean - expected) < 4 * standard_error, (
             f"at {instant} h the output is on in {mean:.4f} of the replicas, where an exponential "
             f"switch-on at rate {RATE} gives {expected:.4f} (4 standard errors: {4 * standard_error:.4f})"
+        )
+
+
+LOW, HIGH = 200.0, 600.0
+UNIFORM_SAMPLES = (100.0, 300.0, 500.0, 700.0)
+
+
+def test_the_switch_on_instant_is_uniform():
+    """P(switched on by t) = (t - low) / (high - low), clamped to [0, 1].
+
+    Same tolerance as the exponential case; outside the interval the
+    probability is exactly 0 or 1, so those samples are held exactly.
+    """
+    document = _relay_document({"cls": "UniformOccDistribution", "low": LOW, "high": HIGH})
+    result = engine.simulate(document, {"nb_runs": NB_RUNS, "schedule": list(UNIFORM_SAMPLES), "seed": 13})
+    fed = result.indicators["RELAY_out_fed_out"]
+    for instant, mean in zip(fed.instants, fed.mean):
+        expected = min(max((instant - LOW) / (HIGH - LOW), 0.0), 1.0)
+        if expected in (0.0, 1.0):
+            assert mean == expected, f"at {instant} h the output is on in {mean} of the replicas, not {expected}"
+            continue
+        standard_error = math.sqrt(expected * (1 - expected) / NB_RUNS)
+        assert abs(mean - expected) < 4 * standard_error, (
+            f"at {instant} h the output is on in {mean:.4f} of the replicas, where a uniform "
+            f"switch-on in [{LOW}, {HIGH}] gives {expected:.4f} (4 standard errors: {4 * standard_error:.4f})"
         )
 
 

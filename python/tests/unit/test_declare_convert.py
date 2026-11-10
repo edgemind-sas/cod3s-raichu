@@ -870,6 +870,26 @@ def test_a_temporised_output_drawing_its_waits_matches_by_replay():
     assert comparison.identical, comparison.detail
 
 
+def test_a_temporised_output_drawing_uniform_waits_converts_and_matches_by_replay():
+    declaration = backup_plant(
+        {"cls": "UniformOccDistribution", "low": 1.0, "high": 4.0},
+        {"cls": "uniform", "low": 0.25, "high": 0.75},
+    )
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    (use,) = [u for u in types_of(conversion)["Backup"]["uses"] if u["fragment"] == "muscadet.bool_flow_out_tempo"]
+    assert {key: use["with"][key] for key in use["with"] if key.startswith(("enable_", "disable_"))} == {
+        "enable_law": "uniform",
+        "enable_low": 1.0,
+        "enable_high": 4.0,
+        "disable_law": "uniform",
+        "disable_low": 0.25,
+        "disable_high": 0.75,
+    }
+    comparison = compare_routes(declaration, conversion, t_max=2000.0, seeds=range(6))
+    assert comparison.identical, comparison.detail
+
+
 def test_a_wrong_enable_delay_is_reported_divergent():
     declaration = backup_plant({"cls": "DelayOccDistribution", "time": 3.0}, {"cls": "DelayOccDistribution", "time": 0.5})
     wrong = copy.deepcopy(convert(declaration))

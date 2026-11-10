@@ -652,9 +652,9 @@ def prod_cond_disjunction(
     return [list(choice) for choice in itertools.product(*clauses)]
 
 
-#: The laws a temporised output's transition may wait on, and the one
-#: parameter each carries, in the engine's transition form.
-_TEMPO_LAW_PARAMETER = {"delay": "time", "exp": "rate"}
+#: The laws a temporised output's transition may wait on, and the
+#: parameters each carries, in the engine's transition form.
+_TEMPO_LAW_PARAMETERS = {"delay": ("time",), "exp": ("rate",), "uniform": ("low", "high")}
 
 
 def _tempo_law(flow: str, direction: str, time: float, law: dict[str, Any] | None) -> dict[str, Any]:
@@ -663,7 +663,9 @@ def _tempo_law(flow: str, direction: str, time: float, law: dict[str, Any] | Non
     `time` is the short form of a fixed delay and `law` the general one;
     both at once for one direction contradict each other unless the time
     is the default. A negative parameter is refused: a delay that ends
-    before it starts, or a rate that is no rate, is no law.
+    before it starts, or a rate that is no rate, is no law. A uniform wait
+    is drawn in `[low, high]` and refuses an empty interval, as the core
+    does on any transition.
     """
     if law is None:
         law = {"distrib": "delay", "time": time}
@@ -673,20 +675,29 @@ def _tempo_law(flow: str, direction: str, time: float, law: dict[str, Any] | Non
             f"{direction} transition's wait; declare one"
         )
     distrib = law.get("distrib")
-    parameter = _TEMPO_LAW_PARAMETER.get(distrib)
-    if parameter is None:
+    parameters = _TEMPO_LAW_PARAMETERS.get(distrib)
+    if parameters is None:
         raise ValueError(
             f"flow {flow!r}: the {direction} law {law!r} is neither "
-            f"{' nor '.join(sorted(_TEMPO_LAW_PARAMETER))}"
+            f"{' nor '.join(sorted(_TEMPO_LAW_PARAMETERS))}"
         )
-    if set(law) != {"distrib", parameter}:
-        raise ValueError(f"flow {flow!r}: a {distrib} {direction} law carries `distrib` and `{parameter}`, got {law!r}")
-    value = law[parameter]
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+    if set(law) != {"distrib", *parameters}:
+        carried = "`distrib`, " + ", ".join(f"`{name}`" for name in parameters)
+        raise ValueError(f"flow {flow!r}: a {distrib} {direction} law carries {carried}, got {law!r}")
+    values = {}
+    for name in parameters:
+        value = law[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(
+                f"flow {flow!r}: the {direction} law's `{name}` must be a finite non-negative number, got {value!r}"
+            )
+        values[name] = float(value)
+    if distrib == "uniform" and values["high"] <= values["low"]:
         raise ValueError(
-            f"flow {flow!r}: the {direction} law's `{parameter}` must be a finite non-negative number, got {value!r}"
+            f"flow {flow!r}: the {direction} law's interval [{values['low']}, {values['high']}] is empty; "
+            f"`high` must be strictly above `low`"
         )
-    return {"distrib": distrib, parameter: float(value)}
+    return {"distrib": distrib, **values}
 
 
 def _var(component: str, variable: str) -> dict[str, Any]:
@@ -5941,9 +5952,10 @@ class ObjFlow:
         Each transition waits on a law. `enable_time` / `disable_time`
         are the short form of a fixed delay; `enable_law` /
         `disable_law` take the law itself, in the engine's transition
-        form: ``{"distrib": "delay", "time": t}`` or
-        ``{"distrib": "exp", "rate": r}``, the latter drawing the
-        switch-on (switch-off) instant. A law and a non-zero time for
+        form: ``{"distrib": "delay", "time": t}``,
+        ``{"distrib": "exp", "rate": r}`` or
+        ``{"distrib": "uniform", "low": a, "high": b}``, the last two
+        drawing the switch-on (switch-off) instant. A law and a non-zero time for
         the same direction contradict each other and are refused.
 
         The availability gate's two knobs are the base class's and are
