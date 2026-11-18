@@ -26,6 +26,7 @@ import math
 import pytest
 
 import pyraichu
+from pyraichu.mode_objects import failure_mode_object
 from pyraichu.plugins import expand_model
 
 #: Order-1 rate and horizon of the analytic case: four independent
@@ -347,3 +348,188 @@ def test_the_merge_survives_the_continuous_rebuild():
         ("B1", "mode_a", "mode_a__occ"),
         ("B1", "mode_b", "mode_b__occ"),
     }
+
+
+# --- writers of different ranks: the highest-ranked active mode wins ----------
+#
+# A mode may carry a rank (`effects_priority`, a `cod3s.ObjMode2S` constructor
+# argument). Where several modes write one attribute with DIFFERENT values, the
+# chain of conditionals the merge builds is ordered by rank, highest first, and
+# by declaration order between equal ranks. The rank is the caller's: a failure
+# mode outranks a compromise of the same instrument, so a gain a compromise
+# sets to 0.1 reads 0 while a failure kills it, and 0.1 again once the failure
+# is repaired while the compromise lasts.
+
+NOMINAL, COMPROMISED, DEAD = 1.0, 0.1, 0.0
+FAILURE_RANK, COMPROMISE_RANK = 1, 0
+BEHAVIOURS = ("internal", "external", "external_rep_indep")
+
+#: The compromise occurs at 1 and lasts until 3.6; the failure occurs at 2
+#: and is repaired at 3. No mode fires again before the last sample.
+COMPROMISE_FIRST = {"compromise": (1.0, 2.6), "failure": (2.0, 1.0)}
+S_COMPROMISE_FIRST = [0.0, 1.5, 2.5, 3.3, 3.8]
+#: Compromise, then the failure over it, then the failure repaired while the
+#: compromise lasts, then the compromise over: back to nominal.
+EXPECTED_COMPROMISE_FIRST = [NOMINAL, COMPROMISED, DEAD, COMPROMISED, NOMINAL]
+
+#: The failure occurs at 1, the compromise at 2, neither is repaired before
+#: the last sample.
+FAILURE_FIRST = {"failure": (1.0, 10.0), "compromise": (2.0, 10.0)}
+S_FAILURE_FIRST = [0.0, 1.5, 2.5, 3.5]
+EXPECTED_FAILURE_FIRST = [NOMINAL, DEAD, DEAD, DEAD]
+
+
+def _gain_store():
+    return {
+        "name": "S",
+        "attributes": [
+            {"name": "gain", "kind": "float", "init": {"kind": "float", "value": NOMINAL}}
+        ],
+        "ports": [],
+        "interfaces": [],
+        "automata": [],
+        "sensitive_functions": [],
+        "equations": [],
+    }
+
+
+def _two_state(name, value, times, rank, behaviour="internal", handback=False):
+    """One `ObjMode2S` on `S.gain`, its two directions on delay laws."""
+    ttf, ttr = times
+    spec = {
+        "cls": "ObjMode2S",
+        "fm_name": name,
+        "targets": ["S"],
+        "behaviour": behaviour,
+        "occ_state": "occ",
+        "not_occ_state": "rep",
+        "occ_law": {"cls": "delay", "time": ttf},
+        "not_occ_law": {"cls": "delay", "time": ttr},
+        "occ_effects": {"gain": value},
+    }
+    if handback:
+        spec["not_occ_effects_trans"] = {"gain": NOMINAL}
+    if rank is not None:
+        spec["effects_priority"] = rank
+    return failure_mode_object(spec)
+
+
+def _pair(schedule, order, ranked=True, behaviour="internal", handback=False):
+    """The compromise and the failure, declared in `order`."""
+    declared = {
+        "compromise": _two_state(
+            "compromise",
+            COMPROMISED,
+            schedule["compromise"],
+            COMPROMISE_RANK if ranked else None,
+            behaviour,
+            handback,
+        ),
+        "failure": _two_state(
+            "failure",
+            DEAD,
+            schedule["failure"],
+            FAILURE_RANK if ranked else None,
+            behaviour,
+            handback,
+        ),
+    }
+    return [declared[name] for name in order]
+
+
+def _gain_timeline(modes, samples):
+    body = expand_model(
+        {
+            "name": "ranked_writers",
+            "components": [_gain_store()],
+            "connections": [],
+            "indicators": [],
+            "plugins": {"muscadet": {"objects": list(modes)}},
+        }
+    )
+    body["indicators"] = [
+        {"name": "S_gain", "target": "attribute", "attr": {"component": "S", "attribute": "gain"}}
+    ]
+    result = pyraichu.simulate(
+        pyraichu.load_model(body), t_max=samples[-1], samples=samples, seed=1
+    )
+    return [round(float(value), 12) for _, value in result.samples["S_gain"]]
+
+
+@pytest.mark.parametrize("handback", [False, True], ids=["held", "handback"])
+@pytest.mark.parametrize("order", [("compromise", "failure"), ("failure", "compromise")])
+@pytest.mark.parametrize("behaviour", BEHAVIOURS)
+def test_a_failure_outranks_a_compromise_and_hands_it_back_at_its_repair(
+    behaviour, order, handback
+):
+    """The compromise sets 0.1, the failure over it sets 0, the failure
+    repaired while the compromise lasts gives 0.1 back, and the compromise
+    over gives the nominal value back. Whichever is declared first: the rank
+    decides, not the order."""
+    modes = _pair(COMPROMISE_FIRST, order, behaviour=behaviour, handback=handback)
+    assert _gain_timeline(modes, S_COMPROMISE_FIRST) == EXPECTED_COMPROMISE_FIRST
+
+
+@pytest.mark.parametrize("order", [("compromise", "failure"), ("failure", "compromise")])
+@pytest.mark.parametrize("behaviour", BEHAVIOURS)
+def test_a_compromise_arriving_over_a_failure_changes_nothing(behaviour, order):
+    modes = _pair(FAILURE_FIRST, order, behaviour=behaviour)
+    assert _gain_timeline(modes, S_FAILURE_FIRST) == EXPECTED_FAILURE_FIRST
+
+
+def test_without_a_rank_the_first_declared_writer_still_wins():
+    """A declaration carrying no rank is the chain it always was: declared
+    first, the compromise keeps the gain at 0.1 through the failure."""
+    modes = _pair(COMPROMISE_FIRST, ("compromise", "failure"), ranked=False)
+    assert _gain_timeline(modes, S_COMPROMISE_FIRST) == [
+        NOMINAL,
+        COMPROMISED,
+        COMPROMISED,
+        COMPROMISED,
+        NOMINAL,
+    ]
+
+
+def test_a_mode_without_a_rank_is_the_spec_it_always_was():
+    """No key on the plugin object when the declaration carries none, so the
+    expansion of every existing model is unchanged."""
+    unranked = _two_state("compromise", COMPROMISED, (1.0, 2.0), None)
+    assert "effects_priority" not in unranked
+    assert _two_state("compromise", COMPROMISED, (1.0, 2.0), 0)["effects_priority"] == 0
+
+
+def test_two_values_at_one_rank_handed_back_are_still_refused():
+    """Ranks order DIFFERENT ranks. Two modes of one rank asserting two values
+    on a handed-back variable stay as ill-posed as they were."""
+    modes = [
+        _two_state("compromise", COMPROMISED, (1.0, 2.0), COMPROMISE_RANK, handback=True),
+        _two_state("tamper", 0.5, (1.5, 2.0), COMPROMISE_RANK, handback=True),
+    ]
+    with pytest.raises(ValueError, match="DIFFERENT clamp values"):
+        _gain_timeline(modes, S_COMPROMISE_FIRST)
+
+
+def test_two_values_handed_back_without_a_rank_are_still_refused():
+    modes = _pair(COMPROMISE_FIRST, ("compromise", "failure"), ranked=False, handback=True)
+    with pytest.raises(ValueError, match="DIFFERENT clamp values"):
+        _gain_timeline(modes, S_COMPROMISE_FIRST)
+
+
+def test_a_ranked_and_an_unranked_writer_of_two_values_are_refused():
+    """Nothing says where an unranked writer stands among ranked ones, so two
+    values from the two kinds of writer are refused by name rather than
+    ordered by a guess."""
+    modes = [
+        _two_state("compromise", COMPROMISED, (1.0, 2.6), COMPROMISE_RANK),
+        _two_state("failure", DEAD, (2.0, 1.0), None),
+    ]
+    with pytest.raises(ValueError, match="effects_priority"):
+        _gain_timeline(modes, S_COMPROMISE_FIRST)
+
+
+@pytest.mark.parametrize("rank", [True, 1.5, "1"])
+def test_a_rank_is_an_integer(rank):
+    from pyraichu.mode_objects import TranslationError
+
+    with pytest.raises(TranslationError, match="effects_priority"):
+        _two_state("compromise", COMPROMISED, (1.0, 2.0), rank)

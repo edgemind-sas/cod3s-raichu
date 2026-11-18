@@ -1014,6 +1014,10 @@ _MODE_2S_MODE = _Vocabulary(
         not_occ_effects_trans="not_occ_effects_trans",
         not_occ_param_name="not_occ_param_name",
         not_occ_param="not_occ_param",
+        # The rank of this mode's effects against another mode writing the
+        # same variable with another value: the highest-ranked active mode
+        # wins (`plugin._merge_reinit_writers`). `None` declares no rank.
+        effects_priority="effects_priority",
     ),
     inert=dict(
         _MODE_SHARED_INERT,
@@ -3278,6 +3282,14 @@ _CONTROL_IN = {
     for kind, seed in _CONTROL_IN_SEED.items()
 }
 
+#: What a SERVICE input may carry. It is a boolean, not a measurement, so it
+#: has no seed (unwired, it reads false), no constituent and no aggregation:
+#: muscadet's read-back writes `aggregate` on every input, empty here.
+_CONTROL_IN["service"] = _Vocabulary(
+    carried={"name": "name", "kind": "kind"},
+    inert={"aggregate": None, "flows": [], "default": False},
+)
+
 #: What a BOOLEAN output may carry: muscadet's vocabulary is this layer's, key
 #: for key.
 _CONTROL_OUT_BOOL = _Vocabulary(
@@ -3332,15 +3344,15 @@ def _controller_sections(spec: dict, name: str) -> tuple[list[dict], list[dict]]
     lost between two functions that agree.
     """
     from ..plugins.controller import (
+        CONTROL_IN_KINDS,
         CTRL_OUT_KINDS,
-        MEASUREMENT_KINDS,
         _build_control_in,
         _build_control_out,
     )
 
     translated: dict[str, list[dict]] = {}
     for section, kinds, vocabularies, default_kind in (
-        ("controls_in", MEASUREMENT_KINDS, _CONTROL_IN, "level"),
+        ("controls_in", CONTROL_IN_KINDS, _CONTROL_IN, "level"),
         ("controls_out", CTRL_OUT_KINDS, _CONTROL_OUT, "bool"),
     ):
         entries = []
@@ -3975,6 +3987,10 @@ def _controller_in_anchor(entry: dict) -> tuple[str, str, str | None]:
     name = entry["name"]
     kind = entry.get("kind") or "level"
     flows = list(entry.get("flows") or [])
+    if kind == "service":
+        # The box of a flow component's discrete input, port included: a
+        # boolean has one variable, so the anchor already names it.
+        return f"{name}_in", f"{name}_in", None
     if kind == "rate":
         return f"{name}{_RATE_IN_SUFFIX}", f"{name}{_RATE_IN_SUFFIX}", None
     if kind == "ratio":
@@ -4048,9 +4064,21 @@ def _wire_controller_link(
                 f"{where}: controller `{target}` observes on "
                 f"{sorted(anchors) or 'no box at all'}, and not on "
                 f"`{target_box}`. An observation input imports a level or a "
-                f"ratio on `{{name}}_level_in` and a rate on `{{name}}_rate_in`"
+                f"ratio on `{{name}}_level_in`, a rate on `{{name}}_rate_in` "
+                f"and a service input its condition on `{{name}}_in`"
             )
         read, target_port, alias = anchors[target_box]
+        if (read.get("kind") or "level") == "service" and source_box.endswith(
+            (_LEVEL_OUT_SUFFIX, _RATE_OUT_SUFFIX)
+        ):
+            # A number into a condition: `any` over a float port would read
+            # "nonzero" in silence, a question nobody asked.
+            raise SystemSpecError(
+                f"{where}: `{read['name']}` is a service input, which reads a "
+                f"condition: a discrete output `{{flow}}_out` or a controller's "
+                f"boolean output `{{output}}_out`. `{source_box}` publishes a "
+                f"number"
+            )
         if alias is not None:
             # A constituent's level and a constituent's share are published by
             # the VOLUME that holds it, each under an alias of its own inside

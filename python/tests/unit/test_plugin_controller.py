@@ -1454,3 +1454,157 @@ def test_a_chained_controller_is_swept_after_the_one_it_reads():
     assert order.index(("INSTR", "vol_level")) < order.index(("INSTR", "reading_level"))
     assert order.index(("INSTR", "reading_level")) < order.index(("CTRL", "reading_level"))
     assert len(order) == len(set(order))
+
+
+# --- a service input: a boolean the controller is fed -------------------
+#
+# The fourth kind of input reads no quantity: it says whether the controller is
+# fed, by a discrete flow output or by another controller's boolean output, the
+# very boxes a flow component's discrete input imports. It lands in
+# `{name}_fed_in`, the name a flow component gives the same reading, so a mode
+# condition names it the same way on both engines.
+
+SERVICE_SAMPLES = [0.0, 0.5, 1.5, 3.0]
+#: Off until 1, on until 2.5, off again: what the source below publishes.
+SERVICE_EXPECTED = [False, False, True, False]
+
+
+def a_toggling_source() -> dict:
+    """A bare component publishing a boolean on `x_out`: off, on at 1, off
+    again at 2.5."""
+    on = {
+        "op": "state_active",
+        "state": {"component": "SRC", "automaton": "cycle", "state": "on"},
+    }
+    return {
+        "name": "SRC",
+        "attributes": [
+            {"name": "x", "kind": "bool", "init": {"kind": "bool", "value": False}}
+        ],
+        "ports": [{"name": "x_out", "dir": "out", "attr": "x"}],
+        "interfaces": [],
+        "equations": [],
+        "automata": [
+            {
+                "name": "cycle",
+                "states": ["off", "on", "done"],
+                "init": "off",
+                "transitions": [
+                    {"name": "up", "source": "off", "targets": ["on"],
+                     "distrib": "delay", "time": 1.0},
+                    {"name": "down", "source": "on", "targets": ["done"],
+                     "distrib": "delay", "time": 1.5},
+                ],
+            }
+        ],
+        "sensitive_functions": [
+            {
+                "name": "publish",
+                "effects": [
+                    {"target": {"component": "SRC", "attribute": "x"}, "value": on}
+                ],
+            }
+        ],
+    }
+
+
+def a_served(name="C") -> dict:
+    return {
+        "type": "ObjCtrl",
+        "name": name,
+        "controls_in": [{"name": "ot", "kind": "service"}],
+        "controls_out": [],
+    }
+
+
+def service_reading(components, objects, connections, samples=SERVICE_SAMPLES):
+    body = pyraichu.expand_model(
+        {
+            "name": "served",
+            "components": components,
+            "connections": [
+                {
+                    "from": {"component": source, "port": source_port},
+                    "to": {"component": target, "port": target_port},
+                }
+                for source, source_port, target, target_port in connections
+            ],
+            "indicators": [],
+            "plugins": {"muscadet": {"objects": objects}},
+        }
+    )
+    result = pyraichu.simulate(
+        pyraichu.load_model(body), t_max=samples[-1], samples=samples, seed=1
+    )
+    return [bool(value) for _, value in result.samples["C_ot_fed_in"]]
+
+
+def test_a_service_input_lands_in_fed_in_on_the_box_of_a_discrete_input():
+    body = pyraichu.expand_model(
+        {"name": "served", "plugins": {"muscadet": {"objects": [a_served()]}}}
+    )
+    component = next(c for c in body["components"] if c["name"] == "C")
+    assert component["attributes"] == [
+        {"name": "ot_fed_in", "kind": "bool", "init": {"kind": "bool", "value": False}}
+    ]
+    assert component["ports"] == [{"name": "ot_in", "dir": "in"}]
+    # A condition, not a quantity: no explicit equation enters the sweep.
+    assert component["equations"] == []
+
+
+def test_a_service_input_follows_the_boolean_it_is_wired_to():
+    got = service_reading(
+        [a_toggling_source()], [a_served()], [("SRC", "x_out", "C", "ot_in")]
+    )
+    assert got == SERVICE_EXPECTED
+
+
+def test_an_unwired_service_input_reads_false():
+    assert service_reading([], [a_served()], []) == [False] * len(SERVICE_SAMPLES)
+
+
+def test_a_service_input_follows_another_controller_s_boolean_output():
+    """`D.o` is raised by a mode from 1 to 2.5; `C` reads it on `ot_in`."""
+    raising = {
+        "type": "ObjFM",
+        "name": "raise",
+        "targets": ["D"],
+        "failure": [{"law": "delay", "time": 1.0}],
+        "repair": [{"law": "delay", "time": 1.5}],
+        "failure_effects": {"o": True},
+    }
+    publisher = {
+        "type": "ObjCtrl",
+        "name": "D",
+        "controls_in": [],
+        "controls_out": [{"name": "o", "kind": "bool"}],
+    }
+    got = service_reading(
+        [], [publisher, raising, a_served()], [("D", "o_out", "C", "ot_in")]
+    )
+    assert got == SERVICE_EXPECTED
+
+
+@pytest.mark.parametrize(
+    "declaration, message",
+    [
+        ({"name": "ot", "kind": "service", "flows": ["w"]}, "carries no constituent"),
+        ({"name": "ot", "kind": "service", "aggregate": "sum"}, "aggregates nothing"),
+        ({"name": "ot", "kind": "service", "default": True}, "unwired"),
+    ],
+)
+def test_a_service_input_declares_no_quantity(declaration, message):
+    with pytest.raises(ValueError, match=message):
+        pyraichu.expand_model(controller(controls_in=[declaration]))
+
+
+def test_a_service_input_is_not_read_as_a_number():
+    """The grammar compares and republishes readings; a service input is a
+    condition, so naming it there is refused rather than cast."""
+    with pytest.raises(ValueError, match="not a number"):
+        pyraichu.expand_model(
+            controller(
+                controls_in=[{"name": "ot", "kind": "service"}],
+                controls_out=[{"name": "o", "emit": compare("ot", ">", 0.5)}],
+            )
+        )

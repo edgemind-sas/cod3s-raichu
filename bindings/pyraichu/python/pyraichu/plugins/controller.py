@@ -30,6 +30,11 @@ Two sections.
   channel, so the reader creates no demand and enters no allocation operator.
   An input declaring an ``aggregate`` reduces several sources to one value.
 
+  A **service** input (``kind="service"``) reads no quantity: a boolean,
+  ``{name}_fed_in``, true while the source wired to ``{name}_in`` is (a
+  discrete flow output or another controller's boolean output), false
+  unwired. The grammar below does not read it as a number.
+
   **A ratio input is what a closed grammar costs, and where that cost is
   paid.** There is no division among the operators below: a quotient
   carries no threshold anything could root-find, so admitting it would break
@@ -160,6 +165,20 @@ MEASUREMENT_RATIO = "ratio"
 
 #: Every nature a measurement input may be declared with.
 MEASUREMENT_KINDS = (MEASUREMENT_LEVEL, MEASUREMENT_RATE, MEASUREMENT_RATIO)
+
+#: A **service** input reads no quantity: it says whether the controller is
+#: fed, as a boolean. It imports on ``{name}_in``, the box a flow component's
+#: discrete input imports, so it accepts as they stand a discrete flow output
+#: ``{flow}_out`` and a controller's boolean output ``{output}_out``. Its
+#: reading lands in ``{name}_fed_in``, the name a flow component gives the
+#: same reading, so a mode condition names it alike on both engines. Not a
+#: measurement: it has no constituent, no aggregation, and no seed (unwired,
+#: it reads false).
+CONTROL_IN_SERVICE = "service"
+
+#: Every nature an input may be declared with: the measurements, then the
+#: service input.
+CONTROL_IN_KINDS = MEASUREMENT_KINDS + (CONTROL_IN_SERVICE,)
 
 #: The closed list an observation input's aggregation is chosen from, under
 #: the names muscadet gives them.
@@ -791,8 +810,13 @@ class _ControlIn:
     #: It governs that first instant only. muscadet reads an unconnected
     #: reference as this default for the whole run, while ``port_agg``
     #: answers 0 on a port nothing feeds, so an input left unwired reads
-    #: zero here from the first evaluation point on.
-    default: float
+    #: zero here from the first evaluation point on. A service input holds
+    #: False here, which is what it reads unwired.
+    default: float | bool
+
+    @property
+    def is_service(self) -> bool:
+        return self.kind == CONTROL_IN_SERVICE
 
     @property
     def attribute(self) -> str:
@@ -802,6 +826,8 @@ class _ControlIn:
         publishes ``{name}_level`` and ``{name}_level_{flow}``, a continuous
         output ``{name}_rate``, a volume ``{name}_ratio_{flow}``.
         """
+        if self.is_service:
+            return f"{self.name}_fed_in"
         if self.kind == MEASUREMENT_RATE:
             return f"{self.name}_{MEASUREMENT_RATE}"
         if self.kind == MEASUREMENT_RATIO:
@@ -816,8 +842,11 @@ class _ControlIn:
 
         One port per attribute, unlike muscadet's message box that carries
         several: RAICHU connects attribute to attribute, so a ratio has a
-        port of its own where PyCATSHOO shared the level's box.
+        port of its own where PyCATSHOO shared the level's box. A service
+        input imports on ``{name}_in``, the port of a discrete flow input.
         """
+        if self.is_service:
+            return f"{self.name}_in"
         return f"{self.attribute}_in"
 
     @property
@@ -841,10 +870,12 @@ def _build_control_in(where: str, spec: Any) -> _ControlIn:
         raise ValueError(f"{where}: an observation input declares `name`")
     where = f"{where} input `{name}`"
     kind = spec.get("kind", MEASUREMENT_LEVEL)
+    if kind == CONTROL_IN_SERVICE:
+        return _build_service_in(where, spec)
     if kind not in MEASUREMENT_KINDS:
         raise ValueError(
             f"{where}: a measurement reads one of {', '.join(MEASUREMENT_KINDS)}, "
-            f"got {kind!r}"
+            f"or the input is a {CONTROL_IN_SERVICE!r} one, got {kind!r}"
         )
     flows = list(spec.get("flows") or [])
     if kind == MEASUREMENT_RATE and flows:
@@ -890,6 +921,35 @@ def _build_control_in(where: str, spec: Any) -> _ControlIn:
         flow=flows[0] if flows else None,
         aggregate=aggregate,
         default=_number(where, "default", spec.get("default", 0.0)),
+    )
+
+
+def _build_service_in(where: str, spec: dict) -> _ControlIn:
+    """One service input: a boolean, so none of a measurement's fields."""
+    if spec.get("flows"):
+        raise ValueError(
+            f"{where}: a service input says whether the controller is fed, and "
+            f"carries no constituent, so it names no `flows` (got "
+            f"{list(spec['flows'])})"
+        )
+    if spec.get("aggregate") is not None:
+        raise ValueError(
+            f"{where}: a service input aggregates nothing: it reads ONE source, "
+            f"a discrete output or a boolean controller output, so it declares "
+            f"no `aggregate` (got {spec['aggregate']!r})"
+        )
+    if spec.get("default", False) is not False:
+        raise ValueError(
+            f"{where}: a service input reads false while unwired and declares "
+            f"no other `default` (got {spec['default']!r}). Wire a source to "
+            "read it true"
+        )
+    return _ControlIn(
+        name=str(spec["name"]),
+        kind=CONTROL_IN_SERVICE,
+        flow=None,
+        aggregate=None,
+        default=False,
     )
 
 
@@ -1001,6 +1061,11 @@ class _Compiler:
                 f"{where}: operator {node.op!r} reads observation input "
                 f"`{node.input}`, which this controller does not declare "
                 f"(it declares {sorted(self.inputs) or 'none'})"
+            )
+        if channel.is_service:
+            raise ValueError(
+                f"{where}: operator {node.op!r} reads `{node.input}` as a "
+                f"number, and it is a service input: a condition, not a number"
             )
         return channel
 
@@ -1220,6 +1285,29 @@ def expand_objctrl(spec: dict[str, Any], model: dict[str, Any]) -> tuple:
     # operator), and the explicit equation that sweeps the port into the
     # attribute at every evaluation point.
     for channel in inputs.values():
+        if channel.is_service:
+            # A condition, not a quantity: a boolean attribute and the
+            # sensitive function a flow component's discrete input uses,
+            # `any` over the port. Unwired, `any` reads false, which is the
+            # declared reading of a service input nothing feeds.
+            attributes.append(_bool_attribute(channel.attribute, False))
+            ports.append({"name": channel.port, "dir": "in"})
+            functions.append(
+                {
+                    "name": f"update_{channel.attribute}",
+                    "effects": [
+                        {
+                            "target": {"component": name, "attribute": channel.attribute},
+                            "value": {
+                                "op": "port_agg",
+                                "port": {"component": name, "port": channel.port},
+                                "agg": "any",
+                            },
+                        }
+                    ],
+                }
+            )
+            continue
         attributes.append(_float_attribute(channel.attribute, channel.default))
         ports.append({"name": channel.port, "dir": "in"})
         equations.append(
