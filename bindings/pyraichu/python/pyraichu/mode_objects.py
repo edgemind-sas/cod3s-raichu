@@ -397,7 +397,27 @@ def _translate_objmode2s(fm: dict) -> dict:
     spec["repair_state"] = fm.get("not_occ_state", "rep")
     if on_demand and "occ_parked_state" in fm:
         spec["absorb_state"] = fm["occ_parked_state"]
+    rank = _effects_priority(fm.get("effects_priority"), where)
+    if rank is not None:
+        spec["effects_priority"] = rank
     return spec
+
+
+def _effects_priority(raw: Any, where: str) -> int | None:
+    """The rank a mode's effects carry against another mode's on the same
+    variable (cod3s `ObjMode2S(effects_priority=...)`), or `None`.
+
+    Higher wins. The caller computes it; the expansion only orders by it
+    (`plugin._merge_reinit_writers`). Absent and `None` are the same
+    declaration and leave the plugin object without the key, so a mode
+    declaring no rank expands exactly as it always did."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise TranslationError(
+            f"{where}: effects_priority must be an integer rank or null, got {raw!r}"
+        )
+    return raw
 
 
 def _on_demand_expander(on_demand: bool, behaviour: str) -> str:

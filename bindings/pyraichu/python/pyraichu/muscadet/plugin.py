@@ -1031,6 +1031,12 @@ def _one_shot_shape(spec: dict, attribute: str) -> str | None:
     return None
 
 
+def _effects_rank(modes: dict, mode: str) -> int | None:
+    """The rank a mode declares for its effects (``effects_priority``), or
+    ``None`` when it declares none."""
+    return (modes.get(mode) or {}).get("effects_priority")
+
+
 def _refuse_ill_posed_one_shot_sharing(
     component_name: str, attribute: str, entries: list, modes: dict
 ) -> None:
@@ -1073,13 +1079,22 @@ def _refuse_ill_posed_one_shot_sharing(
             "behind at their repair on the reference: declare the hand-back on "
             "every mode that clamps it"
         )
-    clamps = {json.dumps(effect["value"]["then"], sort_keys=True) for _, _, effect in entries}
-    if len(clamps) > 1:
+    # Clamps of different values are posed only between writers of different
+    # ranks: the highest-ranked failed mode is then the one that holds, and the
+    # last repair hands the nominal value back. At one rank (no rank at all
+    # included) two failed modes still assert two values.
+    clamps_by_rank: dict = {}
+    for mode, _, effect in entries:
+        clamps_by_rank.setdefault(_effects_rank(modes, mode), set()).add(
+            json.dumps(effect["value"]["then"], sort_keys=True)
+        )
+    if any(len(clamps) > 1 for clamps in clamps_by_rank.values()):
         raise ValueError(
             f"{where}, each holding a clamp while failed and handing it back at "
-            "its repair, with DIFFERENT clamp values: two of them failed at once "
-            "assert two values, which is ill-posed on the reference. Clamp the "
-            "variable at one value"
+            "its repair, with DIFFERENT clamp values at one rank: two of them "
+            "failed at once assert two values, which is ill-posed on the "
+            "reference. Clamp the variable at one value, or give the modes "
+            "different ranks (effects_priority)"
         )
 
 
@@ -1091,9 +1106,15 @@ def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
     write one attribute, their effects are folded into the first writer:
     the gate becomes the OR of theirs when they agree on the failure
     value (the ordinary case: the same physical loss declared by several
-    modes), and a declaration-ordered chain when they do not, so that a
-    disagreement resolves the same way on every run instead of by
-    whichever clamp the fixpoint applied last.
+    modes), and a chain when they do not, so that a disagreement resolves
+    the same way on every run instead of by whichever clamp the fixpoint
+    applied last. The chain is ordered by the rank the modes declare
+    (``effects_priority``, highest first: a failure outranks a compromise
+    of the same instrument), then by declaration order; a model declaring
+    no rank is the declaration-ordered chain it always was. The chain is
+    re-read at every evaluation, so the repair of the winner gives the
+    attribute back to the next-ranked mode still active, and to the rest
+    value once none is.
 
     The rest branches must agree: two modes claiming different values for
     "nobody has failed this attribute" is a contradiction about what the
@@ -1140,6 +1161,26 @@ def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
                 "otherwise": rest,
             }
         else:
+            ranks = [_effects_rank(modes, mode) for mode, _, _ in entries]
+            if None in ranks and any(rank is not None for rank in ranks):
+                declared = {mode: rank for (mode, _, _), rank in zip(entries, ranks)}
+                raise ValueError(
+                    f"the failure modes writing `{component_name}.{attribute}` "
+                    f"write different values, and only some of them declare a "
+                    f"rank (effects_priority: {dict(sorted(declared.items()))}): "
+                    "an unranked writer has no place among ranked ones. Rank "
+                    "every writer of the attribute, or none"
+                )
+            if ranks[0] is not None:
+                # Highest rank outermost, declaration order between equals
+                # (`sorted` is stable): while several modes hold the
+                # attribute, the highest-ranked one's value is the one read.
+                values = [
+                    value
+                    for _, value in sorted(
+                        zip(ranks, values), key=lambda ranked: -ranked[0]
+                    )
+                ]
             merged = rest
             for value in reversed(values):
                 merged = {

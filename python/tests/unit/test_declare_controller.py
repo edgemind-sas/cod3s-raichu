@@ -1442,3 +1442,258 @@ def test_a_cycle_the_closure_cannot_order_keeps_declaration_order_and_stays_comp
     assert sorted(ordered) == [("X", "a"), ("X", "b"), ("X", "c")]
     assert ordered.index(("X", "a")) < ordered.index(("X", "c"))
     assert ordered.index(("X", "a")) < ordered.index(("X", "b"))
+
+
+# --- a service input: the controller is fed, or it is not ---------------
+#
+# A fourth kind of input, boolean: muscadet writes it `kind="service"`, and it
+# imports on `{name}_in`, the box of a flow component's discrete input, so it
+# reads a discrete flow output or a controller's boolean output as they stand.
+# Its variable is `{name}_fed_in` on both engines, which is what lets a mode
+# condition name it without a translation between the two.
+
+#: The switch's service output is cut from here, for `SERVICE_CUT` units.
+SERVICE_CUT_DATE = 4.0
+SERVICE_CUT = 2.0
+
+#: When a mode makes a dormant service output available.
+ELEVATION_DATE = 4.0
+
+
+def a_service_channel(name="ot"):
+    """A service input, as muscadet writes one: a name and a kind, and the
+    `aggregate` its read-back writes on every input, empty."""
+    return {"name": name, "kind": "service", "aggregate": None}
+
+
+def a_switch(name="SW", dormant=False):
+    """A flow component whose discrete output `ot` is fed from the start, or,
+    `dormant`, only once a mode makes it available."""
+    return {
+        "name": name,
+        "cls": "ObjFlow",
+        "flows": [
+            {
+                "cls": "FlowOut",
+                "name": "ot",
+                "var_type": "bool",
+                "var_fed_default": False,
+                "component_authorized": [{"class_name_bkd": ".*"}],
+                "var_is_active_default": True,
+                "var_fed_available_out_init": not dormant,
+                "var_fed_available_out_reset": True,
+                "var_prod_cond_inner_mode": "or",
+                "var_prod_default": True,
+                "negate": False,
+            }
+        ],
+        "capacities": [],
+        "failure_modes": [],
+    }
+
+
+def an_elevation(target="SW"):
+    """Makes the dormant output available at `ELEVATION_DATE`, for good."""
+    return {
+        "name": f"{target}__elevate",
+        "kind": "two_state_mode",
+        "cls": "ObjFMDelay",
+        "fm_name": "elevate",
+        "targets": [target],
+        "target_name": target,
+        "failure_effects": {"ot_fed_available_out": True},
+        "failure_param_name": ["ttf"],
+        "failure_param": [ELEVATION_DATE],
+        "repair_param_name": ["ttr"],
+        "repair_param": [1000.0],
+    }
+
+
+def a_cut(target="SW"):
+    """Takes the switch's output away at `SERVICE_CUT_DATE`, for
+    `SERVICE_CUT`."""
+    return {
+        "name": f"{target}__cut",
+        "kind": "two_state_mode",
+        "cls": "ObjFMDelay",
+        "fm_name": "cut",
+        "targets": [target],
+        "target_name": target,
+        "failure_effects": {"ot_fed_available_out": False},
+        "failure_param_name": ["ttf"],
+        "failure_param": [SERVICE_CUT_DATE],
+        "repair_param_name": ["ttr"],
+        "repair_param": [SERVICE_CUT],
+    }
+
+
+def a_served_sensor(name="SENSOR", controls_out=None):
+    return {
+        "name": name,
+        "kind": "controller",
+        "cls": "ObjCtrl",
+        "source_cls": "ObjCtrl",
+        "controls_in": [a_service_channel()],
+        "controls_out": controls_out
+        if controls_out is not None
+        else [a_signal("alarm")],
+        "metadata": {"controller": True},
+    }
+
+
+def a_served_switch(extra=(), wired=True, dormant=False):
+    return a_document(
+        a_switch(dormant=dormant),
+        a_served_sensor(),
+        an_elevation() if dormant else a_cut(),
+        *extra,
+        connections=[
+            {"source": "SW", "source_box": "ot_out",
+             "target": "SENSOR", "target_box": "ot_in"},
+        ]
+        if wired
+        else [],
+    )
+
+
+def served(document, t_max=8.0):
+    model = pyraichu.load_model(json.dumps(declare.build_document(document)))
+    result = pyraichu.simulate(model, t_max=t_max)
+    return settled(result.indicators["SENSOR_ot_fed_in"])
+
+
+def switches_of(series):
+    kept = []
+    for time, value in series:
+        if not kept or kept[-1][1] != value:
+            kept.append((time, value))
+    return kept
+
+
+def test_a_service_input_is_true_while_the_discrete_output_it_reads_is_fed():
+    got = switches_of(served(a_served_switch()))
+    assert [value for _, value in got] == [True, False, True], got
+    assert abs(got[1][0] - SERVICE_CUT_DATE) < CROSSING_TOL, got
+    assert abs(got[2][0] - (SERVICE_CUT_DATE + SERVICE_CUT)) < CROSSING_TOL, got
+
+
+def test_an_unwired_service_input_is_false():
+    assert {value for _, value in served(a_served_switch(wired=False))} == {False}
+
+
+def test_a_service_input_reads_a_controller_s_boolean_output():
+    """`PUMP.run` turns on when the level reaches `START`: so does the
+    sensor's service input wired to it."""
+    document = a_filled_tank(extra=[a_served_sensor()])
+    document["connections"].append(
+        {"source": "PUMP", "source_box": "run_out",
+         "target": "SENSOR", "target_box": "ot_in"}
+    )
+    got = switches_of(served(document))
+    assert [value for _, value in got] == [False, True], got
+    assert abs(got[1][0] - START) < CROSSING_TOL, got
+
+
+def test_a_number_is_not_wired_to_a_service_input():
+    document = a_filled_tank(extra=[a_served_sensor()])
+    document["connections"].append(
+        {"source": "TANK", "source_box": "level_level_out",
+         "target": "SENSOR", "target_box": "ot_in"}
+    )
+    with pytest.raises(declare.SystemSpecError, match="service input"):
+        declare.build_document(document)
+
+
+def test_a_service_input_carries_nothing_a_measurement_does():
+    sensor = a_served_sensor()
+    sensor["controls_in"][0]["aggregate"] = "sum"
+    with pytest.raises(declare.ComponentSpecError, match="aggregate"):
+        declare.check_controller_spec(sensor)
+
+
+def test_a_mode_conditioned_on_a_service_input_waits_for_it():
+    """A falsification that needs the sensor to be fed: the switch's output is
+    dormant until a mode makes it available at `ELEVATION_DATE`, so the
+    falsification cannot occur before, and occurs its delay after."""
+    falsify = {
+        "name": "SENSOR__falsify",
+        "kind": "two_state_mode",
+        "cls": "ObjMode2S",
+        "mode_name": "falsify",
+        "targets": ["SENSOR"],
+        "target_name": "SENSOR",
+        "occ_law": {"cls": "delay", "time": 1.0},
+        "not_occ_law": {"cls": "delay", "time": 100.0},
+        "occ_cond": [[{"obj": "SENSOR", "attr": "ot_fed_in", "value": True}]],
+        "occ_effects": {"alarm_signal_available": False},
+        "occ_state": "occ",
+        "not_occ_state": "rep",
+    }
+    document = a_served_switch(extra=[falsify], dormant=True)
+    model = pyraichu.load_model(json.dumps(declare.build_document(document)))
+    fired = [
+        event.time
+        for event in pyraichu.simulate(model, t_max=20.0).events
+        if event.transition.startswith("SENSOR__falsify.")
+        and event.to_state.endswith("occ")
+        and not event.to_state.endswith("not_occ")
+    ]
+    assert fired, "the falsification never fired"
+    assert abs(fired[0] - (ELEVATION_DATE + 1.0)) < CROSSING_TOL, fired
+
+
+# --- two modes of different ranks on one controller variable ------------
+
+GAIN_NOMINAL, GAIN_COMPROMISED, GAIN_DEAD = 1.0, 0.1, 0.0
+
+
+def a_ranked_mode(name, gain, ttf, ttr, rank):
+    """`cod3s.ObjMode2S(effects_priority=rank, ...)` on the sensor's gain."""
+    return {
+        "name": f"SENSOR__{name}",
+        "kind": "two_state_mode",
+        "cls": "ObjMode2S",
+        "mode_name": name,
+        "targets": ["SENSOR"],
+        "target_name": "SENSOR",
+        "occ_law": {"cls": "delay", "time": ttf},
+        "not_occ_law": {"cls": "delay", "time": ttr},
+        "occ_effects": {"reading_level_gain": gain},
+        "occ_state": "occ",
+        "not_occ_state": "rep",
+        "effects_priority": rank,
+    }
+
+
+@pytest.mark.parametrize("compromise_first", [True, False])
+def test_a_failure_outranks_a_compromise_on_one_gain(compromise_first):
+    """The compromise (rank 0) sets the gain to 0.1 at 1, the failure (rank 1)
+    to 0 at 2; the failure is repaired at 3 while the compromise lasts, which
+    ends at 3.6. Declared in either order, the gain reads 0.1, 0, 0.1, then
+    its nominal value."""
+    sensor = a_sensor()
+    compromise = a_ranked_mode("compromise", GAIN_COMPROMISED, 1.0, 2.6, 0)
+    failure = a_ranked_mode("failure", GAIN_DEAD, 2.0, 1.0, 1)
+    modes = (compromise, failure) if compromise_first else (failure, compromise)
+    document = a_document(
+        a_filler(),
+        a_tank(),
+        sensor,
+        *modes,
+        connections=[
+            {"source": "FILL", "source_box": "q_out", "target": "TANK",
+             "target_box": "q_in", "flow": "q"},
+            a_measurement("TANK", "level", "SENSOR", "tank"),
+        ],
+    )
+    samples = [0.0, 1.5, 2.5, 3.3, 3.8]
+    model = pyraichu.load_model(json.dumps(declare.build_document(document)))
+    result = pyraichu.simulate(model, t_max=samples[-1], samples=samples, seed=1)
+    got = [round(float(v), 12) for _, v in result.samples["SENSOR_reading_level_gain"]]
+    assert got == [
+        GAIN_NOMINAL,
+        GAIN_COMPROMISED,
+        GAIN_DEAD,
+        GAIN_COMPROMISED,
+        GAIN_NOMINAL,
+    ]

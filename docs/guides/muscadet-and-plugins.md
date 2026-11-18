@@ -879,6 +879,18 @@ combination covering it is failed and to the rest value only while all of
 them are at rest. That is the reference's rule since cod3s 1.23.0
 (edgemind-sas/cod3s#10; 1.21.0 refused the shape, #4).
 
+Several modes holding **one** variable at **different** failure values are
+folded into one writer: a chain of conditionals re-read at every
+evaluation, so the value read is that of the first active mode of the
+chain, and the rest value once none is. The chain follows the rank each
+mode declares (`effects_priority`, a `cod3s.ObjMode2S` argument, highest
+first), then declaration order. A failure ranked above a compromise of the
+same instrument therefore wins while both hold, and gives the variable
+back to the compromise at its repair. A model declaring no rank keeps the
+declaration-ordered chain. Writers of different values that do not all
+declare a rank are refused, and so are modes of one rank clamping
+different values with a hand-back at their repair.
+
 The same rule makes a write entering the failure on a variable held at
 rest well posed over overlapping combinations: the write sticks while any
 combination covering the target is failed, and the rest value comes back
@@ -962,7 +974,9 @@ input change; several `out_elements` broadcast the same result.
 reading or a signal instead of a conserved quantity. It declares
 observation inputs (`controls_in`, a capacity level, a delivered rate or
 a constituent's share, optionally reduced over several publishers by
-`sum`, `mean` or `median`) and control outputs (`controls_out`, a boolean
+`sum`, `mean` or `median`; or a `service` input, a boolean
+`{name}_fed_in` that is true while the discrete output or the boolean
+controller output wired to `{name}_in` is, and false unwired) and control outputs (`controls_out`, a boolean
 signal or a published number), and each output's value is composed from a
 **closed grammar** of five operators: `compare` (a reading against a
 threshold), `band` (two thresholds and a direction: a hysteresis band),
