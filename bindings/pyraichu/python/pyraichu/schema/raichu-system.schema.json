@@ -472,6 +472,89 @@
             "op"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Periodic piecewise-linear shape of `arg` (usually `time`): the\ndrawn shape and the ramped square wave of a time profile.\n\nEvaluated at `u = (arg - phase_shift) mod period` by binary search\nand linear interpolation between `points`; the last segment joins\nthe last point to `(period, first value)`, so the shape is\ncontinuous across periods. Model validation requires a positive\nperiod, a first instant of 0 and instants strictly increasing and\nbelow the period ([`signal::periodic_piecewise_linear`]).",
+          "properties": {
+            "arg": {
+              "$ref": "#/$defs/Expr",
+              "description": "Abscissa (usually `time`)."
+            },
+            "op": {
+              "const": "piecewise_linear",
+              "type": "string"
+            },
+            "period": {
+              "description": "Period, in the unit of `arg`.",
+              "format": "double",
+              "type": "number"
+            },
+            "phase_shift": {
+              "default": 0.0,
+              "description": "Shift of the shape along `arg` (0 when absent).",
+              "format": "double",
+              "type": "number"
+            },
+            "points": {
+              "description": "`[instant, value]` pairs over one period.",
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "op",
+            "arg",
+            "points",
+            "period"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Smoothed Gaussian noise of `arg` (usually `time`), drawn once per\nMonte-Carlo replica.\n\nNodes every `time_scale` carry `amplitude * z_k`, `z_k` standard\nnormal with `z_0 = 0`, interpolated by a smoothstep: continuous,\nreproducible from the study seed, independent from one replica to\nthe next and from one `key` to another\n([`signal::smooth_noise`]). Evaluating it never draws from the\ngenerator that schedules transitions.",
+          "properties": {
+            "amplitude": {
+              "description": "Standard deviation at the nodes.",
+              "format": "double",
+              "type": "number"
+            },
+            "arg": {
+              "$ref": "#/$defs/Expr",
+              "description": "Abscissa (usually `time`)."
+            },
+            "key": {
+              "description": "Key of the noisy flow: two keys give independent noises. A\ntime profile uses the FNV-1a 64-bit hash of\n`<component>/<flow>`.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "op": {
+              "const": "smooth_noise",
+              "type": "string"
+            },
+            "time_scale": {
+              "description": "Spacing of the nodes, in the unit of `arg` (positive).",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "arg",
+            "amplitude",
+            "time_scale",
+            "key"
+          ],
+          "type": "object"
         }
       ]
     },

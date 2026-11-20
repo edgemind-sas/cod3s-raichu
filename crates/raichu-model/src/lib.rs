@@ -1692,6 +1692,17 @@ pub enum ModelError {
         /// The declared (ineffective) policy.
         policy: &'static str,
     },
+    /// A time signal (`piecewise_linear`, `smooth_noise`) whose literal
+    /// parameters do not describe one.
+    #[error("{op} in {context}: {detail}")]
+    InvalidTimeSignal {
+        /// Where the expression appears.
+        context: String,
+        /// The offending operator.
+        op: &'static str,
+        /// What is wrong, naming the offending value.
+        detail: String,
+    },
     /// An n-ary operator needs at least one operand.
     #[error("{op} in {context} needs at least one operand")]
     EmptyExprArgs {
@@ -3460,9 +3471,10 @@ impl Model {
                 Self::program_expr_numeric(lhs, scopes, decisions)
                     && Self::program_expr_numeric(rhs, scopes, decisions)
             }
-            Expr::Sin { arg } | Expr::Exp { arg } => {
-                Self::program_expr_numeric(arg, scopes, decisions)
-            }
+            Expr::Sin { arg }
+            | Expr::Exp { arg }
+            | Expr::PiecewiseLinear { arg, .. }
+            | Expr::SmoothNoise { arg, .. } => Self::program_expr_numeric(arg, scopes, decisions),
             Expr::If {
                 cond,
                 then,
@@ -5373,6 +5385,35 @@ impl Model {
             Expr::Sin { arg } | Expr::Exp { arg } => {
                 Self::check_expr(scopes, sources, arg, context)
             }
+            Expr::PiecewiseLinear {
+                arg,
+                points,
+                period,
+                phase_shift,
+            } => {
+                raichu_expr::signal::check_periodic_piecewise_linear(points, *period, *phase_shift)
+                    .map_err(|detail| ModelError::InvalidTimeSignal {
+                        context: context.to_owned(),
+                        op: "piecewise_linear",
+                        detail,
+                    })?;
+                Self::check_expr(scopes, sources, arg, context)
+            }
+            Expr::SmoothNoise {
+                arg,
+                amplitude,
+                time_scale,
+                ..
+            } => {
+                raichu_expr::signal::check_smooth_noise(*amplitude, *time_scale).map_err(
+                    |detail| ModelError::InvalidTimeSignal {
+                        context: context.to_owned(),
+                        op: "smooth_noise",
+                        detail,
+                    },
+                )?;
+                Self::check_expr(scopes, sources, arg, context)
+            }
             Expr::Time => Ok(()),
         }
     }
@@ -5822,7 +5863,10 @@ impl Model {
                 Self::collect_reads(scopes, feeds, then, into);
                 Self::collect_reads(scopes, feeds, otherwise, into);
             }
-            Expr::Sin { arg } | Expr::Exp { arg } => {
+            Expr::Sin { arg }
+            | Expr::Exp { arg }
+            | Expr::PiecewiseLinear { arg, .. }
+            | Expr::SmoothNoise { arg, .. } => {
                 Self::collect_reads(scopes, feeds, arg, into);
             }
         }

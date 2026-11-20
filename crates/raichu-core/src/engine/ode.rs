@@ -97,6 +97,8 @@ pub(super) struct ContinuousSystem<'m> {
     /// The attribute vector before the last pass of a torn sweep, reused
     /// across evaluations.
     pub(super) settle_scratch: Vec<Value>,
+    /// The replica's noise seed ([`Engine`]'s), read by smoothed noises.
+    pub(super) noise_seed: u64,
 }
 
 impl ContinuousSystem<'_> {
@@ -121,6 +123,7 @@ impl ContinuousSystem<'_> {
                 &mut self.vars,
                 &self.states,
                 t,
+                self.noise_seed,
                 &mut ctx,
                 self.sweep_budget,
                 self.flow_tolerance,
@@ -229,6 +232,7 @@ impl ContinuousSystem<'_> {
             &mut vars,
             &self.states,
             t,
+            self.noise_seed,
             &mut ctx,
             self.sweep_budget,
             self.flow_tolerance,
@@ -238,7 +242,7 @@ impl ContinuousSystem<'_> {
         model
             .ode
             .iter()
-            .map(|(_, expr)| eval_f64(model, &vars, &self.states, t, expr).ok())
+            .map(|(_, expr)| eval_f64(model, &vars, &self.states, t, self.noise_seed, expr).ok())
             .collect()
     }
 }
@@ -251,7 +255,14 @@ impl OdeSystem for ContinuousSystem<'_> {
     fn rhs(&mut self, t: f64, y: &[f64], dydt: &mut [f64]) {
         self.load(t, y);
         for (slot, (var, expr)) in self.model.ode.iter().enumerate() {
-            match eval_f64(self.model, &self.vars, &self.states, t, expr) {
+            match eval_f64(
+                self.model,
+                &self.vars,
+                &self.states,
+                t,
+                self.noise_seed,
+                expr,
+            ) {
                 Ok(value) => {
                     // `evolC` refuses a rate the model reserved for
                     // "unbounded", recorded like any callback error and
@@ -281,7 +292,14 @@ impl OdeSystem for ContinuousSystem<'_> {
                 dydt[ode_len + slot] = 0.0;
                 continue;
             };
-            match eval_f64(self.model, &self.vars, &self.states, t, rate) {
+            match eval_f64(
+                self.model,
+                &self.vars,
+                &self.states,
+                t,
+                self.noise_seed,
+                rate,
+            ) {
                 Ok(lambda) if lambda.is_finite() && lambda >= 0.0 => {
                     dydt[ode_len + slot] = lambda;
                 }
@@ -359,7 +377,14 @@ impl OdeSystem for ContinuousSystem<'_> {
                 out[slot] = -1.0;
                 continue;
             };
-            match eval_f64(self.model, &self.vars, &self.states, t, margin) {
+            match eval_f64(
+                self.model,
+                &self.vars,
+                &self.states,
+                t,
+                self.noise_seed,
+                margin,
+            ) {
                 // The complement of `margin >= 0` is the strict
                 // `margin < 0`, tightened as a strict comparison is.
                 Ok(value) if *sense == MarginSense::Falling => {
@@ -388,6 +413,7 @@ impl OdeSystem for ContinuousSystem<'_> {
                 &self.vars,
                 &self.states,
                 t,
+                self.noise_seed,
                 flow.allocation,
                 &mut self.flow_demands,
             );

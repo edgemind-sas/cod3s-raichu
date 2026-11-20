@@ -70,6 +70,7 @@ fn jump_within_active_set(
     vars: &mut [Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     work: &mut WorkCounters,
     changed: &mut ChangeLog,
     extrapolation: &Extrapolation,
@@ -87,7 +88,10 @@ fn jump_within_active_set(
             length,
             &mut ChangeLog::discarding(tolerance),
         );
-        Ok(active_set_after_sweep(model, &mut probe, states, time, work, tolerance)? == *held)
+        Ok(
+            active_set_after_sweep(model, &mut probe, states, time, noise_seed, work, tolerance)?
+                == *held,
+        )
     };
     let length = if keeps(reach, work)? {
         reach
@@ -119,6 +123,7 @@ fn active_set_after_sweep(
     vars: &mut [Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     work: &mut WorkCounters,
     tolerance: f64,
 ) -> Result<ActiveSet, EngineError> {
@@ -132,10 +137,10 @@ fn active_set_after_sweep(
         scratch: &mut scratch,
         changed: &mut changed,
     };
-    recompute_explicit(model, vars, states, time, &mut ctx)?;
+    recompute_explicit(model, vars, states, time, noise_seed, &mut ctx)?;
     Ok(ActiveSet {
         edges: scratch.classes.unwrap_or_default(),
-        branches: branches_taken(model, vars, states, time)?,
+        branches: branches_taken(model, vars, states, time, noise_seed)?,
     })
 }
 
@@ -146,12 +151,13 @@ fn branches_taken(
     vars: &[Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
 ) -> Result<Vec<u32>, EngineError> {
     let mut branches = Vec::new();
     for step in &model.explicit {
         match step {
             CStep::Equation { expr, .. } => {
-                record_branches(model, vars, states, time, expr, &mut branches)?;
+                record_branches(model, vars, states, time, noise_seed, expr, &mut branches)?;
             }
             CStep::Allocate(allocation) => {
                 record_branches(
@@ -159,6 +165,7 @@ fn branches_taken(
                     vars,
                     states,
                     time,
+                    noise_seed,
                     &allocation.available,
                     &mut branches,
                 )?;
@@ -171,11 +178,19 @@ fn branches_taken(
             // visited.
             CStep::Block(block) => {
                 for expr in &block.constants {
-                    record_branches(model, vars, states, time, expr, &mut branches)?;
+                    record_branches(model, vars, states, time, noise_seed, expr, &mut branches)?;
                 }
                 for row in &block.coefficients {
                     for (_, coefficient) in row {
-                        record_branches(model, vars, states, time, coefficient, &mut branches)?;
+                        record_branches(
+                            model,
+                            vars,
+                            states,
+                            time,
+                            noise_seed,
+                            coefficient,
+                            &mut branches,
+                        )?;
                     }
                 }
             }
@@ -254,6 +269,7 @@ fn run_allocation(
     vars: &mut [Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     allocation: &CAllocation,
     ctx: &mut PassContext<'_>,
 ) -> Result<(), EngineError> {
@@ -262,7 +278,7 @@ fn run_allocation(
         scratch,
         changed,
     } = ctx;
-    let raw = eval_f64(model, vars, states, time, &allocation.available)?;
+    let raw = eval_f64(model, vars, states, time, noise_seed, &allocation.available)?;
     let available = flow_input(raw, time, &allocation.name, "available quantity")?;
     scratch.demands.clear();
     for &var in &allocation.demands {
@@ -309,10 +325,11 @@ pub(super) fn read_flow_inputs(
     vars: &[Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     allocation: &CAllocation,
     demands: &mut Vec<f64>,
 ) -> Result<f64, EngineError> {
-    let raw = eval_f64(model, vars, states, time, &allocation.available)?;
+    let raw = eval_f64(model, vars, states, time, noise_seed, &allocation.available)?;
     let available = flow_input(raw, time, &allocation.name, "available quantity")?;
     demands.clear();
     for &var in &allocation.demands {
@@ -331,20 +348,21 @@ pub(super) fn recompute_explicit(
     vars: &mut [Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     ctx: &mut PassContext<'_>,
 ) -> Result<(), EngineError> {
     ctx.work.explicit_evaluations += 1;
     for (index, step) in model.explicit.iter().enumerate() {
         match step {
             CStep::Equation { target, expr } => {
-                let value = eval_f64(model, vars, states, time, expr)?;
+                let value = eval_f64(model, vars, states, time, noise_seed, expr)?;
                 ctx.changed.write(vars, *target, Value::Float(value));
             }
             CStep::Allocate(allocation) => {
-                run_allocation(model, vars, states, time, allocation, ctx)?;
+                run_allocation(model, vars, states, time, noise_seed, allocation, ctx)?;
             }
             CStep::Block(block) => {
-                run_block(model, vars, states, time, index, block, ctx)?;
+                run_block(model, vars, states, time, noise_seed, index, block, ctx)?;
             }
         }
     }
@@ -354,11 +372,13 @@ pub(super) fn recompute_explicit(
 /// Solve the block simultaneously, reusing caller-owned buffers and LU
 /// factors while coefficient values are unchanged. Scratch is not
 /// trajectory state: restore and restart evaluate the current inputs.
+#[allow(clippy::too_many_arguments)]
 fn run_block(
     model: &CompiledModel,
     vars: &mut [Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     index: usize,
     block: &CBlock,
     ctx: &mut PassContext<'_>,
@@ -376,7 +396,7 @@ fn run_block(
         scratch.coefficients.clear();
         for row in &block.coefficients {
             for (_, expr) in row {
-                let value = eval_f64(model, vars, states, time, expr)?;
+                let value = eval_f64(model, vars, states, time, noise_seed, expr)?;
                 if !value.is_finite() {
                     return Err(EngineError::TypeError {
                         time,
@@ -392,7 +412,7 @@ fn run_block(
     }
     scratch.right.clear();
     for expr in &block.constants {
-        let value = eval_f64(model, vars, states, time, expr)?;
+        let value = eval_f64(model, vars, states, time, noise_seed, expr)?;
         if !value.is_finite() {
             return Err(EngineError::TypeError {
                 time,
@@ -477,6 +497,7 @@ fn record_branches(
     vars: &[Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     expr: &CExpr,
     into: &mut Vec<u32>,
 ) -> Result<(), EngineError> {
@@ -485,7 +506,7 @@ fn record_branches(
             let wants_min = matches!(expr, CExpr::Min { .. });
             let mut best: Option<(usize, f64)> = None;
             for (index, arg) in args.iter().enumerate() {
-                let value = eval_f64(model, vars, states, time, arg)?;
+                let value = eval_f64(model, vars, states, time, noise_seed, arg)?;
                 let better = match best {
                     None => true,
                     Some((_, incumbent)) => {
@@ -504,7 +525,7 @@ fn record_branches(
             // answer, and it is as stable as any other.
             into.push(best.map_or(u32::MAX, |(index, _)| index as u32));
             for arg in args {
-                record_branches(model, vars, states, time, arg, into)?;
+                record_branches(model, vars, states, time, noise_seed, arg, into)?;
             }
         }
         CExpr::If {
@@ -512,29 +533,33 @@ fn record_branches(
             then,
             otherwise,
         } => {
-            let taken = eval_bool(model, vars, states, time, cond)?;
+            let taken = eval_bool(model, vars, states, time, noise_seed, cond)?;
             into.push(u32::from(taken));
-            record_branches(model, vars, states, time, cond, into)?;
+            record_branches(model, vars, states, time, noise_seed, cond, into)?;
             record_branches(
                 model,
                 vars,
                 states,
                 time,
+                noise_seed,
                 if taken { then } else { otherwise },
                 into,
             )?;
         }
         CExpr::Cmp { lhs, rhs, .. } | CExpr::Sub { lhs, rhs } | CExpr::Div { lhs, rhs } => {
-            record_branches(model, vars, states, time, lhs, into)?;
-            record_branches(model, vars, states, time, rhs, into)?;
+            record_branches(model, vars, states, time, noise_seed, lhs, into)?;
+            record_branches(model, vars, states, time, noise_seed, rhs, into)?;
         }
         CExpr::Bool { args, .. } | CExpr::Add { args } | CExpr::Mul { args } => {
             for arg in args {
-                record_branches(model, vars, states, time, arg, into)?;
+                record_branches(model, vars, states, time, noise_seed, arg, into)?;
             }
         }
-        CExpr::Sin(arg) | CExpr::Exp(arg) => {
-            record_branches(model, vars, states, time, arg, into)?;
+        CExpr::Sin(arg)
+        | CExpr::Exp(arg)
+        | CExpr::PiecewiseLinear { arg, .. }
+        | CExpr::SmoothNoise { arg, .. } => {
+            record_branches(model, vars, states, time, noise_seed, arg, into)?;
         }
         CExpr::Const(_)
         | CExpr::Var(_)
@@ -676,7 +701,10 @@ fn decision_sites(expr: &CExpr) -> usize {
         CExpr::Bool { args, .. } | CExpr::Add { args } | CExpr::Mul { args } => {
             args.iter().map(decision_sites).sum()
         }
-        CExpr::Sin(arg) | CExpr::Exp(arg) => decision_sites(arg),
+        CExpr::Sin(arg)
+        | CExpr::Exp(arg)
+        | CExpr::PiecewiseLinear { arg, .. }
+        | CExpr::SmoothNoise { arg, .. } => decision_sites(arg),
         CExpr::Const(_)
         | CExpr::Var(_)
         | CExpr::StateActive { .. }
@@ -709,13 +737,14 @@ pub(super) fn settle_explicit(
     vars: &mut [Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     ctx: &mut PassContext<'_>,
     budget: usize,
     tolerance: f64,
     before: &mut Vec<Value>,
 ) -> Result<(), EngineError> {
     if !model.sweep_reads_ahead() {
-        return recompute_explicit(model, vars, states, time, ctx);
+        return recompute_explicit(model, vars, states, time, noise_seed, ctx);
     }
     // Taken out of the scratch for the loop, so the passes can borrow the
     // rest of it; put back on every exit so its buffers are reused.
@@ -726,6 +755,7 @@ pub(super) fn settle_explicit(
         vars,
         states,
         time,
+        noise_seed,
         ctx,
         budget,
         tolerance,
@@ -744,6 +774,7 @@ fn repeat_torn_sweep(
     vars: &mut [Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     ctx: &mut PassContext<'_>,
     budget: usize,
     tolerance: f64,
@@ -754,7 +785,7 @@ fn repeat_torn_sweep(
     for _ in 0..budget.max(1) {
         before.clear();
         before.extend_from_slice(vars);
-        recompute_explicit(model, vars, states, time, ctx)?;
+        recompute_explicit(model, vars, states, time, noise_seed, ctx)?;
         if flows_settled(before, vars, tolerance) {
             return Ok(());
         }
@@ -771,6 +802,7 @@ fn repeat_torn_sweep(
                 &mut vars.to_vec(),
                 states,
                 time,
+                noise_seed,
                 ctx.work,
                 tolerance,
             )?;
@@ -779,6 +811,7 @@ fn repeat_torn_sweep(
                 vars,
                 states,
                 time,
+                noise_seed,
                 ctx.work,
                 ctx.changed,
                 extrapolation,
@@ -791,7 +824,7 @@ fn repeat_torn_sweep(
     if jumped {
         // A jump writes the torn attributes only: the pass that derives
         // everything else from them is owed, budget or not.
-        recompute_explicit(model, vars, states, time, ctx)?;
+        recompute_explicit(model, vars, states, time, noise_seed, ctx)?;
     }
     Ok(())
 }
@@ -924,6 +957,7 @@ impl<'m> Engine<'m> {
                 &mut self.vars,
                 &self.states,
                 self.time,
+                self.noise_seed,
                 &mut ctx,
             );
         }
@@ -1026,6 +1060,7 @@ impl<'m> Engine<'m> {
                     &mut self.vars,
                     &self.states,
                     self.time,
+                    self.noise_seed,
                     &mut self.work,
                     &mut self.changed,
                     &extrapolation,
@@ -1178,12 +1213,19 @@ impl<'m> Engine<'m> {
             &mut self.vars,
             &self.states,
             self.time,
+            self.noise_seed,
             &mut ctx,
         );
         let edges = self.flow_scratch.classes.take().unwrap_or_default();
         outcome?;
         self.work.flow_sweeps += 1;
-        let branches = branches_taken(self.model, &self.vars, &self.states, self.time)?;
+        let branches = branches_taken(
+            self.model,
+            &self.vars,
+            &self.states,
+            self.time,
+            self.noise_seed,
+        )?;
         Ok(ActiveSet { edges, branches })
     }
 
@@ -1208,7 +1250,14 @@ impl<'m> Engine<'m> {
             scratch: &mut scratch,
             changed: &mut changed,
         };
-        recompute_explicit(self.model, &mut vars, &self.states, self.time, &mut ctx)?;
+        recompute_explicit(
+            self.model,
+            &mut vars,
+            &self.states,
+            self.time,
+            self.noise_seed,
+            &mut ctx,
+        )?;
         Ok(scratch.classes.unwrap_or_default())
     }
 }

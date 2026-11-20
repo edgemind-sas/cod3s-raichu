@@ -304,7 +304,10 @@ fn reads_time(expr: &CExpr) -> bool {
             then,
             otherwise,
         } => reads_time(cond) || reads_time(then) || reads_time(otherwise),
-        CExpr::Sin(arg) | CExpr::Exp(arg) => reads_time(arg),
+        CExpr::Sin(arg)
+        | CExpr::Exp(arg)
+        | CExpr::PiecewiseLinear { arg, .. }
+        | CExpr::SmoothNoise { arg, .. } => reads_time(arg),
     }
 }
 

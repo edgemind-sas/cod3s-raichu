@@ -637,6 +637,7 @@ impl<'m> Engine<'m> {
             flow_restarts: self.flow_restarts,
             first_flow_restart: self.first_flow_restart,
             rng: self.rng.clone(),
+            noise_seed: self.noise_seed,
             worklist: self.worklist.clone(),
             exposure: self.exposure.clone(),
         }
@@ -724,6 +725,7 @@ impl<'m> Engine<'m> {
         self.flow_restarts = snap.flow_restarts;
         self.first_flow_restart = snap.first_flow_restart;
         self.rng = snap.rng.clone();
+        self.noise_seed = snap.noise_seed;
         self.worklist = snap.worklist.clone();
         self.exposure = snap.exposure.clone();
         // The indexed watched set is *derived*, never carried: rewinding
@@ -810,6 +812,7 @@ impl<'m> Engine<'m> {
         self.sample_cursor = 0;
         self.watched_streak = (0.0, 0);
         self.rng = raichu_rng::replica_rng(self.config.seed, self.config.rng_stream);
+        self.noise_seed = raichu_rng::replica_noise_seed(self.config.seed, self.config.rng_stream);
         self.worklist.clear();
         if let Some(tally) = self.exposure.as_mut() {
             *tally = ExposureTally::new(self.model);
@@ -1012,7 +1015,14 @@ impl<'m> Engine<'m> {
         let Some(guard) = &transition.guard else {
             return Ok(false);
         };
-        eval_bool(self.model, &self.vars, &self.states, self.time, guard)
+        eval_bool(
+            self.model,
+            &self.vars,
+            &self.states,
+            self.time,
+            self.noise_seed,
+            guard,
+        )
     }
 }
 

@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 mod affine;
+pub mod signal;
 
 /// A runtime value carried by attributes and expressions.
 ///
@@ -278,6 +279,47 @@ pub enum Expr {
     /// sensitive functions are *not* re-triggered by the passage of
     /// time alone.
     Time,
+    /// Periodic piecewise-linear shape of `arg` (usually `time`): the
+    /// drawn shape and the ramped square wave of a time profile.
+    ///
+    /// Evaluated at `u = (arg - phase_shift) mod period` by binary search
+    /// and linear interpolation between `points`; the last segment joins
+    /// the last point to `(period, first value)`, so the shape is
+    /// continuous across periods. Model validation requires a positive
+    /// period, a first instant of 0 and instants strictly increasing and
+    /// below the period ([`signal::periodic_piecewise_linear`]).
+    PiecewiseLinear {
+        /// Abscissa (usually `time`).
+        arg: Box<Expr>,
+        /// `[instant, value]` pairs over one period.
+        points: Vec<[f64; 2]>,
+        /// Period, in the unit of `arg`.
+        period: f64,
+        /// Shift of the shape along `arg` (0 when absent).
+        #[serde(default)]
+        phase_shift: f64,
+    },
+    /// Smoothed Gaussian noise of `arg` (usually `time`), drawn once per
+    /// Monte-Carlo replica.
+    ///
+    /// Nodes every `time_scale` carry `amplitude * z_k`, `z_k` standard
+    /// normal with `z_0 = 0`, interpolated by a smoothstep: continuous,
+    /// reproducible from the study seed, independent from one replica to
+    /// the next and from one `key` to another
+    /// ([`signal::smooth_noise`]). Evaluating it never draws from the
+    /// generator that schedules transitions.
+    SmoothNoise {
+        /// Abscissa (usually `time`).
+        arg: Box<Expr>,
+        /// Standard deviation at the nodes.
+        amplitude: f64,
+        /// Spacing of the nodes, in the unit of `arg` (positive).
+        time_scale: f64,
+        /// Key of the noisy flow: two keys give independent noises. A
+        /// time profile uses the FNV-1a 64-bit hash of
+        /// `<component>/<flow>`.
+        key: u64,
+    },
 }
 
 impl Expr {
@@ -310,7 +352,10 @@ impl Expr {
             | Expr::PortAgg { .. }
             | Expr::StateActive { .. }
             | Expr::Time => {}
-            Expr::Sin { arg } | Expr::Exp { arg } => f(arg),
+            Expr::Sin { arg }
+            | Expr::Exp { arg }
+            | Expr::PiecewiseLinear { arg, .. }
+            | Expr::SmoothNoise { arg, .. } => f(arg),
             Expr::Cmp { lhs, rhs, .. } | Expr::Sub { lhs, rhs } | Expr::Div { lhs, rhs } => {
                 f(lhs);
                 f(rhs);
@@ -345,7 +390,10 @@ impl Expr {
             | Expr::PortAgg { .. }
             | Expr::StateActive { .. }
             | Expr::Time => {}
-            Expr::Sin { arg } | Expr::Exp { arg } => f(arg),
+            Expr::Sin { arg }
+            | Expr::Exp { arg }
+            | Expr::PiecewiseLinear { arg, .. }
+            | Expr::SmoothNoise { arg, .. } => f(arg),
             Expr::Cmp { lhs, rhs, .. } | Expr::Sub { lhs, rhs } | Expr::Div { lhs, rhs } => {
                 f(lhs);
                 f(rhs);
@@ -508,6 +556,29 @@ impl Expr {
             Expr::Sin { arg } => format!("sin({})", arg.render()),
             Expr::Exp { arg } => format!("exp({})", arg.render()),
             Expr::Time => "time".to_owned(),
+            Expr::PiecewiseLinear {
+                arg,
+                points,
+                period,
+                phase_shift,
+            } => {
+                let points: Vec<String> =
+                    points.iter().map(|[x, y]| format!("({x}, {y})")).collect();
+                format!(
+                    "piecewise_linear({}; period {period}, phase {phase_shift}, points [{}])",
+                    arg.render(),
+                    points.join(", ")
+                )
+            }
+            Expr::SmoothNoise {
+                arg,
+                amplitude,
+                time_scale,
+                key,
+            } => format!(
+                "smooth_noise({}; amplitude {amplitude}, time_scale {time_scale}, key {key})",
+                arg.render()
+            ),
         }
     }
 }
@@ -528,6 +599,52 @@ pub struct Assignment {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn the_time_signals_read_their_json_form() {
+        let shape: Expr = serde_json::from_str(
+            r#"{"op": "piecewise_linear", "arg": {"op": "time"},
+                "points": [[0, 2], [0.5, 8]], "period": 24}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            shape,
+            Expr::PiecewiseLinear {
+                arg: Box::new(Expr::Time),
+                points: vec![[0.0, 2.0], [0.5, 8.0]],
+                period: 24.0,
+                phase_shift: 0.0,
+            }
+        );
+        // A flow key is a full 64-bit hash, above the signed range.
+        let noise: Expr = serde_json::from_str(
+            r#"{"op": "smooth_noise", "arg": {"op": "time"}, "amplitude": 0.1,
+                "time_scale": 2, "key": 18446744073709551557}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            noise,
+            Expr::SmoothNoise {
+                key: 18_446_744_073_709_551_557,
+                ..
+            }
+        ));
+        let round_trip: Expr =
+            serde_json::from_value(serde_json::to_value(&noise).unwrap()).unwrap();
+        assert_eq!(round_trip, noise);
+        assert!(serde_json::from_str::<Expr>(
+            r#"{"op": "piecewise_linear", "arg": {"op": "time"},
+                "points": [[0, 2, 3]], "period": 24}"#,
+        )
+        .is_err());
+        assert_eq!(
+            noise.render(),
+            "smooth_noise(time; amplitude 0.1, time_scale 2, key 18446744073709551557)"
+        );
+        let mut times = 0;
+        shape.for_each_child(&mut |child| times += usize::from(*child == Expr::Time));
+        assert_eq!(times, 1);
+    }
 
     #[test]
     fn affine_decomposition_distinguishes_coefficients_from_decisions() {

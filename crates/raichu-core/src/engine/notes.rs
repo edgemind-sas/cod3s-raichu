@@ -300,8 +300,14 @@ impl<'m> Engine<'m> {
                 // Counted work: this scan is one of the two sites the
                 // index narrows, so its cost is measured here.
                 self.work.immediate_guard_scans += 1;
-                self.watched_guard[position] =
-                    eval_bool(model, &self.vars, &self.states, self.time, guard)?;
+                self.watched_guard[position] = eval_bool(
+                    model,
+                    &self.vars,
+                    &self.states,
+                    self.time,
+                    self.noise_seed,
+                    guard,
+                )?;
                 self.watched_stale[position] = false;
             }
             if self.watched_guard[position] {

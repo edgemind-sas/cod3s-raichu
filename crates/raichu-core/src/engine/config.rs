@@ -1285,6 +1285,7 @@ pub struct Snapshot {
     pub(super) flow_restarts: u64,
     pub(super) first_flow_restart: f64,
     pub(super) rng: ChaCha8Rng,
+    pub(super) noise_seed: u64,
     pub(super) worklist: BTreeSet<FnIdx>,
     pub(super) exposure: Option<ExposureTally>,
 }

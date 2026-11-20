@@ -827,7 +827,7 @@
       },
       {
         "name": "time_profile",
-        "description": "A sinusoidal time profile written into the attribute `<target>`: max(value_min, amplitude sin(2 pi (t - phase_shift) / period) + offset).",
+        "description": "A time profile written into the attribute `<target>`: max(value_min, min(base(t) + noise(t), value_max)). The base is a sine, amplitude sin(2 pi (t - phase_shift) / period) + offset (`shape: sine`), or a periodic piecewise-linear shape through `points` (`shape: piecewise_linear`; a ramped square wave is its four points per period). With `noise: smooth`, a smoothed Gaussian noise drawn once per replica is added: null at t = 0, independent between replicas and between `noise_key`s.",
         "parameters": [
           {
             "name": "target",
@@ -835,14 +835,25 @@
             "description": "Attribute written (declared here)."
           },
           {
+            "name": "shape",
+            "kind": "enum",
+            "values": [
+              "sine",
+              "piecewise_linear"
+            ],
+            "default": "sine",
+            "description": "Shape of the base: a sine, or a periodic piecewise-linear shape through `points`."
+          },
+          {
             "name": "amplitude",
             "kind": "number",
-            "description": "Amplitude."
+            "description": "Amplitude of the sine (`shape: sine`).",
+            "default": 0.0
           },
           {
             "name": "phase_shift",
             "kind": "number",
-            "description": "Phase shift, in time units."
+            "description": "Phase shift, in time units: the base is read at t - phase_shift."
           },
           {
             "name": "period",
@@ -852,12 +863,54 @@
           {
             "name": "offset",
             "kind": "number",
-            "description": "Offset."
+            "description": "Offset of the sine (`shape: sine`).",
+            "default": 0.0
+          },
+          {
+            "name": "points",
+            "kind": "list",
+            "items": "number_list",
+            "default": [],
+            "description": "[instant, value] pairs over one period (`shape: piecewise_linear`): the first at instant 0, instants strictly increasing and below the period; the last point joins (period, first value)."
           },
           {
             "name": "value_min",
             "kind": "number",
             "description": "Floor of the profile."
+          },
+          {
+            "name": "value_max",
+            "kind": "number",
+            "default": 1.7976931348623157e+308,
+            "description": "Ceiling of the profile; the default, the largest float, sets none."
+          },
+          {
+            "name": "noise",
+            "kind": "enum",
+            "values": [
+              "none",
+              "smooth"
+            ],
+            "default": "none",
+            "description": "Whether a smoothed Gaussian noise is added to the base."
+          },
+          {
+            "name": "noise_amplitude",
+            "kind": "number",
+            "default": 0.0,
+            "description": "Standard deviation of the noise at its nodes (`noise: smooth`)."
+          },
+          {
+            "name": "noise_time_scale",
+            "kind": "number",
+            "default": 1.0,
+            "description": "Spacing of the noise nodes, in time units, positive (`noise: smooth`)."
+          },
+          {
+            "name": "noise_key",
+            "kind": "integer",
+            "default": 0,
+            "description": "Key of the noisy flow, the FNV-1a 64-bit hash of `<component>/<flow>`: two keys give independent noises (`noise: smooth`)."
           },
           {
             "name": "initial",
@@ -896,61 +949,121 @@
                     }
                   },
                   {
-                    "op": "add",
+                    "op": "min",
                     "args": [
                       {
-                        "op": "mul",
+                        "op": "add",
                         "args": [
                           {
-                            "op": "const",
-                            "value": {
-                              "kind": "float",
-                              "value": {
-                                "$param": "amplitude"
+                            "$choose": "shape",
+                            "cases": {
+                              "sine": {
+                                "op": "add",
+                                "args": [
+                                  {
+                                    "op": "mul",
+                                    "args": [
+                                      {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": {
+                                            "$param": "amplitude"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "op": "sin",
+                                        "arg": {
+                                          "op": "mul",
+                                          "args": [
+                                            {
+                                              "op": "sub",
+                                              "lhs": {
+                                                "op": "time"
+                                              },
+                                              "rhs": {
+                                                "op": "const",
+                                                "value": {
+                                                  "kind": "float",
+                                                  "value": {
+                                                    "$param": "phase_shift"
+                                                  }
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "op": "div",
+                                              "lhs": {
+                                                "op": "const",
+                                                "value": {
+                                                  "kind": "float",
+                                                  "value": 6.283185307179586
+                                                }
+                                              },
+                                              "rhs": {
+                                                "op": "const",
+                                                "value": {
+                                                  "kind": "float",
+                                                  "value": {
+                                                    "$param": "period"
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": {
+                                        "$param": "offset"
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              "piecewise_linear": {
+                                "op": "piecewise_linear",
+                                "arg": {
+                                  "op": "time"
+                                },
+                                "points": {
+                                  "$param": "points"
+                                },
+                                "period": {
+                                  "$param": "period"
+                                },
+                                "phase_shift": {
+                                  "$param": "phase_shift"
+                                }
                               }
                             }
                           },
                           {
-                            "op": "sin",
-                            "arg": {
-                              "op": "mul",
-                              "args": [
-                                {
-                                  "op": "sub",
-                                  "lhs": {
-                                    "op": "time"
-                                  },
-                                  "rhs": {
-                                    "op": "const",
-                                    "value": {
-                                      "kind": "float",
-                                      "value": {
-                                        "$param": "phase_shift"
-                                      }
-                                    }
-                                  }
+                            "$when": "noise",
+                            "is": "smooth",
+                            "items": [
+                              {
+                                "op": "smooth_noise",
+                                "arg": {
+                                  "op": "time"
                                 },
-                                {
-                                  "op": "div",
-                                  "lhs": {
-                                    "op": "const",
-                                    "value": {
-                                      "kind": "float",
-                                      "value": 6.283185307179586
-                                    }
-                                  },
-                                  "rhs": {
-                                    "op": "const",
-                                    "value": {
-                                      "kind": "float",
-                                      "value": {
-                                        "$param": "period"
-                                      }
-                                    }
-                                  }
+                                "amplitude": {
+                                  "$param": "noise_amplitude"
+                                },
+                                "time_scale": {
+                                  "$param": "noise_time_scale"
+                                },
+                                "key": {
+                                  "$param": "noise_key"
                                 }
-                              ]
-                            }
+                              }
+                            ]
                           }
                         ]
                       },
@@ -959,7 +1072,7 @@
                         "value": {
                           "kind": "float",
                           "value": {
-                            "$param": "offset"
+                            "$param": "value_max"
                           }
                         }
                       }

@@ -59,6 +59,31 @@ pub fn replica_rng(master: u64, stream: u64) -> ChaCha8Rng {
     rng
 }
 
+/// Seed of the time-signal noise of one replica: master seed + substream,
+/// as [`replica_rng`] takes them.
+///
+/// A hash, not a draw: deriving it consumes nothing from the replica's
+/// generator, so a model without noise keeps its transition draws bit for
+/// bit, and a model with noise draws its transitions exactly as the same
+/// model without it. Distinct streams under one master seed give distinct
+/// seeds (the mixing is a bijection of the stream for a fixed master), and
+/// a trajectory restarted on another stream keeps the seed it was born
+/// with: the engine carries it in its snapshot.
+#[must_use]
+pub fn replica_noise_seed(master: u64, stream: u64) -> u64 {
+    mix64(mix64(master ^ NOISE_DOMAIN) ^ stream)
+}
+
+/// Separates the noise seeds from any other use of the master seed.
+const NOISE_DOMAIN: u64 = 0xD1B5_4A32_D192_ED03;
+
+/// The splitmix64 finalizer: a bijective avalanche of 64 bits.
+fn mix64(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// First stream of the pilot range: every pilot stream is at or above
 /// it, every final-campaign stream below it (`2⁶³`).
 pub const PILOT_STREAM_BASE: u64 = 1 << 63;
@@ -227,6 +252,16 @@ mod tests {
         let seq_a: Vec<u64> = (0..8).map(|_| a.next_u64()).collect();
         let seq_b: Vec<u64> = (0..8).map(|_| b.next_u64()).collect();
         assert_eq!(seq_a, seq_b);
+    }
+
+    #[test]
+    fn noise_seeds_are_reproducible_and_distinct_per_stream_and_master() {
+        assert_eq!(replica_noise_seed(42, 7), replica_noise_seed(42, 7));
+        let seeds: std::collections::HashSet<u64> = (0..1000)
+            .map(|stream| replica_noise_seed(42, stream))
+            .collect();
+        assert_eq!(seeds.len(), 1000);
+        assert_ne!(replica_noise_seed(42, 7), replica_noise_seed(43, 7));
     }
 
     #[test]

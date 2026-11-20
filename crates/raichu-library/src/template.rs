@@ -103,7 +103,11 @@ fn check_value(param: &Parameter, value: &Value) -> Result<Value, String> {
             let x = value.as_f64().ok_or_else(wrong)?;
             Number::from_f64(x).map(Value::Number).ok_or_else(wrong)
         }
-        ParamKind::Integer => value.as_i64().map(Value::from).ok_or_else(wrong),
+        ParamKind::Integer => value
+            .as_i64()
+            .map(Value::from)
+            .or_else(|| value.as_u64().map(Value::from))
+            .ok_or_else(wrong),
         ParamKind::Bool => value.as_bool().map(Value::Bool).ok_or_else(wrong),
         ParamKind::String => value
             .as_str()
@@ -150,6 +154,12 @@ fn check_value(param: &Parameter, value: &Value) -> Result<Value, String> {
                         .as_array()
                         .filter(|xs| xs.iter().all(Value::is_string))
                         .map(|xs| Value::Array(xs.clone())),
+                    ItemKind::NumberList => item.as_array().and_then(|xs| {
+                        xs.iter()
+                            .map(|x| x.as_f64().and_then(Number::from_f64).map(Value::Number))
+                            .collect::<Option<Vec<_>>>()
+                            .map(Value::Array)
+                    }),
                     ItemKind::Object => item.as_object().map(|o| Value::Object(o.clone())),
                 };
                 out.push(ok.ok_or_else(|| {
@@ -159,6 +169,7 @@ fn check_value(param: &Parameter, value: &Value) -> Result<Value, String> {
                         ItemKind::Bool => "bool",
                         ItemKind::String => "string",
                         ItemKind::StringList => "string_list",
+                        ItemKind::NumberList => "number_list",
                         ItemKind::Object => "object",
                     };
                     format!(

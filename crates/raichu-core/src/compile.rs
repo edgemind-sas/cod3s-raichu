@@ -145,6 +145,30 @@ pub enum CExpr {
     Exp(Box<CExpr>),
     /// Current simulation time.
     Time,
+    /// Periodic piecewise-linear shape of `arg`
+    /// ([`raichu_expr::signal::periodic_piecewise_linear`]).
+    PiecewiseLinear {
+        /// Abscissa.
+        arg: Box<CExpr>,
+        /// `[instant, value]` pairs over one period (validated).
+        points: Vec<[f64; 2]>,
+        /// Period.
+        period: f64,
+        /// Shift along the abscissa.
+        phase_shift: f64,
+    },
+    /// Smoothed Gaussian noise of `arg`, seeded by the replica
+    /// ([`raichu_expr::signal::smooth_noise`]).
+    SmoothNoise {
+        /// Abscissa.
+        arg: Box<CExpr>,
+        /// Standard deviation at the nodes.
+        amplitude: f64,
+        /// Spacing of the nodes.
+        time_scale: f64,
+        /// Key of the noisy flow.
+        key: u64,
+    },
 }
 
 /// Compiled occurrence distribution.
@@ -920,6 +944,28 @@ impl Resolver {
             Expr::Sin { arg } => CExpr::Sin(Box::new(self.compile_expr(arg)?)),
             Expr::Exp { arg } => CExpr::Exp(Box::new(self.compile_expr(arg)?)),
             Expr::Time => CExpr::Time,
+            Expr::PiecewiseLinear {
+                arg,
+                points,
+                period,
+                phase_shift,
+            } => CExpr::PiecewiseLinear {
+                arg: Box::new(self.compile_expr(arg)?),
+                points: points.clone(),
+                period: *period,
+                phase_shift: *phase_shift,
+            },
+            Expr::SmoothNoise {
+                arg,
+                amplitude,
+                time_scale,
+                key,
+            } => CExpr::SmoothNoise {
+                arg: Box::new(self.compile_expr(arg)?),
+                amplitude: *amplitude,
+                time_scale: *time_scale,
+                key: *key,
+            },
         })
     }
 
@@ -1397,7 +1443,10 @@ impl CExpr {
                 then.collect_dependencies(vars, auts, count_sources);
                 otherwise.collect_dependencies(vars, auts, count_sources);
             }
-            CExpr::Sin(arg) | CExpr::Exp(arg) => {
+            CExpr::Sin(arg)
+            | CExpr::Exp(arg)
+            | CExpr::PiecewiseLinear { arg, .. }
+            | CExpr::SmoothNoise { arg, .. } => {
                 arg.collect_dependencies(vars, auts, count_sources);
             }
             CExpr::Time => {}
@@ -1425,7 +1474,10 @@ impl CExpr {
                 then,
                 otherwise,
             } => cond.reads_time() || then.reads_time() || otherwise.reads_time(),
-            CExpr::Sin(arg) | CExpr::Exp(arg) => arg.reads_time(),
+            CExpr::Sin(arg)
+            | CExpr::Exp(arg)
+            | CExpr::PiecewiseLinear { arg, .. }
+            | CExpr::SmoothNoise { arg, .. } => arg.reads_time(),
         }
     }
 
@@ -1478,6 +1530,20 @@ impl CExpr {
             }
             CExpr::Sin(arg) => Some(arg.const_value()?.sin()),
             CExpr::Exp(arg) => Some(arg.const_value()?.exp()),
+            CExpr::PiecewiseLinear {
+                arg,
+                points,
+                period,
+                phase_shift,
+            } => Some(raichu_expr::signal::periodic_piecewise_linear(
+                points,
+                *period,
+                *phase_shift,
+                arg.const_value()?,
+            )),
+            // Its value depends on the replica's seed: never a constant
+            // of the model.
+            CExpr::SmoothNoise { .. } => None,
         }
     }
 }
@@ -2598,6 +2664,9 @@ fn double_stand_in(expr: &mut CExpr, unbounded: f64) -> bool {
             let found = double_stand_in(then, unbounded) | found;
             double_stand_in(otherwise, unbounded) | found
         }
-        CExpr::Sin(arg) | CExpr::Exp(arg) => double_stand_in(arg, unbounded),
+        CExpr::Sin(arg)
+        | CExpr::Exp(arg)
+        | CExpr::PiecewiseLinear { arg, .. }
+        | CExpr::SmoothNoise { arg, .. } => double_stand_in(arg, unbounded),
     }
 }

@@ -212,6 +212,18 @@ fn every_expr() -> Vec<Expr> {
         Expr::Sin { arg: x() },
         Expr::Exp { arg: x() },
         Expr::Time,
+        Expr::PiecewiseLinear {
+            arg: Box::new(Expr::Time),
+            points: vec![[0.0, 1.0], [2.0, 3.0]],
+            period: 24.0,
+            phase_shift: 1.0,
+        },
+        Expr::SmoothNoise {
+            arg: Box::new(Expr::Time),
+            amplitude: 0.5,
+            time_scale: 2.0,
+            key: u64::MAX,
+        },
     ];
     for expr in &all {
         match expr {
@@ -230,7 +242,9 @@ fn every_expr() -> Vec<Expr> {
             | Expr::If { .. }
             | Expr::Sin { .. }
             | Expr::Exp { .. }
-            | Expr::Time => {}
+            | Expr::Time
+            | Expr::PiecewiseLinear { .. }
+            | Expr::SmoothNoise { .. } => {}
         }
     }
     all

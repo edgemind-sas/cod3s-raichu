@@ -400,6 +400,7 @@ impl<'m> Engine<'m> {
             flow_tolerance: self.config.flow.tolerance,
             sweep_budget: self.config.flow.sweep_budget,
             settle_scratch: Vec::new(),
+            noise_seed: self.noise_seed,
         };
         self.work.segments += 1;
 
@@ -436,6 +437,7 @@ impl<'m> Engine<'m> {
             let model = self.model;
             let base_vars = self.vars.clone();
             let states = self.states.clone();
+            let noise_seed = self.noise_seed;
             let mut on_sample = |t: f64, y_at: &[f64]| {
                 let mut vars = base_vars.clone();
                 for (slot, (var, _)) in model.ode.iter().enumerate() {
@@ -451,6 +453,7 @@ impl<'m> Engine<'m> {
                     &mut vars,
                     &states,
                     t,
+                    noise_seed,
                     &mut ctx,
                     sample_budget,
                     sample_tolerance,

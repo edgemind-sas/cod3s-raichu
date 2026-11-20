@@ -190,7 +190,14 @@ impl<'m> Engine<'m> {
     /// Evaluate a state-dependent rate λ(x) on the current state and
     /// reject non-finite or negative values with a typed error.
     pub(super) fn eval_rate(&self, trans_idx: TransIdx, rate: &CExpr) -> Result<f64, EngineError> {
-        let lambda = eval_f64(self.model, &self.vars, &self.states, self.time, rate)?;
+        let lambda = eval_f64(
+            self.model,
+            &self.vars,
+            &self.states,
+            self.time,
+            self.noise_seed,
+            rate,
+        )?;
         if !lambda.is_finite() || lambda < 0.0 {
             return Err(EngineError::TypeError {
                 time: self.time,
@@ -231,7 +238,14 @@ impl<'m> Engine<'m> {
         }
         let guard_ok = match &transition.guard {
             None => true,
-            Some(guard) => eval_bool(self.model, &self.vars, &self.states, self.time, guard)?,
+            Some(guard) => eval_bool(
+                self.model,
+                &self.vars,
+                &self.states,
+                self.time,
+                self.noise_seed,
+                guard,
+            )?,
         };
         let deferred_choice = self.held_choice(trans_idx);
         if deferred_choice {

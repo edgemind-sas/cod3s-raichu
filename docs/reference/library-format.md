@@ -81,9 +81,9 @@ neighbour is reached through a port.
 | `kind` | `number`, `integer`, `bool`, `string`, `law`, `list` or `enum` |
 | `default` | default value; a parameter without one is required |
 | `values` | the allowed values of an `enum` |
-| `items` | the item kind of a `list`: `number`, `integer`, `bool`, `string`, `string_list` or `object` |
+| `items` | the item kind of a `list`: `number`, `integer`, `bool`, `string`, `string_list`, `number_list` or `object` |
 
-A `law` is a core law object (`{"distrib": "exp", "rate": 0.1}`). A list of
+An `integer` is a 64-bit integer, signed or unsigned. A `number_list` item is a list of numbers, such as a point `[instant, value]` of a drawn time profile. A `law` is a core law object (`{"distrib": "exp", "rate": 0.1}`). A list of
 `object` items is inserted as written where `{"$param": ...}` substitutes it,
 and the core reader then checks each item at the place it lands: this is
 how a split's shares, keyed by consumer, reach a distribution operator
@@ -242,7 +242,7 @@ plugin's continuous objects, and each is characterised against it.
 |---|---|---|
 | `state_out` | `name`, `automaton`, `states`, `init` | whether `automaton` is in one of `states`, as the boolean `<name>` on the out port `<name>_out`: how a neighbour reads a state (`any`, `all`, or `sum` to count) |
 | `bool_not` | `of`, `init` | the attribute `<of>_not`, the negation of the boolean attribute `<of>` of the instance: how a production condition, which reads attributes only, reads a flow being absent (`[["ctrl_fed_in_not"]]`) |
-| `time_profile` | `target`, `amplitude`, `phase_shift`, `period`, `offset`, `value_min`, `initial` | a sinusoidal profile written into `target` |
+| `time_profile` | `target`, `shape` (`sine`, `piecewise_linear`), `amplitude`, `phase_shift`, `period`, `offset`, `points`, `value_min`, `value_max`, `noise` (`none`, `smooth`), `noise_amplitude`, `noise_time_scale`, `noise_key`, `initial` | a time profile written into `target`: `max(value_min, min(base(t) + noise(t), value_max))`, the base a sine (`amplitude sin(2 pi (t - phase_shift) / period) + offset`) or a periodic [piecewise-linear shape](model-schema.md#time-signals) through `points`, the noise a [smoothed Gaussian noise](model-schema.md#time-signals) keyed by `noise_key`; `value_max` defaults to no ceiling |
 | `aggregate_measure` | `name`, `agg` (`sum`, `mean`, `median`), `initial` | attribute `<name>`, the values connected to the in port `<name>_in` reduced by `agg` (the median of an even count is the mean of the two central values) |
 | `threshold_compare` | `name`, `input`, `operator`, `threshold` | boolean output `<name>` true while `input` compares to the threshold |
 | `threshold_band` | `name`, `input`, `direction` (`below`, `above`), `activate`, `release` | boolean output `<name>` with a hysteresis band |

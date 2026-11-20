@@ -666,7 +666,14 @@ impl<'m> Engine<'m> {
     fn apply_transition_effects(&mut self, trans_idx: TransIdx) -> Result<(), EngineError> {
         let transition = &self.model.transitions[trans_idx];
         for (target, value_expr) in &transition.effects {
-            let new = eval_expr(self.model, &self.vars, &self.states, self.time, value_expr)?;
+            let new = eval_expr(
+                self.model,
+                &self.vars,
+                &self.states,
+                self.time,
+                self.noise_seed,
+                value_expr,
+            )?;
             // On an ODE target the effect is a reset map: integration
             // restarts from the written value, which must be a finite float.
             if self.model.ode.iter().any(|(var, _)| var == target)
@@ -705,7 +712,14 @@ impl<'m> Engine<'m> {
     fn apply_function(&mut self, fn_idx: FnIdx, trigger: bool) -> Result<(), EngineError> {
         let function = &self.model.functions[fn_idx];
         for (target, value_expr) in &function.effects {
-            let new = eval_expr(self.model, &self.vars, &self.states, self.time, value_expr)?;
+            let new = eval_expr(
+                self.model,
+                &self.vars,
+                &self.states,
+                self.time,
+                self.noise_seed,
+                value_expr,
+            )?;
             let old = self.vars[*target];
             if old != new {
                 self.vars[*target] = new;
@@ -743,19 +757,35 @@ impl<'m> Engine<'m> {
             &self.vars,
             &self.states,
             self.time,
+            self.noise_seed,
             &expr.constant,
         )?;
         let mut coefficients = vec![0.0; columns];
         for (column, coefficient) in &expr.terms {
-            coefficients[*column] +=
-                eval_f64(self.model, &self.vars, &self.states, self.time, coefficient)?;
+            coefficients[*column] += eval_f64(
+                self.model,
+                &self.vars,
+                &self.states,
+                self.time,
+                self.noise_seed,
+                coefficient,
+            )?;
         }
         Ok((constant, coefficients))
     }
 
     fn program_number(&self, expr: Option<&CExpr>, default: f64) -> Result<f64, EngineError> {
-        expr.map(|expr| eval_f64(self.model, &self.vars, &self.states, self.time, expr))
-            .unwrap_or(Ok(default))
+        expr.map(|expr| {
+            eval_f64(
+                self.model,
+                &self.vars,
+                &self.states,
+                self.time,
+                self.noise_seed,
+                expr,
+            )
+        })
+        .unwrap_or(Ok(default))
     }
 
     fn program_write(&mut self, target: VarIdx, value: Value, name: &str, trigger: bool) {

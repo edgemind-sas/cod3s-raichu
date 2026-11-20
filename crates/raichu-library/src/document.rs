@@ -39,7 +39,8 @@ pub struct Header {
 pub enum ParamKind {
     /// A float (an integer literal is accepted).
     Number,
-    /// An integer.
+    /// A 64-bit integer, signed or unsigned (a flow key spans the whole
+    /// unsigned range).
     Integer,
     /// A boolean.
     Bool,
@@ -70,6 +71,9 @@ pub enum ItemKind {
     /// Items that are themselves lists of strings (a production condition:
     /// a disjunction of conjunctions, each a list of attribute names).
     StringList,
+    /// Items that are themselves lists of numbers (a point of a drawn
+    /// time profile: `[instant, value]`).
+    NumberList,
     /// Items that are JSON objects, inserted as written where the list is
     /// substituted with `$param` (a split share keyed by its consumer:
     /// `{"to": {"component", "port"}, "value"}`); the core reader then

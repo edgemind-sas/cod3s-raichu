@@ -503,7 +503,11 @@ impl<'m, 'x> Fold<'m, 'x> {
             },
             // A clock and the transcendental functions over it: nothing
             // an emptiness decides.
-            Expr::Time | Expr::Sin { .. } | Expr::Exp { .. } => None,
+            Expr::Time
+            | Expr::Sin { .. }
+            | Expr::Exp { .. }
+            | Expr::PiecewiseLinear { .. }
+            | Expr::SmoothNoise { .. } => None,
         }
     }
 
