@@ -1126,7 +1126,7 @@ trajectory it integrates the value the attribute had at the last one.
 
 ## Expressions
 
-Every expression is an object with an `"op"` tag. The 16 operators:
+Every expression is an object with an `"op"` tag. The 18 operators:
 
 | `op` | fields | value |
 |---|---|---|
@@ -1145,12 +1145,59 @@ Every expression is an object with an `"op"` tag. The 16 operators:
 | `sin` | `arg`: Expr | sine |
 | `exp` | `arg`: Expr | exponential |
 | `time` | *(none)* | the current simulation time |
+| `piecewise_linear` | `arg`: Expr, `points`: array of `[instant, value]`, `period`: number, `phase_shift`: number (default 0) | a [periodic piecewise-linear shape](#time-signals) of `arg` |
+| `smooth_noise` | `arg`: Expr, `amplitude`: number, `time_scale`: number, `key`: unsigned 64-bit integer | a [smoothed Gaussian noise](#time-signals) of `arg`, drawn once per replica |
 
 Enumerations:
 
 - **AggOp** (`agg`): `sum`, `count`, `all`, `any`, `mean`, `median`
 - **CmpOp** (`cmp`): `eq`, `ne`, `lt`, `le`, `gt`, `ge`
 - **StateRef**: `{ "component", "automaton", "state" }`
+
+### Time signals
+
+Two operators describe a signal of their argument, usually `{"op": "time"}`,
+evaluated natively: no event is scheduled at a breakpoint or a noise node,
+so a drawn shape simulated over a year costs a binary search per evaluation.
+Both are continuous; a guard or a threshold on them is located like any
+other continuous crossing.
+
+**`piecewise_linear`** reads its points at `u = (arg - phase_shift) mod period`
+and interpolates linearly between them; the last segment joins the last
+point to `(period, first value)`, so the shape never jumps from one period to
+the next. Validation refuses a period that is not finite and positive, an
+empty `points`, a first instant other than 0, and instants not strictly
+increasing or not below the period. A square wave with ramps (`low`, `high`,
+`high_duration`, `ramp_duration`) is the four points `[0, low]`,
+`[ramp, high]`, `[ramp + high_duration, high]`,
+`[2 ramp + high_duration, low]`, the last low segment closing the period.
+
+**`smooth_noise`** places nodes every `time_scale` (positive), node `k`
+carrying `amplitude * z_k` with `z_k` a standard normal number; between two
+nodes the value follows the smoothstep `s(u) = 3u^2 - 2u^3`:
+`amplitude * (z_k + (z_{k+1} - z_k) s(u))`. The first node is fixed at
+`z_0 = 0`, so every replica starts from the value without noise; a negative
+argument reads node 0. `z_k` comes from a counter-based generator hashing
+the replica's noise seed, `key` and `k` (splitmix64 mixing, then the
+Box-Muller transform), so within a trajectory the noise is a pure function of
+its argument:
+
+- **reproducible**: the noise seed derives from the study's master seed and
+  the replica's stream, so a replica replays its noise exactly;
+- **independent between replicas** (distinct streams) and between keys: a
+  time profile keys its noise by the FNV-1a 64-bit hash of
+  `<component>/<flow>`, so two components of the same type get independent
+  noises;
+- **free for the schedule**: the seed is a hash of the master seed and the
+  stream, not a draw, so adding a noise to a model leaves its transition
+  dates bit for bit what they were;
+- **kept by a restarted trajectory**: a trajectory restarted from a snapshot
+  on another stream (adaptive splitting) keeps the noise of the replica it
+  was born on.
+
+Outside a replica (the static analyses that freeze an expression at time
+zero) the noise reads seed 0, which is immaterial there: it is null at
+time zero.
 
 ## The simulation cycle
 

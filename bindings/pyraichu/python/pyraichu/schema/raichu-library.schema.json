@@ -2228,6 +2228,259 @@
             },
             {
               "additionalProperties": false,
+              "description": "Periodic piecewise-linear shape of `arg` (usually `time`): the\ndrawn shape and the ramped square wave of a time profile.\n\nEvaluated at `u = (arg - phase_shift) mod period` by binary search\nand linear interpolation between `points`; the last segment joins\nthe last point to `(period, first value)`, so the shape is\ncontinuous across periods. Model validation requires a positive\nperiod, a first instant of 0 and instants strictly increasing and\nbelow the period ([`signal::periodic_piecewise_linear`]).",
+              "properties": {
+                "arg": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Abscissa (usually `time`)."
+                },
+                "op": {
+                  "const": "piecewise_linear",
+                  "type": "string"
+                },
+                "period": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Period, in the unit of `arg`."
+                },
+                "phase_shift": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "default": 0.0,
+                  "description": "Shift of the shape along `arg` (0 when absent)."
+                },
+                "points": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Template_number_double"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_number"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_number"
+                                    }
+                                  ]
+                                },
+                                "maxItems": 2,
+                                "minItems": 2,
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "$choose": {
+                                    "type": "string"
+                                  },
+                                  "cases": {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "items": {
+                                            "anyOf": [
+                                              {
+                                                "$ref": "#/$defs/Template_number_double"
+                                              },
+                                              {
+                                                "$ref": "#/$defs/ForEach_number"
+                                              },
+                                              {
+                                                "$ref": "#/$defs/When_number"
+                                              }
+                                            ]
+                                          },
+                                          "maxItems": 2,
+                                          "minItems": 2,
+                                          "type": "array"
+                                        },
+                                        {
+                                          "$ref": "#/$defs/TemplateParam"
+                                        }
+                                      ]
+                                    },
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "$choose",
+                                  "cases"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Condition_points"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Condition_points"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "items": {
+                                            "anyOf": [
+                                              {
+                                                "$ref": "#/$defs/Template_number_double"
+                                              },
+                                              {
+                                                "$ref": "#/$defs/ForEach_number"
+                                              },
+                                              {
+                                                "$ref": "#/$defs/When_number"
+                                              }
+                                            ]
+                                          },
+                                          "maxItems": 2,
+                                          "minItems": 2,
+                                          "type": "array"
+                                        },
+                                        {
+                                          "$ref": "#/$defs/TemplateParam"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "$choose": {
+                                              "type": "string"
+                                            },
+                                            "cases": {
+                                              "additionalProperties": {
+                                                "anyOf": [
+                                                  {
+                                                    "items": {
+                                                      "anyOf": [
+                                                        {
+                                                          "$ref": "#/$defs/Template_number_double"
+                                                        },
+                                                        {
+                                                          "$ref": "#/$defs/ForEach_number"
+                                                        },
+                                                        {
+                                                          "$ref": "#/$defs/When_number"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "maxItems": 2,
+                                                    "minItems": 2,
+                                                    "type": "array"
+                                                  },
+                                                  {
+                                                    "$ref": "#/$defs/TemplateParam"
+                                                  }
+                                                ]
+                                              },
+                                              "type": "object"
+                                            }
+                                          },
+                                          "required": [
+                                            "$choose",
+                                            "cases"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Condition_points"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Condition_points"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "`[instant, value]` pairs over one period."
+                }
+              },
+              "required": [
+                "op",
+                "arg",
+                "points",
+                "period"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Smoothed Gaussian noise of `arg` (usually `time`), drawn once per\nMonte-Carlo replica.\n\nNodes every `time_scale` carry `amplitude * z_k`, `z_k` standard\nnormal with `z_0 = 0`, interpolated by a smoothstep: continuous,\nreproducible from the study seed, independent from one replica to\nthe next and from one `key` to another\n([`signal::smooth_noise`]). Evaluating it never draws from the\ngenerator that schedules transitions.",
+              "properties": {
+                "amplitude": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Standard deviation at the nodes."
+                },
+                "arg": {
+                  "$ref": "#/$defs/Condition",
+                  "description": "Abscissa (usually `time`)."
+                },
+                "key": {
+                  "$ref": "#/$defs/Template_integer_uint64",
+                  "description": "Key of the noisy flow: two keys give independent noises. A\ntime profile uses the FNV-1a 64-bit hash of\n`<component>/<flow>`."
+                },
+                "op": {
+                  "const": "smooth_noise",
+                  "type": "string"
+                },
+                "time_scale": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Spacing of the nodes, in the unit of `arg` (positive)."
+                }
+              },
+              "required": [
+                "op",
+                "arg",
+                "amplitude",
+                "time_scale",
+                "key"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
               "description": "True while the named mode is occurred.",
               "properties": {
                 "mode": {
@@ -3230,6 +3483,259 @@
                 "op"
               ],
               "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Periodic piecewise-linear shape of `arg` (usually `time`): the\ndrawn shape and the ramped square wave of a time profile.\n\nEvaluated at `u = (arg - phase_shift) mod period` by binary search\nand linear interpolation between `points`; the last segment joins\nthe last point to `(period, first value)`, so the shape is\ncontinuous across periods. Model validation requires a positive\nperiod, a first instant of 0 and instants strictly increasing and\nbelow the period ([`signal::periodic_piecewise_linear`]).",
+              "properties": {
+                "arg": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Abscissa (usually `time`)."
+                },
+                "op": {
+                  "const": "piecewise_linear",
+                  "type": "string"
+                },
+                "period": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Period, in the unit of `arg`."
+                },
+                "phase_shift": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "default": 0.0,
+                  "description": "Shift of the shape along `arg` (0 when absent)."
+                },
+                "points": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/Template_number_double"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_number"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_number"
+                                    }
+                                  ]
+                                },
+                                "maxItems": 2,
+                                "minItems": 2,
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "$choose": {
+                                    "type": "string"
+                                  },
+                                  "cases": {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "items": {
+                                            "anyOf": [
+                                              {
+                                                "$ref": "#/$defs/Template_number_double"
+                                              },
+                                              {
+                                                "$ref": "#/$defs/ForEach_number"
+                                              },
+                                              {
+                                                "$ref": "#/$defs/When_number"
+                                              }
+                                            ]
+                                          },
+                                          "maxItems": 2,
+                                          "minItems": 2,
+                                          "type": "array"
+                                        },
+                                        {
+                                          "$ref": "#/$defs/TemplateParam"
+                                        }
+                                      ]
+                                    },
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "$choose",
+                                  "cases"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "$ref": "#/$defs/ForEach_Expr_points"
+                          },
+                          {
+                            "$ref": "#/$defs/When_Expr_points"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "$ref": "#/$defs/TemplateParam"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "$choose": {
+                          "type": "string"
+                        },
+                        "cases": {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "items": {
+                                            "anyOf": [
+                                              {
+                                                "$ref": "#/$defs/Template_number_double"
+                                              },
+                                              {
+                                                "$ref": "#/$defs/ForEach_number"
+                                              },
+                                              {
+                                                "$ref": "#/$defs/When_number"
+                                              }
+                                            ]
+                                          },
+                                          "maxItems": 2,
+                                          "minItems": 2,
+                                          "type": "array"
+                                        },
+                                        {
+                                          "$ref": "#/$defs/TemplateParam"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "$choose": {
+                                              "type": "string"
+                                            },
+                                            "cases": {
+                                              "additionalProperties": {
+                                                "anyOf": [
+                                                  {
+                                                    "items": {
+                                                      "anyOf": [
+                                                        {
+                                                          "$ref": "#/$defs/Template_number_double"
+                                                        },
+                                                        {
+                                                          "$ref": "#/$defs/ForEach_number"
+                                                        },
+                                                        {
+                                                          "$ref": "#/$defs/When_number"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "maxItems": 2,
+                                                    "minItems": 2,
+                                                    "type": "array"
+                                                  },
+                                                  {
+                                                    "$ref": "#/$defs/TemplateParam"
+                                                  }
+                                                ]
+                                              },
+                                              "type": "object"
+                                            }
+                                          },
+                                          "required": [
+                                            "$choose",
+                                            "cases"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "$ref": "#/$defs/ForEach_Expr_points"
+                                    },
+                                    {
+                                      "$ref": "#/$defs/When_Expr_points"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "$ref": "#/$defs/TemplateParam"
+                              }
+                            ]
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "$choose",
+                        "cases"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "description": "`[instant, value]` pairs over one period."
+                }
+              },
+              "required": [
+                "op",
+                "arg",
+                "points",
+                "period"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Smoothed Gaussian noise of `arg` (usually `time`), drawn once per\nMonte-Carlo replica.\n\nNodes every `time_scale` carry `amplitude * z_k`, `z_k` standard\nnormal with `z_0 = 0`, interpolated by a smoothstep: continuous,\nreproducible from the study seed, independent from one replica to\nthe next and from one `key` to another\n([`signal::smooth_noise`]). Evaluating it never draws from the\ngenerator that schedules transitions.",
+              "properties": {
+                "amplitude": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Standard deviation at the nodes."
+                },
+                "arg": {
+                  "$ref": "#/$defs/Expr",
+                  "description": "Abscissa (usually `time`)."
+                },
+                "key": {
+                  "$ref": "#/$defs/Template_integer_uint64",
+                  "description": "Key of the noisy flow: two keys give independent noises. A\ntime profile uses the FNV-1a 64-bit hash of\n`<component>/<flow>`."
+                },
+                "op": {
+                  "const": "smooth_noise",
+                  "type": "string"
+                },
+                "time_scale": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Spacing of the nodes, in the unit of `arg` (positive)."
+                }
+              },
+              "required": [
+                "op",
+                "arg",
+                "amplitude",
+                "time_scale",
+                "key"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -3517,6 +4023,106 @@
       ],
       "type": "object"
     },
+    "ForEach_Condition_points": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "except": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Template_number_double"
+                        },
+                        {
+                          "$ref": "#/$defs/ForEach_number"
+                        },
+                        {
+                          "$ref": "#/$defs/When_number"
+                        }
+                      ]
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "$choose": {
+                        "type": "string"
+                      },
+                      "cases": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Template_number_double"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/ForEach_number"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/When_number"
+                                  }
+                                ]
+                              },
+                              "maxItems": 2,
+                              "minItems": 2,
+                              "type": "array"
+                            },
+                            {
+                              "$ref": "#/$defs/TemplateParam"
+                            }
+                          ]
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "$choose",
+                      "cases"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/$defs/ForEach_Condition_points"
+              },
+              {
+                "$ref": "#/$defs/When_Condition_points"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
     "ForEach_ConsumerParam": {
       "additionalProperties": false,
       "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
@@ -3689,6 +4295,106 @@
               },
               {
                 "$ref": "#/$defs/When_Expr"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$for_each",
+        "as",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ForEach_Expr_points": {
+      "additionalProperties": false,
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "properties": {
+        "$for_each": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "except": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Template_number_double"
+                        },
+                        {
+                          "$ref": "#/$defs/ForEach_number"
+                        },
+                        {
+                          "$ref": "#/$defs/When_number"
+                        }
+                      ]
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "$choose": {
+                        "type": "string"
+                      },
+                      "cases": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Template_number_double"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/ForEach_number"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/When_number"
+                                  }
+                                ]
+                              },
+                              "maxItems": 2,
+                              "minItems": 2,
+                              "type": "array"
+                            },
+                            {
+                              "$ref": "#/$defs/TemplateParam"
+                            }
+                          ]
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "$choose",
+                      "cases"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/$defs/ForEach_Expr_points"
+              },
+              {
+                "$ref": "#/$defs/When_Expr_points"
               }
             ]
           },
@@ -4330,6 +5036,11 @@
           "type": "string"
         },
         {
+          "const": "number_list",
+          "description": "Items that are themselves lists of numbers (a point of a drawn\ntime profile: `[instant, value]`).",
+          "type": "string"
+        },
+        {
           "const": "object",
           "description": "Items that are JSON objects, inserted as written where the list is\nsubstituted with `$param` (a split share keyed by its consumer:\n`{\"to\": {\"component\", \"port\"}, \"value\"}`); the core reader then\nchecks them strictly at the place they land.",
           "type": "string"
@@ -4440,7 +5151,7 @@
         },
         {
           "const": "integer",
-          "description": "An integer.",
+          "description": "A 64-bit integer, signed or unsigned (a flow key spans the whole\nunsigned range).",
           "type": "string"
         },
         {
@@ -5134,6 +5845,46 @@
                 "anyOf": [
                   {
                     "format": "int64",
+                    "type": "integer"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  }
+                ]
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "$choose",
+            "cases"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Template_integer_uint64": {
+      "anyOf": [
+        {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "$ref": "#/$defs/TemplateParam"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$choose": {
+              "type": "string"
+            },
+            "cases": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "format": "uint64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   {
@@ -7051,6 +7802,120 @@
       ],
       "type": "object"
     },
+    "When_Condition_points": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Template_number_double"
+                        },
+                        {
+                          "$ref": "#/$defs/ForEach_number"
+                        },
+                        {
+                          "$ref": "#/$defs/When_number"
+                        }
+                      ]
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "$choose": {
+                        "type": "string"
+                      },
+                      "cases": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Template_number_double"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/ForEach_number"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/When_number"
+                                  }
+                                ]
+                              },
+                              "maxItems": 2,
+                              "minItems": 2,
+                              "type": "array"
+                            },
+                            {
+                              "$ref": "#/$defs/TemplateParam"
+                            }
+                          ]
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "$choose",
+                      "cases"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/$defs/ForEach_Condition_points"
+              },
+              {
+                "$ref": "#/$defs/When_Condition_points"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
     "When_ConsumerParam": {
       "additionalProperties": false,
       "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
@@ -7294,6 +8159,120 @@
               },
               {
                 "$ref": "#/$defs/When_Expr"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "$when",
+        "items"
+      ],
+      "type": "object"
+    },
+    "When_Expr_points": {
+      "additionalProperties": false,
+      "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
+      "properties": {
+        "$when": {
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "boolean",
+                "number"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "boolean",
+                  "number"
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "items": {
+          "items": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "items": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Template_number_double"
+                        },
+                        {
+                          "$ref": "#/$defs/ForEach_number"
+                        },
+                        {
+                          "$ref": "#/$defs/When_number"
+                        }
+                      ]
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  {
+                    "$ref": "#/$defs/TemplateParam"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "$choose": {
+                        "type": "string"
+                      },
+                      "cases": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/$defs/Template_number_double"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/ForEach_number"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/When_number"
+                                  }
+                                ]
+                              },
+                              "maxItems": 2,
+                              "minItems": 2,
+                              "type": "array"
+                            },
+                            {
+                              "$ref": "#/$defs/TemplateParam"
+                            }
+                          ]
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "$choose",
+                      "cases"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/$defs/ForEach_Expr_points"
+              },
+              {
+                "$ref": "#/$defs/When_Expr_points"
               }
             ]
           },

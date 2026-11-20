@@ -1290,6 +1290,28 @@ impl Builder<'_> {
             }),
             CExpr::Sin(arg) => TExpr::Plain(CExpr::Sin(boxed(self, arg)?)),
             CExpr::Exp(arg) => TExpr::Plain(CExpr::Exp(boxed(self, arg)?)),
+            CExpr::PiecewiseLinear {
+                arg,
+                points,
+                period,
+                phase_shift,
+            } => TExpr::Plain(CExpr::PiecewiseLinear {
+                arg: boxed(self, arg)?,
+                points: points.clone(),
+                period: *period,
+                phase_shift: *phase_shift,
+            }),
+            CExpr::SmoothNoise {
+                arg,
+                amplitude,
+                time_scale,
+                key,
+            } => TExpr::Plain(CExpr::SmoothNoise {
+                arg: boxed(self, arg)?,
+                amplitude: *amplitude,
+                time_scale: *time_scale,
+                key: *key,
+            }),
         })
     }
 
@@ -2512,7 +2534,10 @@ fn visit_states(expr: &CExpr, visit: &mut impl FnMut(AutIdx, StateIdx)) {
             visit_states(then, visit);
             visit_states(otherwise, visit);
         }
-        CExpr::Sin(arg) | CExpr::Exp(arg) => visit_states(arg, visit),
+        CExpr::Sin(arg)
+        | CExpr::Exp(arg)
+        | CExpr::PiecewiseLinear { arg, .. }
+        | CExpr::SmoothNoise { arg, .. } => visit_states(arg, visit),
     }
 }
 
@@ -2542,7 +2567,10 @@ fn collect_attributes(expr: &CExpr, out: &mut BTreeSet<VarIdx>) {
             collect_attributes(then, out);
             collect_attributes(otherwise, out);
         }
-        CExpr::Sin(arg) | CExpr::Exp(arg) => collect_attributes(arg, out),
+        CExpr::Sin(arg)
+        | CExpr::Exp(arg)
+        | CExpr::PiecewiseLinear { arg, .. }
+        | CExpr::SmoothNoise { arg, .. } => collect_attributes(arg, out),
     }
 }
 
@@ -2567,7 +2595,10 @@ fn size_of(expr: &CExpr) -> usize {
             then,
             otherwise,
         } => size_of(cond) + size_of(then) + size_of(otherwise),
-        CExpr::Sin(arg) | CExpr::Exp(arg) => size_of(arg),
+        CExpr::Sin(arg)
+        | CExpr::Exp(arg)
+        | CExpr::PiecewiseLinear { arg, .. }
+        | CExpr::SmoothNoise { arg, .. } => size_of(arg),
     }
 }
 
@@ -2598,7 +2629,10 @@ fn reads_state(expr: &CExpr) -> bool {
             then,
             otherwise,
         } => reads_state(cond) || reads_state(then) || reads_state(otherwise),
-        CExpr::Sin(arg) | CExpr::Exp(arg) => reads_state(arg),
+        CExpr::Sin(arg)
+        | CExpr::Exp(arg)
+        | CExpr::PiecewiseLinear { arg, .. }
+        | CExpr::SmoothNoise { arg, .. } => reads_state(arg),
     }
 }
 

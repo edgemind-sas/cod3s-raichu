@@ -1201,6 +1201,63 @@ BENCHES.update({
     ),
 })
 
+
+# --- the square wave, the drawn curve and the noise of `time_profile` --------
+
+#: A square wave low 2, high 8, rising at 8 over a 5-minute ramp, held 8, as
+#: the four points of one period; and a drawn curve read 3 later, clamped at 1.
+RAMP = 5.0 / 60.0
+SQUARE_POINTS = [[0.0, 2.0], [RAMP, 8.0], [RAMP + 8.0, 8.0], [2 * RAMP + 8.0, 2.0]]
+DRAWN_POINTS = [[0.0, 0.5], [8.0, 1.2], [16.0, 0.8]]
+#: The drawn curve at t = 0, read 3 before its first point: on its last
+#: segment, from (16, 0.8) to (24, 0.5).
+DRAWN_AT_ZERO = 0.8 + (0.5 - 0.8) * (21.0 - 16.0) / (24.0 - 16.0)
+
+TYPES.append({
+    "name": "NoisySquareSource",
+    "parameters": [p("flow", "string"), p("noise_key", "integer")],
+    "uses": [use("time_profile", target="${flow}_out_profile", shape="piecewise_linear",
+                 points=SQUARE_POINTS, period=24.0, phase_shift=8.0, value_min=0.0, noise="smooth",
+                 noise_amplitude=0.5, noise_time_scale=2.0, noise_key=P("noise_key"), initial=2.0),
+             use("continuous_source", name="${flow}", rate=1.0, profiled=True),
+             use("continuous_flow_out", name="${flow}")],
+})
+TYPES.append({
+    "name": "DrawnSink",
+    "parameters": [p("flow", "string")],
+    "uses": [use("continuous_flow_in", name="${flow}", demand=3.0),
+             use("time_profile", target="${flow}_in_profile", shape="piecewise_linear",
+                 points=DRAWN_POINTS, period=24.0, phase_shift=3.0, value_min=0.0, value_max=1.0,
+                 initial=DRAWN_AT_ZERO),
+             use("continuous_sink", name="${flow}", demand=3.0, profiled=True)],
+})
+
+
+def shaped_profiles():
+    """A noisy square-wave source feeding a consumer whose demand follows a
+    drawn curve. The plugin declares the noise without a key, so it takes the
+    key of its flow, which is the one the library instance is given."""
+    from pyraichu.muscadet import flow_noise_key
+
+    square = {"cls": "TrapezoidProfile", "low": 2.0, "high": 8.0, "period": 24.0,
+              "high_duration": 8.0, "ramp_duration": RAMP, "phase_shift": 8.0,
+              "noise_amplitude": 0.5, "noise_time_scale": 2.0}
+    drawn = {"cls": "PiecewiseLinearProfile", "points": DRAWN_POINTS, "period": 24.0,
+             "phase_shift": 3.0, "value_max": 1.0}
+    return (
+        [{"type": "ObjFlow", "name": "S", "flows_continuous_out": [flow_out("Elec", 1.0, profile=square)]},
+         {"type": "ObjFlow", "name": "K", "flows_continuous_in": [flow_in("Elec", 3.0, profile=drawn)]}],
+        [{"name": "S", "type": "NoisySquareSource",
+          "parameters": {"flow": "Elec", "noise_key": flow_noise_key("S", "Elec")}},
+         {"name": "K", "type": "DrawnSink", "parameters": {"flow": "Elec"}}],
+        [("S.Elec_out", "K.Elec_in")],
+        [], 48.0,
+    )
+
+
+BENCHES["shaped_profiles"] = shaped_profiles()
+
+
 def plugin_model(name, objects, connections):
     def end(written):
         component, port = written.split(".", 1)

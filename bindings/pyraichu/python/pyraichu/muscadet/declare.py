@@ -1196,10 +1196,10 @@ _MODE_FAMILY = {False: "Failure mode", True: "Event"}
 #: one of them.
 MODE_LOGIC = ("all", "any")
 
-#: The one transfer law and the one time profile a mapping can carry. Every
-#: other shape of either family is a Python function.
+#: The one transfer law and the time profile shapes a mapping can carry.
+#: Every other shape of either family is a Python function.
 _TRANSFER_CLASS = authoring._TRANSFER_CLASS
-_PROFILE_CLASS = authoring._PROFILE_CLASS
+_PROFILE_CLASSES = authoring.PROFILE_CLASSES
 
 # --- refusals reachable from the mapping alone ------------------------------
 
@@ -1217,7 +1217,7 @@ def _refuse_callables(where: str, value: Any) -> None:
             f"{where} holds a Python {type(value).__name__}, which no mapping "
             f"can carry. Declare the equivalent shape instead: a named "
             f"allocation policy, a `{_TRANSFER_CLASS}` equation, a "
-            f"`{_PROFILE_CLASS}` time profile, or keep this component a "
+            f"time profile among {', '.join(_PROFILE_CLASSES)}, or keep this component a "
             f"subclass"
         )
     if isinstance(value, dict):
@@ -1637,32 +1637,39 @@ def _tempo_law(where: str, key: str, declared: Any) -> dict[str, Any]:
 # --- the declared shapes a mapping can carry --------------------------------
 
 
-def _check_declared_shape(where: str, key: str, declared: Any, expected: str) -> None:
+def _check_declared_shape(
+    where: str, key: str, declared: Any, expected: str | tuple[str, ...]
+) -> None:
     """Refuse a transfer equation or a time profile whose shape has no mapping
-    form, naming the one that has.
+    form, naming the ones that have.
 
     Both families follow the same pattern: a base class carrying a Python
-    function, and one declarable subclass. The base is refused HERE rather than
-    at construction, so a batch of declarations reports it without an engine.
+    function, and declarable subclasses (one transfer law, three profile
+    shapes). The base is refused HERE rather than at construction, so a batch
+    of declarations reports it without an engine.
     """
+    accepted = (expected,) if isinstance(expected, str) else tuple(expected)
+    if len(accepted) == 1:
+        named = f"the one declarable shape is `{accepted[0]}`"
+    else:
+        named = "the declarable shapes are " + ", ".join(f"`{shape}`" for shape in accepted)
     if declared is None:
         return
     if not isinstance(declared, dict):
         raise ComponentSpecError(
             f"{where} declares {declared!r} as `{key}`, which is not one: it is "
-            f"the mapping {{'cls': '{expected}', ...}}"
+            f"the mapping {{'cls': <shape>, ...}}, where {named}"
         )
     shape = declared.get("cls")
     if shape is None:
         raise ComponentSpecError(
-            f"{where} declares `{key}` with no `cls` key naming its shape; the "
-            f"one declarable shape is `{expected}`"
+            f"{where} declares `{key}` with no `cls` key naming its shape; {named}"
         )
-    if shape != expected:
+    if shape not in accepted:
         raise ComponentSpecError(
-            f"{where} declares the `{key}` shape `{shape}`; the one declarable "
-            f"shape is `{expected}`, every other shape of that family being a "
-            f"Python function that no mapping can carry"
+            f"{where} declares the `{key}` shape `{shape}`; {named}, every "
+            f"other shape of that family being a Python function that no "
+            f"mapping can carry"
         )
 
 
@@ -1775,7 +1782,7 @@ def entry_call(kind: str, entry: dict, *, where: str) -> tuple[str, dict[str, An
         if keyword in keywords:
             keywords[keyword] = _tempo_law(where, declared, keywords[keyword])
     if "profile" in keywords:
-        _check_declared_shape(where, "profile", keywords["profile"], _PROFILE_CLASS)
+        _check_declared_shape(where, "profile", keywords["profile"], _PROFILE_CLASSES)
     if "equation" in keywords:
         _check_declared_shape(where, "equation", keywords["equation"], _TRANSFER_CLASS)
     if "rules" in keywords:
@@ -3925,7 +3932,7 @@ def capacity_absent_variables(spec: Any) -> dict[str, str]:
 #: is refused with its own number rather than half-built into a system nobody
 #: can explain: the whole point of the document is that two engines read the
 #: same thing, so a reader that guesses defeats it.
-SYSTEM_SPEC_VERSION = "1.0.0"
+SYSTEM_SPEC_VERSION = "1.2.0"
 
 #: The suffix pair of an ordinary flow connection, and the third channel a
 #: discrete trigger flow offers. Ordered longest first, so ``f_trigger_in``

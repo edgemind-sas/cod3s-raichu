@@ -20,8 +20,12 @@ import copy
 
 import pytest
 
+import pyraichu
+import pyraichu.muscadet as mu
+from conftest import sampled
 from pyraichu.muscadet.convert import _armed_tolerated, _Spread, compare_routes, convert
 from test_declare_convert import component, document, flow_in, link
+from test_muscadet_profile_shapes import CLOSED_FORM_TOL, DRAWN, INSTANTS, NOISY, SQUARE, drawn, series
 
 SUN = {"cls": "SinusoidalProfile", "amplitude": 6.0, "period": 12.0, "phase_shift": 2.0,
        "offset": 5.0, "value_min": 0.0, "value_max": float("inf"), "name": "SinusoidalProfile"}
@@ -931,3 +935,127 @@ def test_an_unbenched_controller_construct_is_refused_by_name(edit):
     declaration = instrumented_store_plant()
     change(declaration)
     assert construct in refusals(declaration)
+
+
+# --- the square wave, the drawn curve and the noise ---------------------------
+
+
+def profiled_out(name: str, rate: float, profile: dict) -> dict:
+    return {"cls": "FlowContinuousOut", "name": name, "var_type": "float", "var_fed_default": rate,
+            "component_authorized": [{"class_name_bkd": ".*"}], "var_demand_in_default": 0.0,
+            "allocation": "proportional", "allocation_shares": {}, "allocation_priorities": {},
+            "var_prod_cond_inner_mode": "or", "profile": profile}
+
+
+def profiled_in(name: str, demand: float) -> dict:
+    return {"cls": "FlowContinuousIn", "name": name, "var_type": "float", "var_fed_default": 0.0,
+            "component_authorized": [{"class_name_bkd": ".*"}], "var_in_default": 0.0,
+            "var_demand_default": demand}
+
+
+def plant(profiles: dict[str, dict]) -> dict:
+    """One source of class `Panel` per entry, each feeding its own load."""
+    components = {}
+    connections = []
+    for name, profile in profiles.items():
+        components[name] = {"name": name, "cls": "ObjFlow", "source_cls": "ObjFlow",
+                            "metadata": {"class_name": "Panel"}, "flows": [profiled_out("P", 2.0, profile)]}
+        load = f"{name}_load"
+        components[load] = {"name": load, "cls": "ObjFlow", "source_cls": "ObjFlow",
+                            "metadata": {"class_name": "Load"}, "flows": [profiled_in("P", 100.0)]}
+        connections.append({"source": name, "source_box": "P_out", "target": load, "target_box": "P_in"})
+    return {"version": "1.2.0", "name": "panels", "components": components, "connections": connections}
+
+
+def types_by_instance(conversion) -> dict[str, str]:
+    return {i["name"]: i["type"] for i in conversion.system["system"]["instances"]}
+
+
+def library_run(conversion, components, attribute: str, seed: int = 0):
+    """Simulate the library route, observing `attribute` of each component as
+    the indicator `<component>_<attribute>`, as the declaration route names it."""
+    observed = copy.deepcopy(conversion)
+    observed.system["system"]["indicators"] = [
+        {"name": f"{c}_{attribute}", "target": "attribute", "attr": {"component": c, "attribute": attribute}}
+        for c in components
+    ]
+    return pyraichu.simulate(observed.load(), t_max=48.0, samples=INSTANTS, seed=seed)
+
+
+def profile_use(conversion, type_name: str) -> dict:
+    kind = next(t for t in conversion.library["library"]["types"] if t["name"] == type_name)
+    return next(u for u in kind["uses"] if u["fragment"] == "std.time_profile")["with"]
+
+
+def test_a_square_wave_converts_to_its_four_points():
+    conversion = convert(plant({"A": SQUARE}))
+    assert conversion.converted, conversion.refusals
+    use = profile_use(conversion, "Panel")
+    ramp = 5.0 / 60.0
+    assert use["shape"] == "piecewise_linear"
+    assert use["points"] == [[0.0, 2.0], [ramp, 8.0], [ramp + 8.0, 8.0], [2 * ramp + 8.0, 2.0]]
+    assert use["phase_shift"] == 8.0 and use["period"] == 24.0
+
+
+@pytest.mark.parametrize("profile", [SQUARE, DRAWN, NOISY, {**SQUARE, "value_max": 6.0}])
+def test_a_new_shape_converts_and_both_routes_agree(profile):
+    declaration = plant({"A": {**profile, "noise_key": 11} if "noise_amplitude" in profile else profile})
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    comparison = compare_routes(declaration, conversion, t_max=48.0)
+    assert comparison.identical, comparison.detail
+
+
+def test_two_instances_drawing_different_points_become_two_variants_each_with_its_points():
+    other = {**DRAWN, "points": [[0.0, 0.1], [12.0, 0.9]]}
+    declaration = plant({"A": DRAWN, "B": other})
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    types = types_by_instance(conversion)
+    assert types["A"] != types["B"]
+    assert profile_use(conversion, types["A"])["points"] == DRAWN["points"]
+    assert profile_use(conversion, types["B"])["points"] == other["points"]
+    assert compare_routes(declaration, conversion, t_max=48.0).identical
+    result = library_run(conversion, ["A", "B"], "P_out_profile")
+    for name, shape in (("A", DRAWN), ("B", other)):
+        curve = drawn(shape["points"], 24.0, 3.0)
+        for t in INSTANTS:
+            assert abs(sampled(result, f"{name}_P_out_profile", t) - min(1.0, curve(t))) < CLOSED_FORM_TOL
+
+
+def test_two_instances_sharing_a_noise_share_a_type_with_their_keys_as_parameters():
+    declaration = plant(
+        {
+            "A": {**NOISY, "noise_key": mu.flow_noise_key("A", "P")},
+            "B": {**NOISY, "noise_key": mu.flow_noise_key("B", "P")},
+        }
+    )
+    conversion = convert(declaration)
+    assert conversion.converted, conversion.refusals
+    types = types_by_instance(conversion)
+    assert types["A"] == types["B"]
+    keys = sorted(
+        value
+        for instance in conversion.system["system"]["instances"]
+        if instance["name"] in ("A", "B")
+        for value in instance["parameters"].values()
+    )
+    assert keys == sorted([mu.flow_noise_key("A", "P"), mu.flow_noise_key("B", "P")])
+    assert compare_routes(declaration, conversion, t_max=48.0).identical
+    result = library_run(conversion, ["A", "B"], "P_out_profile", seed=3)
+    assert series(result, "A_P_out_profile", INSTANTS) != series(result, "B_P_out_profile", INSTANTS)
+
+
+def test_a_converted_square_wave_altered_is_reported_divergent():
+    """Negative control: the comparison sees a moved point."""
+    declaration = plant({"A": SQUARE})
+    altered = copy.deepcopy(convert(declaration))
+    profile_use(altered, "Panel")["points"][1][1] = 7.5
+    assert not compare_routes(declaration, altered, t_max=48.0).identical
+
+
+def test_a_converted_noise_key_altered_is_reported_divergent():
+    declaration = plant({"A": {**NOISY, "noise_key": 11}})
+    altered = copy.deepcopy(convert(declaration))
+    profile_use(altered, "Panel")["noise_key"] = 12
+    assert not compare_routes(declaration, altered, t_max=48.0).identical

@@ -6,22 +6,36 @@ use super::*;
 /// Evaluate a compiled expression with every attribute frozen at `vars`
 /// and every automaton in `states`, at time zero: what the fault-tree
 /// generator reads a guard, a rate or a boundary as.
+///
+/// There is no replica here, so a smoothed noise reads the seed
+/// [`FROZEN_NOISE_SEED`]. It changes nothing: the noise is null at time
+/// zero whatever its seed (its first node is fixed at 0), and the
+/// fault-tree generator refuses an expression that reads the clock
+/// before it would evaluate one.
 pub(crate) fn eval_frozen(
     model: &CompiledModel,
     vars: &[Value],
     states: &[StateIdx],
     expr: &CExpr,
 ) -> Result<Value, EngineError> {
-    eval_expr(model, vars, states, 0.0, expr)
+    eval_expr(model, vars, states, 0.0, FROZEN_NOISE_SEED, expr)
 }
+
+/// Seed of the smoothed noise outside any replica ([`eval_frozen`]).
+pub(crate) const FROZEN_NOISE_SEED: u64 = 0;
 
 /// Evaluate a compiled expression against an explicit state (usable
 /// both by the engine and by the continuous-system adapter).
+///
+/// `noise_seed` is the seed of the replica the state belongs to
+/// ([`raichu_rng::replica_noise_seed`]): what a smoothed noise reads its
+/// nodes from. It is not drawn from the replica's generator.
 pub(super) fn eval_expr(
     model: &CompiledModel,
     vars: &[Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     expr: &CExpr,
 ) -> Result<Value, EngineError> {
     match expr {
@@ -30,14 +44,14 @@ pub(super) fn eval_expr(
         CExpr::StateActive { automaton, state } => Ok(Value::Bool(states[*automaton] == *state)),
         CExpr::PortAgg { sources, agg } => eval_agg(model, vars, time, sources, *agg),
         CExpr::Cmp { op, lhs, rhs } => {
-            let lhs = eval_expr(model, vars, states, time, lhs)?;
-            let rhs = eval_expr(model, vars, states, time, rhs)?;
+            let lhs = eval_expr(model, vars, states, time, noise_seed, lhs)?;
+            let rhs = eval_expr(model, vars, states, time, noise_seed, rhs)?;
             eval_cmp(time, *op, lhs, rhs)
         }
         CExpr::Bool { op, args } => match op {
             BoolOp::And => {
                 for arg in args {
-                    if !eval_bool(model, vars, states, time, arg)? {
+                    if !eval_bool(model, vars, states, time, noise_seed, arg)? {
                         return Ok(Value::Bool(false));
                     }
                 }
@@ -45,7 +59,7 @@ pub(super) fn eval_expr(
             }
             BoolOp::Or => {
                 for arg in args {
-                    if eval_bool(model, vars, states, time, arg)? {
+                    if eval_bool(model, vars, states, time, noise_seed, arg)? {
                         return Ok(Value::Bool(true));
                     }
                 }
@@ -53,7 +67,7 @@ pub(super) fn eval_expr(
             }
             // Arity validated at model build (exactly one).
             BoolOp::Not => Ok(Value::Bool(!eval_bool(
-                model, vars, states, time, &args[0],
+                model, vars, states, time, noise_seed, &args[0],
             )?)),
         },
         CExpr::Add { args } | CExpr::Mul { args } => {
@@ -62,7 +76,7 @@ pub(super) fn eval_expr(
             let mut acc_f: f64 = if product { 1.0 } else { 0.0 };
             let mut any_float = false;
             for arg in args {
-                match eval_num(model, vars, states, time, arg)? {
+                match eval_num(model, vars, states, time, noise_seed, arg)? {
                     Num::Int(i) => {
                         if product {
                             acc_i *= i;
@@ -89,16 +103,16 @@ pub(super) fn eval_expr(
             }
         }
         CExpr::Sub { lhs, rhs } => {
-            let lhs = eval_num(model, vars, states, time, lhs)?;
-            let rhs = eval_num(model, vars, states, time, rhs)?;
+            let lhs = eval_num(model, vars, states, time, noise_seed, lhs)?;
+            let rhs = eval_num(model, vars, states, time, noise_seed, rhs)?;
             Ok(match (lhs, rhs) {
                 (Num::Int(a), Num::Int(b)) => Value::Int(a - b),
                 (a, b) => Value::Float(a.as_f64() - b.as_f64()),
             })
         }
         CExpr::Div { lhs, rhs } => {
-            let lhs = eval_num(model, vars, states, time, lhs)?.as_f64();
-            let rhs = eval_num(model, vars, states, time, rhs)?.as_f64();
+            let lhs = eval_num(model, vars, states, time, noise_seed, lhs)?.as_f64();
+            let rhs = eval_num(model, vars, states, time, noise_seed, rhs)?.as_f64();
             // IEEE semantics (±inf on zero divisor); NaN is caught by
             // comparisons and the integrator's finiteness checks.
             Ok(Value::Float(lhs / rhs))
@@ -107,7 +121,7 @@ pub(super) fn eval_expr(
             let take_min = matches!(expr, CExpr::Min { .. });
             let mut best: Option<Num> = None;
             for arg in args {
-                let value = eval_num(model, vars, states, time, arg)?;
+                let value = eval_num(model, vars, states, time, noise_seed, arg)?;
                 best = Some(match best {
                     None => value,
                     Some(current) => {
@@ -132,19 +146,49 @@ pub(super) fn eval_expr(
             then,
             otherwise,
         } => {
-            if eval_bool(model, vars, states, time, cond)? {
-                eval_expr(model, vars, states, time, then)
+            if eval_bool(model, vars, states, time, noise_seed, cond)? {
+                eval_expr(model, vars, states, time, noise_seed, then)
             } else {
-                eval_expr(model, vars, states, time, otherwise)
+                eval_expr(model, vars, states, time, noise_seed, otherwise)
             }
         }
         CExpr::Sin(arg) => Ok(Value::Float(
-            eval_num(model, vars, states, time, arg)?.as_f64().sin(),
+            eval_num(model, vars, states, time, noise_seed, arg)?
+                .as_f64()
+                .sin(),
         )),
         CExpr::Exp(arg) => Ok(Value::Float(
-            eval_num(model, vars, states, time, arg)?.as_f64().exp(),
+            eval_num(model, vars, states, time, noise_seed, arg)?
+                .as_f64()
+                .exp(),
         )),
         CExpr::Time => Ok(Value::Float(time)),
+        CExpr::PiecewiseLinear {
+            arg,
+            points,
+            period,
+            phase_shift,
+        } => {
+            let x = eval_num(model, vars, states, time, noise_seed, arg)?.as_f64();
+            Ok(Value::Float(
+                raichu_expr::signal::periodic_piecewise_linear(points, *period, *phase_shift, x),
+            ))
+        }
+        CExpr::SmoothNoise {
+            arg,
+            amplitude,
+            time_scale,
+            key,
+        } => {
+            let x = eval_num(model, vars, states, time, noise_seed, arg)?.as_f64();
+            Ok(Value::Float(raichu_expr::signal::smooth_noise(
+                noise_seed,
+                *key,
+                *amplitude,
+                *time_scale,
+                x,
+            )))
+        }
     }
 }
 
@@ -175,9 +219,10 @@ fn eval_num(
     vars: &[Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     expr: &CExpr,
 ) -> Result<Num, EngineError> {
-    match eval_expr(model, vars, states, time, expr)? {
+    match eval_expr(model, vars, states, time, noise_seed, expr)? {
         Value::Int(i) => Ok(Num::Int(i)),
         Value::Float(f) => Ok(Num::Float(f)),
         Value::Bool(_) => Err(EngineError::TypeError {
@@ -192,9 +237,10 @@ pub(super) fn eval_bool(
     vars: &[Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     expr: &CExpr,
 ) -> Result<bool, EngineError> {
-    match eval_expr(model, vars, states, time, expr)? {
+    match eval_expr(model, vars, states, time, noise_seed, expr)? {
         Value::Bool(b) => Ok(b),
         other => Err(EngineError::TypeError {
             time,
@@ -208,9 +254,10 @@ pub(super) fn eval_f64(
     vars: &[Value],
     states: &[StateIdx],
     time: f64,
+    noise_seed: u64,
     expr: &CExpr,
 ) -> Result<f64, EngineError> {
-    Ok(eval_num(model, vars, states, time, expr)?.as_f64())
+    Ok(eval_num(model, vars, states, time, noise_seed, expr)?.as_f64())
 }
 
 fn eval_agg(

@@ -192,6 +192,11 @@ pub struct Engine<'m> {
     first_flow_restart: f64,
     /// Replica generator (master seed + substream; `schedule_stochastic` draws).
     rng: ChaCha8Rng,
+    /// Seed of the smoothed noises of this trajectory
+    /// ([`raichu_rng::replica_noise_seed`] of the replica it was born
+    /// on): derived, never drawn from `rng`, and carried by the snapshot
+    /// so a trajectory restarted on another stream keeps its noise.
+    noise_seed: u64,
     /// Whether the model carries any stochastic distribution (provenance).
     stochastic: bool,
     /// Scratch worklist for the fixpoint (reused across steps: no
@@ -425,6 +430,7 @@ impl<'m> Engine<'m> {
             .map(|(i, _)| i)
             .collect();
         let rng = raichu_rng::replica_rng(config.seed, config.rng_stream);
+        let noise_seed = raichu_rng::replica_noise_seed(config.seed, config.rng_stream);
         Engine {
             host: None,
             time: 0.0,
@@ -472,6 +478,7 @@ impl<'m> Engine<'m> {
             flow_restarts: 0,
             first_flow_restart: f64::NAN,
             rng,
+            noise_seed,
             stochastic,
             worklist: BTreeSet::new(),
             fixpoint_iteration: 0,

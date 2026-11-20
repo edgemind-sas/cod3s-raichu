@@ -26,6 +26,7 @@ import math
 import pytest
 
 import pyraichu.muscadet as mu
+import test_muscadet_profile_shapes as shapes
 from conftest import CROSSING_TOL, sampled
 
 #: The curve both suites use: 0.6 + 0.4 sin(2 pi t / 24), which is 0.6 at
@@ -334,3 +335,21 @@ def test_a_watched_guard_on_a_profile_is_located_with_nothing_to_integrate():
     assert abs(sampled(result, "W_alarm_fed_in", 6.0) - 1.0) < CROSSING_TOL
     # And back below on the way down, at t = 10.
     assert abs(sampled(result, "W_alarm_fed_in", 11.0)) < CROSSING_TOL
+
+
+# --- the square wave and the drawn curve on an input -----------------------
+
+
+@pytest.mark.parametrize(
+    "shape,curve",
+    [
+        (shapes.SQUARE, shapes.square(2.0, 8.0, 24.0, 8.0, 5.0 / 60.0, 8.0)),
+        (shapes.DRAWN, lambda t: min(1.0, shapes.drawn(shapes.DRAWN["points"], 24.0, 3.0)(t))),
+    ],
+)
+def test_a_pure_consumer_demand_follows_a_new_shape_and_publishes_it(shape, curve):
+    result = shapes.line(shapes.source(None, rate=1000.0), shapes.sink(shape, demand=3.0)).simulate(t_max=48.0, samples=shapes.INSTANTS)
+    for t in shapes.INSTANTS:
+        assert abs(sampled(result, "T_w_in_profile", t) - curve(t)) < shapes.CLOSED_FORM_TOL, t
+        assert abs(sampled(result, "T_w_demand_in", t) - 3.0 * curve(t)) < CROSSING_TOL, t
+        assert abs(sampled(result, "T_w_fed_in", t) - 3.0 * curve(t)) < CROSSING_TOL, t

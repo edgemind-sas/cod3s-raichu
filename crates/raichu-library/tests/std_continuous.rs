@@ -458,3 +458,280 @@ fn a_voter_reads_the_median_of_what_instruments_republish() {
         assert_eq!(v, 18.0);
     }
 }
+
+/// A component `P` whose attribute `f` follows `std.time_profile` with
+/// the parameters `with` (`target` and `initial` given here), plus, when
+/// `failing`, a repairable failure automaton drawing exponential dates.
+fn profile_model(with: serde_json::Value, failing: bool) -> raichu_model::Model {
+    try_profile_model(with, failing).unwrap()
+}
+
+/// [`profile_model`], the expansion error as text.
+fn try_profile_model(
+    with: serde_json::Value,
+    failing: bool,
+) -> Result<raichu_model::Model, String> {
+    let mut with = with;
+    with["target"] = json!("f");
+    let mut uses = vec![json!({"fragment": "std.time_profile", "with": with})];
+    if with.get("period").is_none() {
+        uses.clear();
+    }
+    let body = if failing {
+        json!({"automata": [{"name": "life", "states": ["ok", "ko"], "init": "ok",
+            "transitions": [
+                {"name": "fail", "source": "ok", "targets": ["ko"], "distrib": "exp", "rate": 0.3},
+                {"name": "repair", "source": "ko", "targets": ["ok"], "distrib": "exp", "rate": 0.7}]}]})
+    } else {
+        json!({})
+    };
+    let library = parse_library(
+        &json!({"raichu_library": {"format": 1}, "library": {
+            "name": "plant", "version": "1.0.0", "imports": ["std"],
+            "types": [{"name": "Profiled", "uses": uses, "body": body}]}})
+        .to_string(),
+    )
+    .unwrap();
+    let indicators = if uses.is_empty() {
+        json!([])
+    } else {
+        json!([{"name": "f", "target": "attribute", "attr": {"component": "P", "attribute": "f"}}])
+    };
+    let system = parse_system(
+        &json!({"raichu_system": {"format": 1}, "system": {
+            "name": "profiled", "library": {"name": "plant", "version": "1.0.0"},
+            "instances": [{"name": "P", "type": "Profiled"}],
+            "indicators": indicators}})
+        .to_string(),
+    )
+    .unwrap();
+    expand(&[library], &system, None)
+        .map(|expanded| expanded.model)
+        .map_err(|error| error.to_string())
+}
+
+/// The profile `f` sampled at `samples` on replica stream `stream`.
+fn sample_profile(with: serde_json::Value, samples: &[f64], seed: u64, stream: u64) -> Vec<f64> {
+    let model = profile_model(with, false);
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let config = EngineConfig {
+        t_max: samples.last().copied().unwrap_or(1.0) + 1.0,
+        samples: samples.to_vec(),
+        seed,
+        rng_stream: stream,
+        ..EngineConfig::default()
+    };
+    let result = Engine::new(&compiled, config).unwrap().run().unwrap();
+    let series = result.samples.iter().find(|s| s.name == "f").unwrap();
+    assert_eq!(series.points.len(), samples.len());
+    series
+        .points
+        .iter()
+        .map(|(_, value)| match value {
+            Value::Float(v) => *v,
+            other => panic!("float profile, got {other:?}"),
+        })
+        .collect()
+}
+
+/// The ramped square wave of the reference profile: low 2, high 8 for 8
+/// hours, 5-minute ramps, a 24-hour period shifted by 8 hours, written as
+/// the four points of one period.
+fn square_profile() -> serde_json::Value {
+    let ramp = 5.0 / 60.0;
+    json!({"shape": "piecewise_linear", "period": 24.0, "phase_shift": 8.0,
+        "points": [[0.0, 2.0], [ramp, 8.0], [ramp + 8.0, 8.0], [2.0 * ramp + 8.0, 2.0]],
+        "value_min": 0.0, "initial": 2.0})
+}
+
+#[test]
+fn a_square_profile_ramps_holds_its_plateau_and_falls_back() {
+    let ramp = 5.0 / 60.0;
+    let samples = [
+        2.0,
+        8.0 + 2.5 / 60.0,
+        8.0 + ramp + 4.0,
+        20.0,
+        32.0 + 2.5 / 60.0,
+    ];
+    let values = sample_profile(square_profile(), &samples, 1, 0);
+    for (got, expected) in values.iter().zip([2.0, 5.0, 8.0, 2.0, 5.0]) {
+        assert!((got - expected).abs() < 1e-9, "{values:?}");
+    }
+}
+
+#[test]
+fn a_drawn_profile_is_continuous_across_its_period_and_periodic() {
+    let drawn = json!({"shape": "piecewise_linear", "period": 24.0, "phase_shift": 0.0,
+        "points": [[0.0, 1.0], [6.0, 3.0], [15.0, 0.5]], "value_min": 0.0, "initial": 1.0});
+    let samples = [3.0, 19.5, 24.0 - 1e-6, 24.0, 24.0 + 1e-6, 27.0, 43.5];
+    let v = sample_profile(drawn, &samples, 1, 0);
+    assert!((v[0] - 2.0).abs() < 1e-9, "{v:?}");
+    assert!((v[1] - 0.75).abs() < 1e-9, "{v:?}");
+    for edge in &v[2..5] {
+        assert!((edge - 1.0).abs() < 1e-6, "{v:?}");
+    }
+    assert!((v[5] - v[0]).abs() < 1e-9, "{v:?}");
+    assert!((v[6] - v[1]).abs() < 1e-9, "{v:?}");
+}
+
+#[test]
+fn an_ill_formed_profile_is_refused_naming_what_is_wrong() {
+    let drawn = |points: serde_json::Value| {
+        json!({"shape": "piecewise_linear", "period": 24.0, "phase_shift": 0.0,
+            "points": points, "value_min": 0.0})
+    };
+    let refused = |with: serde_json::Value| try_profile_model(with, false).unwrap_err();
+    let error = refused(drawn(json!([[0.0, 1.0], [30.0, 3.0]])));
+    assert!(
+        error.contains("piecewise_linear in equation of `P.f`"),
+        "{error}"
+    );
+    assert!(error.contains("not below the period"), "{error}");
+    let error = refused(drawn(json!([[1.0, 1.0]])));
+    assert!(error.contains("first instant must be 0"), "{error}");
+    let error = refused(drawn(json!([[0.0, 1.0], [5.0, 2.0], [5.0, 3.0]])));
+    assert!(error.contains("strictly increasing"), "{error}");
+    let error = refused(drawn(json!([])));
+    assert!(error.contains("at least one"), "{error}");
+    let error = refused(drawn(json!([[0.0, 1.0, 2.0]])));
+    assert!(error.contains("expected 2 elements"), "{error}");
+    let mut noisy = noisy_profile(1);
+    noisy["noise_time_scale"] = json!(0.0);
+    let error = refused(noisy);
+    assert!(
+        error.contains("smooth_noise") && error.contains("time_scale"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_sine_profile_with_a_ceiling_is_clipped_on_both_sides() {
+    let sine = json!({"amplitude": 5.0, "offset": 5.0, "period": 24.0, "phase_shift": 0.0,
+        "value_min": 1.0, "value_max": 8.0, "initial": 5.0});
+    let samples: Vec<f64> = (0..48).map(|i| f64::from(i) * 0.5).collect();
+    let values = sample_profile(sine, &samples, 1, 0);
+    let (mut floor, mut ceiling) = (0, 0);
+    for (t, got) in samples.iter().zip(&values) {
+        let raw = 5.0 * (std::f64::consts::TAU * t / 24.0).sin() + 5.0;
+        let expected = raw.clamp(1.0, 8.0);
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "{got} at {t}, expected {expected}"
+        );
+        floor += usize::from(raw < 1.0);
+        ceiling += usize::from(raw > 8.0);
+    }
+    assert!(floor > 0 && ceiling > 0, "both bounds bite");
+}
+
+/// The noise of the reference profile: amplitude 0.5 around the square
+/// wave, nodes every 2 hours.
+fn noisy_profile(key: u64) -> serde_json::Value {
+    let mut profile = square_profile();
+    profile["noise"] = json!("smooth");
+    profile["noise_amplitude"] = json!(0.5);
+    profile["noise_time_scale"] = json!(2.0);
+    profile["noise_key"] = json!(key);
+    profile
+}
+
+#[test]
+fn a_noisy_profile_is_reproducible_per_replica_and_differs_between_replicas() {
+    // A key above the signed 64-bit range, as half the flow hashes are.
+    let key = 0xCBF2_9CE4_8422_2325;
+    let samples: Vec<f64> = (0..40).map(|i| 0.75 + f64::from(i) * 1.3).collect();
+    let first = sample_profile(noisy_profile(key), &samples, 7, 3);
+    assert_eq!(first, sample_profile(noisy_profile(key), &samples, 7, 3));
+    assert_ne!(first, sample_profile(noisy_profile(key), &samples, 7, 4));
+    assert_ne!(first, sample_profile(noisy_profile(key), &samples, 8, 3));
+    assert_ne!(
+        first,
+        sample_profile(noisy_profile(key + 1), &samples, 7, 3)
+    );
+    let quiet = sample_profile(square_profile(), &samples, 7, 3);
+    assert_ne!(first, quiet);
+    // The noise is null at its first node, so every replica starts from
+    // the shape without noise.
+    let start = [0.0, 1e-6];
+    for stream in 0..5 {
+        let noisy = sample_profile(noisy_profile(key), &start, 7, stream);
+        assert!((noisy[0] - 2.0).abs() < 1e-12, "{noisy:?}");
+        assert!((noisy[1] - 2.0).abs() < 1e-6, "{noisy:?}");
+    }
+}
+
+#[test]
+fn a_noisy_profile_is_continuous() {
+    let samples: Vec<f64> = (1..200)
+        .flat_map(|i| {
+            let t = f64::from(i) * 0.37;
+            [t, t + 1e-9]
+        })
+        .collect();
+    let values = sample_profile(noisy_profile(17), &samples, 3, 0);
+    for pair in values.chunks(2) {
+        assert!((pair[1] - pair[0]).abs() < 1e-6, "{pair:?}");
+    }
+}
+
+/// The failure dates of the repairable component, with or without a
+/// profile beside it.
+fn failure_dates(profile: Option<serde_json::Value>, stream: u64) -> Vec<(String, f64)> {
+    let with = profile.unwrap_or_else(|| json!({}));
+    let model = profile_model(with, true);
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let config = EngineConfig {
+        t_max: 200.0,
+        seed: 11,
+        rng_stream: stream,
+        ..EngineConfig::default()
+    };
+    let result = Engine::new(&compiled, config).unwrap().run().unwrap();
+    result
+        .events
+        .iter()
+        .map(|e| (e.transition.clone(), e.time))
+        .collect()
+}
+
+#[test]
+fn a_noise_draws_nothing_from_the_transition_dates() {
+    for stream in 0..4 {
+        let bare = failure_dates(None, stream);
+        assert!(bare.len() > 10, "{bare:?}");
+        assert_eq!(bare, failure_dates(Some(square_profile()), stream));
+        assert_eq!(bare, failure_dates(Some(noisy_profile(5)), stream));
+    }
+}
+
+#[test]
+fn a_restarted_trajectory_keeps_the_noise_of_its_replica() {
+    let model = profile_model(noisy_profile(23), false);
+    let compiled = CompiledModel::compile(&model).unwrap();
+    let config = EngineConfig {
+        t_max: 100.0,
+        seed: 5,
+        rng_stream: 2,
+        ..EngineConfig::default()
+    };
+    let mut original = Engine::new(&compiled, config.clone()).unwrap();
+    original.advance_to(10.0).unwrap();
+    let snapshot = original.snapshot().unwrap();
+    original.advance_to(17.3).unwrap();
+    let mut clone =
+        Engine::restart_from_snapshot(&compiled, config.clone(), &snapshot, 99).unwrap();
+    clone.advance_to(17.3).unwrap();
+    assert_eq!(original.attribute("P.f"), clone.attribute("P.f"));
+    // While a fresh replica on the clone's stream has another noise.
+    let mut other = Engine::new(
+        &compiled,
+        EngineConfig {
+            rng_stream: 99,
+            ..config
+        },
+    )
+    .unwrap();
+    other.advance_to(17.3).unwrap();
+    assert_ne!(original.attribute("P.f"), other.attribute("P.f"));
+}

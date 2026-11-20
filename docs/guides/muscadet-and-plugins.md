@@ -331,17 +331,41 @@ physical model reaches. A controller reading such a channel compares it
 against a threshold like any other number, which is what it would do with
 an infinity too; nothing needs to test for it by name.
 
-#### What a time profile carries besides its curve: `name`
+#### Time profile shapes
 
-A declared profile is the clamped sinusoid and nothing else, so its
-vocabulary is closed: `amplitude`, `period`, `phase_shift`, `offset`,
-`value_min`, `value_max`, and `name`.
+A declared profile is one of three shapes, each with a closed vocabulary
+(`pyraichu.muscadet.PROFILE_CLASS_KEYS`):
 
-That last one is not a parameter of the curve, it is a **label**.
+| `cls` | Curve | Keys |
+|---|---|---|
+| `SinusoidalProfile` | `amplitude x sin(2 pi (t - phase_shift) / period) + offset` | `amplitude`, `period`, `phase_shift`, `offset`, `name` |
+| `TrapezoidProfile` | a square wave: `low`, a linear ramp of `ramp_duration` up to `high`, `high` for `high_duration`, a ramp back down, `low` until the period ends; the rise starts at `phase_shift` | `low`, `high`, `period`, `high_duration`, `ramp_duration`, `phase_shift` |
+| `PiecewiseLinearProfile` | `points`, `[instant, factor]` pairs over one period joined by segments, the last joined to the first one period later, read at `t - phase_shift` | `points`, `period`, `phase_shift` |
+
+Every shape also takes the clamp `value_min` (0 by default, never
+negative) and `value_max` (unbounded by default), and a smoothed noise:
+`noise_amplitude` (the standard deviation at the noise nodes),
+`noise_time_scale` (their spacing) and `noise_key`. The noise is drawn once
+per replica, reproducible from the seed, null at `t = 0`, and added to the
+curve before the clamp. Its key makes two flows' noises independent; a
+noisy profile declared without one takes `flow_noise_key(component, flow)`,
+the FNV-1a 64-bit hash of `<component>/<flow>`, which is the key muscadet
+writes, so two components of one class never share a noise.
+
+A ramp of zero, a plateau and two ramps longer than the period, a first
+point at another instant than 0, instants not strictly increasing or not
+below the period, and a negative factor are refused where they are
+declared: each would be a jump or a curve that is not one. A square wave
+and a drawn curve reach the engine as the same node, the square wave as its
+four points per period.
+
+#### What a sinusoid carries besides its curve: `name`
+
+`name` is not a parameter of the curve, it is a **label**.
 muscadet serialises a declared object by its constructor's own parameter
-names, read off the signature, and `muscadet.Profile.__init__` takes a
-`name` it defaults to the class name. Every profile a read-back writes
-therefore carries one, whether or not a modeller wrote it:
+names, read off the signature, and `muscadet.SinusoidalProfile.__init__`
+takes a `name` it defaults to the class name. Every sinusoid a read-back
+writes therefore carries one, whether or not a modeller wrote it:
 
 ```json
 {"cls": "SinusoidalProfile", "amplitude": 0.4, "period": 24.0,

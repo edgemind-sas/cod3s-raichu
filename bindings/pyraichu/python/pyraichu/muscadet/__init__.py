@@ -203,6 +203,7 @@ natively instead of widening this vocabulary.
 
 from __future__ import annotations
 
+import bisect
 import heapq
 import itertools
 import json
@@ -267,25 +268,40 @@ NOMINAL_RATE = 1.0
 #: a tenth off it, and nothing in the number distinguishes the two.
 NO_TAP = 0.0
 
-#: The one transfer law and the one time profile this layer can carry as
-#: data, matching what muscadet declares. Everything else in either place
-#: is a Python callable, which no mapping serializes and no engine can
-#: attest continuous, so it is refused rather than approximated (R8).
+#: The one transfer law this layer can carry as data, matching what
+#: muscadet declares. Everything else is a Python callable, which no
+#: mapping serializes and no engine can attest continuous, so it is
+#: refused rather than approximated.
 _TRANSFER_CLASS = "ConductiveTransfer"
-_PROFILE_CLASS = "SinusoidalProfile"
 
-#: Every key a declared time profile may carry, as DATA rather than as a
+#: The time profile shapes this layer can carry as data, matching
+#: muscadet's: a clamped sinusoid, a periodic square wave whose edges are
+#: linear ramps, and a drawn periodic curve through points. Any other
+#: profile is a Python callable, refused for the same reason as a
+#: transfer law.
+SINE_PROFILE = "SinusoidalProfile"
+SQUARE_PROFILE = "TrapezoidProfile"
+DRAWN_PROFILE = "PiecewiseLinearProfile"
+PROFILE_CLASSES = (SINE_PROFILE, SQUARE_PROFILE, DRAWN_PROFILE)
+
+#: The noise modifier every shape may carry: the standard deviation at the
+#: nodes, their spacing, and the flow key making two flows' noises
+#: independent. muscadet writes them only on a noisy profile.
+NOISE_KEYS = ("noise_amplitude", "noise_time_scale", "noise_key")
+
+#: Every key a declared sinusoid may carry, as DATA rather than as a
 #: tuple buried in the parser: the vocabulary is confronted with what
 #: muscadet's read-back writes rather than patched key by key after an
 #: export is refused (`test_muscadet_declaration_vocabulary`).
 #:
-#: The six parameters of the clamped sinusoid, and `name`. That last one
-#: is not a parameter of the curve: muscadet serializes a declared object
-#: by its constructor's own parameter names, and `Profile.__init__` takes
-#: a `name` defaulted to the class name, so EVERY exported profile
-#: carries one whether or not a modeller wrote it. A vocabulary that did
-#: not know the key refused the whole document, which is the same shape
-#: of gate `mixtures` was on a component.
+#: The six parameters of the clamped sinusoid, `name`, and the noise
+#: modifier. `name` is not a parameter of the curve: muscadet serializes a
+#: declared object by its constructor's own parameter names, and
+#: `SinusoidalProfile.__init__` takes a `name` defaulted to the class
+#: name, so EVERY exported sinusoid carries one whether or not a modeller
+#: wrote it. A vocabulary that did not know the key refused the whole
+#: document, which is the same shape of gate `mixtures` was on a
+#: component. The two other shapes take no `name`, so they carry none.
 PROFILE_KEYS = (
     "amplitude",
     "period",
@@ -294,7 +310,64 @@ PROFILE_KEYS = (
     "value_min",
     "value_max",
     "name",
+    *NOISE_KEYS,
 )
+
+#: The vocabulary of each declarable shape, the sinusoid's being
+#: :data:`PROFILE_KEYS`.
+PROFILE_CLASS_KEYS = MappingProxyType(
+    {
+        SINE_PROFILE: PROFILE_KEYS,
+        SQUARE_PROFILE: (
+            "low",
+            "high",
+            "period",
+            "high_duration",
+            "ramp_duration",
+            "phase_shift",
+            "value_min",
+            "value_max",
+            *NOISE_KEYS,
+        ),
+        DRAWN_PROFILE: (
+            "points",
+            "period",
+            "phase_shift",
+            "value_min",
+            "value_max",
+            *NOISE_KEYS,
+        ),
+    }
+)
+
+#: The keys a square wave or a drawn curve cannot do without: muscadet's
+#: constructors take them without a default.
+_PROFILE_REQUIRED_KEYS = MappingProxyType(
+    {
+        SINE_PROFILE: (),
+        SQUARE_PROFILE: ("low", "high", "period", "high_duration", "ramp_duration"),
+        DRAWN_PROFILE: ("points", "period"),
+    }
+)
+
+_FNV_OFFSET_BASIS = 0xCBF29CE484222325
+_FNV_PRIME = 0x100000001B3
+_MASK64 = (1 << 64) - 1
+
+
+def flow_noise_key(component: str, flow: str) -> int:
+    """The key of the noise on `flow` of `component`: the FNV-1a 64-bit
+    hash of the UTF-8 bytes of ``"<component>/<flow>"``.
+
+    muscadet computes the same key for a noisy profile declared without
+    one, so two components of one class draw independent noises on every
+    engine, and the key never depends on the process (as Python's salted
+    ``hash`` would)."""
+    value = _FNV_OFFSET_BASIS
+    for byte in f"{component}/{flow}".encode():
+        value ^= byte
+        value = (value * _FNV_PRIME) & _MASK64
+    return value
 
 #: Why a Python function is refused where a declared shape is expected.
 #: It names the mechanism a discontinuous law would need rather than only
@@ -1081,13 +1154,34 @@ class _FlowContinuousIn:
 
 @dataclass
 class _Profile:
-    """A clamped sinusoid of simulation time scaling an output.
+    """A declared time profile scaling a flow: a base curve of simulation
+    time, plus an optional smoothed noise, clamped into
+    ``[value_min, value_max]``.
 
-    ``amplitude x sin(2 pi (t - phase_shift) / period) + offset``,
-    clamped into ``[value_min, value_max]``. Continuous by construction,
-    the clamp meeting the curve where it crosses the bound, which is why
-    this shape carries no attestation of its own: the attestation is what
-    a bare callable cannot give (see :data:`_CONTINUITY_MESSAGE`).
+    The base is one of three shapes, named by `shape` (muscadet's class
+    name):
+
+    - the sinusoid, ``amplitude x sin(2 pi (t - phase_shift) / period) +
+      offset``;
+    - the square wave, ``low`` rising over ``ramp_duration`` to ``high``,
+      held ``high_duration``, falling back over ``ramp_duration`` and
+      ``low`` for the rest of the period, the rise starting at
+      ``phase_shift``;
+    - the drawn curve, ``points`` joined by segments over one period, the
+      last point joined to the first one period later, read at
+      ``t - phase_shift``.
+
+    The square wave is drawn as the four points of :meth:`drawn_points`,
+    so both periodic shapes reach the engine as one piecewise-linear node.
+    Every shape is continuous by construction, the clamp meeting the curve
+    where it crosses the bound, which is why a shape carries no
+    attestation of its own: the attestation is what a bare callable cannot
+    give (see :data:`_CONTINUITY_MESSAGE`).
+
+    The noise (``noise_amplitude > 0``) adds nodes every
+    ``noise_time_scale`` carrying a standard normal drawn once per replica
+    for the flow key ``noise_key``, smoothly interpolated, and null at
+    ``t = 0``: the factor at the initial instant is the noise-free one.
 
     ``value_max`` is ``None`` when the curve is unbounded above: a
     document cannot carry an infinity, and an upper clamp that never
@@ -1100,21 +1194,76 @@ class _Profile:
     offset: float = 0.0
     value_min: float = 0.0
     value_max: float | None = None
-    #: The label muscadet carries on the profile object, defaulting to
-    #: the shape's own class name exactly as `Profile.__init__` does.
+    #: The label muscadet carries on a sinusoid, defaulting to the shape's
+    #: own class name exactly as `SinusoidalProfile.__init__` does.
     #: Decoration, like a component's `label`: it reaches no generated
     #: model, and it is kept so a declaration survives the round trip
     #: rather than losing what a modeller wrote on the curve. What it
     #: buys on the way is the refusals below, which name the curve at
     #: fault instead of only the flow carrying it.
-    name: str = _PROFILE_CLASS
+    name: str = SINE_PROFILE
+    #: Which of :data:`PROFILE_CLASSES` the base curve is.
+    shape: str = SINE_PROFILE
+    #: The square wave's levels and durations.
+    low: float = 0.0
+    high: float = 0.0
+    high_duration: float = 0.0
+    ramp_duration: float = 0.0
+    #: The drawn curve's ``[instant, factor]`` points over one period.
+    points: list[list[float]] | None = None
+    noise_amplitude: float = 0.0
+    noise_time_scale: float | None = None
+    noise_key: int | None = None
+
+    @property
+    def has_noise(self) -> bool:
+        return self.noise_amplitude > 0.0
+
+    def drawn_points(self) -> list[list[float]]:
+        """The periodic piecewise-linear points of a square wave or a drawn
+        curve: the declared points, or for a square wave ``[0, low]``,
+        ``[ramp, high]``, ``[ramp + plateau, high]``,
+        ``[2 ramp + plateau, low]``, low after that.
+
+        A point that would repeat the instant of the one before it (no
+        plateau) or fall on the period itself (the fall ending with the
+        period, where the curve rejoins its first point by itself) is
+        left out: the instants of a periodic shape are strictly increasing
+        and below the period."""
+        if self.shape == DRAWN_PROFILE:
+            return [list(point) for point in self.points or []]
+        ramp = self.ramp_duration
+        candidates = [
+            [0.0, self.low],
+            [ramp, self.high],
+            [ramp + self.high_duration, self.high],
+            [2 * ramp + self.high_duration, self.low],
+        ]
+        points: list[list[float]] = []
+        for point in candidates:
+            if point[0] >= self.period or (points and point[0] <= points[-1][0]):
+                continue
+            points.append(point)
+        return points
+
+    def base(self, time: float) -> float:
+        """The base curve at `time`, before the noise and the clamp."""
+        if self.shape == SINE_PROFILE:
+            angle = (time - self.phase_shift) * (2 * math.pi / self.period)
+            return self.amplitude * math.sin(angle) + self.offset
+        points = self.drawn_points()
+        u = (time - self.phase_shift) % self.period
+        index = max(bisect.bisect_right([p[0] for p in points], u), 1) - 1
+        x0, y0 = points[index]
+        x1, y1 = points[index + 1] if index + 1 < len(points) else (self.period, points[0][1])
+        return y0 + (y1 - y0) * (u - x0) / (x1 - x0)
 
     def factor(self, time: float) -> float:
-        """The factor at `time`, for the initial value of the published
-        variable: the sweep overwrites it, and an init that already
-        agrees with the curve keeps a document readable on its own."""
-        angle = (time - self.phase_shift) * (2 * math.pi / self.period)
-        value = max(self.value_min, self.amplitude * math.sin(angle) + self.offset)
+        """The noise-free factor at `time`, for the initial value of the
+        published variable: the noise is null at the initial instant, the
+        sweep overwrites the value, and an init that already agrees with
+        the curve keeps a document readable on its own."""
+        value = max(self.value_min, self.base(time))
         return value if self.value_max is None else min(value, self.value_max)
 
 
@@ -2125,10 +2274,17 @@ class ObjFlow:
 
         `profile` is a declared **continuous** function of simulation
         time multiplying what this output produces, as the mapping
-        ``{"cls": "SinusoidalProfile", ...}`` carrying `amplitude`,
-        `period`, `phase_shift`, `offset`, `value_min` and `value_max`,
-        and beside them a `name` labelling the curve, which muscadet
-        writes on every exported profile and this layer carries back.
+        ``{"cls": <shape>, ...}``, the shape one of
+        :data:`PROFILE_CLASSES` with the keys of
+        :data:`PROFILE_CLASS_KEYS`: a sinusoid (`amplitude`, `period`,
+        `phase_shift`, `offset`, and a `name` labelling the curve, which
+        muscadet writes on every exported sinusoid and this layer carries
+        back), a square wave with ramped edges (`low`, `high`, `period`,
+        `high_duration`, `ramp_duration`, `phase_shift`) or a drawn
+        periodic curve (`points`, `period`, `phase_shift`). Every shape
+        takes the clamp `value_min`/`value_max` and an optional smoothed
+        noise (`noise_amplitude`, `noise_time_scale`, `noise_key`, the
+        key defaulting to :func:`flow_noise_key` of this flow).
         A Python callable is refused: continuity is an attestation this
         layer cannot make for the modeller, and it derives no watched
         transition from a function's breakpoints. The profile composes
@@ -2189,31 +2345,34 @@ class ObjFlow:
         self, flow: str, spec: Any, side: str = "out"
     ) -> _Profile | None:
         """One declared time profile, normalised, or refused where it was
-        written (R8).
+        written.
 
-        The only shape a mapping can carry is the clamped sinusoid: a
-        bare callable is refused because the continuity flag is the one
-        thing this layer cannot work out for itself, and a mapping naming
-        the callable shape offers a serialised form that cannot be
-        serialised.
+        The shapes a mapping can carry are :data:`PROFILE_CLASSES`: a bare
+        callable is refused because the continuity flag is the one thing
+        this layer cannot work out for itself, and a mapping naming the
+        callable shape offers a serialised form that cannot be serialised.
+        Each shape is refused on what muscadet's constructor refuses, so a
+        declaration both engines read is refused by both.
 
         `side` is which end of the component declared the curve: a demand
         that varies with the clock is as ordinary as a production that
         does, and a refusal naming an out-flow that the component has not
         got sends a modeller looking for the wrong declaration."""
         where = f"ObjFlow `{self.name}`: continuous {side}-flow `{flow}`"
+        shapes = ", ".join(f"`{shape}`" for shape in PROFILE_CLASSES)
         if spec is None or isinstance(spec, _Profile):
             return spec
         if callable(spec):
             raise ValueError(
                 f"{where} declares its time profile as a Python function; "
-                f"{_CONTINUITY_MESSAGE}. Declare it as "
-                f'{{"cls": "{_PROFILE_CLASS}", ...}}'
+                f"{_CONTINUITY_MESSAGE}. Declare it as one of the shapes "
+                f'{shapes}, as {{"cls": <shape>, ...}}'
             )
         if not isinstance(spec, dict):
             raise ValueError(
                 f"{where} declares {spec!r} as a time profile, which is not "
-                f'one: a profile is {{"cls": "{_PROFILE_CLASS}", ...}}'
+                f'one: a profile is {{"cls": <shape>, ...}}, the shape one of '
+                f"{shapes}"
             )
 
         params = dict(spec)
@@ -2221,19 +2380,26 @@ class ObjFlow:
         if shape is None:
             raise ValueError(
                 f"{where} declares a time profile with no `cls` key naming "
-                f"its shape; the one declarable shape is `{_PROFILE_CLASS}`"
+                f"its shape; the declarable shapes are {shapes}"
             )
-        if shape != _PROFILE_CLASS:
+        if shape not in PROFILE_CLASSES:
             raise ValueError(
-                f"{where} declares the time profile shape `{shape}`; the one "
-                f"declarable shape is `{_PROFILE_CLASS}`, every other profile "
+                f"{where} declares the time profile shape `{shape}`; the "
+                f"declarable shapes are {shapes}, every other profile "
                 f"being a Python function. {_CONTINUITY_MESSAGE}"
             )
-        unknown = sorted(set(params) - set(PROFILE_KEYS))
+        vocabulary = PROFILE_CLASS_KEYS[shape]
+        unknown = sorted(set(params) - set(vocabulary))
         if unknown:
             raise ValueError(
-                f"{where} declares a time profile carrying unknown keys "
-                f"{unknown} (expected {list(PROFILE_KEYS)})"
+                f"{where} declares a `{shape}` time profile carrying unknown "
+                f"keys {unknown} (expected {list(vocabulary)})"
+            )
+        missing = [key for key in _PROFILE_REQUIRED_KEYS[shape] if params.get(key) is None]
+        if missing:
+            raise ValueError(
+                f"{where} declares a `{shape}` time profile without {missing}, "
+                "which the shape cannot do without"
             )
 
         # Read FIRST, so every refusal below can name the curve at fault:
@@ -2252,8 +2418,10 @@ class ObjFlow:
         # and the default it writes out is therefore the class name. Mirror
         # it rather than carrying `None`: a read-back of what this layer
         # read says what muscadet's read-back said.
-        label = label or _PROFILE_CLASS
-        named = "" if label == _PROFILE_CLASS else f" `{label}`"
+        label = label or shape
+        named = f" `{label}`"
+        if label == SINE_PROFILE:
+            named = ""
 
         period = float(params.get("period", 2 * math.pi))
         if not period > 0.0:
@@ -2281,7 +2449,7 @@ class ObjFlow:
                 f"wrong way round: value_min={value_min:g} exceeds "
                 f"value_max={value_max:g}"
             )
-        return _Profile(
+        profile = _Profile(
             amplitude=float(params.get("amplitude", 1.0)),
             period=period,
             phase_shift=float(params.get("phase_shift", 0.0)),
@@ -2289,7 +2457,168 @@ class ObjFlow:
             value_min=value_min,
             value_max=value_max,
             name=label,
+            shape=shape,
+            **self._profile_noise(where, named, flow, params),
         )
+        if shape == SQUARE_PROFILE:
+            return self._square_profile(where, named, profile, params)
+        if shape == DRAWN_PROFILE:
+            return replace(
+                profile, points=self._drawn_points(where, named, period, params["points"])
+            )
+        return profile
+
+    def _profile_noise(
+        self, where: str, named: str, flow: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The noise modifier of a declared profile, refused on what
+        muscadet refuses. A noisy profile declared without a key gets the
+        key of this flow (:func:`flow_noise_key`), as muscadet gives it."""
+        amplitude = float(params.get("noise_amplitude", 0.0))
+        if not (amplitude >= 0.0 and math.isfinite(amplitude)):
+            raise ValueError(
+                f"{where} declares a time profile{named} with noise_amplitude="
+                f"{amplitude:g}; the standard deviation of a noise is a finite "
+                "number, not negative"
+            )
+        time_scale = params.get("noise_time_scale")
+        if amplitude > 0.0:
+            if time_scale is None:
+                raise ValueError(
+                    f"{where} declares a time profile{named} with a noise of "
+                    f"amplitude {amplitude:g} and no noise_time_scale, the "
+                    "spacing of the noise nodes"
+                )
+            time_scale = float(time_scale)
+            if not (time_scale > 0.0 and math.isfinite(time_scale)):
+                raise ValueError(
+                    f"{where} declares a time profile{named} with "
+                    f"noise_time_scale={time_scale:g}; the spacing of the noise "
+                    "nodes is strictly positive and finite"
+                )
+        elif time_scale is not None:
+            raise ValueError(
+                f"{where} declares a time profile{named} with noise_time_scale="
+                f"{time_scale!r} without noise; give a positive "
+                "noise_amplitude, or leave both out"
+            )
+        key = params.get("noise_key")
+        if key is not None and (
+            isinstance(key, bool) or not isinstance(key, int) or not 0 <= key <= _MASK64
+        ):
+            raise ValueError(
+                f"{where} declares a time profile{named} with noise_key={key!r}; "
+                "a flow key is an integer that fits in 64 unsigned bits"
+            )
+        if amplitude > 0.0 and key is None:
+            key = flow_noise_key(self.name, flow)
+        if not amplitude > 0.0:
+            return {}
+        return {
+            "noise_amplitude": amplitude,
+            "noise_time_scale": time_scale,
+            "noise_key": key,
+        }
+
+    @staticmethod
+    def _square_profile(
+        where: str, named: str, profile: _Profile, params: dict[str, Any]
+    ) -> _Profile:
+        """A square wave's levels and durations, refused on what
+        muscadet's `TrapezoidProfile` refuses."""
+        low, high = float(params["low"]), float(params["high"])
+        high_duration = float(params["high_duration"])
+        ramp_duration = float(params["ramp_duration"])
+        if not ramp_duration > 0.0:
+            raise ValueError(
+                f"{where} declares a square wave{named} with ramp_duration="
+                f"{ramp_duration:g}. A zero ramp is a jump, which the solver "
+                "would integrate across without stopping at it; give the edge "
+                "a duration, however short"
+            )
+        if high_duration < 0.0:
+            raise ValueError(
+                f"{where} declares a square wave{named} with a negative "
+                f"high_duration={high_duration:g}"
+            )
+        if 2.0 * ramp_duration + high_duration > profile.period:
+            raise ValueError(
+                f"{where} declares a square wave{named} whose plateau "
+                f"({high_duration:g}) and two ramps ({ramp_duration:g} each) "
+                f"last longer than the period ({profile.period:g})"
+            )
+        for label, level in (("low", low), ("high", high)):
+            if level < 0.0:
+                raise ValueError(
+                    f"{where} declares a square wave{named} with {label}="
+                    f"{level:g}; a profile factor scales a quantity and may not "
+                    "be negative"
+                )
+        return replace(
+            profile,
+            low=low,
+            high=high,
+            high_duration=high_duration,
+            ramp_duration=ramp_duration,
+        )
+
+    @staticmethod
+    def _drawn_points(
+        where: str, named: str, period: float, declared: Any
+    ) -> list[list[float]]:
+        """A drawn curve's points, refused on what muscadet's
+        `PiecewiseLinearProfile` refuses."""
+        try:
+            pairs = [list(pair) for pair in declared]
+        except TypeError:
+            raise ValueError(
+                f"{where} declares a drawn curve{named} whose points {declared!r} "
+                "are not a list of [instant, factor] pairs"
+            ) from None
+        if len(pairs) < 2:
+            raise ValueError(
+                f"{where} declares a drawn curve{named} with {len(pairs)} "
+                "point(s); at least two points are needed"
+            )
+        points: list[list[float]] = []
+        for index, pair in enumerate(pairs):
+            if len(pair) != 2:
+                raise ValueError(
+                    f"{where} declares a drawn curve{named} whose point {index} "
+                    f"is {pair!r}, not an [instant, factor] pair"
+                )
+            instant, factor = float(pair[0]), float(pair[1])
+            if not (math.isfinite(instant) and math.isfinite(factor)):
+                raise ValueError(
+                    f"{where} declares a drawn curve{named} whose point {index} "
+                    f"is not finite: {pair!r}"
+                )
+            if factor < 0.0:
+                raise ValueError(
+                    f"{where} declares a drawn curve{named} whose point {index} "
+                    f"has factor {factor:g}, and a profile factor may not be "
+                    "negative"
+                )
+            if not instant < period:
+                raise ValueError(
+                    f"{where} declares a drawn curve{named} whose point {index} "
+                    f"is at instant {instant:g}, not below the period "
+                    f"({period:g}); the curve returns to its first point at the "
+                    "period by itself"
+                )
+            if points and not instant > points[-1][0]:
+                raise ValueError(
+                    f"{where} declares a drawn curve{named} whose instants are "
+                    f"not strictly increasing: point {index} at {instant:g} "
+                    f"follows {points[-1][0]:g}"
+                )
+            points.append([instant, factor])
+        if points[0][0] != 0.0:
+            raise ValueError(
+                f"{where} declares a drawn curve{named} whose first point is at "
+                f"instant {points[0][0]:g}; it must be at instant 0"
+            )
+        return points
 
     # --- transfer pairs -------------------------------------------------
 
@@ -5893,28 +6222,59 @@ class ObjFlow:
         return {"op": "sub", "lhs": _float(NOMINAL_RATE), "rhs": _sum(taken)}
 
     def _profile_expr(self, profile: _Profile) -> dict[str, Any]:
-        """The clamped sinusoid, as an expression of simulation time."""
-        angle = {
-            "op": "mul",
-            "args": [
-                {
-                    "op": "sub",
-                    "lhs": {"op": "time"},
-                    "rhs": _float(profile.phase_shift),
-                },
-                _float(2 * math.pi / profile.period),
-            ],
-        }
-        wave: dict[str, Any] = {
-            "op": "add",
-            "args": [
-                {
-                    "op": "mul",
-                    "args": [_float(profile.amplitude), {"op": "sin", "arg": angle}],
-                },
-                _float(profile.offset),
-            ],
-        }
+        """The clamped profile, as an expression of simulation time: its
+        base curve, plus its noise, clamped."""
+        wave: dict[str, Any]
+        if profile.shape == SINE_PROFILE:
+            angle = {
+                "op": "mul",
+                "args": [
+                    {
+                        "op": "sub",
+                        "lhs": {"op": "time"},
+                        "rhs": _float(profile.phase_shift),
+                    },
+                    _float(2 * math.pi / profile.period),
+                ],
+            }
+            wave = {
+                "op": "add",
+                "args": [
+                    {
+                        "op": "mul",
+                        "args": [
+                            _float(profile.amplitude),
+                            {"op": "sin", "arg": angle},
+                        ],
+                    },
+                    _float(profile.offset),
+                ],
+            }
+        else:
+            # The square wave and the drawn curve are one engine node: a
+            # periodic piecewise-linear signal, evaluated by binary search
+            # without an event per breakpoint and per period.
+            wave = {
+                "op": "piecewise_linear",
+                "arg": {"op": "time"},
+                "points": profile.drawn_points(),
+                "period": profile.period,
+                "phase_shift": profile.phase_shift,
+            }
+        if profile.has_noise:
+            wave = {
+                "op": "add",
+                "args": [
+                    wave,
+                    {
+                        "op": "smooth_noise",
+                        "arg": {"op": "time"},
+                        "amplitude": profile.noise_amplitude,
+                        "time_scale": profile.noise_time_scale,
+                        "key": profile.noise_key,
+                    },
+                ],
+            }
         clamped: dict[str, Any] = {
             "op": "max",
             "args": [_float(profile.value_min), wave],
