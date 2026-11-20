@@ -1,0 +1,304 @@
+{
+  "components": {
+    "D1": {
+      "automata": [],
+      "capacities": [],
+      "cls": "ObjFlow",
+      "create_default_out_automata": true,
+      "failure_modes": [],
+      "flows": [
+        {
+          "allocation": "proportional",
+          "allocation_priorities": {},
+          "allocation_shares": {},
+          "cls": "FlowContinuousOut",
+          "component_authorized": [
+            {
+              "class_name_bkd": ".*"
+            }
+          ],
+          "name": "P",
+          "profile": {
+            "cls": "PiecewiseLinearProfile",
+            "period": 24.0,
+            "phase_shift": 0.0,
+            "points": [
+              [
+                0.0,
+                0.5
+              ],
+              [
+                8.0,
+                1.2
+              ],
+              [
+                16.0,
+                0.8
+              ]
+            ],
+            "value_max": 1.5,
+            "value_min": 0.0
+          },
+          "var_demand_in_default": 0.0,
+          "var_fed_default": 5.0,
+          "var_prod_cond_inner_mode": "or",
+          "var_type": "float"
+        }
+      ],
+      "measurements_in": [],
+      "measurements_out": [],
+      "metadata": {
+        "attributes_initial": [],
+        "capacity_overrides": [],
+        "class_name": "Drawn",
+        "instance_overrides": [],
+        "platform_id": "id-d1"
+      },
+      "mixtures": [],
+      "name": "D1",
+      "rules": [],
+      "source_cls": "ObjFlow",
+      "transfers": []
+    },
+    "G1": {
+      "automata": [],
+      "capacities": [],
+      "cls": "ObjFlow",
+      "create_default_out_automata": true,
+      "failure_modes": [],
+      "flows": [
+        {
+          "allocation": "proportional",
+          "allocation_priorities": {},
+          "allocation_shares": {},
+          "cls": "FlowContinuousOut",
+          "component_authorized": [
+            {
+              "class_name_bkd": ".*"
+            }
+          ],
+          "name": "P",
+          "profile": {
+            "amplitude": 0.5,
+            "cls": "SinusoidalProfile",
+            "name": "SinusoidalProfile",
+            "offset": 1.0,
+            "period": 24.0,
+            "phase_shift": 0.0,
+            "value_max": Infinity,
+            "value_min": 0.0
+          },
+          "var_demand_in_default": 0.0,
+          "var_fed_default": 4.0,
+          "var_prod_cond_inner_mode": "or",
+          "var_type": "float"
+        }
+      ],
+      "measurements_in": [],
+      "measurements_out": [],
+      "metadata": {
+        "attributes_initial": [],
+        "capacity_overrides": [],
+        "class_name": "Gen",
+        "instance_overrides": [],
+        "platform_id": "id-g1"
+      },
+      "mixtures": [],
+      "name": "G1",
+      "rules": [],
+      "source_cls": "ObjFlow",
+      "transfers": []
+    },
+    "G2": {
+      "automata": [],
+      "capacities": [],
+      "cls": "ObjFlow",
+      "create_default_out_automata": true,
+      "failure_modes": [],
+      "flows": [
+        {
+          "allocation": "proportional",
+          "allocation_priorities": {},
+          "allocation_shares": {},
+          "cls": "FlowContinuousOut",
+          "component_authorized": [
+            {
+              "class_name_bkd": ".*"
+            }
+          ],
+          "name": "P",
+          "profile": {
+            "cls": "TrapezoidProfile",
+            "high": 1.5,
+            "high_duration": 11.0,
+            "low": 0.2,
+            "period": 24.0,
+            "phase_shift": 6.0,
+            "ramp_duration": 0.5,
+            "value_max": Infinity,
+            "value_min": 0.0
+          },
+          "var_demand_in_default": 0.0,
+          "var_fed_default": 3.0,
+          "var_prod_cond_inner_mode": "or",
+          "var_type": "float"
+        }
+      ],
+      "measurements_in": [],
+      "measurements_out": [],
+      "metadata": {
+        "attributes_initial": [
+          {
+            "name": "P",
+            "role": "production_profile",
+            "value": {
+              "cls": "square",
+              "high": 1.5,
+              "high_duration": 11.0,
+              "low": 0.2,
+              "period": 24.0,
+              "phase_shift": 6.0,
+              "ramp_duration": 0.5,
+              "value": 3.0
+            }
+          }
+        ],
+        "capacity_overrides": [],
+        "class_name": "Gen",
+        "instance_overrides": [
+          {
+            "name": "P",
+            "role": "production_profile",
+            "value": {
+              "cls": "square",
+              "high": 1.5,
+              "high_duration": 11.0,
+              "low": 0.2,
+              "period": 24.0,
+              "phase_shift": 6.0,
+              "ramp_duration": 0.5,
+              "value": 3.0
+            }
+          }
+        ],
+        "platform_id": "id-g2"
+      },
+      "mixtures": [],
+      "name": "G2",
+      "rules": [],
+      "source_cls": "ObjFlow",
+      "transfers": []
+    },
+    "L1": {
+      "automata": [],
+      "capacities": [],
+      "cls": "ObjFlow",
+      "create_default_out_automata": true,
+      "failure_modes": [],
+      "flows": [
+        {
+          "cls": "FlowContinuousIn",
+          "component_authorized": [
+            {
+              "class_name_bkd": ".*"
+            }
+          ],
+          "name": "P",
+          "profile": {
+            "amplitude": 0.4,
+            "cls": "SinusoidalProfile",
+            "name": "SinusoidalProfile",
+            "offset": 1.0,
+            "period": 24.0,
+            "phase_shift": -3.0,
+            "value_max": Infinity,
+            "value_min": 0.0
+          },
+          "var_demand_default": 1.5,
+          "var_fed_default": 0.0,
+          "var_in_default": 0.0,
+          "var_type": "float"
+        }
+      ],
+      "measurements_in": [],
+      "measurements_out": [],
+      "metadata": {
+        "attributes_initial": [],
+        "capacity_overrides": [],
+        "class_name": "Load",
+        "instance_overrides": [],
+        "platform_id": "id-l1"
+      },
+      "mixtures": [],
+      "name": "L1",
+      "rules": [],
+      "source_cls": "ObjFlow",
+      "transfers": []
+    },
+    "N1": {
+      "automata": [],
+      "capacities": [],
+      "cls": "ObjFlow",
+      "create_default_out_automata": true,
+      "failure_modes": [],
+      "flows": [
+        {
+          "allocation": "proportional",
+          "allocation_priorities": {},
+          "allocation_shares": {},
+          "cls": "FlowContinuousOut",
+          "component_authorized": [
+            {
+              "class_name_bkd": ".*"
+            }
+          ],
+          "name": "P",
+          "profile": {
+            "amplitude": 0.3,
+            "cls": "SinusoidalProfile",
+            "name": "SinusoidalProfile",
+            "noise_amplitude": 0.1,
+            "noise_key": 10188443936111325687,
+            "noise_time_scale": 2.0,
+            "offset": 1.0,
+            "period": 12.0,
+            "phase_shift": 0.0,
+            "value_max": Infinity,
+            "value_min": 0.0
+          },
+          "var_demand_in_default": 0.0,
+          "var_fed_default": 2.0,
+          "var_prod_cond_inner_mode": "or",
+          "var_type": "float"
+        }
+      ],
+      "measurements_in": [],
+      "measurements_out": [],
+      "metadata": {
+        "attributes_initial": [],
+        "capacity_overrides": [],
+        "class_name": "Noisy",
+        "instance_overrides": [],
+        "platform_id": "id-n1"
+      },
+      "mixtures": [],
+      "name": "N1",
+      "rules": [],
+      "source_cls": "ObjFlow",
+      "transfers": []
+    }
+  },
+  "connections": [
+    {
+      "flow": "P",
+      "source": "G1",
+      "source_box": "P_out",
+      "target": "L1",
+      "target_box": "P_in"
+    }
+  ],
+  "generated_indicators": true,
+  "indicators": [],
+  "name": "ProfileReference",
+  "version": "1.2.0"
+}

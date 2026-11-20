@@ -903,10 +903,15 @@ def test_every_blocking_construct_of_a_component_is_named():
     continuous = {"cls": "FlowContinuousOut", "name": "relay", "max_rate": 2.0, "profile": {
         "cls": "SinusoidalProfile", "amplitude": 1.0, "period": 4.0, "phase_shift": 0.0,
         "offset": 1.0, "value_min": 0.0, "value_max": 1.5, "name": "SinusoidalProfile"}}
-    inverter = component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True), continuous])
+    unconnected = {"cls": "FlowContinuousIn", "name": "feed", "var_type": "float", "var_fed_default": 0.0,
+                   "component_authorized": [{"class_name_bkd": ".*"}], "var_in_default": 1.0,
+                   "var_demand_default": 0.0}
+    inverter = component("inv", [flow_in("x"), flow_out("y", [["x"]], negate=True), continuous, unconnected])
     refusals = convert(document([inverter], [])).refusals
+    # The profile's upper clamp is not among them: `std.time_profile` takes
+    # `value_max`.
     assert [(r.component, r.construct) for r in refusals] == [
-        ("inv", "profile upper bound"),
+        ("inv", "value of an unconnected continuous input"),
         ("inv", "maximum rate on an output no rule set produces"),
     ]
 

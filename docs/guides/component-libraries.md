@@ -274,8 +274,11 @@ the three documents of a library:
   own named after the instance when the class is the bare `ObjFlow`;
 - values that differ between the instances of a class become type
   parameters, and a class whose instances differ in structure (another
-  set of flows, a mode with other effects) splits into variant types,
-  which the conversion's `notes` report;
+  set of flows, a mode with other effects, a time profile of another
+  shape, with or without noise, or through other points) splits into
+  variant types, which the conversion's `notes` report. A profile's
+  scalars, its noise key among them, are values: two instances carrying
+  the same noisy profile share a type and keep independent noises;
 - each two-state mode becomes a mode of its target's type, its laws and
   condition an activation in the study; each event becomes a feared event.
 
@@ -340,7 +343,9 @@ effect are held effects here: held while failed and handed back once at
 the repair, and held at rest and written once entering the failure.
 
 Continuous flows convert where a plugin-versus-library bench proves the
-fragment: sources and sinks with their sinusoidal profiles and published
+fragment: sources and sinks with their time profiles (sinusoids, square
+waves and drawn curves, the last two as the `piecewise_linear` shape of
+`std.time_profile`, with their upper clamp and their noise) and published
 rates, proportional and share splits, pass-throughs (`muscadet.pass_through`),
 single-flow volumes on the output side with a finite or unbounded fill
 (`muscadet.volume_flow`, `muscadet.volume_outlet`, `muscadet.volume_total`), volumes

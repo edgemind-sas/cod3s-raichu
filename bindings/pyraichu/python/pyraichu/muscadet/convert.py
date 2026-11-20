@@ -549,29 +549,44 @@ def _is_continuous(call: Any) -> bool:
     return call.method in _CONTINUOUS_METHODS or call.section in _CONTINUOUS_SECTIONS
 
 
-def _profile_refusal(profile: Any, where: str) -> list[_Refused]:
-    """`std.time_profile` clamps from below only."""
-    if profile is not None and profile.value_max is not None and not math.isinf(profile.value_max):
-        return [_Refused("profile upper bound", f"{where} clamps its profile at {profile.value_max}")]
-    return []
-
-
 def _profile_uses(target: str, profile: Any) -> list[dict]:
-    """`std.time_profile` for a declared sinusoidal profile."""
-    return [
-        {
-            "fragment": "std.time_profile",
-            "with": {
-                "target": target,
-                "amplitude": float(profile.amplitude),
-                "phase_shift": float(profile.phase_shift),
-                "period": float(profile.period),
-                "offset": float(profile.offset),
-                "value_min": float(profile.value_min),
-                "initial": float(profile.factor(0.0)),
-            },
-        }
-    ]
+    """`std.time_profile` for a declared profile.
+
+    A sinusoid keeps the default `sine` shape and writes what it always
+    wrote. A square wave and a drawn curve are both the `piecewise_linear`
+    shape, the square wave through its four points per period. The upper
+    clamp is written only when it binds and the noise only when there is
+    one, so a profile without either reads as it did before they existed.
+    """
+    from .. import muscadet as authoring
+
+    with_: dict[str, Any] = {"target": target}
+    if profile.shape == authoring.SINE_PROFILE:
+        with_.update(
+            amplitude=float(profile.amplitude),
+            phase_shift=float(profile.phase_shift),
+            period=float(profile.period),
+            offset=float(profile.offset),
+        )
+    else:
+        with_.update(
+            shape="piecewise_linear",
+            points=profile.drawn_points(),
+            phase_shift=float(profile.phase_shift),
+            period=float(profile.period),
+        )
+    with_["value_min"] = float(profile.value_min)
+    if profile.value_max is not None:
+        with_["value_max"] = float(profile.value_max)
+    if profile.has_noise:
+        with_.update(
+            noise="smooth",
+            noise_amplitude=float(profile.noise_amplitude),
+            noise_time_scale=float(profile.noise_time_scale),
+            noise_key=int(profile.noise_key),
+        )
+    with_["initial"] = float(profile.factor(0.0))
+    return [{"fragment": "std.time_profile", "with": with_}]
 
 
 def _allocation(flow: Any, consumers: list[tuple[str, str]]) -> dict[str, Any]:
@@ -1276,7 +1291,6 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         )
         if flow.profile is not None and not sink:
             refused.append(_Refused("profile on an input that is not a sink", where))
-        refused += _profile_refusal(flow.profile, where)
         if flow.publish_rate is not None and flow.publish_rate != authoring.RATE_DELIVERED:
             refused.append(_Refused(f"published input rate `{flow.publish_rate}`", where))
         elif flow.publish_rate is not None and flow.name in drawn:
@@ -1288,7 +1302,6 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         source = not (obj._passes_through(flow.name) or flow.name in held or flow.name in produced_by)
         if flow.profile is not None and not source:
             refused.append(_Refused("profile on an output that is not a source", where))
-        refused += _profile_refusal(flow.profile, where)
         if flow.max_rate is not None and flow.name not in produced_by:
             refused.append(_Refused("maximum rate on an output no rule set produces", where))
         if flow.publish_rate not in (None, authoring.RATE_CAPABILITY, authoring.RATE_DELIVERED):
@@ -1705,6 +1718,14 @@ def _gate_use(
 
 #: Which parameters of a std fragment hold a VALUE (a type parameter when it
 #: differs between instances); every other parameter is structure.
+#:
+#: A time profile's `shape`, `noise` and `points` are structure: two
+#: instances of one class whose profiles differ by shape, by the presence of
+#: a noise or by their points (a drawn curve's, or a square wave's levels
+#: and durations, which are its points) become two variant types, each
+#: carrying its own points. Its scalars, `noise_key` among them, are values:
+#: two instances carrying the same noisy profile share one type and differ
+#: by their flow key, so their noises stay independent.
 _VALUE_PARAMETERS = {
     "muscadet.bool_flow_in": ("default", "k"),
     "muscadet.bool_flow_out": ("fed_available_init", "negate"),
@@ -1724,7 +1745,18 @@ _VALUE_PARAMETERS = {
     "muscadet.continuous_flow_in": ("demand",),
     "muscadet.continuous_source": ("rate",),
     "muscadet.continuous_sink": ("demand",),
-    "std.time_profile": ("amplitude", "phase_shift", "period", "offset", "value_min", "initial"),
+    "std.time_profile": (
+        "amplitude",
+        "phase_shift",
+        "period",
+        "offset",
+        "value_min",
+        "value_max",
+        "noise_amplitude",
+        "noise_time_scale",
+        "noise_key",
+        "initial",
+    ),
     "muscadet.volume_flow": ("capacity", "content_init", "demand", "fill_rate"),
     "muscadet.volume_outlet": ("rate",),
     "muscadet.volume_total": ("capacity",),

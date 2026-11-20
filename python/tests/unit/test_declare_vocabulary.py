@@ -542,6 +542,23 @@ def test_the_label_is_the_last_key_of_the_declared_vocabulary():
         "value_min",
         "value_max",
         "name",
+        "noise_amplitude",
+        "noise_time_scale",
+        "noise_key",
+    )
+
+
+def test_each_profile_shape_reads_the_vocabulary_of_its_muscadet_constructor():
+    """The square wave and the drawn curve take no `name`, and every shape
+    takes the clamp and the noise."""
+    assert set(mu.PROFILE_CLASS_KEYS) == set(mu.PROFILE_CLASSES)
+    assert mu.PROFILE_CLASS_KEYS[mu.SINE_PROFILE] == mu.PROFILE_KEYS
+    assert mu.PROFILE_CLASS_KEYS[mu.SQUARE_PROFILE] == (
+        "low", "high", "period", "high_duration", "ramp_duration", "phase_shift",
+        "value_min", "value_max", *mu.NOISE_KEYS,
+    )
+    assert mu.PROFILE_CLASS_KEYS[mu.DRAWN_PROFILE] == (
+        "points", "period", "phase_shift", "value_min", "value_max", *mu.NOISE_KEYS,
     )
 
 
