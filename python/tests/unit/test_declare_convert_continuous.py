@@ -180,9 +180,11 @@ def test_a_split_names_each_consumer_by_its_own_input():
 def test_a_conditioned_rule_set_with_a_band_converts():
     conversion = proved(machine_plant())
     machine = next(t for t in conversion.library["library"]["types"] if t["name"] == "Machine")
-    fragments = [u["fragment"] for u in machine["uses"]]
-    # Two suppliers on a consumed input: the surplus goes back.
-    assert fragments.count("muscadet.surplus_release") == 1
+    # Every wired input the rule consumes hands back what it does not
+    # consume: the single-supplier `Water` as the two-supplier `Elec`.
+    releases = [u for u in machine["uses"] if u["fragment"] == "muscadet.surplus_release"]
+    assert sorted(u["with"]["name"] for u in releases) == ["Elec", "Water"]
+    assert all(u["with"]["consumed"] is True for u in releases)
 
 
 def test_instances_of_one_class_share_a_type_with_their_rates_as_parameters():

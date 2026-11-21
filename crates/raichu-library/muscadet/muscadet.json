@@ -2267,12 +2267,18 @@
       },
       {
         "name": "surplus_release",
-        "description": "Makes the input `<name>` (a `continuous_flow_in`) hand back what it does not need when two suppliers or more offer more than its demand, pro rata of what each offered. A supplier whose volume has run out (`held` on its `continuous_flow_out`) passes on what arrives and is accepted first; the others share what is left. With a single supplier both shares stay 1. Apply it to an input a rule set consumes and no volume holds. A supplier serving the pooled draw of a mixed volume (channel `pooled`) makes the input release with a single supplier too, against what the rule consumes at its draw (`<name>_consumed_in`, written by `rule_consumes`): the rule runs at the draw its scarcest arrival allows, and what it does not consume stays in the volume. A rule input fed by a pooled output must apply it: without it the input keeps the whole offer and the volume drains for nothing.",
+        "description": "Makes the input `<name>` (a `continuous_flow_in`) hand back what it does not need when two suppliers or more offer more than its demand, pro rata of what each offered. A supplier whose volume has run out (`held` on its `continuous_flow_out`) passes on what arrives and is accepted first; the others share what is left. With a single supplier both shares stay 1, unless `consumed` is set. Apply it to an input a rule set consumes and no volume holds. A supplier serving the pooled draw of a mixed volume (channel `pooled`) makes the input release with a single supplier too, against what the rule consumes at its draw (`<name>_consumed_in`, written by `rule_consumes`): the rule runs at the draw its scarcest arrival allows, and what it does not consume stays in the volume. A rule input fed by a pooled output must apply it: without it the input keeps the whole offer and the volume drains for nothing. With `consumed`, the input releases whatever the number of its suppliers, against `<name>_consumed_in`: a recipe limited by another of its inputs consumes less of this one than it asked for, and the rest goes back to the suppliers instead of vanishing (muscadet's `release_unused_supply`).",
         "parameters": [
           {
             "name": "name",
             "kind": "string",
             "description": "Flow name of the input."
+          },
+          {
+            "name": "consumed",
+            "kind": "bool",
+            "default": false,
+            "description": "A rule set consumes the input and writes `<name>_consumed_in` (`rule_consumes`): the input releases whatever the number of its suppliers, against what the rule consumes at its draw. A recipe limited by another input consumes less of this one than it asked for, and the rest goes back to the suppliers. Without it, the input releases between two suppliers or more against its demand, or against its consumption when a pooled output feeds it."
           }
         ],
         "body": {
@@ -2281,175 +2287,239 @@
               "target": "${name}_accepted_held",
               "kind": "explicit",
               "expr": {
-                "op": "port_agg",
-                "port": {
-                  "component": "$self",
-                  "port": "${name}_in"
-                },
-                "agg": "sum",
-                "channel": "held"
+                "$choose": "consumed",
+                "cases": {
+                  "false": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "${name}_in"
+                    },
+                    "agg": "sum",
+                    "channel": "held"
+                  },
+                  "true": {
+                    "op": "port_agg",
+                    "port": {
+                      "component": "$self",
+                      "port": "${name}_in"
+                    },
+                    "agg": "sum",
+                    "channel": "held"
+                  }
+                }
               }
             },
             {
               "target": "${name}_accepted_held_share",
               "kind": "explicit",
               "expr": {
-                "op": "if",
-                "cond": {
-                  "op": "bool",
-                  "bool_op": "or",
-                  "args": [
-                    {
-                      "op": "cmp",
-                      "cmp": "ge",
-                      "lhs": {
-                        "op": "port_agg",
-                        "port": {
-                          "component": "$self",
-                          "port": "${name}_in"
+                "$choose": "consumed",
+                "cases": {
+                  "false": {
+                    "op": "if",
+                    "cond": {
+                      "op": "bool",
+                      "bool_op": "or",
+                      "args": [
+                        {
+                          "op": "cmp",
+                          "cmp": "ge",
+                          "lhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "${name}_in"
+                            },
+                            "agg": "count"
+                          },
+                          "rhs": {
+                            "op": "const",
+                            "value": {
+                              "kind": "int",
+                              "value": 2
+                            }
+                          }
                         },
-                        "agg": "count"
-                      },
-                      "rhs": {
-                        "op": "const",
-                        "value": {
-                          "kind": "int",
-                          "value": 2
+                        {
+                          "op": "cmp",
+                          "cmp": "gt",
+                          "lhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "${name}_in"
+                            },
+                            "agg": "sum",
+                            "channel": "pooled"
+                          },
+                          "rhs": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
-                    {
-                      "op": "cmp",
-                      "cmp": "gt",
-                      "lhs": {
-                        "op": "port_agg",
-                        "port": {
-                          "component": "$self",
-                          "port": "${name}_in"
+                    "then": {
+                      "op": "if",
+                      "cond": {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${name}_accepted_held"
+                          }
                         },
-                        "agg": "sum",
-                        "channel": "pooled"
+                        "rhs": {
+                          "op": "if",
+                          "cond": {
+                            "op": "cmp",
+                            "cmp": "gt",
+                            "lhs": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "${name}_in"
+                              },
+                              "agg": "sum",
+                              "channel": "pooled"
+                            },
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          },
+                          "then": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_consumed_in"
+                            }
+                          },
+                          "otherwise": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_demand_in"
+                            }
+                          }
+                        }
                       },
-                      "rhs": {
+                      "then": {
+                        "op": "div",
+                        "lhs": {
+                          "op": "if",
+                          "cond": {
+                            "op": "cmp",
+                            "cmp": "gt",
+                            "lhs": {
+                              "op": "port_agg",
+                              "port": {
+                                "component": "$self",
+                                "port": "${name}_in"
+                              },
+                              "agg": "sum",
+                              "channel": "pooled"
+                            },
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            }
+                          },
+                          "then": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_consumed_in"
+                            }
+                          },
+                          "otherwise": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_demand_in"
+                            }
+                          }
+                        },
+                        "rhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${name}_accepted_held"
+                          }
+                        }
+                      },
+                      "otherwise": {
                         "op": "const",
                         "value": {
                           "kind": "float",
-                          "value": 0.0
+                          "value": 1.0
                         }
-                      }
-                    }
-                  ]
-                },
-                "then": {
-                  "op": "if",
-                  "cond": {
-                    "op": "cmp",
-                    "cmp": "gt",
-                    "lhs": {
-                      "op": "attr",
-                      "attr": {
-                        "component": "$self",
-                        "attribute": "${name}_accepted_held"
                       }
                     },
-                    "rhs": {
-                      "op": "if",
-                      "cond": {
-                        "op": "cmp",
-                        "cmp": "gt",
-                        "lhs": {
-                          "op": "port_agg",
-                          "port": {
-                            "component": "$self",
-                            "port": "${name}_in"
-                          },
-                          "agg": "sum",
-                          "channel": "pooled"
-                        },
-                        "rhs": {
-                          "op": "const",
-                          "value": {
-                            "kind": "float",
-                            "value": 0.0
-                          }
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
+                      }
+                    }
+                  },
+                  "true": {
+                    "op": "if",
+                    "cond": {
+                      "op": "cmp",
+                      "cmp": "gt",
+                      "lhs": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_accepted_held"
                         }
                       },
-                      "then": {
+                      "rhs": {
+                        "op": "attr",
+                        "attr": {
+                          "component": "$self",
+                          "attribute": "${name}_consumed_in"
+                        }
+                      }
+                    },
+                    "then": {
+                      "op": "div",
+                      "lhs": {
                         "op": "attr",
                         "attr": {
                           "component": "$self",
                           "attribute": "${name}_consumed_in"
                         }
                       },
-                      "otherwise": {
+                      "rhs": {
                         "op": "attr",
                         "attr": {
                           "component": "$self",
-                          "attribute": "${name}_demand_in"
-                        }
-                      }
-                    }
-                  },
-                  "then": {
-                    "op": "div",
-                    "lhs": {
-                      "op": "if",
-                      "cond": {
-                        "op": "cmp",
-                        "cmp": "gt",
-                        "lhs": {
-                          "op": "port_agg",
-                          "port": {
-                            "component": "$self",
-                            "port": "${name}_in"
-                          },
-                          "agg": "sum",
-                          "channel": "pooled"
-                        },
-                        "rhs": {
-                          "op": "const",
-                          "value": {
-                            "kind": "float",
-                            "value": 0.0
-                          }
-                        }
-                      },
-                      "then": {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${name}_consumed_in"
-                        }
-                      },
-                      "otherwise": {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${name}_demand_in"
+                          "attribute": "${name}_accepted_held"
                         }
                       }
                     },
-                    "rhs": {
-                      "op": "attr",
-                      "attr": {
-                        "component": "$self",
-                        "attribute": "${name}_accepted_held"
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
                       }
                     }
-                  },
-                  "otherwise": {
-                    "op": "const",
-                    "value": {
-                      "kind": "float",
-                      "value": 1.0
-                    }
-                  }
-                },
-                "otherwise": {
-                  "op": "const",
-                  "value": {
-                    "kind": "float",
-                    "value": 1.0
                   }
                 }
               }
@@ -2458,230 +2528,348 @@
               "target": "${name}_accepted_share",
               "kind": "explicit",
               "expr": {
-                "op": "if",
-                "cond": {
-                  "op": "bool",
-                  "bool_op": "or",
-                  "args": [
-                    {
-                      "op": "cmp",
-                      "cmp": "ge",
-                      "lhs": {
-                        "op": "port_agg",
-                        "port": {
-                          "component": "$self",
-                          "port": "${name}_in"
+                "$choose": "consumed",
+                "cases": {
+                  "false": {
+                    "op": "if",
+                    "cond": {
+                      "op": "bool",
+                      "bool_op": "or",
+                      "args": [
+                        {
+                          "op": "cmp",
+                          "cmp": "ge",
+                          "lhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "${name}_in"
+                            },
+                            "agg": "count"
+                          },
+                          "rhs": {
+                            "op": "const",
+                            "value": {
+                              "kind": "int",
+                              "value": 2
+                            }
+                          }
                         },
-                        "agg": "count"
-                      },
-                      "rhs": {
-                        "op": "const",
-                        "value": {
-                          "kind": "int",
-                          "value": 2
+                        {
+                          "op": "cmp",
+                          "cmp": "gt",
+                          "lhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "${name}_in"
+                            },
+                            "agg": "sum",
+                            "channel": "pooled"
+                          },
+                          "rhs": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
+                            }
+                          }
                         }
-                      }
+                      ]
                     },
-                    {
-                      "op": "cmp",
-                      "cmp": "gt",
-                      "lhs": {
-                        "op": "port_agg",
-                        "port": {
-                          "component": "$self",
-                          "port": "${name}_in"
+                    "then": {
+                      "op": "if",
+                      "cond": {
+                        "op": "cmp",
+                        "cmp": "gt",
+                        "lhs": {
+                          "op": "sub",
+                          "lhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "${name}_in"
+                            },
+                            "agg": "sum",
+                            "channel": "alloc"
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_accepted_held"
+                            }
+                          }
                         },
-                        "agg": "sum",
-                        "channel": "pooled"
+                        "rhs": {
+                          "op": "max",
+                          "args": [
+                            {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            },
+                            {
+                              "op": "sub",
+                              "lhs": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "cmp",
+                                  "cmp": "gt",
+                                  "lhs": {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "${name}_in"
+                                    },
+                                    "agg": "sum",
+                                    "channel": "pooled"
+                                  },
+                                  "rhs": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 0.0
+                                    }
+                                  }
+                                },
+                                "then": {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${name}_consumed_in"
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${name}_demand_in"
+                                  }
+                                }
+                              },
+                              "rhs": {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_accepted_held"
+                                }
+                              }
+                            }
+                          ]
+                        }
                       },
-                      "rhs": {
+                      "then": {
+                        "op": "div",
+                        "lhs": {
+                          "op": "max",
+                          "args": [
+                            {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            },
+                            {
+                              "op": "sub",
+                              "lhs": {
+                                "op": "if",
+                                "cond": {
+                                  "op": "cmp",
+                                  "cmp": "gt",
+                                  "lhs": {
+                                    "op": "port_agg",
+                                    "port": {
+                                      "component": "$self",
+                                      "port": "${name}_in"
+                                    },
+                                    "agg": "sum",
+                                    "channel": "pooled"
+                                  },
+                                  "rhs": {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 0.0
+                                    }
+                                  }
+                                },
+                                "then": {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${name}_consumed_in"
+                                  }
+                                },
+                                "otherwise": {
+                                  "op": "attr",
+                                  "attr": {
+                                    "component": "$self",
+                                    "attribute": "${name}_demand_in"
+                                  }
+                                }
+                              },
+                              "rhs": {
+                                "op": "attr",
+                                "attr": {
+                                  "component": "$self",
+                                  "attribute": "${name}_accepted_held"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "rhs": {
+                          "op": "sub",
+                          "lhs": {
+                            "op": "port_agg",
+                            "port": {
+                              "component": "$self",
+                              "port": "${name}_in"
+                            },
+                            "agg": "sum",
+                            "channel": "alloc"
+                          },
+                          "rhs": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_accepted_held"
+                            }
+                          }
+                        }
+                      },
+                      "otherwise": {
                         "op": "const",
                         "value": {
                           "kind": "float",
-                          "value": 0.0
-                        }
-                      }
-                    }
-                  ]
-                },
-                "then": {
-                  "op": "if",
-                  "cond": {
-                    "op": "cmp",
-                    "cmp": "gt",
-                    "lhs": {
-                      "op": "sub",
-                      "lhs": {
-                        "op": "port_agg",
-                        "port": {
-                          "component": "$self",
-                          "port": "${name}_in"
-                        },
-                        "agg": "sum",
-                        "channel": "alloc"
-                      },
-                      "rhs": {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${name}_accepted_held"
+                          "value": 1.0
                         }
                       }
                     },
-                    "rhs": {
-                      "op": "max",
-                      "args": [
-                        {
-                          "op": "const",
-                          "value": {
-                            "kind": "float",
-                            "value": 0.0
-                          }
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
+                      }
+                    }
+                  },
+                  "true": {
+                    "op": "if",
+                    "cond": {
+                      "op": "cmp",
+                      "cmp": "gt",
+                      "lhs": {
+                        "op": "sub",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "${name}_in"
+                          },
+                          "agg": "sum",
+                          "channel": "alloc"
                         },
-                        {
-                          "op": "sub",
-                          "lhs": {
-                            "op": "if",
-                            "cond": {
-                              "op": "cmp",
-                              "cmp": "gt",
-                              "lhs": {
-                                "op": "port_agg",
-                                "port": {
-                                  "component": "$self",
-                                  "port": "${name}_in"
-                                },
-                                "agg": "sum",
-                                "channel": "pooled"
-                              },
-                              "rhs": {
-                                "op": "const",
-                                "value": {
-                                  "kind": "float",
-                                  "value": 0.0
-                                }
-                              }
-                            },
-                            "then": {
+                        "rhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${name}_accepted_held"
+                          }
+                        }
+                      },
+                      "rhs": {
+                        "op": "max",
+                        "args": [
+                          {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
+                            }
+                          },
+                          {
+                            "op": "sub",
+                            "lhs": {
                               "op": "attr",
                               "attr": {
                                 "component": "$self",
                                 "attribute": "${name}_consumed_in"
                               }
                             },
-                            "otherwise": {
+                            "rhs": {
                               "op": "attr",
                               "attr": {
                                 "component": "$self",
-                                "attribute": "${name}_demand_in"
+                                "attribute": "${name}_accepted_held"
                               }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "then": {
+                      "op": "div",
+                      "lhs": {
+                        "op": "max",
+                        "args": [
+                          {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
                             }
                           },
-                          "rhs": {
-                            "op": "attr",
-                            "attr": {
-                              "component": "$self",
-                              "attribute": "${name}_accepted_held"
-                            }
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  "then": {
-                    "op": "div",
-                    "lhs": {
-                      "op": "max",
-                      "args": [
-                        {
-                          "op": "const",
-                          "value": {
-                            "kind": "float",
-                            "value": 0.0
-                          }
-                        },
-                        {
-                          "op": "sub",
-                          "lhs": {
-                            "op": "if",
-                            "cond": {
-                              "op": "cmp",
-                              "cmp": "gt",
-                              "lhs": {
-                                "op": "port_agg",
-                                "port": {
-                                  "component": "$self",
-                                  "port": "${name}_in"
-                                },
-                                "agg": "sum",
-                                "channel": "pooled"
-                              },
-                              "rhs": {
-                                "op": "const",
-                                "value": {
-                                  "kind": "float",
-                                  "value": 0.0
-                                }
-                              }
-                            },
-                            "then": {
+                          {
+                            "op": "sub",
+                            "lhs": {
                               "op": "attr",
                               "attr": {
                                 "component": "$self",
                                 "attribute": "${name}_consumed_in"
                               }
                             },
-                            "otherwise": {
+                            "rhs": {
                               "op": "attr",
                               "attr": {
                                 "component": "$self",
-                                "attribute": "${name}_demand_in"
+                                "attribute": "${name}_accepted_held"
                               }
                             }
-                          },
-                          "rhs": {
-                            "op": "attr",
-                            "attr": {
-                              "component": "$self",
-                              "attribute": "${name}_accepted_held"
-                            }
                           }
-                        }
-                      ]
-                    },
-                    "rhs": {
-                      "op": "sub",
-                      "lhs": {
-                        "op": "port_agg",
-                        "port": {
-                          "component": "$self",
-                          "port": "${name}_in"
-                        },
-                        "agg": "sum",
-                        "channel": "alloc"
+                        ]
                       },
                       "rhs": {
-                        "op": "attr",
-                        "attr": {
-                          "component": "$self",
-                          "attribute": "${name}_accepted_held"
+                        "op": "sub",
+                        "lhs": {
+                          "op": "port_agg",
+                          "port": {
+                            "component": "$self",
+                            "port": "${name}_in"
+                          },
+                          "agg": "sum",
+                          "channel": "alloc"
+                        },
+                        "rhs": {
+                          "op": "attr",
+                          "attr": {
+                            "component": "$self",
+                            "attribute": "${name}_accepted_held"
+                          }
                         }
                       }
+                    },
+                    "otherwise": {
+                      "op": "const",
+                      "value": {
+                        "kind": "float",
+                        "value": 1.0
+                      }
                     }
-                  },
-                  "otherwise": {
-                    "op": "const",
-                    "value": {
-                      "kind": "float",
-                      "value": 1.0
-                    }
-                  }
-                },
-                "otherwise": {
-                  "op": "const",
-                  "value": {
-                    "kind": "float",
-                    "value": 1.0
                   }
                 }
               }

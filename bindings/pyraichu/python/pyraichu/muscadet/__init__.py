@@ -7157,15 +7157,15 @@ class ObjFlow:
                     {"op": "mul", "args": [coefficient, _var(me, made)]}
                 )
 
-        # What the rules actually consume of each input served as a
-        # mixture, at their draw: the need the release measures the
-        # offers against, so the supplier keeps what was not consumed.
+        # What the rules actually consume of each input that releases its
+        # surplus, at their draw: the need the release measures the offers
+        # against, so the suppliers keep what was not consumed.
         for flow in sorted(
             {
                 flow
                 for rule_set in self.rule_sets
                 for flow in rule_set.consumed()
-                if self._fed_by_a_mixture(flow)
+                if self._releases_surplus(flow)
             }
         ):
             variables.append(_float_attribute(f"{flow}_consumed_in", 0.0))
@@ -7241,6 +7241,28 @@ class ObjFlow:
         from, and it absorbs the difference."""
         return (
             flow in self._mixture_sources
+            and self._capacity_of(flow) is None
+            and any(flow in rule_set.consumed() for rule_set in self.rule_sets)
+        )
+
+    def _releases_surplus(self, flow: str) -> bool:
+        """Whether the input `flow` hands back to its suppliers what the
+        rules did not consume of it: muscadet's `release_unused_supply`.
+
+        The demand that fetched a rule's inputs is sized on what each
+        could deliver, before the scale the rule actually runs at is
+        known, so a recipe limited by one input is offered more of the
+        others than it consumes. Whatever the number of suppliers, the
+        rule takes its consumption at its draw and the rest goes back:
+        without it, the surplus of the inputs the scarce one limits
+        vanished, and a tank supplying one of them emptied faster than
+        the recipe justifies.
+
+        Three inputs keep what they are offered, as muscadet's do: one no
+        connection feeds, one no rule consumes, and one a volume of this
+        component holds, which is filled by what arrives instead."""
+        return (
+            flow in self._wired_in
             and self._capacity_of(flow) is None
             and any(flow in rule_set.consumed() for rule_set in self.rule_sets)
         )
@@ -8769,31 +8791,25 @@ class System:
         hands the surplus back pro rata of what each supplier offered:
         without it the input kept everything offered and the difference
         vanished, a battery beside a bus emptying at twice the rate its
-        electrolyser consumed. Only an input fed by two suppliers or more
-        can be offered too much; one a volume upstream of the rules holds
-        is filled by what arrives instead, and one no rule consumes keeps
-        what it is offered, as muscadet's does.
+        electrolyser consumed.
 
-        **An input fed by a mixed volume releases with a single supplier
-        too**, and against a different need: the rule runs at the draw
-        its scarcest arrival allows (:meth:`ObjFlow._rule_draw_scale`),
-        so it may consume less of this input than it asked for, and the
-        rest goes back to the volume rather than draining it for nothing.
-        Its need is then what the rules consume at their draw,
-        ``{flow}_consumed_in``, not the demand they published."""
+        **A single supplier releases too.** The rule runs at the draw its
+        scarcest arrival allows (:meth:`ObjFlow._rule_draw_scale`), which
+        may be less than the scale its demand was published at: a recipe
+        limited by one input consumes less of the others than it asked
+        for, and the rest goes back rather than vanishing. The need is
+        therefore what the rules consume at their draw,
+        ``{flow}_consumed_in``, never the demand they published.
+
+        Which inputs release is :meth:`ObjFlow._releases_surplus`: one a
+        volume upstream of the rules holds is filled by what arrives
+        instead, and one no rule consumes keeps what it is offered, as
+        muscadet's does."""
         releasing: set[tuple[str, str]] = set()
-        for (name, flow), feeding in in_edges.items():
+        for name, flow in in_edges:
             obj = self.comp.get(name)
-            if obj is not None and obj._fed_by_a_mixture(flow):
+            if obj is not None and obj._releases_surplus(flow):
                 releasing.add((name, flow))
-                continue
-            if obj is None or len(feeding) < 2:
-                continue
-            if not any(flow in rule_set.consumed() for rule_set in obj.rule_sets):
-                continue
-            if any(flow in capacity.flow_names for capacity in obj.capacities):
-                continue
-            releasing.add((name, flow))
         return releasing
 
     def _emit_continuous_network(
@@ -9074,12 +9090,7 @@ class System:
                     # what arrives is that sliding motion's own average,
                     # the content held at zero.
                     offered = obj._offered(flow.name)
-                    need = _var(
-                        name,
-                        f"{flow.name}_consumed_in"
-                        if obj._fed_by_a_mixture(flow.name)
-                        else f"{flow.name}_demand_in",
-                    )
+                    need = _var(name, f"{flow.name}_consumed_in")
                     held = [
                         {
                             "op": "if",
@@ -9504,11 +9515,11 @@ class System:
             for rule_set in self.comp[producer].rule_sets:
                 if self.comp[producer]._runs_at_a_draw(rule_set):
                     step(producer, f"{rule_set.name}_draw_scale")
-            # What the rules consume of an input served as a mixture, at
-            # the draw just swept: the release at the end of the band
-            # measures the offers against it.
+            # What the rules consume of an input that releases its
+            # surplus, at the draw just swept: the release at the end of
+            # the band measures the offers against it.
             for flow in self.comp[producer].flows_continuous_in:
-                if self.comp[producer]._fed_by_a_mixture(flow.name):
+                if self.comp[producer]._releases_surplus(flow.name):
                     step(producer, f"{flow.name}_consumed_in")
             for flow_name in self.comp[producer]._claimed_outputs():
                 step(producer, f"{flow_name}_made_out")
