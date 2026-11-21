@@ -727,12 +727,18 @@
       },
       {
         "name": "surplus_release",
-        "description": "Forwards to `muscadet.surplus_release`, which this name applies unchanged; withdrawn at the next major release. Makes the input `<name>` (a `continuous_flow_in`) hand back what it does not need when two suppliers or more offer more than its demand, pro rata of what each offered. A supplier whose volume has run out (`held` on its `continuous_flow_out`) passes on what arrives and is accepted first; the others share what is left. With a single supplier both shares stay 1. Apply it to an input a rule set consumes and no volume holds.",
+        "description": "Forwards to `muscadet.surplus_release`, which this name applies unchanged; withdrawn at the next major release. Makes the input `<name>` (a `continuous_flow_in`) hand back what it does not need when two suppliers or more offer more than its demand, pro rata of what each offered. A supplier whose volume has run out (`held` on its `continuous_flow_out`) passes on what arrives and is accepted first; the others share what is left. With a single supplier both shares stay 1, unless `consumed` is set. Apply it to an input a rule set consumes and no volume holds.",
         "parameters": [
           {
             "name": "name",
             "kind": "string",
             "description": "Flow name of the input."
+          },
+          {
+            "name": "consumed",
+            "kind": "bool",
+            "default": false,
+            "description": "A rule set consumes the input and writes `<name>_consumed_in` (`rule_consumes`): the input releases whatever the number of its suppliers, against what the rule consumes at its draw. A recipe limited by another input consumes less of this one than it asked for, and the rest goes back to the suppliers. Without it, the input releases between two suppliers or more against its demand, or against its consumption when a pooled output feeds it."
           }
         ],
         "uses": [
@@ -741,6 +747,9 @@
             "with": {
               "name": {
                 "$param": "name"
+              },
+              "consumed": {
+                "$param": "consumed"
               }
             }
           }

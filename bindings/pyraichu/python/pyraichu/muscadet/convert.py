@@ -1363,12 +1363,16 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
                 "with": {"name": flow.name, "demand": float(flow.var_demand_in_default)},
             }
         )
-        if flow.name in consumed_by and (
-            network.suppliers.get((name, flow.name), 0) >= 2 or (name, flow.name) in network.pooled_fed
+        if (
+            flow.name in consumed_by
+            and network.suppliers.get((name, flow.name), 0) >= 1
+            and obj._capacity_of(flow.name) is None
         ):
-            # A rule input a mixed volume feeds hands back what the rule
-            # does not consume, as one with two suppliers does.
-            uses.append({"fragment": "muscadet.surplus_release", "with": {"name": flow.name}})
+            # A wired rule input no volume holds hands back what the rule
+            # does not consume, whatever the number of its suppliers: a
+            # recipe limited by another input consumes less of this one
+            # than it asked for (`ObjFlow._releases_surplus`).
+            uses.append({"fragment": "muscadet.surplus_release", "with": {"name": flow.name, "consumed": True}})
         if flow.publish_rate is not None:
             uses.append({"fragment": "muscadet.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED}})
         if obj._passes_through(flow.name) or flow.name in consumed_by or flow.name in grouped:

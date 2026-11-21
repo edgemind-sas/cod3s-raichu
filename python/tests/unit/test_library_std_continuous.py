@@ -118,8 +118,8 @@ TYPES = [
      "parameters": [p("activate", "number"), p("release", "number")],
      "uses": [use("continuous_flow_in", name="Water"),
               use("continuous_flow_in", name="Elec"),
-              use("surplus_release", name="Water"),
-              use("surplus_release", name="Elec"),
+              use("surplus_release", name="Water", consumed=True),
+              use("surplus_release", name="Elec", consumed=True),
               use("rule_set", name="work", active="on", idle="off", consumes=["Water", "Elec"],
                   produces=["Gas"], threshold="band", threshold_flow="Elec",
                   activate=P("activate"), release=P("release")),
@@ -148,7 +148,7 @@ TYPES = [
     {"name": "Fan", "parameters": [p("max_rate", "number")],
      "uses": [use("bool_flow_in", name="vent", logic="and"),
               use("continuous_flow_in", name="H2"),
-              use("surplus_release", name="H2"),
+              use("surplus_release", name="H2", consumed=True),
               use("rule_set", name="duty", active="venting", idle="shut", consumes=["H2"],
                   produces=["H2_vented"], capped=["H2_vented"], conditions=["vent"]),
               use("rule_consumes", rule_set="duty", active="venting", flow="H2", rate=1.0),
@@ -814,7 +814,7 @@ TYPES += [
     # handing back what it does not consume.
     {"name": "Mixer",
      "uses": [mu("continuous_flow_in", name="H2"), mu("continuous_flow_in", name="AIR"),
-              mu("surplus_release", name="H2"), mu("surplus_release", name="AIR"),
+              mu("surplus_release", name="H2", consumed=True), mu("surplus_release", name="AIR", consumed=True),
               mu("rule_set", name="r", active="run", idle="none", consumes=["H2", "AIR"],
                  produces=["mix"], always_on=True),
               mu("rule_consumes", rule_set="r", active="run", flow="H2", rate=10.0, always_on=True),
@@ -1100,7 +1100,7 @@ def ventilation(name, torn, extraction_torn=()):
     back into the room, the output `torn` names."""
     return {"name": name, "uses": [
         mu("continuous_flow_in", name="H2_leak"), mu("continuous_flow_in", name="AIR"),
-        mu("surplus_release", name="H2_leak"), mu("surplus_release", name="AIR"),
+        mu("surplus_release", name="H2_leak", consumed=True), mu("surplus_release", name="AIR", consumed=True),
         mu("rule_set", name="extraction", active="go", idle="none", consumes=["H2_leak"],
            produces=["exhaust"], always_on=True, torn=list(extraction_torn)),
         mu("rule_consumes", rule_set="extraction", active="go", flow="H2_leak", rate=25.0, always_on=True),
@@ -1130,7 +1130,7 @@ def cascaded_ventilation(name):
     room, is subtracted at the scale it can be expected to run at."""
     return {"name": name, "uses": [
         mu("continuous_flow_in", name="H2_leak"), mu("continuous_flow_in", name="AIR"),
-        mu("surplus_release", name="H2_leak"), mu("surplus_release", name="AIR"),
+        mu("surplus_release", name="H2_leak", consumed=True), mu("surplus_release", name="AIR", consumed=True),
         mu("rule_set", name="extraction", active="go", idle="none", consumes=["H2_leak"],
            produces=["exhaust"], always_on=True),
         mu("rule_consumes", rule_set="extraction", active="go", flow="H2_leak", rate=25.0, always_on=True),

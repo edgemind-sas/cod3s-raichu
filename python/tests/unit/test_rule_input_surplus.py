@@ -357,3 +357,106 @@ def test_an_empty_supplying_volume_passes_on_what_arrives_without_chattering():
             abs(sampled(result, "B1_e_fed_out", instant) - sampled(result, "B1_e_fed_in", instant))
             < 1e-9
         )
+
+
+# An electrolyser whose recipe has two inputs: twenty of `e` and five of
+# `w` make two of `h`. When `e` limits the rule, `w` must be drawn at the
+# scale `e` allows, whatever the number of its suppliers.
+E_PER_RUN, W_PER_RUN, H_PER_RUN = 20.0, 5.0, 2.0
+
+
+class TwoInputElectrolyser(mu.ObjFlow):
+    def add_flows(self):
+        self.add_flow_continuous_in(name="e")
+        self.add_flow_continuous_in(name="w")
+        self.add_flow_continuous_out(name="h")
+        self.add_rule_set(
+            name="conv",
+            rules=[{"cons": {"e": E_PER_RUN, "w": W_PER_RUN}, "prod": {"h": H_PER_RUN}}],
+        )
+
+
+class TwoInputSink(mu.ObjFlow):
+    def add_flows(self):
+        self.add_flow_continuous_in(name="h", var_demand_in_default=H_PER_RUN)
+
+
+class EmptyBattery(mu.ObjFlow):
+    """A transiting volume with nothing in it, recharged by the bus that
+    also feeds the electrolyser: what `e` could deliver counts its offer,
+    what arrives does not."""
+
+    def add_flows(self):
+        self.add_flow_continuous_in(name="e")
+        self.add_flow_continuous_out(name="e")
+        self.add_capacity(
+            name="battery", flow="e", capacity=1000.0, content_init={"e": 0.0}, transmits=True
+        )
+
+
+def limited_by_e(water_suppliers: dict) -> mu.System:
+    """The H2 plant's daytime shape: a bus short of the recipe's need
+    feeds both the electrolyser and the battery beside it, and the
+    battery feeds the electrolyser too. `water_suppliers` maps a name to
+    the class supplying `w`."""
+    system = mu.System("rule_input_limited_by_e")
+    system.add_component(source("e", 13.22), "BUS")
+    system.add_component(EmptyBattery, "BAT")
+    system.add_component(TwoInputElectrolyser, "EL")
+    system.add_component(TwoInputSink, "SINK")
+    system.connect("BUS", "e", "BAT", "e")
+    system.connect("BUS", "e", "EL", "e")
+    system.connect("BAT", "e", "EL", "e")
+    for name, supplier in water_suppliers.items():
+        system.add_component(supplier, name)
+        system.connect(name, "w", "EL", "w")
+    system.connect("EL", "h", "SINK", "h")
+    return system
+
+
+def test_an_input_another_input_limits_is_drawn_at_the_limited_scale():
+    """The recipe runs at what `e` delivers, so `w` is fed in the recipe's
+    ratio to it, and its only supplier hands over that much: the water
+    left over goes back, as muscadet's `release_unused_supply` gives it
+    back. It used to keep the demand sized on what `e` COULD deliver,
+    4.96 of water for 1.32 of hydrogen where the recipe justifies 3.31."""
+    result = limited_by_e({"TAP": source("w", 100.0)}).simulate(t_max=2.0, samples=[1.0, 2.0])
+    for instant in (1.0, 2.0):
+        e_fed = sampled(result, "EL_e_fed_in", instant)
+        assert e_fed < E_PER_RUN - 1.0, "the bus must limit the recipe"
+        scale = e_fed / E_PER_RUN
+        assert abs(sampled(result, "EL_w_fed_in", instant) - W_PER_RUN * scale) < 1e-9
+        assert abs(sampled(result, "TAP_w_fed_out", instant) - W_PER_RUN * scale) < 1e-9
+        assert abs(sampled(result, "EL_h_fed_out", instant) - H_PER_RUN * scale) < 1e-9
+
+
+def test_a_limited_rule_releases_against_what_it_consumes_across_suppliers():
+    """Two suppliers of `w` share what the recipe draws at its limited
+    scale, pro rata of their offers (each is offered the whole demand,
+    so they share it equally), and nothing more."""
+    result = limited_by_e(
+        {"TAP1": source("w", 100.0), "TAP2": source("w", 100.0)}
+    ).simulate(t_max=2.0, samples=[1.0])
+    drawn = W_PER_RUN * sampled(result, "EL_e_fed_in", 1.0) / E_PER_RUN
+    assert abs(sampled(result, "EL_w_fed_in", 1.0) - drawn) < 1e-9
+    assert abs(sampled(result, "TAP1_w_fed_out", 1.0) - drawn / 2.0) < 1e-9
+    assert abs(sampled(result, "TAP2_w_fed_out", 1.0) - drawn / 2.0) < 1e-9
+
+
+def test_a_stocked_input_another_input_limits_drains_at_the_consumption():
+    """The issue's consequence: water drawn from a tank. The tank falls
+    by what the recipe consumes at its limited scale, not by the demand
+    sized on what `e` could deliver."""
+
+    class Tank(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="w")
+            self.add_flow_continuous_out(name="w")
+            self.add_capacity(
+                name="tank", flow="w", capacity=1000.0, content_init={"w": 500.0}, transmits=True
+            )
+
+    result = limited_by_e({"TANK": Tank}).simulate(t_max=2.0, samples=[1.0, 2.0])
+    drawn = W_PER_RUN * sampled(result, "EL_e_fed_in", 2.0) / E_PER_RUN
+    fallen = sampled(result, "TANK_tank_content", 1.0) - sampled(result, "TANK_tank_content", 2.0)
+    assert abs(fallen - drawn) < 1e-6
