@@ -57,7 +57,14 @@
 //! A mode is reported when some quantity is **nothing** while the mode
 //! is elsewhere and **not nothing** once it is pinned, which is the
 //! definition of flattering the result. A seal that raises nothing is
-//! silent, and that is where the rule with a `cons` lands.
+//! silent.
+//!
+//! The rule with a `cons` is silent for a reason of its own: the
+//! emptiness that pins it also **starves** it. Some quantity reading the
+//! mode is nothing once it is pinned, and nothing because of the empty
+//! port (the scale the rule can run at). Such a mode is not reported
+//! whatever else it writes, and what it does write once pinned is the
+//! demand on the very input nothing feeds, an ask and not a result.
 //!
 //! What is reported is therefore narrow by construction. A guard that
 //! also reads a clock, a state or a moving attribute does not fold, so
@@ -752,6 +759,9 @@ fn seal_flatters(
     automaton: &str,
     state: &str,
 ) -> bool {
+    if seal_starves(model, unfed, definitions, component, automaton, state) {
+        return false;
+    }
     for expr in quantities(model) {
         if !reads_state(expr, component, automaton, state) {
             continue;
@@ -769,6 +779,37 @@ fn seal_flatters(
         }
     }
     false
+}
+
+/// Whether the emptiness that seals the mode also **starves** it: some
+/// quantity that reads the mode is nothing once it is pinned there, and
+/// is nothing *because* of the ports nothing feeds, the same fold
+/// settling nothing when no port is taken as empty.
+///
+/// This is the rule that consumes the flow nothing feeds, told by what
+/// it can run at rather than by every quantity it writes. Such a rule
+/// still **asks** for its input once pinned (its claim is the need
+/// behind it, never bounded by the supplier it is addressed to), and an
+/// ask addressed to a port nothing is wired to moves no result: read as
+/// a quantity like the others, it would report the pessimistic seal as
+/// a flattering one.
+fn seal_starves(
+    model: &Model,
+    unfed: &HashSet<(String, String)>,
+    definitions: &HashMap<(&str, &str), Definition<'_>>,
+    component: &str,
+    automaton: &str,
+    state: &str,
+) -> bool {
+    let fed = HashSet::new();
+    let pin = (component, automaton, state, true);
+    quantities(model)
+        .filter(|expr| reads_state(expr, component, automaton, state))
+        .any(|expr| {
+            let settled = Fold::assuming(unfed, definitions, pin).fold(expr);
+            matches!(settled, Some(value) if is_nothing(value))
+                && Fold::assuming(&fed, definitions, pin).fold(expr).is_none()
+        })
 }
 
 /// Every expression the model uses to give a quantity its value: the

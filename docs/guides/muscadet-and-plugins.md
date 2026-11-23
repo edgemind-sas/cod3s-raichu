@@ -228,7 +228,7 @@ point accepts and the other refuses does not exist.
 | `capacities` | a volume over one or more held flows: `capacity`, `content_init`, `fill_rate`, `transmits`, `serve_rate`, `serve_cond` (the discharge command), `makeup_flow` (a volume open to the atmosphere, muscadet 5.17.0), `side`, `hysteresis`. A volume holding more than one flow also publishes each constituent's `ratio`, its fraction of the mixture |
 | `measurements_in` | the reading side of a measurement link: a channel observing a published level, carrying no quantity |
 | `mixtures` | a group of continuous inputs drawn together at one volumetric rate (`name`, `flows`, `flow_rate`, and the run command `run_cond` with its negations, comparisons and inner mode): each input takes the rate times its constituent's share of the volume drawn |
-| `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow |
+| `rules` | an ordered set of transformation rules (`cond` / `cons` / `prod`), running at the scale its scarcest input and least demanded output allow, and at its nominal scale when nothing reads any of its outputs |
 | `transfers` | a transfer pair: a quantity moved because a gradient drives it, under a `ConductiveTransfer` equation |
 
 <!-- model -->
@@ -788,17 +788,21 @@ continuous model (`unbounded_rate`, see the model schema), and the
 engine refuses the rate by name. Bound one of the two sides: a finite
 `fill_rate` on the room, or a finite `serve_rate` on the volume.
 
-The same refusal covers a rule set whose outputs nothing reads and which
-declares no `max_rate`: nothing asks it for less, so it draws whatever its
-input allows, and a volume with no `serve_rate` allows without bound.
-When that volume holds a mixture, the draw on each constituent is the
-stand-in scaled by its share, and the run used to end on "step size
-underflow ... too stiff" the instant the rule started (a leak into a room
-extracted by a fan, issue #158). It is now refused by name like the
-undiluted case, and so is a mixture volume feeding a room with an
-infinite `fill_rate`. A `max_rate` on the rule's output or a `serve_rate` on
-the volume runs it; on that study either gives the reference engine's
-trajectory.
+A mixture volume feeding a room with an infinite `fill_rate` is refused
+the same way: the draw on each constituent is the stand-in scaled by its
+share, under the magnitude the engine checks and far beyond what the step
+controller can follow.
+
+A rule set whose outputs nothing reads is **not** such a case. Nobody
+asking is not somebody asking without bound: the rule runs and claims at
+its nominal scale of 1, its declared coefficients, where its inputs allow
+it, as muscadet's does. Behind a source of 10, `cons w:2` asks 2, and a
+load sharing that source keeps its share. An output counts as read when a
+connection reads it or a volume downstream of the rule holds it; one read
+output is enough to size the rule, and the unread ones then bound nothing.
+A leak into a room extracted by a fan whose exhaust nothing reads (issue
+#158) used to be refused as an unbounded draw; the fan now draws its
+declared rate and the study gives the reference engine's trajectory.
 
 The refusal is a `pyraichu.UnboundedRateError` (a `SimulationError`)
 carrying the integrated `variable`, the `time`, the `rate` and the

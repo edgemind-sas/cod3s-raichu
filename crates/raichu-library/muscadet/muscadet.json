@@ -4951,7 +4951,7 @@
       },
       {
         "name": "rule_set",
-        "description": "A rule set `<name>` with one producing rule `<active>` and one idle rule `<idle>`: the automaton `<name>_mode` runs `<active>` while every boolean input in `conditions` is fed (and, with a `band` threshold, while the capability of `<threshold_flow>` has reached `activate` and not fallen below `release`). The rule's scale is the largest fraction of its nominal rates the inputs' capabilities allow (`<name>_capability_scale`), bounded by what the outputs are asked (`<name>_scale`) and by what actually arrives (`<name>_draw_scale`). Each consumed input `<flow>` is claimed at a scale of its own, `<name>_claim_scale_<flow>`: what the outputs are asked, bounded by what the other inputs could sustain and never by the input's own supplier, so the claim is the need behind it. A set none of whose outputs bounds the scale (`produces` less `torn`, and `cascaded`, both empty) claims each input at `<name>_capability_scale`. With `always_on`, the set has its producing rule only, with no condition and no automaton, as a rule declared without a condition. Each consumed flow is a `rule_consumes`, each produced one a `rule_produces`. The outputs in `cascaded` are produced by another rule set too and served in declaration order: this set is bounded by what those declared before it leave (`<name>_<flow>_left`, a `rule_cascade`) instead of by the whole demand. `torn` lists produced outputs whose demand no longer bounds the scale: a recirculation ring through a volume is torn there, the volume absorbing what the two ends momentarily disagree on.",
+        "description": "A rule set `<name>` with one producing rule `<active>` and one idle rule `<idle>`: the automaton `<name>_mode` runs `<active>` while every boolean input in `conditions` is fed (and, with a `band` threshold, while the capability of `<threshold_flow>` has reached `activate` and not fallen below `release`). The rule's scale is the largest fraction of its nominal rates the inputs' capabilities allow (`<name>_capability_scale`), bounded by what the outputs are asked (`<name>_scale`) and by what actually arrives (`<name>_draw_scale`). Each consumed input `<flow>` is claimed at a scale of its own, `<name>_claim_scale_<flow>`: what the outputs are asked, bounded by what the other inputs could sustain and never by the input's own supplier, so the claim is the need behind it. A set naming no output at all (`produces` and `cascaded` both empty: it produces nothing, or nothing reads what it produces) runs and claims at its nominal scale of 1 where its inputs allow it, so a machine nothing is connected behind draws its declared coefficients and not its supplier's whole capability. A set whose every named output is `torn` claims each input at `<name>_capability_scale`. With `always_on`, the set has its producing rule only, with no condition and no automaton, as a rule declared without a condition. Each consumed flow is a `rule_consumes`, each produced one a `rule_produces`. The outputs in `cascaded` are produced by another rule set too and served in declaration order: this set is bounded by what those declared before it leave (`<name>_<flow>_left`, a `rule_cascade`) instead of by the whole demand. `torn` lists produced outputs whose demand no longer bounds the scale: a recirculation ring through a volume is torn there, the volume absorbing what the two ends momentarily disagree on.",
         "parameters": [
           {
             "name": "name",
@@ -4978,7 +4978,7 @@
             "name": "produces",
             "kind": "list",
             "items": "string",
-            "description": "Flows the producing rule produces."
+            "description": "Flows the producing rule produces and something asks for: an output a connection reads, or one a volume downstream of the rule holds. Their demand bounds the scale. An output nothing reads is left out: nobody asking is not somebody asking for nothing."
           },
           {
             "name": "torn",
@@ -5353,6 +5353,72 @@
                               }
                             }
                           ]
+                        },
+                        {
+                          "op": "if",
+                          "cond": {
+                            "op": "cmp",
+                            "cmp": "gt",
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            },
+                            "lhs": {
+                              "op": "add",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                },
+                                {
+                                  "$for_each": "produces",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": 1.0
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "$for_each": "cascaded",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": 1.0
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          "then": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 1e+30
+                            }
+                          },
+                          "otherwise": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 1.0
+                            }
+                          }
                         }
                       ]
                     },
@@ -5420,6 +5486,72 @@
                             }
                           }
                         ]
+                      },
+                      {
+                        "op": "if",
+                        "cond": {
+                          "op": "cmp",
+                          "cmp": "gt",
+                          "rhs": {
+                            "op": "const",
+                            "value": {
+                              "kind": "float",
+                              "value": 0.0
+                            }
+                          },
+                          "lhs": {
+                            "op": "add",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              },
+                              {
+                                "$for_each": "produces",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 1.0
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "$for_each": "cascaded",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 1.0
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "then": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 1e+30
+                          }
+                        },
+                        "otherwise": {
+                          "op": "const",
+                          "value": {
+                            "kind": "float",
+                            "value": 1.0
+                          }
+                        }
                       }
                     ]
                   }
@@ -5775,10 +5907,191 @@
                             ]
                           },
                           "otherwise": {
-                            "op": "attr",
-                            "attr": {
-                              "component": "$self",
-                              "attribute": "${name}_capability_scale"
+                            "op": "if",
+                            "cond": {
+                              "op": "cmp",
+                              "cmp": "gt",
+                              "rhs": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              },
+                              "lhs": {
+                                "op": "add",
+                                "args": [
+                                  {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 0.0
+                                    }
+                                  },
+                                  {
+                                    "$for_each": "produces",
+                                    "as": "f",
+                                    "items": [
+                                      {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 1.0
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "$for_each": "cascaded",
+                                    "as": "f",
+                                    "items": [
+                                      {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 1.0
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${name}_capability_scale"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "min",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 1.0
+                                  }
+                                },
+                                {
+                                  "$for_each": "consumes",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${f}_capability_in"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_cons_${f}"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "except": "c"
+                                },
+                                {
+                                  "$for_each": "from_volume",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${f}_serve_capability_in"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_cons_${f}"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "$for_each": "capped",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_max_${f}"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_prod_${f}"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "$for_each": "produces",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${f}_demand_out"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_prod_${f}"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "except": "torn"
+                                },
+                                {
+                                  "$for_each": "cascaded",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_${f}_left"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_prod_${f}"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
                             }
                           }
                         },
@@ -5972,10 +6285,191 @@
                           ]
                         },
                         "otherwise": {
-                          "op": "attr",
-                          "attr": {
-                            "component": "$self",
-                            "attribute": "${name}_capability_scale"
+                          "op": "if",
+                          "cond": {
+                            "op": "cmp",
+                            "cmp": "gt",
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            },
+                            "lhs": {
+                              "op": "add",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                },
+                                {
+                                  "$for_each": "produces",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": 1.0
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "$for_each": "cascaded",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": 1.0
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          "then": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_capability_scale"
+                            }
+                          },
+                          "otherwise": {
+                            "op": "min",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 1.0
+                                }
+                              },
+                              {
+                                "$for_each": "consumes",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${f}_capability_in"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_cons_${f}"
+                                      }
+                                    }
+                                  }
+                                ],
+                                "except": "c"
+                              },
+                              {
+                                "$for_each": "from_volume",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${f}_serve_capability_in"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_cons_${f}"
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "$for_each": "capped",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_max_${f}"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_prod_${f}"
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "$for_each": "produces",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${f}_demand_out"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_prod_${f}"
+                                      }
+                                    }
+                                  }
+                                ],
+                                "except": "torn"
+                              },
+                              {
+                                "$for_each": "cascaded",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_${f}_left"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_prod_${f}"
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
                           }
                         }
                       }
@@ -6186,10 +6680,191 @@
                             ]
                           },
                           "otherwise": {
-                            "op": "attr",
-                            "attr": {
-                              "component": "$self",
-                              "attribute": "${name}_capability_scale"
+                            "op": "if",
+                            "cond": {
+                              "op": "cmp",
+                              "cmp": "gt",
+                              "rhs": {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 0.0
+                                }
+                              },
+                              "lhs": {
+                                "op": "add",
+                                "args": [
+                                  {
+                                    "op": "const",
+                                    "value": {
+                                      "kind": "float",
+                                      "value": 0.0
+                                    }
+                                  },
+                                  {
+                                    "$for_each": "produces",
+                                    "as": "f",
+                                    "items": [
+                                      {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 1.0
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "$for_each": "cascaded",
+                                    "as": "f",
+                                    "items": [
+                                      {
+                                        "op": "const",
+                                        "value": {
+                                          "kind": "float",
+                                          "value": 1.0
+                                        }
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            },
+                            "then": {
+                              "op": "attr",
+                              "attr": {
+                                "component": "$self",
+                                "attribute": "${name}_capability_scale"
+                              }
+                            },
+                            "otherwise": {
+                              "op": "min",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 1.0
+                                  }
+                                },
+                                {
+                                  "$for_each": "consumes",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${f}_capability_in"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_cons_${f}"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "$for_each": "from_volume",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${f}_serve_capability_in"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_cons_${f}"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "except": "c"
+                                },
+                                {
+                                  "$for_each": "capped",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_max_${f}"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_prod_${f}"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "$for_each": "produces",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${f}_demand_out"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_prod_${f}"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "except": "torn"
+                                },
+                                {
+                                  "$for_each": "cascaded",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "div",
+                                      "lhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_${f}_left"
+                                        }
+                                      },
+                                      "rhs": {
+                                        "op": "attr",
+                                        "attr": {
+                                          "component": "$self",
+                                          "attribute": "${name}_prod_${f}"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
                             }
                           }
                         },
@@ -6383,10 +7058,191 @@
                           ]
                         },
                         "otherwise": {
-                          "op": "attr",
-                          "attr": {
-                            "component": "$self",
-                            "attribute": "${name}_capability_scale"
+                          "op": "if",
+                          "cond": {
+                            "op": "cmp",
+                            "cmp": "gt",
+                            "rhs": {
+                              "op": "const",
+                              "value": {
+                                "kind": "float",
+                                "value": 0.0
+                              }
+                            },
+                            "lhs": {
+                              "op": "add",
+                              "args": [
+                                {
+                                  "op": "const",
+                                  "value": {
+                                    "kind": "float",
+                                    "value": 0.0
+                                  }
+                                },
+                                {
+                                  "$for_each": "produces",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": 1.0
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "$for_each": "cascaded",
+                                  "as": "f",
+                                  "items": [
+                                    {
+                                      "op": "const",
+                                      "value": {
+                                        "kind": "float",
+                                        "value": 1.0
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          "then": {
+                            "op": "attr",
+                            "attr": {
+                              "component": "$self",
+                              "attribute": "${name}_capability_scale"
+                            }
+                          },
+                          "otherwise": {
+                            "op": "min",
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": {
+                                  "kind": "float",
+                                  "value": 1.0
+                                }
+                              },
+                              {
+                                "$for_each": "consumes",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${f}_capability_in"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_cons_${f}"
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "$for_each": "from_volume",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${f}_serve_capability_in"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_cons_${f}"
+                                      }
+                                    }
+                                  }
+                                ],
+                                "except": "c"
+                              },
+                              {
+                                "$for_each": "capped",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_max_${f}"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_prod_${f}"
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "$for_each": "produces",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${f}_demand_out"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_prod_${f}"
+                                      }
+                                    }
+                                  }
+                                ],
+                                "except": "torn"
+                              },
+                              {
+                                "$for_each": "cascaded",
+                                "as": "f",
+                                "items": [
+                                  {
+                                    "op": "div",
+                                    "lhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_${f}_left"
+                                      }
+                                    },
+                                    "rhs": {
+                                      "op": "attr",
+                                      "attr": {
+                                        "component": "$self",
+                                        "attribute": "${name}_prod_${f}"
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
                           }
                         }
                       }

@@ -177,10 +177,8 @@ def leaking_room(serve_rate=None):
     nothing reads (issue #158, reduced from a platform study).
 
     The room's volume holds a mixture and serves each constituent at its
-    share, so with ``serve_rate`` unbounded the fan's draw on H2 is the
-    stand-in scaled by the H2 share (2 % here): under the magnitude the
-    engine checks, and far beyond what the step controller can follow. The
-    run used to end on "step size underflow ... too stiff"."""
+    share. The fan asks its nominal 51, so the H2 stock leaves at 51 times
+    its share (2 % here) and the model runs with or without a ceiling."""
 
     class Leak(mu.ObjFlow):
         def add_flows(self):
@@ -221,17 +219,25 @@ def leaking_room(serve_rate=None):
     return system
 
 
-def test_a_draw_diluted_by_a_mixture_share_is_refused_rather_than_called_stiff():
-    with pytest.raises(pyraichu.UnboundedRateError) as caught:
-        leaking_room().simulate(t_max=1.0, samples=[1.0])
-    error = caught.value
-    assert error.variable == "LOCAL.local_content_H2"
-    assert error.time == 0.0
-    assert 0.0 < abs(error.rate) < error.unbounded
-    message = str(error)
-    assert ENGINE_WORDING in message, message
-    assert "capacity `local` of `LOCAL`" in message, message
-    assert "whose outputs nothing reads" in message, message
+def test_a_fan_nothing_reads_draws_its_nominal_rate_and_runs():
+    """The study of issue #158 as it stands, no ceiling declared. The fan's
+    exhaust is read by nothing, so its rule runs at the nominal scale and
+    asks the room for its declared 51 of H2, a finite demand the mixture
+    serves at the H2 share. It used to draw whatever its input allowed, an
+    unbounded rate the engine refused by name.
+
+    The stock is the muscadet reference engine's, recorded on this model:
+    1.99022, 1.56440, 1.22253 and 0.45322 at these instants."""
+    instants = [0.01, 0.5, 1.0, 3.0]
+    result = leaking_room().simulate(t_max=3.0, samples=instants)
+    (stock,) = [
+        points
+        for name, points in result.samples.items()
+        if name.endswith("local_content_H2")
+    ]
+    assert [value for _, value in stock] == pytest.approx(
+        [1.99022, 1.56440, 1.22253, 0.45322], abs=1e-5
+    )
 
 
 def test_the_diluted_draw_runs_once_the_volume_states_its_rate():

@@ -293,6 +293,23 @@ def test_a_rule_that_draws_the_flow_nothing_feeds_is_silent():
     assert triggers_of(rule_system(wired=True, draws=True)) == []
 
 
+def test_the_starved_rule_is_silent_whatever_asks_for_its_product():
+    """The same starved rule with a consumer behind it. Pinned, the rule
+    asks for its input at the need its output is asked for, a claim its
+    own supplier never bounds: not nothing, and addressed to a port
+    nothing is wired to. What it can run at is still zero, so the seal
+    starves and nothing is said."""
+
+    class Load(mu.ObjFlow):
+        def add_flows(self):
+            self.add_flow_continuous_in(name="W", var_demand_in_default=5.0)
+
+    system = rule_system(wired=False, draws=True)
+    system.add_component(Load, "K")
+    system.connect("P", "W", "K", "W")
+    assert triggers_of(system) == []
+
+
 def test_a_threshold_the_emptiness_keeps_shut_is_silent():
     """The same rule stated the safe way round, `>=`: the empty input
     holds the mode OFF for ever. Sealed just as thoroughly, in a state

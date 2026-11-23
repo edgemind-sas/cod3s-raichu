@@ -1319,6 +1319,20 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
         except _Refused as error:
             refused.append(error)
             continue
+        # An output nothing reads asks nothing and bounds nothing: left out
+        # of the lists whose demand the scale is taken on, so a set no
+        # output of which is read runs at its nominal scale, as on the
+        # declaration route. A volume downstream of the rules reads it.
+        unread = {
+            flow
+            for flow in rule_set.produced()
+            if not network.consumers.get((name, flow)) and flow not in obj._claimed_outputs()
+        }
+        if unread:
+            for use in these:
+                if use["fragment"] == "muscadet.rule_set":
+                    for listed in ("produces", "cascaded"):
+                        use["with"][listed] = [flow for flow in use["with"][listed] if flow not in unread]
         made = set(rule_set.produced()) & torn
         if made & set(contested):
             refused.append(
