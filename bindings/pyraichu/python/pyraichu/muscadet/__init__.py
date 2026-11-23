@@ -559,9 +559,7 @@ def explain_unbounded_rate(error: UnboundedRateError, model: Model) -> Unbounded
         f"{error}. In muscadet terms: capacity `{capacity}` of `{component}` "
         f"holds a stock with no ceiling on what leaves it (`serve_rate` left "
         f"unbounded) while what it feeds takes without bound (for instance an "
-        f"infinite `fill_rate` downstream, or a rule set whose outputs nothing "
-        f"reads and which declares no `max_rate`, so that it draws whatever its "
-        f"input allows). Declare a finite `serve_rate` on capacity "
+        f"infinite `fill_rate` downstream). Declare a finite `serve_rate` on capacity "
         f"`{capacity}`, the rate its stock may leave at, or bound the demand "
         f"downstream. The reference engine runs such a model at a rate the "
         f"model does not state (one rule activity per time unit, measured on "
@@ -5387,6 +5385,7 @@ class ObjFlow:
         shares: dict[str, dict[str, float]],
         cascades: dict[str, list[_RuleSet]],
         claiming: str | None = None,
+        torn: set[str] | None = None,
     ) -> dict[str, Any]:
         """The scale a rule actually runs at: its capability scale,
         bounded by what its outputs are asked for.
@@ -5405,8 +5404,16 @@ class ObjFlow:
         An output **no connection reads** does not take part: nobody is
         asking is not the same statement as somebody asking for nothing,
         and only the second is a bound. A rule left with no reading
-        output at all therefore runs at its capability scale, exactly as
-        a rule producing nothing does."""
+        output at all, or producing nothing, runs at its **nominal**
+        scale of 1 where its inputs allow it, as muscadet's does: it
+        claims its declared coefficients and no more, so a machine
+        nothing is connected behind does not draw its supplier's whole
+        capability, nor take a rival's share of it.
+
+        An output in `torn` is another matter: something does read it,
+        on the edge a ring is cut at, and its demand is only left out of
+        this band. A rule whose every asked output is torn keeps its
+        capability scale."""
         ran = _var(self.name, f"{rule_set.name}_capability_scale")
         terms = [
             ran if claiming is None else self._rule_capability_scale(rule, claiming)
@@ -5440,11 +5447,15 @@ class ObjFlow:
                 )
                 demand = _clamped_at_zero({"op": "sub", "lhs": demand, "rhs": served})
             terms.append({"op": "div", "lhs": demand, "rhs": _float(coefficient)})
-        if claiming is not None and len(terms) == 1:
-            # No reading output asks anything: the rule claims at the
-            # scale it runs at, as it did before the claim had a scale of
-            # its own.
-            return ran
+        if len(terms) == 1:
+            if any(
+                coefficient > 0 and flow in (torn or ())
+                for flow, coefficient in rule.prod.items()
+            ):
+                # Read on a torn edge only: the scale it runs at.
+                return ran
+            # Nothing asks: the nominal scale, bounded by the inputs.
+            terms.append(_float(1.0))
         return _min(terms)
 
     def _expected_scale(self, rule_set: _RuleSet) -> dict[str, Any]:
@@ -7140,7 +7151,12 @@ class ObjFlow:
                             rule_set,
                             [
                                 self._rule_demand_scale(
-                                    rule_set, rule, reading, shares, cascades
+                                    rule_set,
+                                    rule,
+                                    reading,
+                                    shares,
+                                    cascades,
+                                    torn=ring_torn_out,
                                 )
                                 for rule in rule_set.rules
                             ],
@@ -7176,7 +7192,13 @@ class ObjFlow:
                         rule_set,
                         [
                             self._rule_demand_scale(
-                                rule_set, rule, reading, shares, cascades, flow
+                                rule_set,
+                                rule,
+                                reading,
+                                shares,
+                                cascades,
+                                flow,
+                                torn=ring_torn_out,
                             )
                             for rule in rule_set.rules
                         ],
