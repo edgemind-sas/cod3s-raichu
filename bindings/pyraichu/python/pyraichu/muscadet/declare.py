@@ -1111,17 +1111,8 @@ class _ModeClass:
     #: ``(None, None)`` for a class whose laws are DECLARED (``ObjMode2S``).
     laws: tuple
 
-    #: The wire ``cls`` the shared cod3s translation reads. Two names for one
-    #: dialect: the deprecated ``muscadet.ObjFailureMode*`` are subclasses of
-    #: the cod3s ones and are built from the same wire.
+    #: The wire ``cls`` the shared cod3s translation reads.
     wire: str
-
-    #: Whether effects and conditions name FLOWS (the muscadet façade, whose
-    #: patterns are regular expressions over the target's flow names) or
-    #: VARIABLES (the cod3s classes, which name the target's attributes
-    #: exactly). Both spellings are load-bearing in models that exist, and
-    #: the class is what tells them apart.
-    by_flow: bool = False
 
     #: The key the mode's OWN name is declared under, which is not the same as
     #: the key the document files it under: the three families spell it
@@ -1146,22 +1137,15 @@ class _ModeClass:
 
 #: The mode classes this reader knows, by the name a declaration carries.
 #:
-#: ``ObjFM`` and ``muscadet.ObjFailureMode`` are deliberately ABSENT: neither
-#: carries an occurrence law (``set_occ_law_failure`` is defined by the three
-#: flavours below and by none of the two bases), so a mode declared as one has
-#: no law to build a transition from. ``ObjDegMode`` is absent for another
+#: ``ObjFM`` is deliberately ABSENT: it carries no occurrence law
+#: (``set_occ_law_failure`` is defined by the three flavours below and not by
+#: the base), so a mode declared as one has no law to build a transition from. ``ObjDegMode`` is absent for another
 #: reason: it is a MULTI-state degradation mode, so it is not the shape this
 #: kind names at all, and it gets the refusal :func:`check_mode_spec` gives.
 MODE_CLASSES: dict[str, _ModeClass] = {
     "ObjFMExp": _ModeClass(_FAILURE_MODE_MODE, ("exp", "exp"), "ObjFMExp"),
     "ObjFMDelay": _ModeClass(_FAILURE_MODE_MODE, ("delay", "delay"), "ObjFMDelay"),
     "ObjFMInst": _ModeClass(_FAILURE_MODE_MODE, ("inst", "exp"), "ObjFMInst"),
-    "ObjFailureModeExp": _ModeClass(
-        _FAILURE_MODE_MODE, ("exp", "exp"), "ObjFMExp", by_flow=True
-    ),
-    "ObjFailureModeDelay": _ModeClass(
-        _FAILURE_MODE_MODE, ("delay", "delay"), "ObjFMDelay", by_flow=True
-    ),
     "ObjMode2S": _ModeClass(
         _MODE_2S_MODE, (None, None), "ObjMode2S", name_key="mode_name"
     ),
@@ -2359,16 +2343,40 @@ def component_kind(spec: Any, name: Any = None) -> str:
     return kind
 
 
+#: The muscadet façades removed in muscadet 6.0.0, and the cod3s class each
+#: one was a thin subclass of. Kept so a document still naming one is refused
+#: with its replacement, the way muscadet refuses it, rather than with "is not
+#: a mode class this layer reads".
+REMOVED_MODE_CLASSES: dict[str, str] = {
+    "ObjFailureMode": "ObjFM",
+    "ObjFailureModeExp": "ObjFMExp",
+    "ObjFailureModeDelay": "ObjFMDelay",
+}
+
+
 def _mode_class(spec: dict, where: str) -> _ModeClass:
     """The :class:`_ModeClass` a declaration's ``cls`` names, or a refusal."""
     declared = spec.get("cls")
+    replacement = (
+        REMOVED_MODE_CLASSES.get(declared) if isinstance(declared, str) else None
+    )
+    if replacement is not None:
+        raise ComponentSpecError(
+            f"{where}: cls={declared!r} was removed in muscadet 6.0.0: declare "
+            f"cls={replacement!r} instead. Its effects and conditions name the "
+            f"targets' variables by their exact basename: a discrete output "
+            f"'f' is 'f_fed_available_out', a continuous output 'q' is "
+            f"'q_out_rate', and the condition shorthand {{'c': True}} is the "
+            f"structured tree [[{{'attr': 'c_fed_in', 'value': True}}]]. A "
+            f"wildcard is written out flow by flow"
+        )
     mode_class = MODE_CLASSES.get(declared) if isinstance(declared, str) else None
     if mode_class is None:
         raise ComponentSpecError(
             f"{where}: cls={declared!r} is not a mode class this layer reads. "
             f"A two-state component names the class that carries its "
             f"occurrence, one of {', '.join(sorted(MODE_CLASSES))}. A class "
-            f"carrying no law of its own (`ObjFM`, `ObjFailureMode`) has no "
+            f"carrying no law of its own (`ObjFM`) has no "
             f"transition to build, and a MULTI-state degradation mode is not "
             f"the shape this kind names"
         )
@@ -2740,7 +2748,6 @@ def _mode_cond(
     declared: Any,
     targets: list[str],
     modes: dict,
-    by_flow: bool,
     spellings: dict | None = None,
 ) -> Any:
     """A mode's condition, as the plugin's condition tree.
@@ -2749,26 +2756,12 @@ def _mode_cond(
     ``False`` is a direction that never fires, and the plugin reads both.
     Everything else is cod3s' structured tree, normalised to the OR-of-AND
     groups the plugin normalises to as well, with each leaf resolved.
-
-    ``by_flow`` is the muscadet façade's dict shorthand: ``{"c1": True}``
-    requires every named INPUT flow of every target to be fed with that value,
-    which is one conjunction over the targets. It names a flow and never a
-    variable, so no volume is read there: what it builds is a `{flow}_fed_in`
-    reference, which both layers spell alike.
     """
     if declared is None or isinstance(declared, bool):
         return declared
     _refuse_callables(f"{where}.{key}", declared)
 
     if isinstance(declared, dict):
-        if by_flow:
-            return [
-                [
-                    {"obj": target, "attr": f"{flow}_fed_in", "value": value}
-                    for flow, value in declared.items()
-                    for target in targets
-                ]
-            ]
         groups = [[declared]]
     elif isinstance(declared, (list, tuple)):
         entries = list(declared)
@@ -2792,82 +2785,7 @@ def _mode_cond(
     ]
 
 
-def _mode_flow_effects(
-    where: str, key: str, declared: dict, targets: list[str], components: dict
-) -> dict:
-    """The muscadet façade's flow-pattern effects, as the variables they name.
-
-    ``muscadet.ObjFailureMode`` names its target's FLOWS with a regular
-    expression and the library resolves each match to what the flow offers a
-    mode; ``cod3s.ObjFM`` names the variable exactly. Both spellings are
-    load-bearing in models that exist, and the class is what tells them apart,
-    so this is the one place the two are reconciled.
-
-    What a discrete output offers is its availability gate, which this layer
-    derives and a mode may hold down. A CONTINUOUS output offers a derating
-    variable the mode itself owns, one per (automaton, output) pair; a mode
-    declared ON a component reaches it here through `failure_effects`, and a
-    standalone one has no such variable, so a pattern naming a continuous
-    output is refused rather than silently applied to nothing.
-    """
-    resolved: dict[str, Any] = {}
-    for target in targets:
-        flows = (components.get(target) or {}).get("flows") or []
-        discrete = [
-            entry["name"]
-            for entry in flows
-            if isinstance(entry, dict)
-            and entry.get("cls") in _DISCRETE_OUT_CLASSES
-            and isinstance(entry.get("name"), str)
-        ]
-        continuous = [
-            entry["name"]
-            for entry in flows
-            if isinstance(entry, dict)
-            and entry.get("cls") == "FlowContinuousOut"
-            and isinstance(entry.get("name"), str)
-        ]
-        for pattern, value in declared.items():
-            named = [
-                flow for flow in discrete if _pattern_names(where, key, pattern, flow)
-            ]
-            derated = [
-                flow for flow in continuous if _pattern_names(where, key, pattern, flow)
-            ]
-            if derated:
-                raise ComponentSpecError(
-                    f"{where} declares the `{key}` pattern {pattern!r}, which "
-                    f"names the continuous output(s) {derated} of `{target}`. "
-                    f"A mode derates a continuous output through a variable it "
-                    f"OWNS, one per automaton and output, and a standalone "
-                    f"mode declares none here: declare the derating on the "
-                    f"component's own `failure_modes` section instead"
-                )
-            if not named:
-                raise ComponentSpecError(
-                    f"{where} declares the `{key}` pattern {pattern!r}, which "
-                    f"names no discrete output of `{target}`. Its outputs are "
-                    f"{discrete or 'none'}"
-                )
-            for flow in named:
-                variable = f"{flow}{AVAILABILITY_SUFFIX}"
-                if resolved.setdefault(variable, value) != value:
-                    raise ComponentSpecError(
-                        f"{where} resolves `{key}` to two different values on "
-                        f"`{variable}`; a mode applies ONE set of effects to "
-                        f"every target it names"
-                    )
-    return resolved
-
-
-def _mode_effects(
-    where: str,
-    key: str,
-    declared: Any,
-    targets: list[str],
-    components: dict,
-    by_flow: bool,
-) -> dict:
+def _mode_effects(where: str, key: str, declared: Any) -> dict:
     """A mode's effects, as ``{variable: value}`` on each of its targets."""
     if declared is None:
         return {}
@@ -2877,8 +2795,6 @@ def _mode_effects(
             f"effects are a mapping of what it writes to the value it writes"
         )
     _refuse_callables(f"{where}.{key}", declared)
-    if by_flow:
-        return _mode_flow_effects(where, key, declared, targets, components)
     return {str(name): value for name, value in declared.items()}
 
 
@@ -3161,7 +3077,7 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
     for key in ("failure_cond", "repair_cond", "occ_cond", "not_occ_cond", "cond"):
         if key in wire:
             wire[key] = _mode_cond(
-                where, key, wire[key], targets, modes, mode_class.by_flow, spellings
+                where, key, wire[key], targets, modes, spellings
             )
 
     for key in (
@@ -3175,9 +3091,7 @@ def mode_object(spec: Any, components: dict | None = None, name: Any = None) -> 
         "not_occ_effects_trans",
     ):
         if key in wire:
-            wire[key] = _mode_effects(
-                where, key, wire[key], targets, components, mode_class.by_flow
-            )
+            wire[key] = _mode_effects(where, key, wire[key])
 
     translate = event_object if mode_class.self_hosted else failure_mode_object
     try:
@@ -3601,7 +3515,6 @@ def logic_gate_object(
             cond,
             [],
             modes,
-            False,
             _mode_spellings(components),
         )
     return {

@@ -235,8 +235,8 @@ def test_an_unknown_key_names_the_vocabulary_of_its_own_class(mode, unknown):
 
 
 def test_a_mode_class_carrying_no_law_is_refused_by_name():
-    """`ObjFM` and `ObjFailureMode` are bases: neither declares an occurrence
-    law, so a mode declared as one has no transition to build."""
+    """`ObjFM` is a base: it declares no occurrence law, so a mode declared as
+    one has no transition to build."""
     with pytest.raises(declare.ComponentSpecError, match="is not a mode class"):
         declare.check_mode_spec(a_delay_mode(cls="ObjFM"))
 
@@ -721,25 +721,37 @@ def test_a_mode_naming_a_component_the_document_has_not_is_refused():
         )
 
 
-# --- the muscadet facade spells its effects over FLOWS ------------------
+# --- the muscadet facades are gone ---------------------------------------
 
 
-def test_the_muscadet_facade_names_flows_where_cod3s_names_variables():
-    """Both spellings are load-bearing in models that exist, and the CLASS is
-    what tells them apart."""
+@pytest.mark.parametrize(
+    "removed, replacement",
+    [
+        ("ObjFailureMode", "ObjFM"),
+        ("ObjFailureModeExp", "ObjFMExp"),
+        ("ObjFailureModeDelay", "ObjFMDelay"),
+    ],
+)
+def test_a_removed_muscadet_facade_is_refused_with_its_replacement(
+    removed, replacement
+):
+    """muscadet 6.0.0 removed its regex-on-flows facades. A document still
+    naming one is refused with the cod3s class to write and the exact-name
+    spelling of its effects, as muscadet refuses it."""
+    with pytest.raises(declare.ComponentSpecError) as refused:
+        declare.check_mode_spec(a_delay_mode(cls=removed))
+    message = str(refused.value)
+    assert f"cls={replacement!r}" in message
+    assert "f_fed_available_out" in message
+
+
+def test_a_cod3s_mode_names_the_variable_it_clamps():
+    """The one spelling left: an exact variable basename, passed through."""
     obj = declare.mode_object(
-        a_delay_mode(cls="ObjFailureModeDelay", failure_effects={FLOW: False}),
+        a_delay_mode(failure_effects={GATE: False}),
         {"B": a_block()},
     )
     assert obj["failure_effects"] == {GATE: False}
-
-
-def test_a_facade_pattern_naming_no_output_is_refused_by_the_outputs_there_are():
-    with pytest.raises(declare.ComponentSpecError, match="names no discrete output"):
-        declare.mode_object(
-            a_delay_mode(cls="ObjFailureModeDelay", failure_effects={"absent": False}),
-            {"B": a_block()},
-        )
 
 
 # --- the system scale answers the system, the document the document -----

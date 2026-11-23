@@ -365,7 +365,7 @@ constructor takes** — a declaration is written the way its own class reads it:
 
 | Class | Spelling | Where its law is |
 |---|---|---|
-| `ObjFMExp`, `ObjFMDelay`, `ObjFMInst`, `muscadet.ObjFailureMode*` | `failure_*` / `repair_*` | carried by the class |
+| `ObjFMExp`, `ObjFMDelay`, `ObjFMInst` | `failure_*` / `repair_*` | carried by the class |
 | `ObjMode2S` | `occ_*` / `not_occ_*` | declared, in `occ_law` / `not_occ_law` |
 | `ObjEvent` | `cond` and its comparison | its two tempos, `tempo_occ` / `tempo_not_occ` |
 
