@@ -67,8 +67,7 @@ def test_two_groups_add_their_draws():
 
 def test_groups_behind_a_ceiling_keep_their_pro_rata():
     """Requests of 100 and 1 behind an air outlet of 2: the air goes 100 to
-    1, the claims scaled to what the outlet delivers rather than truncated
-    at it."""
+    1, the claims scaled to what the outlet delivers."""
     s = samples("two_mixture_groups_under_a_ceiling", [1.0])
     fan, draft = s["FAN_AIR_fed_in"][1.0], s["DRAFT_AIR_fed_in"][1.0]
     assert fan + draft == pytest.approx(2.0, rel=1e-12)

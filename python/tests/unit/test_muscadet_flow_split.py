@@ -1,18 +1,21 @@
-"""How one supply is shared, and what a rule makes of its share (muscadet 5.14.0).
+"""How one supply is shared, and what a rule makes of its share (muscadet 5.24.0).
 
 Three statements of muscadet's continuous-flow semantics, each pinned on the
 smallest declaration that shows it:
 
-* **an unbounded fill claim weighs as the whole supply.** A volume with
+* **an unbounded fill claim takes the whole supply.** A volume with
   ``fill_rate = inf`` publishes an infinite demand, and the producer's split
-  truncates every claim at the quantity it has to give
-  (``regularize_demands``) before it divides. A source of 10 shared by such a
-  volume and a consumer asking 3 hands them 100/13 and 30/13;
+  weighs every claim as declared: an unbounded claim is the limit of a
+  growing one, so it is handed everything and a finite claim beside it
+  nothing. A source of 10 shared by such a volume and a consumer asking 3
+  hands them 10 and 0 (100/13 and 30/13 from muscadet 5.11.0 to 5.23.0,
+  which truncated every claim at the supply before dividing);
 * **a rule makes what arrived.** A capability is published whole to every
   consumer of a supply (R-20, ``incoming_capability`` is a sum, never a
   share), so a rule cannot size its production on it: it runs at the scale its
   inputs actually deliver. An electrolyser asking 20 beside an unbounded store
-  on a bus of 25 receives 500/45 and makes a tenth of it;
+  on a bus of 25 receives nothing and makes nothing, while its capability
+  still reads the whole bus;
 * **rule sets on one input share it in declaration order, on what each
   actually drew** (R-17, with the uptake factor of R-13). A fan whose forced
   extraction a failure mode has cut to zero draws nothing through it, so the
@@ -23,8 +26,9 @@ state the dynamics integrate**, so a sampled inflow is the rate its stock
 rises at and a sampled production keeps its rule's balance, whatever the
 supply does between two discrete events.
 
-Every expected number is the muscadet 5.14.0 reference engine's, recorded on
-the very documents below. The documents are written field by field in the
+Every expected number is the muscadet reference engine's, recorded on the
+very documents below: 5.24.0 for the two splits beside an unbounded store,
+5.14.0 for the rest, which 5.24.0 does not move. The documents are written field by field in the
 shape ``muscadet.engine.system_declaration`` produces, reduced to the keys that
 carry a decision, so the module needs no muscadet.
 """
@@ -293,19 +297,20 @@ def close(actual, expected):
 # --- an unbounded fill claim -------------------------------------------
 
 
-def test_an_unbounded_fill_claim_weighs_as_the_whole_supply():
-    """10 split between a claim truncated at 10 and a demand of 3: muscadet's
-    `test_capacity_fill_001::test_the_distributed_total_is_still_the_available_quantity`,
-    on this layer. Weighed at what the consumer beside it left, the claim
-    took 7 and the consumer its whole 3."""
+def test_an_unbounded_fill_claim_takes_the_whole_supply():
+    """10 split between a claim without bound and a demand of 3: the claim
+    takes the 10 and the consumer beside it is starved, as muscadet 5.24.0
+    measures it. Truncated at the supply, the claim weighed 10 against 3
+    and left the consumer 30/13. A volume meant to share declares a finite
+    `fill_rate`."""
     seen = observe(
         a_shared_source(),
         [("buffer", "BUF", "q_fed_in"), ("direct", "DIRECT", "q_fed_in")],
         [0.5],
         t_max=1.0,
     )
-    assert close(seen["buffer"][0.5], 100.0 / 13.0), seen  # 7.6923
-    assert close(seen["direct"][0.5], 30.0 / 13.0), seen  # 2.3077
+    assert close(seen["buffer"][0.5], 10.0), seen
+    assert close(seen["direct"][0.5], 0.0), seen
 
 
 def test_a_capability_is_published_whole_to_every_consumer():
@@ -326,8 +331,9 @@ def test_a_capability_is_published_whole_to_every_consumer():
 
 def test_a_rule_beside_an_unbounded_store_makes_what_it_receives():
     """Bus 25, store claiming without bound, electrolyser asking 20: the
-    store receives 25^2/45, the electrolyser 25*20/45 and makes a tenth of
-    it in H2, the store rising at what it receives."""
+    store receives the 25 and rises at that rate, the electrolyser
+    receives nothing and makes nothing. It makes a tenth of what it
+    receives, never of the 25 its capability reads."""
     seen = observe(
         a_shared_bus(),
         [
@@ -335,23 +341,26 @@ def test_a_rule_beside_an_unbounded_store_makes_what_it_receives():
             ("electrolyser", "EL", "Elec_fed_in"),
             ("hydrogen", "EL", "H2_fed_out"),
             ("content", "STORE", "tank_content_Elec"),
+            ("capability", "EL", "Elec_capability_in"),
         ],
         [0.5, 1.0],
         t_max=1.0,
     )
     for instant in (0.5, 1.0):
-        assert close(seen["store"][instant], 625.0 / 45.0), seen  # 13.8889
-        assert close(seen["electrolyser"][instant], 500.0 / 45.0), seen  # 11.1111
-        assert close(seen["hydrogen"][instant], 50.0 / 45.0), seen  # 1.1111
-        assert close(seen["content"][instant], 625.0 / 45.0 * instant), seen
+        assert close(seen["store"][instant], 25.0), seen
+        assert close(seen["electrolyser"][instant], 0.0), seen
+        assert close(seen["hydrogen"][instant], 0.0), seen
+        assert close(seen["content"][instant], 25.0 * instant), seen
+        assert close(seen["capability"][instant], 25.0), seen
 
 
 #: The reference on the solar bus: (store inflow, electrolyser inflow, H2
-#: made, store content) at t = 3, 6 and 9 h.
+#: made, store content) at t = 3, 6 and 9 h. The store takes the whole
+#: curve, 30 + 15 sin(pi t / 12), and holds its integral.
 SOLAR_REFERENCE = {
-    3.0: (27.206543, 13.400059, 1.340006, 68.434433),
-    6.0: (31.153846, 13.846154, 1.384615, 157.853164),
-    9.0: (27.206543, 13.400059, 1.340006, 247.271894),
+    3.0: (40.606602, 0.0, 0.0, 106.781547),
+    6.0: (45.000000, 0.0, 0.0, 237.295780),
+    9.0: (40.606602, 0.0, 0.0, 367.810012),
 }
 
 
