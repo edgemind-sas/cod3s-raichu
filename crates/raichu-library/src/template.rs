@@ -10,7 +10,9 @@
 //! - `{"$for_each": "list", "as": "var", "items": [...]}`, as an item of
 //!   an array, repeats `items` once per element of a list parameter, with
 //!   `var` bound to the element; `"except": "other"` skips the elements
-//!   the list parameter `other` holds, each of which `list` must hold;
+//!   the list parameter `other` holds, each of which `list` must hold, or
+//!   the one element a scalar `other` is (the variable of an enclosing
+//!   `$for_each`: every element but the current one);
 //! - `{"$law": "law_param", ...}` writes the keys of a law parameter
 //!   (`distrib`, `rate`, ...) onto the object beside its other keys, the
 //!   way a transition carries its law;
@@ -424,21 +426,24 @@ fn for_each(
                     "`except` names a list parameter by a string",
                 )
             })?;
-            let listed = env
-                .get(except_name)
-                .ok_or_else(|| {
-                    ctx.err(
+            let named = env.get(except_name).ok_or_else(|| {
+                ctx.err(
+                    &pointer_key(pointer, "except"),
+                    format!("unknown parameter `{except_name}`"),
+                )
+            })?;
+            // A list skips each of its elements; a scalar (the variable
+            // of an enclosing `$for_each`, typically) skips that one.
+            let listed = match named {
+                Value::Array(listed) => listed.clone(),
+                Value::String(_) | Value::Number(_) | Value::Bool(_) => vec![named.clone()],
+                _ => {
+                    return Err(ctx.err(
                         &pointer_key(pointer, "except"),
-                        format!("unknown parameter `{except_name}`"),
-                    )
-                })?
-                .as_array()
-                .ok_or_else(|| {
-                    ctx.err(
-                        &pointer_key(pointer, "except"),
-                        format!("`except` names a list; `{except_name}` is not one"),
-                    )
-                })?;
+                        format!("`except` names a list or one element; `{except_name}` is neither"),
+                    ))
+                }
+            };
             // An element the repeated list does not hold skips nothing:
             // refused, since it is a misspelling or a stale name.
             if let Some(stray) = listed.iter().find(|e| !elements.contains(e)) {
@@ -447,7 +452,7 @@ fn for_each(
                     format!("`{except_name}` holds {stray}, which `{list_name}` does not"),
                 ));
             }
-            listed.clone()
+            listed
         }
     };
     let mut out = Vec::new();

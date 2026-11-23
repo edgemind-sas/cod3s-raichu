@@ -1313,11 +1313,23 @@ def test_the_fragment_agrees_with_its_plugin_counterpart(bench):
         spread = integrator_spread(plugin, t_max, plugin_events)
         assert [name for _, name in library_events] == [name for _, name in plugin_events]
         for (mine, name), (theirs, _) in zip(library_events, plugin_events):
-            assert abs(mine - theirs) <= max(spread.dates.get(name, 0.0), 1e-12 * abs(theirs)), name
+            bound = max(spread.dates.get(name, 0.0), 1e-12 * abs(theirs), LOCATION_TOLERANCE)
+            assert abs(mine - theirs) <= bound, name
+        # A sample read where one route has passed an event and the other
+        # not yet reads two regimes: it is left out, as the spread leaves
+        # out the samples that close to an event.
+        straddled = {
+            index
+            for index in range(49)
+            for (mine, _), (theirs, _) in zip(library_events, plugin_events)
+            if min(mine, theirs) <= t_max * index / 48 <= max(mine, theirs) and mine != theirs
+        }
         qualified = indicator_attributes(plugin)
         for name, expected in plugin_samples.items():
             bound = spread.values.get(qualified.get(name), 0.0)
-            for mine, theirs in zip(library_samples[name], expected):
+            for index, (mine, theirs) in enumerate(zip(library_samples[name], expected)):
+                if index in straddled:
+                    continue
                 assert mine == theirs or abs(mine - theirs) <= max(bound, 1e-12 * abs(theirs)), name
         return
     assert library_events == plugin_events
@@ -1330,7 +1342,26 @@ def test_the_fragment_agrees_with_its_plugin_counterpart(bench):
 #: dates and samples are compared within the integrator's spread, measured
 #: on the plugin route between two runs that stop at different instants
 #: (the `integrator` level of `compare_routes`).
-INTEGRATOR_BENCHES = {"transmitting_buffer", "transmitting_buffer_rated"}
+#:
+#: The last three joined when the split came to weigh each claim as
+#: declared (muscadet 5.24.0). A supply overtaking the demand it serves is
+#: then a located change of the split's active set, where a claim truncated
+#: at the supply followed it and crossed nothing. A watched crossing next
+#: to it (a volume leaving empty, a band released) is located by each
+#: route within the event tolerance, and no longer on the same bit. Measured
+#: before the change, the two routes of `stock_fills_and_drains` already
+#: parted by 6e-11 on that date as soon as the sampling grid moved.
+INTEGRATOR_BENCHES = {
+    "transmitting_buffer",
+    "transmitting_buffer_rated",
+    "level_sensor_and_delivered_rate",
+    "rule_set_band_tap_and_release",
+    "stock_fills_and_drains",
+}
+
+#: What two locations of one crossing may differ by: each is bisected down
+#: to the solver's event tolerance (`SolverParams::tol_event`, 1e-10).
+LOCATION_TOLERANCE = 2e-10
 
 
 def indicator_attributes(model):

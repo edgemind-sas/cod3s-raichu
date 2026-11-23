@@ -552,8 +552,8 @@ def test_an_unbounded_fill_rate_claims_without_bound():
     """muscadet's `math.inf` fill rate is an unbounded demand, published
     as such (muscadet 5.14.0 writes `inf` on the demand variable). The
     document cannot carry an infinity, so it crosses as
-    `UNBOUNDED_SERVICE`, and the producer's split truncates it at what it
-    has to give: the volume fills at the producer's whole rate."""
+    `UNBOUNDED_SERVICE`, and the producer's split hands an unbounded
+    claim everything: the volume fills at the producer's whole rate."""
 
     class Greedy(mu.ObjFlow):
         def add_flows(self):

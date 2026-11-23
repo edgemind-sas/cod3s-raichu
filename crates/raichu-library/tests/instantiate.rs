@@ -93,6 +93,76 @@ fn for_each_repeats_attributes_and_ports_per_list_element() {
     assert_eq!(ports, ["H2_out", "O2_out"]);
 }
 
+fn beside_library() -> Library {
+    library(json!({
+        "name": "plant", "version": "1.0.0",
+        "types": [{
+            "name": "Mixer",
+            "parameters": [
+                {"name": "flows", "kind": "list", "items": "string"},
+                {"name": "spare", "kind": "string", "default": "A"}
+            ],
+            "body": {
+                "attributes": [
+                    {"$for_each": "flows", "as": "c", "items": [
+                        {"$for_each": "flows", "as": "f", "except": "c", "items": [
+                            {"name": "${c}_beside_${f}", "kind": "float", "init": float(0.0)}
+                        ]}
+                    ]},
+                    {"$for_each": "flows", "as": "f", "except": "spare", "items": [
+                        {"name": "${f}_kept", "kind": "float", "init": float(0.0)}
+                    ]}
+                ]
+            }
+        }]
+    }))
+}
+
+#[test]
+fn except_naming_one_element_skips_it() {
+    // The variable of an enclosing `$for_each` leaves every element but
+    // the current one; a scalar parameter skips the element it names.
+    let s = system(
+        json!({"name": "s", "library": {"name": "plant", "version": "1.0.0"},
+        "instances": [{"name": "M", "type": "Mixer", "parameters": {"flows": ["A", "B", "C"]}}]}),
+    );
+    let model = expand(&[beside_library()], &s, None).unwrap().model;
+    let names: Vec<&str> = model.components[0]
+        .attributes
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "A_beside_B",
+            "A_beside_C",
+            "B_beside_A",
+            "B_beside_C",
+            "C_beside_A",
+            "C_beside_B",
+            "B_kept",
+            "C_kept"
+        ]
+    );
+}
+
+#[test]
+fn except_naming_an_element_the_list_does_not_hold_is_refused() {
+    let s = system(
+        json!({"name": "s", "library": {"name": "plant", "version": "1.0.0"},
+        "instances": [{"name": "M", "type": "Mixer",
+                       "parameters": {"flows": ["A", "B"], "spare": "Z"}}]}),
+    );
+    let err = expand(&[beside_library()], &s, None).unwrap_err();
+    assert!(
+        err.message.contains("`spare` holds \"Z\""),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("`flows` does not"), "{}", err.message);
+}
+
 #[test]
 fn an_empty_list_expands_cleanly() {
     let s = system(

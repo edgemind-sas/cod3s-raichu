@@ -396,11 +396,16 @@ def test_a_stock_only_mixture_feeds_a_cascade():
     result = system.simulate(t_max=1.0, samples=[0.5])
     # Held but never fed, the hydrogen output keeps its declared rate of
     # zero, so the extraction draws nothing and the renewal asks the
-    # whole 50 of air. A mixture asked for one constituent hands that
-    # constituent's share only, as the reference does: 50 x a/(h + a).
+    # whole 50 of air. The extraction still claims the 50 of hydrogen its
+    # need is, a claim not being bounded by its own supplier (muscadet
+    # 5.24.0): the room is asked 100 in all and hands the air its share
+    # of that request, capped at what the renewal asks.
     h = sampled(result, "ROOM_room_content_H2", 0.5)
     a = sampled(result, "ROOM_room_content_AIR", 0.5)
-    assert abs(sampled(result, "FAN_AIR_fed_in", 0.5) - 50.0 * a / (h + a)) < 1e-6
+    assert abs(sampled(result, "FAN_H2_demand_in", 0.5) - 50.0) < 1e-9
+    assert sampled(result, "FAN_H2_fed_in", 0.5) == 0.0
+    handed = min(50.0, 100.0 * a / (h + a))
+    assert abs(sampled(result, "FAN_AIR_fed_in", 0.5) - handed) < 1e-6
     assert abs(
         sampled(result, "OUT_exhaust_fed_in", 0.5) - sampled(result, "FAN_AIR_fed_in", 0.5)
     ) < 1e-9

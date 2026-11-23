@@ -861,8 +861,7 @@ where a model uses them, and each is carried.
 - **Several groups may draw one volume.** Each asks its own rate at the
   composition and the draws add up. The producer's split weighs each machine
   at its composed share scaled to what the volume delivers, so a volume that
-  cannot serve the sum serves each pro rata: the truncation of a claim at the
-  available quantity would otherwise bend it. A group leaving out a
+  cannot serve the sum serves each pro rata. A group leaving out a
   constituent of its volume, a consumer of any held flow that is not one of
   its groups, and several groups behind an allocation other than proportional
   are refused, as muscadet refuses them.

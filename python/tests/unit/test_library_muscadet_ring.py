@@ -86,14 +86,28 @@ def test_tearing_an_output_off_the_ring_keeps_the_refusal():
 def test_a_tear_beside_the_ring_is_accepted():
     """Torn as well, the extraction's exhaust no longer bounds the
     extraction: the author's statement, accepted without a search for
-    rings. The leak still bounds the extraction here, so nothing moves."""
+    rings. The leak still bounds the extraction here, so nothing it
+    receives or makes moves. What it claims does: asked by no output any
+    more, the set claims the leak at the scale it could run at (0.05)
+    where the plugin claims the need behind it (50, what the air could
+    sustain), and the room's pooled draw follows the claim."""
     plugin, library, t_max = models("ventilation_ring", types=with_ventilation(torn=["AIR"], extraction_torn=["exhaust"]))
     scale = next(
         e for c in pyraichu.model_body(library)["components"] if c["name"] == "VENTILATION"
         for e in c["equations"] if e["target"] == "extraction_scale"
     )
     assert "exhaust_demand_out" not in str(scale["expr"])
-    assert run(library, t_max) == run(plugin, t_max)
+    (library_events, library_samples), (plugin_events, plugin_samples) = run(library, t_max), run(plugin, t_max)
+    assert library_events == plugin_events
+    moved = {name for name, series in plugin_samples.items() if library_samples[name] != series}
+    assert moved == {
+        "VENTILATION_H2_leak_demand_in",
+        "LOCAL_H2_leak_demand_out",
+        "LOCAL_room_beyond",
+        "LOCAL_AIR_pooled_out",
+    }
+    assert set(library_samples["VENTILATION_H2_leak_demand_in"]) == {0.05}
+    assert set(plugin_samples["VENTILATION_H2_leak_demand_in"]) == {50.0}
 
 
 def test_a_torn_output_the_rule_set_does_not_make_is_refused():

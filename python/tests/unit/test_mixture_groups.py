@@ -3,9 +3,8 @@
 Each machine takes its own rate at the volume's composition and the draws
 add up. When the volume cannot serve their sum, each is served pro rata of
 its composed share: the claims handed to the split are scaled to what the
-volume delivers, so the truncation of a claim at the available quantity
-cannot bend the pro-rata (machines of 100 and 1 behind a ceiling of 50.5 get
-50 and 0.5, not 49.52 and 0.98).
+volume delivers (machines of 100 and 1 behind a ceiling of 50.5 get 50 and
+0.5).
 
 Refused as muscadet refuses them: a group leaving out a constituent of its
 volume, a volume drawn by several groups allocating other than

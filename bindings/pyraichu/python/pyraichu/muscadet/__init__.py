@@ -4067,11 +4067,11 @@ class ObjFlow:
         base = {"op": "min", "args": [base, self._capacity_ceiling(capacity, flow)]}
         # An unbounded fill claims without bound, as muscadet publishes
         # it (`fill_rate = inf` is an infinite demand): the producer's
-        # split truncates every claim at the quantity it has to give
-        # (muscadet `regularize_demands`), so the volume weighs as the
-        # whole supply beside its rivals. Written as the capability this
-        # input reads, it weighed as whatever capability reached it,
-        # which is no claim muscadet makes.
+        # split weighs every claim as declared, so the volume takes the
+        # whole supply and a finite rival beside it is served nothing.
+        # Written as the capability this input reads, it weighed as
+        # whatever capability reached it, which is no claim muscadet
+        # makes.
         claiming = _fill_claim(capacity, base, _float(UNBOUNDED_SERVICE))
         # Full, a volume upstream of the rules asks for what the rules
         # draw from it, which is `base` itself: full is stocked, and a
@@ -5315,10 +5315,17 @@ class ObjFlow:
             if not any(flow in s.apportionment for s in sets)
         }
 
-    def _rule_capability_scale(self, rule: _Rule) -> dict[str, Any]:
+    def _rule_capability_scale(
+        self, rule: _Rule, exclude: str | None = None
+    ) -> dict[str, Any]:
         """The scale a rule could run at, set by its scarcest input: the
         minimum of what each consumed flow's producers could deliver,
         divided by that flow's coefficient.
+
+        `exclude` leaves one consumed flow out, which is the scale the
+        rule's OTHER inputs could sustain (muscadet's `get_supply_scale`):
+        what the claim on that flow is bounded by. Nothing else bounding
+        it, the scale is unbounded and not nominal.
 
         A coefficient of zero is the catalyst idiom: the rule names the
         flow so a guard can read it but draws none of it, so it is not
@@ -5350,7 +5357,7 @@ class ObjFlow:
         terms = [
             {"op": "div", "lhs": supply(flow), "rhs": _float(coefficient)}
             for flow, coefficient in rule.cons.items()
-            if coefficient > 0
+            if coefficient > 0 and flow != exclude
         ]
         terms += [
             _float(ceiling / coefficient)
@@ -5359,7 +5366,9 @@ class ObjFlow:
             for ceiling in [self._max_rate_on(flow)]
             if ceiling is not None
         ]
-        return _min(terms) if terms else _float(1.0)
+        if terms:
+            return _min(terms)
+        return _float(1.0 if exclude is None else UNBOUNDED_SERVICE)
 
     def _max_rate_on(self, flow: str) -> float | None:
         """The ceiling declared on `flow`, or ``None``. Looked up rather
@@ -5377,9 +5386,16 @@ class ObjFlow:
         connected_out: set[str],
         shares: dict[str, dict[str, float]],
         cascades: dict[str, list[_RuleSet]],
+        claiming: str | None = None,
     ) -> dict[str, Any]:
         """The scale a rule actually runs at: its capability scale,
         bounded by what its outputs are asked for.
+
+        With `claiming` naming a consumed flow, the scale the rule CLAIMS
+        that flow at instead: the same bound by its outputs, and the
+        capability of its other inputs only (muscadet 5.24.0). An input is
+        not bounded by its own supplier: its claim is the need behind it,
+        which is the weight that need is given where the supply is shared.
 
         The output bound is a **minimum**, not a maximum: the outputs of
         one rule are correlated by construction, so a scale above what
@@ -5391,7 +5407,10 @@ class ObjFlow:
         and only the second is a bound. A rule left with no reading
         output at all therefore runs at its capability scale, exactly as
         a rule producing nothing does."""
-        terms = [_var(self.name, f"{rule_set.name}_capability_scale")]
+        ran = _var(self.name, f"{rule_set.name}_capability_scale")
+        terms = [
+            ran if claiming is None else self._rule_capability_scale(rule, claiming)
+        ]
         for flow, coefficient in rule.prod.items():
             if coefficient <= 0 or flow not in connected_out:
                 continue
@@ -5421,6 +5440,11 @@ class ObjFlow:
                 )
                 demand = _clamped_at_zero({"op": "sub", "lhs": demand, "rhs": served})
             terms.append({"op": "div", "lhs": demand, "rhs": _float(coefficient)})
+        if claiming is not None and len(terms) == 1:
+            # No reading output asks anything: the rule claims at the
+            # scale it runs at, as it did before the claim had a scale of
+            # its own.
+            return ran
         return _min(terms)
 
     def _expected_scale(self, rule_set: _RuleSet) -> dict[str, Any]:
@@ -7145,8 +7169,23 @@ class ObjFlow:
                 )
             for flow in rule_set.consumed():
                 coefficient = self._rule_coefficient(rule_set, flow, "cons")
+                # The claim on an input is the need behind it, bounded by
+                # the rule's other inputs and never by its own supplier.
+                claim_scale = _renamed_reads(
+                    self._rule_choice(
+                        rule_set,
+                        [
+                            self._rule_demand_scale(
+                                rule_set, rule, reading, shares, cascades, flow
+                            )
+                            for rule in rule_set.rules
+                        ],
+                    ),
+                    me,
+                    claimed,
+                )
                 rule_demand.setdefault(flow, []).append(
-                    {"op": "mul", "args": [coefficient, _var(me, scale)]}
+                    {"op": "mul", "args": [coefficient, claim_scale]}
                 )
             for flow in rule_set.produced():
                 coefficient = self._rule_coefficient(rule_set, flow, "prod")
@@ -7426,10 +7465,13 @@ class ObjFlow:
             variables.append(
                 _float_attribute(f"{flow_name}_fed_in", continuous_in.var_in_default)
             )
+            # An infinite declared demand is "whatever there is", which a
+            # document cannot carry as an infinity.
+            declared_demand = min(
+                continuous_in.var_demand_in_default, UNBOUNDED_SERVICE
+            )
             variables.append(
-                _float_attribute(
-                    f"{flow_name}_demand_in", continuous_in.var_demand_in_default
-                )
+                _float_attribute(f"{flow_name}_demand_in", declared_demand)
             )
             variables.append(
                 _float_attribute(
@@ -7506,7 +7548,7 @@ class ObjFlow:
                     if ceiling is not None:
                         base = _min([base, _float(ceiling)])
             else:
-                base = _float(continuous_in.var_demand_in_default)
+                base = _float(declared_demand)
             if continuous_in.profile is not None:
                 base = {
                     "op": "mul",
@@ -8985,13 +9027,15 @@ class System:
                     if flow.name in mixed
                     else capability
                 )
-                # What the split weighs each consumer at: its demand,
-                # truncated at the quantity available, which is the most
-                # it could ever receive. Weighed at its raw demand, a
-                # claim far above the supply outweighed everyone else,
-                # and the split depended on how far past the supply it
-                # went. The demand channel itself stays as asked, since
-                # the producer's total demand is read against it.
+                # What the split weighs each consumer at: its demand AS
+                # DECLARED (muscadet 5.24.0), so consumers in parallel on
+                # a saturating supply are all served one fraction of what
+                # they need: 12 between claims of 6 and 18 is 3 and 9.
+                # Truncated at the quantity available, as muscadet did
+                # from 5.11.0 to 5.23.0, the same claims weighed 6 and 12
+                # and the small consumer was favoured. An unbounded claim
+                # is the limit of a growing one: it takes everything and
+                # the finite claims beside it are served nothing.
                 declared_port = next(
                     declared for declared in component["ports"]
                     if declared["name"] == port
@@ -8999,10 +9043,9 @@ class System:
                 declared_port["channels"].append({"name": "claim"})
                 # A volume drawn as a MIXTURE hands each machine its composed
                 # share scaled to what it delivers (R52), muscadet's
-                # `allocate_output`: the truncation above would bend the
-                # pro-rata of several machines the moment one of them asks
-                # for more than the volume delivers (measured in muscadet,
-                # 100 and 1 behind a ceiling of 50.5 served 49.52 and 0.98).
+                # `allocate_output`. The split weighing claims as declared,
+                # the scaling gives what the raw claims would: 100 and 1
+                # behind a ceiling of 50.5 are served 50 and 0.5 either way.
                 # The total demand is a demand-band quantity and the
                 # delivery reads it, so no band reads a later one.
                 drawn = flow.name in mixed and mixed[flow.name].serves_mixture
@@ -9026,7 +9069,7 @@ class System:
                             "otherwise": _float(0.0),
                         }
                         if drawn
-                        else _min([asked, available])
+                        else asked
                     )
                     component["equations"].append(
                         {

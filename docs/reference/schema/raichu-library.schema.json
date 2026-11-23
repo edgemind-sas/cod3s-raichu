@@ -3766,7 +3766,7 @@
     },
     "ForEach_Allocation": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -3803,7 +3803,7 @@
     },
     "ForEach_Assignment": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -3840,7 +3840,7 @@
     },
     "ForEach_Attribute": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -3877,7 +3877,7 @@
     },
     "ForEach_Automaton": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -3914,7 +3914,7 @@
     },
     "ForEach_CatalogueMode": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -3951,7 +3951,7 @@
     },
     "ForEach_Channel": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -3988,7 +3988,7 @@
     },
     "ForEach_Condition": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4025,7 +4025,7 @@
     },
     "ForEach_Condition_points": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4125,7 +4125,7 @@
     },
     "ForEach_ConsumerParam": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4162,7 +4162,7 @@
     },
     "ForEach_EdgeEffect": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4199,7 +4199,7 @@
     },
     "ForEach_Effect": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4236,7 +4236,7 @@
     },
     "ForEach_Equation": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4273,7 +4273,7 @@
     },
     "ForEach_Expr": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4310,7 +4310,7 @@
     },
     "ForEach_Expr_points": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4410,7 +4410,7 @@
     },
     "ForEach_Interface": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4447,7 +4447,7 @@
     },
     "ForEach_Port": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4484,7 +4484,7 @@
     },
     "ForEach_PortEquation": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4521,7 +4521,7 @@
     },
     "ForEach_SensitiveFunction": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4558,7 +4558,7 @@
     },
     "ForEach_Targetable": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4595,7 +4595,7 @@
     },
     "ForEach_Transition": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4632,7 +4632,7 @@
     },
     "ForEach_Transition_points": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4722,7 +4722,7 @@
     },
     "ForEach_number": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"
@@ -4759,7 +4759,7 @@
     },
     "ForEach_string": {
       "additionalProperties": false,
-      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds.",
+      "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
         "$for_each": {
           "type": "string"

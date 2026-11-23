@@ -224,8 +224,15 @@ fn ring_hint(model: &Model, component: &str, attribute: &str) -> String {
     let mut rule_sets: Vec<String> = members
         .iter()
         .filter_map(|(c, step)| {
-            step.strip_suffix("_scale")
-                .filter(|set| !set.ends_with("_capability") && !set.ends_with("_draw"))
+            // The demand of a ring reaches a rule set through the scale
+            // it runs at or through the one it claims an input at
+            // (`<set>_claim_scale_<flow>`).
+            step.split_once("_claim_scale_")
+                .map(|(set, _)| set)
+                .or_else(|| {
+                    step.strip_suffix("_scale")
+                        .filter(|set| !set.ends_with("_capability") && !set.ends_with("_draw"))
+                })
                 .map(|set| format!("`{c}.{set}`"))
         })
         .collect();
