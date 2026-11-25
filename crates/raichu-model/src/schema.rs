@@ -10,8 +10,8 @@ use raichu_expr::{Assignment, AttrRef, CmpOp, Expr, PortRef, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// The type of an attribute (M0 kinds; `String` discrete state is reserved
-/// and will extend this enum without breaking serialized models).
+/// The type of an attribute. A `String` discrete state is reserved: it
+/// would extend this enum without breaking serialized models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -291,8 +291,14 @@ pub struct EvaluationStepReads {
     pub reads: Vec<AttrRef>,
 }
 
-/// Occurrence distribution of a transition (M0 deterministic subset; `Exp` and the
-/// wider distribution library arrive in milestone M2).
+/// Occurrence distribution of a transition: when it fires once armed, and,
+/// for an instantaneous branching, which target it reaches.
+///
+/// Four families: a deterministic delay (`Delay`), an instantaneous
+/// branching (`Inst`), a watched boundary crossing (`Watched`), and seven
+/// laws of a random delay (`Exp`, `Weibull`, `Lognormal`, `Gamma`,
+/// `Uniform`, `Normal`, `Empirical`). Every law except `Inst` has exactly
+/// one target state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "distrib", rename_all = "snake_case")]
@@ -311,7 +317,7 @@ pub enum Distrib {
         /// First N−1 branch probabilities, each in [0, 1], Σ ≤ 1.
         probs: Vec<f64>,
     },
-    /// Watched transition (paper rule `schedule_boundary`, M1): fires exactly when
+    /// Watched transition (paper rule `schedule_boundary`): fires exactly when
     /// the continuous trajectory makes its guard become true. The guard
     /// is the boundary predicate: it must contain at least one ordering
     /// comparison (`<`, `≤`, `>`, `≥`) between float expressions,
@@ -347,21 +353,21 @@ pub enum Distrib {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rate_expr: Option<Expr>,
     },
-    /// Weibull distribution (M4): delay sampled with CDF `1 − e^{−(t/scale)^shape}`.
+    /// Weibull distribution: delay sampled with CDF `1 − e^{−(t/scale)^shape}`.
     Weibull {
         /// Shape parameter k > 0.
         shape: f64,
         /// Scale parameter λ > 0 (time units).
         scale: f64,
     },
-    /// Log-normal distribution (M4): `ln(delay) ~ N(mu, sigma²)`.
+    /// Log-normal distribution: `ln(delay) ~ N(mu, sigma²)`.
     Lognormal {
         /// Mean of the underlying normal.
         mu: f64,
         /// Standard deviation of the underlying normal (> 0).
         sigma: f64,
     },
-    /// Gamma distribution (M4): shape/scale parametrisation
+    /// Gamma distribution: shape/scale parametrisation
     /// (mean = shape·scale).
     Gamma {
         /// Shape parameter k > 0.
@@ -369,7 +375,7 @@ pub enum Distrib {
         /// Scale parameter θ > 0 (time units).
         scale: f64,
     },
-    /// Uniform distribution (M4): delay drawn uniformly in `[low, high)`.
+    /// Uniform distribution: delay drawn uniformly in `[low, high)`.
     Uniform {
         /// Lower bound (≥ 0).
         low: f64,
@@ -394,7 +400,7 @@ pub enum Distrib {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         high: Option<f64>,
     },
-    /// Empirical / user-defined distribution (M4): inverse-CDF sampling from a
+    /// Empirical / user-defined distribution: inverse-CDF sampling from a
     /// table of `(time, cumulative probability)` points: any
     /// distribution supplied as a sampled CDF. `u < points[0].1` maps
     /// to `points[0].0` (probability mass at the first time); between
@@ -664,9 +670,11 @@ impl CycleCancellation {
 
 /// A transition of an automaton.
 ///
-/// Maps to the paper's deterministic transitions ⟨q_src, guard, delay,
-/// dest-distribution⟩; stochastic (`schedule_stochastic`) and watched (`schedule_boundary`)
-/// transitions arrive in M2/M1 respectively.
+/// Maps to the paper's transitions ⟨q_src, guard, delay,
+/// dest-distribution⟩. The occurrence law ([`Distrib`]) selects the
+/// scheduling rule: a deterministic delay or an instantaneous branching
+/// (`schedule_deterministic`), a random delay (`schedule_stochastic`), or a
+/// watched boundary crossing (`schedule_boundary`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Transition {
@@ -678,8 +686,8 @@ pub struct Transition {
     /// Absent means "always true".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard: Option<Expr>,
-    /// Target states (exactly one for `Delay`; one per branch for
-    /// `Inst`, with `probs.len() == targets.len() - 1`).
+    /// Target states: one per branch for `Inst`, with
+    /// `probs.len() == targets.len() - 1`; exactly one for every other law.
     pub targets: Vec<String>,
     /// What happens to a pending countdown when the guard turns false
     /// (paper rule `drop_disabled`; see [`InterruptionPolicy`]).
@@ -874,8 +882,8 @@ pub struct Component {
     /// Declarative sensitive functions.
     #[serde(default)]
     pub sensitive_functions: Vec<SensitiveFunction>,
-    /// Continuous evolution: explicit equations and ODEs (M1;
-    /// declaration order = solving order).
+    /// Continuous evolution: explicit equations and ODEs (declaration
+    /// order = solving order).
     #[serde(default)]
     pub equations: Vec<Equation>,
     /// Conservative distribution operators owned by this component (see

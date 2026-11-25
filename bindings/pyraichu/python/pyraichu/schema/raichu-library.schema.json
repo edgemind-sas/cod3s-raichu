@@ -379,7 +379,7 @@
           "type": "object"
         }
       ],
-      "description": "The type of an attribute (M0 kinds; `String` discrete state is reserved\nand will extend this enum without breaking serialized models)."
+      "description": "The type of an attribute. A `String` discrete state is reserved: it\nwould extend this enum without breaking serialized models."
     },
     "AttrRef": {
       "anyOf": [
@@ -6163,7 +6163,7 @@
               "type": "object"
             },
             {
-              "description": "Watched transition (paper rule `schedule_boundary`, M1): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
+              "description": "Watched transition (paper rule `schedule_boundary`): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
               "properties": {
                 "distrib": {
                   "const": "watched",
@@ -6244,7 +6244,7 @@
               "type": "object"
             },
             {
-              "description": "Weibull distribution (M4): delay sampled with CDF `1 − e^{−(t/scale)^shape}`.",
+              "description": "Weibull distribution: delay sampled with CDF `1 − e^{−(t/scale)^shape}`.",
               "properties": {
                 "distrib": {
                   "const": "weibull",
@@ -6267,7 +6267,7 @@
               "type": "object"
             },
             {
-              "description": "Log-normal distribution (M4): `ln(delay) ~ N(mu, sigma²)`.",
+              "description": "Log-normal distribution: `ln(delay) ~ N(mu, sigma²)`.",
               "properties": {
                 "distrib": {
                   "const": "lognormal",
@@ -6290,7 +6290,7 @@
               "type": "object"
             },
             {
-              "description": "Gamma distribution (M4): shape/scale parametrisation\n(mean = shape·scale).",
+              "description": "Gamma distribution: shape/scale parametrisation\n(mean = shape·scale).",
               "properties": {
                 "distrib": {
                   "const": "gamma",
@@ -6313,7 +6313,7 @@
               "type": "object"
             },
             {
-              "description": "Uniform distribution (M4): delay drawn uniformly in `[low, high)`.",
+              "description": "Uniform distribution: delay drawn uniformly in `[low, high)`.",
               "properties": {
                 "distrib": {
                   "const": "uniform",
@@ -6367,7 +6367,7 @@
               "type": "object"
             },
             {
-              "description": "Empirical / user-defined distribution (M4): inverse-CDF sampling from a\ntable of `(time, cumulative probability)` points: any\ndistribution supplied as a sampled CDF. `u < points[0].1` maps\nto `points[0].0` (probability mass at the first time); between\npoints the CDF is linearly interpolated; the last cumulative\nprobability must be 1.",
+              "description": "Empirical / user-defined distribution: inverse-CDF sampling from a\ntable of `(time, cumulative probability)` points: any\ndistribution supplied as a sampled CDF. `u < points[0].1` maps\nto `points[0].0` (probability mass at the first time); between\npoints the CDF is linearly interpolated; the last cumulative\nprobability must be 1.",
               "properties": {
                 "distrib": {
                   "const": "empirical",
@@ -6871,7 +6871,7 @@
                   "type": "object"
                 }
               ],
-              "description": "Target states (exactly one for `Delay`; one per branch for\n`Inst`, with `probs.len() == targets.len() - 1`)."
+              "description": "Target states: one per branch for `Inst`, with\n`probs.len() == targets.len() - 1`; exactly one for every other law."
             }
           },
           "required": [
@@ -7231,7 +7231,7 @@
                   "type": "object"
                 }
               ],
-              "description": "Target states (exactly one for `Delay`; one per branch for\n`Inst`, with `probs.len() == targets.len() - 1`)."
+              "description": "Target states: one per branch for `Inst`, with\n`probs.len() == targets.len() - 1`; exactly one for every other law."
             }
           },
           "required": [
@@ -7243,7 +7243,7 @@
           "type": "object"
         }
       ],
-      "description": "A transition of an automaton.\n\nMaps to the paper's deterministic transitions ⟨q_src, guard, delay,\ndest-distribution⟩; stochastic (`schedule_stochastic`) and watched (`schedule_boundary`)\ntransitions arrive in M2/M1 respectively."
+      "description": "A transition of an automaton.\n\nMaps to the paper's transitions ⟨q_src, guard, delay,\ndest-distribution⟩. The occurrence law ([`Distrib`]) selects the\nscheduling rule: a deterministic delay or an instantaneous branching\n(`schedule_deterministic`), a random delay (`schedule_stochastic`), or a\nwatched boundary crossing (`schedule_boundary`)."
     },
     "TransitionKind": {
       "anyOf": [
