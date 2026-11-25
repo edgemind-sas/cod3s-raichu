@@ -208,6 +208,17 @@ impl<'m> Engine<'m> {
         state_of(self.model, &self.states, qualified)
     }
 
+    /// What indicator `idx` of the compiled model reads at the current
+    /// instant, the same reading the recorded series and samples use;
+    /// `None` when `idx` is not an indicator index.
+    #[must_use]
+    pub fn indicator_value(&self, idx: usize) -> Option<Value> {
+        self.model
+            .indicators
+            .get(idx)
+            .map(|indicator| sampling::indicator_value(&indicator.target, &self.vars, &self.states))
+    }
+
     /// **Interactive control**: every currently-armed transition.
     ///
     /// Lists the date-scheduled transitions (delay / inst / stochastic)

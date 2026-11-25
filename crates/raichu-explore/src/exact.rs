@@ -372,6 +372,7 @@ impl ExactSettings {
             cutoffs: &self.cutoffs,
             gap_tolerance: self.gap_tolerance,
             threads: self.threads,
+            indicators: None,
         }
     }
 }
@@ -493,6 +494,7 @@ impl Strategy for ExactStrategy<'_> {
             children,
             shared: child_acc,
             snapshot: None,
+            residual: 0.0,
         }))
     }
 
@@ -519,6 +521,12 @@ impl Strategy for ExactStrategy<'_> {
 
     fn step(&self, child: &Child) -> Option<(u32, u32)> {
         Some((child.transition as u32, child.branch as u32))
+    }
+
+    /// The exact driver never moves the clock: a node's dates are random,
+    /// so it reports no indicator and this is never read for one.
+    fn exit_time(&self, _child: &Child, entered: f64) -> f64 {
+        entered
     }
 }
 

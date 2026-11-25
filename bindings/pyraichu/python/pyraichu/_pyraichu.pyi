@@ -135,6 +135,8 @@ def explore_json(
     refine: bool = True,
     allow_fmu_import: bool = False,
     fmu_base_dir: str | None = None,
+    indicators: list[str] | None = None,
+    instants: list[float] | None = None,
 ) -> str: ...
 def exploration_domain_json(model_json: str) -> str: ...
 def fault_tree_json(

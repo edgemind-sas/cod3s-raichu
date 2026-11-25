@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Union
@@ -1062,7 +1062,8 @@ _EXPLORATION_FIELDS = (
 class Exploration:
     """The result of a sequence-tree exploration (:func:`explore`), in its
     open format, ``raichu.exploration`` (version 1 for an exact result,
-    version 2 for a discretised one).
+    version 2 for a discretised one, version 3 for a result carrying
+    indicators).
 
     ``sequences`` are the retained :class:`ExploredSequence` s by
     decreasing probability; ``steps`` is the table they index, one entry
@@ -1087,6 +1088,15 @@ class Exploration:
     error_estimate, truncation_dominated}``. The probabilities and bounds
     of a discretised result are those of the discretised model;
     :attr:`error_estimate` is the estimate of the discretisation error.
+
+    ``indicators`` is ``None`` unless indicators were requested
+    (:func:`explore`). It is then ``{instants, values, time_to_target}``:
+    ``values`` holds one ``{name, mean, sojourn, inconclusive}`` per
+    requested indicator, ``mean`` and ``sojourn`` one bounded value per
+    instant, and ``time_to_target`` is the mean time to the target
+    truncated at the horizon. A bounded value is ``{lower, upper}``, plus
+    ``error_estimate`` when a refinement was made; :meth:`indicator`
+    reads one indicator.
     """
 
     format: str
@@ -1109,6 +1119,7 @@ class Exploration:
     imprecise_sequences: int
     discretisation: dict[str, Any] | None = None
     cycle_groups: list[dict[str, Any]] | None = None
+    indicators: dict[str, Any] | None = None
 
     @classmethod
     def _from_json(cls, text: str) -> Exploration:
@@ -1119,6 +1130,7 @@ class Exploration:
         fields["sequences"] = [ExploredSequence._from_dict(s, table) for s in raw["sequences"]]
         fields["discretisation"] = raw.get("discretisation")
         fields["cycle_groups"] = raw.get("cycle_groups")
+        fields["indicators"] = raw.get("indicators")
         return cls(**fields)
 
     @property
@@ -1136,6 +1148,15 @@ class Exploration:
             return None
         return self.discretisation["refinement"]["error_estimate"]
 
+    def indicator(self, name: str) -> dict[str, Any]:
+        """The values of the requested indicator ``name``,
+        ``{name, mean, sojourn, inconclusive}``. Raises :class:`KeyError`
+        when no indicator of that name was requested."""
+        for values in (self.indicators or {}).get("values", []):
+            if values["name"] == name:
+                return values
+        raise KeyError(f"indicator {name!r} was not requested from this exploration")
+
     def to_json(self, path: str | Path | None = None) -> str:
         """The result in the ``raichu.exploration`` format, as JSON text;
         also written to ``path`` when one is given. :func:`read_exploration`
@@ -1147,6 +1168,8 @@ class Exploration:
             document["discretisation"] = self.discretisation
         if self.cycle_groups is not None:
             document["cycle_groups"] = self.cycle_groups
+        if self.indicators is not None:
+            document["indicators"] = self.indicators
         text = json.dumps(document)
         if path is not None:
             Path(path).write_text(text, encoding="utf-8")
@@ -1202,6 +1225,8 @@ def explore(
     threads: int | None = None,
     level: int | None = None,
     refine: bool = True,
+    indicators: Sequence[str] | None = None,
+    instants: Sequence[float] | None = None,
 ) -> Exploration:
     """Explore the sequence tree of ``model`` to the feared event
     ``target`` (a declared target), instead of drawing Monte-Carlo
@@ -1234,7 +1259,20 @@ def explore(
       ``refine=False`` no estimate is made. ``max_branches`` defaults to
       1 000 000 expanded nodes per pass when omitted.
 
-    ``level`` and ``refine=False`` apply to discretised exploration only,
+    With the discretised driver, ``indicators`` (names of state indicators
+    of the model) and ``instants`` (strictly increasing, in ``[0,
+    horizon]``) request, for each indicator, its mean value at every
+    instant (the probability of being in the state) and its sojourn time
+    by every instant, each with a lower and an upper bound, plus the mean
+    time to the target truncated at the horizon
+    (:attr:`Exploration.indicators`). The process is stopped at the
+    target: once it is reached, every state stays as it is. Either one
+    alone requests them; ``instants`` defaults to ``[horizon]`` and
+    ``indicators`` to none. An indicator on an attribute or a threshold is
+    refused.
+
+    ``level``, ``refine=False``, ``indicators`` and ``instants`` apply to
+    discretised exploration only,
     ``rel_precision`` and ``max_terms`` to exact exploration only; passing
     one to the other method raises. Raises :class:`SimulationError` for an
     unknown algorithm or an invalid setting (before anything runs), for a
@@ -1261,6 +1299,8 @@ def explore(
             refine,
             model.allow_fmu_import,
             str(model.base_dir),
+            None if indicators is None else list(indicators),
+            None if instants is None else [float(t) for t in instants],
         )
     )
 

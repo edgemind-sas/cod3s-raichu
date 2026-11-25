@@ -11,6 +11,7 @@ description = "Sequence-tree exploration: exact enumeration of the sequences lea
 [dependencies]
 raichu-analysis.workspace = true
 raichu-core.workspace = true
+raichu-expr.workspace = true
 raichu-model.workspace = true
 raichu-numeric.workspace = true
 rayon = "1"
@@ -19,7 +20,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-raichu-expr.workspace = true
 raichu-montecarlo.workspace = true
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 tempfile = "3"

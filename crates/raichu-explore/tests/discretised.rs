@@ -14,7 +14,7 @@
 use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError};
 use raichu_explore::{
     explore_discretised, explore_exact, read_exploration, Algorithm, DiscretisedSettings,
-    ExactSettings, ExplorationResult, ReadExplorationError, DEFAULT_LEVEL,
+    ExactSettings, ExplorationResult, ReadExplorationError, DEFAULT_LEVEL, EXPLORATION_VERSION,
 };
 use raichu_model::Model;
 use rayon::prelude::*;
@@ -807,10 +807,11 @@ fn a_discretised_result_is_written_at_format_version_2_and_checked_on_reading() 
         other => panic!("expected an inconsistent-version refusal, got {other:?}"),
     }
     // A version above the highest readable one is refused by version.
-    document["version"] = json!(3);
+    let above = EXPLORATION_VERSION + 1;
+    document["version"] = json!(above);
     assert!(matches!(
         read_exploration(&document.to_string()),
-        Err(ReadExplorationError::Version(Some(3)))
+        Err(ReadExplorationError::Version(Some(v))) if v == above
     ));
     // An exact result read back at version 2 is accepted: version 2 knows
     // the exact algorithm too.
