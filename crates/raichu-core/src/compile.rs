@@ -257,12 +257,14 @@ pub struct CTransition {
     pub distrib: CLaw,
     /// The signed boundary margin of the guard (guard true ⇔ margin ≥ 0)
     /// when the guard's crossing is **located** during integration while
-    /// the law stays what was declared: set for an observer
-    /// ([`TransitionKind::Observation`]) with a deterministic delay whose
-    /// guard varies during continuous evolution. Its countdown then starts
-    /// at the located crossing, and a located fall interrupts it, instead
-    /// of both waiting for the next discrete event. `None` otherwise; a
-    /// [`CLaw::Watched`] transition carries its margin in its law.
+    /// the law stays what was declared: set for every guarded transition,
+    /// whatever its law and its role, whose guard varies during
+    /// continuous evolution. Its law then starts at the located crossing
+    /// (a delay counts from there, a stochastic date is drawn there), and
+    /// a located fall interrupts it under its interruption policy,
+    /// instead of both waiting for the next discrete event. `None`
+    /// otherwise; a [`CLaw::Watched`] transition carries its margin in
+    /// its law.
     pub located: Option<CExpr>,
 }
 
@@ -1870,10 +1872,11 @@ impl CompiledModel {
         let mut explicit: Vec<CStep> = Vec::new();
         let mut ode: Vec<(VarIdx, CExpr)> = Vec::new();
         let mut functions = Vec::new();
-        // Observers with a deterministic delay, each with its declared
-        // guard: pass 3-bis locates those whose guard moves during
-        // continuous evolution, and compiles the margin of those only.
-        let mut delayed_observers: Vec<(TransIdx, &Expr)> = Vec::new();
+        // Guarded transitions that keep a law of their own, each with its
+        // declared guard: pass 3-bis locates those whose guard moves
+        // during continuous evolution, and compiles the margin of those
+        // only.
+        let mut guarded: Vec<(TransIdx, &Expr)> = Vec::new();
         for component in &model.components {
             for automaton in &component.automata {
                 let aut_idx = resolver.automata[&(component.name.clone(), automaton.name.clone())];
@@ -1970,13 +1973,11 @@ impl CompiledModel {
                         })
                         .collect::<Result<Vec<_>, CompileError>>()?;
                     let trans_idx = transitions.len();
-                    if let (Some(TransitionKind::Observation), CLaw::Delay(_), Some(guard), 1) = (
-                        transition.kind,
-                        &distribution,
+                    if let (false, Some(guard)) = (
+                        matches!(distribution, CLaw::Watched { .. }),
                         &transition.guard,
-                        targets.len(),
                     ) {
-                        delayed_observers.push((trans_idx, guard));
+                        guarded.push((trans_idx, guard));
                     }
                     automata[aut_idx].transitions.push(trans_idx);
                     transitions.push(CTransition {
@@ -2178,16 +2179,17 @@ impl CompiledModel {
                 *continuous = flag;
             }
         }
-        // An observer's countdown starts the moment its condition holds.
-        // Re-evaluated only at discrete events, a condition on a quantity
+        // A guarded transition's law starts the moment its guard holds.
+        // Re-evaluated only at discrete events, a guard on a quantity
         // that moves between them would be seen late, at the next discrete
-        // event, or never (edgemind-sas/cod3s-raichu#162): such an observer
-        // keeps its delay and has the crossing of its condition located
-        // during integration ([`CTransition::located`]). Its arming stays
-        // the schedule's, so a zero delay keeps its same-date wave rank.
-        // An observer whose condition only moves at discrete events is
-        // left as declared.
-        for (trans_idx, declared) in delayed_observers {
+        // event, or never (edgemind-sas/cod3s-raichu#162 for an observer's
+        // countdown; the same holds for a failure drawn while a
+        // temperature is above its limit). Such a transition keeps its law
+        // and has the crossing of its guard located during integration
+        // ([`CTransition::located`]). Its arming stays the schedule's, so
+        // a zero delay keeps its same-date wave rank. A transition whose
+        // guard only moves at discrete events is left as declared.
+        for (trans_idx, declared) in guarded {
             let transition = &mut transitions[trans_idx];
             if transition
                 .guard

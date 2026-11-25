@@ -22,8 +22,8 @@ pub(super) struct FrozenFlow<'m> {
 
 /// Which crossing of a monitored margin ends the segment.
 ///
-/// A watched transition and an idle located observer wait for their
-/// condition to start holding. A located observer whose countdown is
+/// A watched transition and an idle located transition wait for their
+/// condition to start holding. A located transition whose countdown is
 /// running waits for it to stop holding, which interrupts the countdown;
 /// under the `continue` policy nothing interrupts it, so its margin is
 /// not monitored at all.
@@ -42,7 +42,7 @@ pub(super) struct ContinuousSystem<'m> {
     pub(super) model: &'m CompiledModel,
     pub(super) vars: Vec<Value>,
     pub(super) states: Vec<StateIdx>,
-    /// Active watched transitions and located observers monitored this
+    /// Active watched transitions and located transitions monitored this
     /// segment.
     pub(super) margins: Vec<TransIdx>,
     /// Which crossing of each entry of `margins` ends the segment.

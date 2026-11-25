@@ -128,7 +128,7 @@ impl<'m> Engine<'m> {
             };
             if self.needs_integration() && target > self.time && target.is_finite() {
                 if let Some(index) = self.advance_continuous(target)? {
-                    // A located observer handed back is a countdown falling
+                    // A located transition handed back is a countdown falling
                     // due, a dated firing, not a boundary crossing.
                     let stop = if self.model.transitions[index].located.is_some() {
                         ProbeStop::Deterministic { index }
@@ -292,11 +292,18 @@ impl<'m> Engine<'m> {
 
     /// What the integration towards a deferred firing date stopped on,
     /// in words: a watched transition whose boundary was crossed, or a
-    /// located observer whose countdown, armed at a crossing, fell due.
+    /// located transition whose date, set at a crossing, fell due.
     fn crossing_cause(&self, trans_idx: TransIdx) -> String {
         let transition = &self.model.transitions[trans_idx];
         if transition.located.is_some() {
-            format!("the located observer `{}`", transition.name)
+            // Any guarded transition may be located; an observer is named
+            // as such, being the feared event a reader looks for.
+            let role = if transition.kind == Some(raichu_model::TransitionKind::Observation) {
+                "observer"
+            } else {
+                "transition"
+            };
+            format!("the located {role} `{}`", transition.name)
         } else {
             format!("the watched transition `{}`", transition.name)
         }

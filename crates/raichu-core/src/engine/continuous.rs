@@ -77,7 +77,7 @@ impl<'m> Engine<'m> {
     ) -> Result<Option<TransIdx>, EngineError> {
         let mut stuck_at = f64::NEG_INFINITY;
         let mut stuck: Vec<usize> = Vec::new();
-        // The located observer whose countdown, armed during this advance,
+        // The located transition whose countdown, armed during this advance,
         // falls due first and before `t_target`: integration stops there
         // and hands it back to fire, as a watched crossing is handed back.
         // A countdown armed before the advance is the caller's to plan
@@ -112,8 +112,8 @@ impl<'m> Engine<'m> {
                 Segment::Watched(trans_idx)
                     if self.model.transitions[trans_idx].located.is_some() =>
                 {
-                    // A located observer's condition crossed: only the
-                    // located observers' schedules move (armed on a rise,
+                    // A located transition's condition crossed: only the
+                    // located transitions' schedules move (armed on a rise,
                     // interrupted on a fall). All of them are settled at
                     // once, since their conditions are followed
                     // continuously anyway: observers sharing one crossing
@@ -206,7 +206,7 @@ impl<'m> Engine<'m> {
         }
     }
 
-    /// Every located observer with a countdown running, with its date.
+    /// Every located transition with a countdown running, with its date.
     fn located_pending(&self) -> Vec<(TransIdx, f64)> {
         self.model
             .watched
@@ -216,7 +216,7 @@ impl<'m> Engine<'m> {
             .collect()
     }
 
-    /// The located observer whose countdown, armed since `armed_before`
+    /// The located transition whose countdown, armed since `armed_before`
     /// was taken, falls due first, when that is before `t_target`. A tie
     /// at `t_target` itself is left to the caller's schedule, which ranks
     /// it in the same-date waves.
@@ -262,8 +262,8 @@ impl<'m> Engine<'m> {
     }
 
     /// Which crossing of `idx`'s margin ends a segment, or `None` when no
-    /// crossing does. A watched transition and an idle located observer
-    /// wait for their condition to start holding; a located observer
+    /// crossing does. A watched transition and an idle located transition
+    /// wait for their condition to start holding; a located transition
     /// counting down waits for it to stop holding, which interrupts the
     /// countdown, unless its `continue` policy means nothing interrupts
     /// it. Such an observer is not monitored: its countdown comes due
@@ -271,7 +271,9 @@ impl<'m> Engine<'m> {
     /// that date instead of integrating towards it.
     fn margin_sense(&self, idx: TransIdx) -> Option<MarginSense> {
         let transition = &self.model.transitions[idx];
-        if transition.located.is_none() || self.pending[idx].is_none() {
+        // Armed, not merely dated: a stochastic transition armed without a
+        // date (deferred dates) waits for its guard to fall like any other.
+        if transition.located.is_none() || !self.is_armed(idx) {
             Some(MarginSense::Rising)
         } else if transition.on_interruption == raichu_model::InterruptionPolicy::Continue {
             None
@@ -290,7 +292,7 @@ impl<'m> Engine<'m> {
         // the one the previous segment monitored, and rebuilding it would
         // cost the model's whole watched population per restart.
         //
-        // A located observer is read in the sense its schedule calls for
+        // A located transition is read in the sense its schedule calls for
         // (see [`Engine::margin_sense`]); one that nothing can interrupt
         // takes no event slot at all.
         let (margins, senses): (Vec<TransIdx>, Vec<MarginSense>) = self

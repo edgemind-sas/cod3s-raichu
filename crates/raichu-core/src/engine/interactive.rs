@@ -216,7 +216,7 @@ impl<'m> Engine<'m> {
     /// paused ones left out), plus the watched transitions armed in
     /// their source state (date = the current instant when their guard
     /// already holds, else `None`: the boundary being located only
-    /// during continuous evolution). A located observer waiting for its
+    /// during continuous evolution). A located transition waiting for its
     /// condition to start holding is listed with date `None` and the
     /// kind of its own law ([`FireableKind::Delay`]), never as watched.
     ///
@@ -263,7 +263,7 @@ impl<'m> Engine<'m> {
             if self.states[transition.automaton] != transition.source {
                 continue;
             }
-            // An armed located observer is listed with its date among the
+            // An armed located transition is listed with its date among the
             // scheduled transitions; an idle one waits, like a watched
             // transition, for a crossing nobody has located yet, but keeps
             // the kind of its own law: it fires a delay after the crossing.
@@ -833,11 +833,11 @@ impl<'m> Engine<'m> {
     ///   branch is never forced).
     /// - A watched transition may be fired only while its guard already
     ///   holds (at the current instant).
-    /// - A located observer whose condition stops holding on the way
+    /// - A located transition whose condition stops holding on the way
     ///   (its countdown interrupted, or restarted with a later date) is no
     ///   longer due at the date asked for: [`EngineError::NotFireable`],
     ///   the engine left unchanged.
-    /// - A located observer whose countdown is armed and falls due on the
+    /// - A located transition whose countdown is armed and falls due on the
     ///   way is a dated firing like the others before the date asked for:
     ///   it is passed over, left overdue, and fires at the next step.
     ///
@@ -899,7 +899,7 @@ impl<'m> Engine<'m> {
                 });
             }
             if self.needs_integration() && t_new > self.time {
-                // A located observer's countdown can be interrupted (or
+                // A located transition's countdown can be interrupted (or
                 // restarted, later) on the way; the refusal then leaves the
                 // engine as it found it, as every other refusal does.
                 let located = operator.is_none()

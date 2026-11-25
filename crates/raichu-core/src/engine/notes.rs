@@ -287,7 +287,7 @@ impl<'m> Engine<'m> {
         for index in 0..self.watched_active.len() {
             let position = self.watched_active[index];
             let trans_idx = model.watched[position];
-            // A located observer is armed by the schedule, which ranks it
+            // A located transition is armed by the schedule, which ranks it
             // in the same-date waves and counts its delay: firing it here
             // would jump both.
             if !matches!(model.transitions[trans_idx].distrib, CLaw::Watched { .. }) {
