@@ -1,9 +1,10 @@
 //! The instantaneous read relation and the classification of its algebraic cycles.
 
 use crate::graph::has_perfect_matching;
+use crate::validate::Scope;
 use crate::{
     channel_attribute_name, strongly_connected_components, Allocation, AllocationPolicy, Component,
-    Connection, Equation, EquationKind, Model, ModelError, Scope,
+    Connection, Equation, EquationKind, Model, ModelError,
 };
 use raichu_expr::{AggOp, AttrRef, Expr, PortRef, Value};
 use std::collections::{HashMap, HashSet};

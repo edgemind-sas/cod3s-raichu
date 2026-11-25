@@ -1,6 +1,7 @@
 //! Validation of the optimisation programs.
 
-use crate::{channel_attribute_name, AttrKind, Model, ModelError, Program, ProgramTieBreak, Scope};
+use crate::validate::Scope;
+use crate::{channel_attribute_name, AttrKind, Model, ModelError, Program, ProgramTieBreak};
 use raichu_expr::{AggOp, AttrRef, Expr, Value};
 use std::collections::{HashMap, HashSet};
 

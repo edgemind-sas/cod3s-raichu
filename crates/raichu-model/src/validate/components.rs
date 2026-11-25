@@ -1,8 +1,9 @@
 //! Validation of a component: attributes, ports, automata and their transitions.
 
+use crate::validate::Scope;
 use crate::{
     AttrKind, Automaton, ChannelAttribute, Component, CycleCancellation, Distrib, EquationKind,
-    InterruptionPolicy, Model, ModelError, PortDir, Scope, Transition,
+    InterruptionPolicy, Model, ModelError, PortDir, Transition,
 };
 use raichu_expr::Expr;
 use std::collections::{HashMap, HashSet};

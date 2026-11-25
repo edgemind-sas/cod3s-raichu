@@ -1,8 +1,9 @@
 //! Validation of the FMU units and of the allocation operators.
 
+use crate::validate::Scope;
 use crate::{
     channel_attribute_name, Allocation, AllocationPolicy, Component, Connection, EquationKind,
-    Model, ModelError, Scope,
+    Model, ModelError,
 };
 use raichu_expr::PortRef;
 use std::collections::{HashMap, HashSet};

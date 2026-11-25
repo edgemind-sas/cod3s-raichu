@@ -1,8 +1,7 @@
 //! Validation of connections, expressions and indicators.
 
-use crate::{
-    AttrKind, Connection, Distrib, IndicatorTarget, Model, ModelError, Port, PortDir, Scope,
-};
+use crate::validate::Scope;
+use crate::{AttrKind, Connection, Distrib, IndicatorTarget, Model, ModelError, Port, PortDir};
 use raichu_expr::{AttrRef, CmpOp, Expr, PortRef, Value};
 use std::collections::{HashMap, HashSet};
 
