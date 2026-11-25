@@ -464,19 +464,11 @@ within one instant (an alarm raised then cleared by a zero-delay repair) is
 observed and counted, as the reference counts it. Unlike the two
 reliability roles, it therefore requires the feature `observer_priority`.
 
-An observer with a `delay` whose guard **varies during continuous
-evolution** (it reads the simulation time, an ODE-integrated attribute,
-or one the explicit equations tie to one) has the crossing of its
-condition **located** during integration, as a threshold indicator on the
-same predicate is, instead of noticed at the next discrete event (or
-never, when none follows). Its delay is a countdown that starts at the
-located crossing: with `time` 0 it fires there, with `time` d it fires d
-later, and a located fall of the condition before then interrupts the
-countdown under the transition's `on_interruption` policy (`reset`, the
-default, cancels it). When a discrete event makes the condition hold
-instead, the observer is armed as any delay is, and a zero delay keeps its
-place in the waves above. An observer whose guard moves only at discrete
-events is not located at all.
+An observer whose guard varies during continuous evolution has the
+crossing of its condition located, as every guarded transition has: see
+[Guards on continuous attributes](#guards-on-continuous-attributes). When
+a discrete event makes the condition hold instead, the observer is armed
+as any delay is, and a zero delay keeps its place in the waves above.
 
 ### Target
 
@@ -522,22 +514,48 @@ on the same transition object.
 |---|---|---|
 | `inst` | `probs`: array of number | fires when the guard holds; `probs` are the destination probabilities, `len(probs) = len(targets) − 1` (the complement is reconstructed) |
 
-### `watched`: a guard on continuous attributes
+### Guards on continuous attributes
 
-`"distrib": "watched"` is **not a third nature**. It marks a *guarded*
-transition whose guard involves continuously-evolving (ODE-driven)
-attributes: the engine must **monitor the continuous trajectory** and
-fire the transition when the boundary is crossed (detected by scanning
-each integration step, then located by bisection), rather than
-re-checking the guard only at discrete events. An episode shorter than
-the scan spacing can be missed: see
+A guard **varies during continuous evolution** when it reads the
+simulation time, an ODE-integrated attribute, or one the explicit
+equations tie to one. Whatever the transition's law and `kind`, the
+crossing of such a guard is **located** during integration, as a
+threshold indicator on the same predicate is, instead of noticed at the
+next discrete event (or never, when none follows):
+
+- the law starts at the located rise: a `delay` counts from there, a
+  stochastic date is drawn there, a state-dependent rate starts to
+  accrue there, an `inst` branching fires there;
+- a located fall before the firing interrupts the transition under its
+  `on_interruption` policy (`reset`, the default, cancels it; `continue`
+  is interrupted by nothing).
+
+A failure drawn at rate λ while a temperature is above its limit is
+therefore one transition: `"distrib": "exp"` with the comparison as its
+guard. A guard that moves only at discrete events is not located at all,
+and costs nothing during integration. An episode shorter than the scan
+spacing can be missed: see
 [Detection and location](../guides/numerical-tuning.md#detection-and-location).
 
-It is declared explicitly because that intent **cannot be inferred from
-the guard alone**: the same comparison could instead gate a timed
-transition's eligibility. A watched transition takes no distribution parameters
-and requires a `guard` containing an ordering comparison
-(`lt`/`le`/`gt`/`ge`).
+Up to 0.141.0 only an observer with a `delay` was located this way; any
+other guarded transition was armed at the next discrete event. A model
+whose results relied on that late arming gives different numbers from
+0.142.0 on.
+
+### `watched`: a transition fired by the crossing itself
+
+`"distrib": "watched"` is **not a third nature**. It marks a *guarded*
+transition with no law of its own: the engine **monitors the continuous
+trajectory** and fires the transition when the boundary is crossed
+(detected by scanning each integration step, then located by bisection).
+An episode shorter than the scan spacing can be missed: see
+[Detection and location](../guides/numerical-tuning.md#detection-and-location).
+
+It is declared explicitly because the same comparison on another law
+gates that law instead (see
+[Guards on continuous attributes](#guards-on-continuous-attributes)). A
+watched transition takes no distribution parameters and requires a
+`guard` containing an ordering comparison (`lt`/`le`/`gt`/`ge`).
 
 A `not` in a watched guard is the **strict** complement: `not(x >= c)`
 holds for `x < c`, as `lt` does, so a guard and its negation never hold
@@ -625,7 +643,7 @@ so it cannot express a split: the share handed to one consumer depends on
 what every other consumer asked for. The operator therefore writes the
 whole vector at once, as one step of the explicit sweep, and is evaluated
 at every evaluation point like an equation. That placement is what lets a
-[watched](#watched-a-guard-on-continuous-attributes) guard reading an
+[watched](#watched-a-transition-fired-by-the-crossing-itself) guard reading an
 allocated quantity be *located* at its crossing instant rather than
 noticed at the next discrete date.
 
@@ -701,7 +719,7 @@ resolution existed.
 
 Only the *search* is done at the boundary. The resolved network is
 evaluated by the ordinary explicit pass at **every solver stage**, so a
-flow moves with the state and a [watched](#watched-a-guard-on-continuous-attributes)
+flow moves with the state and a [watched](#watched-a-transition-fired-by-the-crossing-itself)
 guard reading one is located at its crossing instant.
 
 The frozen active set is itself watched. Every operator contributes one
@@ -1110,7 +1128,7 @@ Kind compatibility is refused at build time: a `bool` attribute takes
 
 **Where a threshold flips.** An ordering threshold (`lt`, `le`, `gt`,
 `ge`) on a number is located inside a continuous segment the way a
-[watched](#watched-a-guard-on-continuous-attributes) transition's boundary is, bisected to the
+[watched](#watched-a-transition-fired-by-the-crossing-itself) transition's boundary is, bisected to the
 event tolerance on the solver's dense output and recorded at that date.
 It is an **observation**, not an event: the solver takes exactly the
 steps it would take without it, so declaring a threshold never moves the

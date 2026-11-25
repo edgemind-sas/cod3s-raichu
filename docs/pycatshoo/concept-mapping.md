@@ -45,6 +45,7 @@ deliberate departures.
 | `expo` + modifiable rate (discrete / continuous) | `"distrib": "exp", "rate_expr": …`: re-evaluated on change; on continuous attributes the cumulative hazard is integrated exactly. See [Modifiable parameters](#modifiable-parameters) |
 | `setCondition(fun)` + watched transition | `"distrib": "watched"` + a `guard` containing at least one ordering comparison, possibly composed with and/or/not (the boundary is root-found). One target state; no real-valued boundary-checker method |
 | `setCondition(fun)` on a timed transition | a `"guard"` on the transition |
+| `addWatchedTransition` on a transition that carries a law of its own (the manager follows it for its condition, user manual V1.3.7.2, section 9.3.32.5.11) | the same law with its `"guard"`: a guard that varies during continuous evolution is located without being declared, the law starting at the located rise and a located fall interrupting it. See [Guards on continuous attributes](../reference/model-schema.md#guards-on-continuous-attributes). Numerical parity on such a model has not been measured |
 | `setInterruptible(True)` | `"on_interruption": "reset"` (**default**) |
 | default (not interruptible) | `"on_interruption": "continue"` |
 | *(no equivalent)* | `"on_interruption": "resume"`: a RAICHU extension |
