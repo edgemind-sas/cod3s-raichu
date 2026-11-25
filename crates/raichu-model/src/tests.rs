@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used)]
 
 use super::*;
+use crate::graph::has_perfect_matching;
 use proptest::prelude::*;
 use raichu_expr::{AggOp, Assignment, AttrRef, BoolOp, CmpOp, Expr, PortRef, StateRef, Value};
 
