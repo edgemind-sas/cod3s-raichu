@@ -6,9 +6,11 @@
 //! `pyraichu._pyraichu` and wrapped by the pure-Python package in
 //! `python/pyraichu/`.
 //!
-//! M0 surface: `validate_model`, `simulate_json`. Results cross the FFI
-//! as JSON strings (fixture-scale data); zero-copy numpy arrays arrive
-//! with the Monte-Carlo milestone where volumes justify them.
+//! Surface: module-level functions, one per engine entry point
+//! (validation, single trajectory, Monte-Carlo, sequence analysis,
+//! exploration, fault trees, quantification, library expansion), and
+//! the classes `Interactive`, `Snapshot` and `FlowConfig`. Models and
+//! results cross the FFI as JSON strings.
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -585,7 +587,7 @@ fn solver_params(
     Ok(ode)
 }
 
-/// Run a Monte-Carlo estimation (M2): `nb_runs` replicas on independent
+/// Run a Monte-Carlo estimation: `nb_runs` replicas on independent
 /// RNG substreams of `seed`, estimates (mean/std/sojourn) at `samples`.
 ///
 /// The GIL is released; replicas run in parallel with an index-ordered

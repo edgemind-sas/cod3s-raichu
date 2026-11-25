@@ -1,5 +1,5 @@
-//! Integration tests of the deterministic engine: Phase 2 exit
-//! criteria of the M0 plan.
+//! Integration tests of the engine on single trajectories: discrete
+//! cycle, hybrid evolution, journal and provenance.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -651,9 +651,9 @@ fn provenance_is_recorded() {
     assert!(!result.provenance.engine_version.is_empty());
 }
 
-// --- M1: hybrid tank (ODE + watched transitions) ---------------------------
+// --- Hybrid tank (ODE + watched transitions) -------------------------------
 
-/// Reduced heated-tank-class model (M1 plan): constant inflow 1.5,
+/// Reduced heated-tank-class model: constant inflow 1.5,
 /// pump automaton toggling outflow 2.0 through watched thresholds
 /// content ≥ 8 (start) and content ≤ 2 (stop), content₀ = 0.
 /// Closed-form event dates: 16/3, 52/3, 64/3, 100/3, 112/3 …
@@ -844,7 +844,7 @@ fn tank_dense_samples_match_closed_form() {
 
 #[test]
 fn tank_runs_on_the_euler_backend_too() {
-    // The OdeSolver trait is the swap point (M1 goal condition).
+    // The OdeSolver trait is the swap point.
     let model = tank_model();
     let compiled = CompiledModel::compile(&model).unwrap();
     let config = EngineConfig {
@@ -1148,8 +1148,8 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
     );
 }
 
-/// M3 aggregation extensions: `mean` and `median` over an in-port
-/// (audit M1 list: sensor averaging, redundant-sensor median).
+/// `mean` and `median` aggregations over an in-port (sensor averaging,
+/// redundant-sensor median).
 #[test]
 fn port_mean_and_median_aggregations() {
     let sensor = |name: &str, value: f64| Component {

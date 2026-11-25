@@ -1,4 +1,4 @@
-//! # raichu-numeric: continuous evolution (milestone M1)
+//! # raichu-numeric: continuous evolution
 //!
 //! ODE integration with dense output and event location for watched
 //! transitions (the `schedule_boundary` rule). Two separate controls
@@ -18,8 +18,8 @@
 //!   is [`DormandPrince45`] (adaptive Dormand-Prince 4(5) with the
 //!   Hairer dense-output interpolant); [`FixedEuler`] is a deliberately
 //!   simple second backend proving the trait boundary (used by tests
-//!   and available for coarse debugging runs). `diffsol` remains the
-//!   candidate backend for stiff/large systems in a later milestone.
+//!   and available for coarse debugging runs). Both are explicit
+//!   methods: the crate carries no implicit backend for stiff systems.
 //! - **Crossing scan** ([`DormandPrince45`]): every accepted step of
 //!   length `h` is scanned at `n` evenly spaced points of the dense
 //!   interpolant, its right endpoint included (the left one is the
@@ -949,7 +949,7 @@ impl OdeSolver for DormandPrince45 {
 
 /// Deliberately simple fixed-step explicit Euler backend with linear
 /// dense output. Exists to prove the [`OdeSolver`] trait is genuinely
-/// swappable (M1 goal condition) and for coarse debugging.
+/// swappable and for coarse debugging.
 #[derive(Debug, Clone)]
 pub struct FixedEuler {
     /// Fixed step size.
@@ -1333,7 +1333,7 @@ mod tests {
         assert!((t - std::f64::consts::FRAC_PI_6).abs() < 1e-8, "t={t}");
     }
 
-    /// Missed-crossing stress (M1 goal condition): the margin
+    /// Missed-crossing stress: the margin
     /// spends only a narrow window (~0.09 time units) above zero near
     /// the sine apex; a naive endpoint check with large steps would
     /// miss it. Sweep step caps and demand the crossing is always

@@ -17,7 +17,9 @@
 //! - [`raichu_analysis`]: analyses of a recorded sequence corpus
 //!   (minimal-sequence reduction, raw corpus format, importance measures).
 //! - [`raichu_rng`]: reproducible RNG streams.
-//! - [`raichu_numeric`]: continuous evolution (milestone M1).
+//! - [`raichu_numeric`]: continuous evolution (ODE integration with
+//!   dense output, location of boundary crossings, the delay laws and
+//!   the dense linear solver).
 //! - [`raichu_montecarlo`]: the Monte-Carlo replica driver.
 //! - [`raichu_explore`]: the sequence-tree exploration drivers (exact
 //!   exploration of the Markov family).
@@ -32,7 +34,7 @@
 //! - [`raichu_fmi`]: FMI 2.0 and 3.0 co-simulation archive and instance host.
 //!
 //! The engine upholds standing validation / performance / observability
-//! contracts across its milestone sequence.
+//! contracts.
 
 pub use raichu_analysis;
 pub use raichu_core;

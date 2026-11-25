@@ -141,8 +141,11 @@ pub struct EngineConfig {
     /// output for continuous attributes, piecewise-constant hold for
     /// discrete ones). Empty = no sampling.
     pub samples: Vec<f64>,
-    /// Master seed of the RNG policy (M2). Only consumed by stochastic
-    /// distributions; deterministic models ignore it.
+    /// Master seed of the RNG policy. With `rng_stream` it seeds the
+    /// generator that draws stochastic delays and the branches of
+    /// instantaneous transitions, and the smoothed noise of
+    /// [`raichu_expr::Expr::SmoothNoise`]; a model with none of these
+    /// ignores it.
     pub seed: u64,
     /// Substream index (`ChaCha8Rng::set_stream`): the Monte-Carlo
     /// driver assigns one stream per replica.
@@ -1453,8 +1456,10 @@ pub struct Provenance {
     pub model: String,
     /// Simulation horizon.
     pub t_max: f64,
-    /// RNG seed (`None` in the deterministic engine; the field exists
-    /// so M2 introduces no schema change).
+    /// RNG seed: `None` when the model has no stochastic transition
+    /// (no stochastic law, no instantaneous transition with two or more
+    /// branches of positive probability), since no draw decided the
+    /// trajectory.
     pub seed: Option<u64>,
     /// Relative tolerance of the ODE controller (level-3 provenance).
     pub ode_rtol: f64,

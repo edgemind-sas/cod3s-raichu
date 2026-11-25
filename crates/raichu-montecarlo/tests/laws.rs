@@ -1,4 +1,4 @@
-//! M4 distribution library: statistical unit tests against closed-form CDFs.
+//! Distribution library: statistical unit tests against closed-form CDFs.
 //!
 //! Identity under test: a single `ok → nok` automaton whose transition
 //! carries distribution `L` gives `E[1{nok at t}] = P(T ≤ t) = CDF_L(t)`. Each

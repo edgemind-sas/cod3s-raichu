@@ -4,8 +4,7 @@
 //! `init → schedule → continuous → discrete → update`, mapped to the
 //! paper's rules (`schedule_deterministic`, `schedule_stochastic`, `schedule_boundary`, `integrate_continuous`, `fire_transition`, `propagate_effects`,
 //! `reschedule_modifiable`, `drop_disabled`) so the correspondence stays auditable: see
-//! the [`engine`] module documentation for the per-rule mapping of the
-//! M0 deterministic subset.
+//! the [`engine`] module documentation for the per-rule mapping.
 //!
 //! Standing requirements:
 //!
