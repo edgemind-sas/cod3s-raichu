@@ -29,9 +29,10 @@ use raichu_core::{
 };
 use raichu_model::TransitionKind;
 
+use crate::indicators::{IndicatorPlan, IndicatorSums};
 use crate::result::{
     relative_gap, Algorithm, CutoffTallies, Cutoffs, ExplorationResult, ExploredEvent,
-    ExploredSequence, ExploredStep, Precision, EXPLORATION_FORMAT,
+    ExploredSequence, ExploredStep, Precision, EXPLORATION_FORMAT, INDICATORS_VERSION,
 };
 
 /// The settings every driver shares, borrowed from its own settings type.
@@ -46,6 +47,9 @@ pub(crate) struct Common<'a> {
     pub gap_tolerance: f64,
     /// Worker threads (`None` = rayon default).
     pub threads: Option<usize>,
+    /// The requested indicators, resolved (`None` when none were
+    /// requested).
+    pub indicators: Option<&'a IndicatorPlan>,
 }
 
 /// A timed expansion of a node, built by [`Strategy::timed`].
@@ -57,6 +61,10 @@ pub(crate) struct Expansion<C, Sh> {
     /// A snapshot of the node's engine state the strategy already took
     /// (the walker reuses it instead of taking another).
     pub snapshot: Option<Snapshot>,
+    /// Fraction of the node's probability that no child carries and that
+    /// stays in the node to the horizon (the survival mass a discretised
+    /// window drops at the horizon). Read only for indicators.
+    pub residual: f64,
 }
 
 /// What [`Strategy::timed`] returns: the node's children, or `None` for a
@@ -115,6 +123,11 @@ pub(crate) trait Strategy: Sync {
     /// The `(transition, branch)` a child fires, `None` when it fires
     /// nothing (it only lets time pass).
     fn step(&self, child: &Self::Child) -> Option<(u32, u32)>;
+
+    /// The instant `child` leaves a node entered at `entered`: the
+    /// instant the child node is entered. Read only for indicators, which
+    /// only a driver with a known clock reports.
+    fn exit_time(&self, child: &Self::Child, entered: f64) -> f64;
 }
 
 /// A node's probability measure (see [`Strategy::node_mass`]).
@@ -143,6 +156,8 @@ pub(crate) struct Partial {
     pub lower: f64,
     pub tallies: CutoffTallies,
     pub expanded: u64,
+    /// Indicator sums (empty when no indicator was requested).
+    pub indicators: IndicatorSums,
     /// Position of each path in `sequences`, when merging.
     index: HashMap<Vec<(u32, u32)>, usize>,
 }
@@ -167,6 +182,8 @@ enum Node<C, Sh> {
 struct Frame<C, Sh> {
     /// Path probability of the node.
     pi: f64,
+    /// The instant the node was entered.
+    time: f64,
     /// Failures fired from the initial state to the node.
     failures: u64,
     /// Consecutive instantaneous firings leading to each child.
@@ -203,6 +220,8 @@ pub(crate) struct Walker<'a, 'm, S: Strategy> {
     max_instantaneous: usize,
     /// Whether retained sequences sharing a path are merged.
     merge: bool,
+    /// Scratch buffer: the requested indicators' values at a node.
+    values: Vec<bool>,
     out: Partial,
 }
 
@@ -225,7 +244,14 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
             budget,
             max_instantaneous,
             merge,
-            out: Partial::default(),
+            values: Vec::new(),
+            out: Partial {
+                indicators: common
+                    .indicators
+                    .map(IndicatorPlan::sums)
+                    .unwrap_or_default(),
+                ..Partial::default()
+            },
         }
     }
 
@@ -240,7 +266,11 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
         via: Option<&S::Child>,
         streak: usize,
     ) -> Result<Node<S::Child, S::Shared>, EngineError> {
-        let (children, shared, child_streak, snapshot) =
+        let entered = self.engine.current_time();
+        if let Some(plan) = self.common.indicators {
+            plan.read(&self.engine, &mut self.values);
+        }
+        let (children, shared, child_streak, snapshot, residual) =
             if let Some(idx) = self.strategy.immediate(&mut self.engine)? {
                 if streak >= self.max_instantaneous {
                     let prefix = self.path.len().saturating_sub(streak);
@@ -253,14 +283,16 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                 let (children, shared) = self
                     .strategy
                     .instantaneous_children(self.model, idx, parent, via);
-                (children, shared, streak + 1, None)
+                (children, shared, streak + 1, None, 0.0)
             } else {
                 // 2. Target reached: a retained sequence (or another
                 //    target: a leaf that contributes nothing).
                 if let Some((name, _)) = self.engine.reached_target() {
-                    if name == self.common.target {
+                    let reached = name == self.common.target;
+                    if reached {
                         self.record(pi, parent, via);
                     }
+                    self.stay(reached, pi, entered);
                     return Ok(Node::Leaf);
                 }
                 // 3. Timed branching, per the driver.
@@ -268,19 +300,25 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                     .strategy
                     .timed(&mut self.engine, parent, via, &self.path)?
                 {
-                    None => return Ok(Node::Leaf),
+                    None => {
+                        self.stay(false, pi, entered);
+                        return Ok(Node::Leaf);
+                    }
                     Some(expansion) => (
                         expansion.children,
                         expansion.shared,
                         0,
                         expansion.snapshot.map(Box::new),
+                        expansion.residual,
                     ),
                 }
             };
 
         // Branch cap: counts expanded nodes.
+        let capped = self.budget.is_some_and(|budget| budget == 0);
+        self.occupy_node(pi, entered, &children, &shared, residual, capped);
         if let Some(budget) = self.budget.as_mut() {
-            if *budget == 0 {
+            if capped {
                 let mass = self.strategy.node_mass(pi, parent, via);
                 self.out.tallies.max_branches.add(mass.value);
                 return Ok(Node::Leaf);
@@ -315,6 +353,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
     ) -> Result<(), EngineError> {
         let mut stack = vec![Frame {
             pi,
+            time: self.engine.current_time(),
             failures,
             child_streak: streak,
             children: vec![child],
@@ -336,7 +375,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
             };
             frame.next += 1;
             let Some((child_pi, child_failures)) =
-                self.admit(frame.pi, frame.failures, &frame.shared, &child)
+                self.admit(frame.pi, frame.time, frame.failures, &frame.shared, &child)
             else {
                 continue;
             };
@@ -355,6 +394,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
             if let Some(step) = step {
                 self.path.push(step);
             }
+            let entered = self.engine.current_time();
             match self.examine(child_pi, &stack[top].shared, Some(&child), child_streak)? {
                 Node::Leaf => {
                     if step.is_some() {
@@ -376,6 +416,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                     };
                     stack.push(Frame {
                         pi: child_pi,
+                        time: entered,
                         failures: child_failures,
                         child_streak,
                         children,
@@ -398,6 +439,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
     fn admit(
         &mut self,
         pi: f64,
+        entered: f64,
         failures: u64,
         shared: &S::Shared,
         child: &S::Child,
@@ -415,19 +457,74 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
         let length = self.path.len() + usize::from(step.is_some());
         let cutoffs = self.common.cutoffs;
         let tallies = &mut self.out.tallies;
-        if cutoffs.min_probability.is_some_and(|p| score < p) {
-            tallies.min_probability.add(mass);
-            return None;
+        let tally = if cutoffs.min_probability.is_some_and(|p| score < p) {
+            &mut tallies.min_probability
+        } else if cutoffs.max_length.is_some_and(|n| length > n) {
+            &mut tallies.max_length
+        } else if cutoffs.max_failures.is_some_and(|n| child_failures > n) {
+            &mut tallies.max_failures
+        } else {
+            return Some((child_pi, child_failures));
+        };
+        tally.add(mass);
+        if let Some(plan) = self.common.indicators {
+            let from = self.strategy.exit_time(child, entered);
+            plan.unknown(&mut self.out.indicators, child_pi, from);
         }
-        if cutoffs.max_length.is_some_and(|n| length > n) {
-            tallies.max_length.add(mass);
-            return None;
+        None
+    }
+
+    /// Indicators: the node's whole mass `pi` stays in its state from
+    /// `entered` on (a leaf), the target `reached` or not.
+    fn stay(&mut self, reached: bool, pi: f64, entered: f64) {
+        if let Some(plan) = self.common.indicators {
+            plan.occupy(
+                &mut self.out.indicators,
+                &self.values,
+                reached,
+                pi,
+                entered,
+                f64::INFINITY,
+            );
         }
-        if cutoffs.max_failures.is_some_and(|n| child_failures > n) {
-            tallies.max_failures.add(mass);
-            return None;
+    }
+
+    /// Indicators: an expanded node of path probability `pi`, entered at
+    /// `entered`, holds each child's mass until the child leaves and the
+    /// `residual` fraction to the end. When the branch cap stops the node
+    /// (`capped`), each child's mass is unknown once it leaves.
+    fn occupy_node(
+        &mut self,
+        pi: f64,
+        entered: f64,
+        children: &[S::Child],
+        shared: &S::Shared,
+        residual: f64,
+        capped: bool,
+    ) {
+        let Some(plan) = self.common.indicators else {
+            return;
+        };
+        let sums = &mut self.out.indicators;
+        for child in children {
+            let (child_pi, _, _) = self.strategy.child_mass(pi, shared, child);
+            if child_pi <= 0.0 {
+                continue;
+            }
+            let left = self.strategy.exit_time(child, entered);
+            plan.occupy(sums, &self.values, false, child_pi, entered, left);
+            if capped {
+                plan.unknown(sums, child_pi, left);
+            }
         }
-        Some((child_pi, child_failures))
+        plan.occupy(
+            sums,
+            &self.values,
+            false,
+            pi * residual,
+            entered,
+            f64::INFINITY,
+        );
     }
 
     /// Record the current node as a retained sequence, merged with an
@@ -769,10 +866,12 @@ pub(crate) fn assemble(
     let mut lower = 0.0;
     let mut tallies = CutoffTallies::default();
     let mut expanded = 0;
+    let mut indicator_sums = IndicatorSums::default();
     for partial in partials {
         lower += partial.lower;
         tallies.merge(&partial.tallies);
         expanded += partial.expanded;
+        indicator_sums.merge(&partial.indicators);
         if merge {
             for sequence in partial.sequences {
                 merge_by_path(&mut raw, &mut index, sequence);
@@ -815,9 +914,17 @@ pub(crate) fn assemble(
             .then_with(|| a.steps.iter().map(key).cmp(b.steps.iter().map(key)))
     });
     let imprecise_sequences = sequences.iter().filter(|s| s.imprecise).count();
+    let indicators = common
+        .indicators
+        .map(|plan| plan.finish(&indicator_sums, common.gap_tolerance));
+    let version = if indicators.is_some() {
+        INDICATORS_VERSION
+    } else {
+        algorithm.format_version()
+    };
     ExplorationResult {
         format: EXPLORATION_FORMAT.to_owned(),
-        version: algorithm.format_version(),
+        version,
         engine_version: env!("CARGO_PKG_VERSION").to_owned(),
         model: model.name.clone(),
         algorithm,
@@ -836,6 +943,7 @@ pub(crate) fn assemble(
         imprecise_sequences,
         discretisation: None,
         cycle_groups: Some(model.cycle_groups.clone()),
+        indicators,
     }
 }
 

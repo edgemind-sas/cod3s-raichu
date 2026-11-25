@@ -509,6 +509,90 @@ Monte-Carlo semantics, unchanged). Adding a public field is why this
 release is 0.46.0 rather than a patch: a struct literal written without
 `..Default::default()` must add it.
 
+## Indicators
+
+A discretised exploration also reports, on request, the state indicators
+of the model: for each one, its **mean value** at chosen instants (the
+probability of being in the state) and its **sojourn time** by those
+instants (the expected time spent in the state), plus the **mean time to
+the target truncated at the horizon**, `E[min(T, horizon)]`. Each value
+comes with a lower and an upper bound.
+
+The explored process is the model **stopped at the target**: once the
+feared event is reached, every state stays as it is, as in the sequence
+mode of a Monte-Carlo campaign. A mean value is therefore that of the
+stopped process; on a model whose target is not absorbing anyway, it is
+not the availability of the free-running system.
+
+On the wear-out pair, with an indicator on the failed state of `A`:
+
+```python
+document = {
+    "name": "wearout_pair",
+    "components": [
+        unit("A", 2.0, 20.0),
+        unit("B", 1.5, 30.0),
+        {"name": "sys", "automata": [{
+            "name": "watch", "states": ["up", "down"], "init": "up",
+            "transitions": [{"name": "down", "source": "up", "targets": ["down"],
+                             "distrib": "inst", "probs": [],
+                             "guard": {"op": "bool", "bool_op": "and",
+                                       "args": [down("A"), down("B")]}}]}]},
+    ],
+    "targets": [{"name": "sys_down", "component": "sys",
+                 "automaton": "watch", "state": "down"}],
+    "indicators": [{"name": "A_down", "target": "state", "component": "A",
+                    "automaton": "fail", "state": "nok"}],
+}
+result = pyraichu.explore(pyraichu.load_model(document), "sys_down", horizon=10.0,
+                          algorithm="discretised",
+                          indicators=["A_down"], instants=[2.0, 5.0, 10.0])
+found = result.indicators
+a_down = result.indicator("A_down")
+for t, mean, sojourn in zip(found["instants"], a_down["mean"], a_down["sojourn"]):
+    print(f"t={t:4}  P(A down)={mean['lower']:.6f} (+-{mean['error_estimate']:.1e})  "
+          f"time down={sojourn['lower']:.6f}")
+ttt = found["time_to_target"]
+print(f"mean time to target, truncated at 10: {ttt['lower']:.6f}")
+```
+
+```text
+t= 2.0  P(A down)=0.007927 (+-1.0e-02)  time down=0.006523
+t= 5.0  P(A down)=0.054737 (+-1.2e-02)  time down=0.101513
+t=10.0  P(A down)=0.221215 (+-4.1e-05)  time down=0.774482
+mean time to target, truncated at 10: 9.908564
+```
+
+No cut-off fired, so each lower bound equals its upper bound. The closed
+forms are `1 - exp(-(t/20)^2)` for the mean value (0.009950, 0.060587
+and 0.221199), its integral for the sojourn time (0.006647, 0.102242
+and 0.774380), and `∫_0^10 (1 - F_A F_B)` for the mean time to the
+target (9.908468). A mean value at an instant is the coarsest of these
+quantities: the discretisation fires every branch at one representative
+instant per cell, so the probability of being in a state at a given
+instant moves in steps of one cell's mass, and its error estimate is of
+that order. A sojourn time integrates those steps and converges much
+faster.
+
+**Bounds.** A cut-off makes a branch's mass unknown from the instant it
+would have entered the pruned node: the lower bound counts that mass as
+out of the state, the upper bound as in it. It is the construction of
+the bounds on the target probability, so at the horizon the gap of a
+mean value is at most `upper - lower` of the target. An indicator whose
+relative gap exceeds `gap_tolerance` at some instant is flagged
+`inconclusive`. As for the target, the bounds are bounds on the
+discretised model, and with `refine` (the default) every value carries
+its own `error_estimate`.
+
+**What is refused.** Only state indicators are reported: an indicator
+on an attribute or on a threshold over one may change between two
+firings, along a continuous evolution, and its bounds would not hold.
+Unknown or repeated names, and instants that are not strictly increasing
+in `[0, horizon]`, are refused before anything runs. The exact algorithm
+does not report indicators: its dates are random, and the computation it
+needs (the distribution of the instant each state is entered and left)
+is not implemented yet.
+
 ## Relation to minimal cut sequences
 
 An explored sequence and a minimal cut sequence are different objects.
@@ -569,7 +653,8 @@ time, and the dates in the reduced sequences are 0.
 An `Exploration` is saved and read back in its own open format,
 `raichu.exploration`, as a single JSON document. An exact result is
 written at version 1 and a discretised one at version 2, the version
-that introduced discretised exploration:
+that introduced discretised exploration; a result carrying indicators
+is written at version 3, the version that introduced them:
 
 ```python
 result.to_json("exploration.json")          # also returns the text
@@ -588,7 +673,13 @@ The top-level fields are `format`, `version`, `engine_version`, `model`,
 meanings given above. A discretised result adds `discretisation`,
 `{level, refinement}` (see
 [Error estimate by refinement](#error-estimate-by-refinement)); an exact
-result omits the field, so its document is unchanged.
+result omits the field, so its document is unchanged. A result carrying
+indicators adds `indicators`, `{instants, values, time_to_target}`:
+`values` holds one `{name, mean, sojourn, inconclusive}` per requested
+indicator, `mean` and `sojourn` one bounded value per instant, each
+`{lower, upper}` plus `error_estimate` when a refinement was made (see
+[Indicators](#indicators)). Without a request the field is omitted and
+the version stays that of the algorithm.
 
 `steps` is the step table: one entry per distinct step occurring in a
 retained sequence, `{transition, from, to, event}`, where `event` is the
@@ -617,7 +708,8 @@ refuses another `format`, a `version` above the one it knows (a reader
 of RAICHU 0.45.0 knows version 1 only, so it refuses a discretised
 document by its version), a document whose `algorithm` its `version`
 predates (a `discretised` result declaring version 1, which no writer
-produces), and a sequence referring to an index outside the table; a
+produces), a document carrying indicators at a version below 3, and a
+sequence referring to an index outside the table; a
 later version may add fields, which an earlier reader ignores. The
 format is distinct from the [raw sequence corpus](../reference/sequence-format.md)
 of a Monte-Carlo campaign, whose sequences carry replica counts and

@@ -16,9 +16,12 @@
 //!   engine carries and continuous evolution: the distribution of the
 //!   random next event is cut into equal-mass cells, each a branch, with
 //!   an error estimate by refinement.
+//! - [`indicators`]: the mean value of state indicators at declared
+//!   instants and their sojourn times, with bounds, and the mean time to
+//!   the target truncated at the horizon (discretised driver).
 //! - [`result`]: the result type and its open format,
 //!   `raichu.exploration` (version 1 for an exact result, 2 for a
-//!   discretised one).
+//!   discretised one, 3 for a result carrying indicators).
 //!
 //! The engine stays the single source of semantics: the explorer drives
 //! one [`raichu_core::Engine`] per worker, never re-implementing guards,
@@ -26,6 +29,7 @@
 
 pub mod discretised;
 pub mod exact;
+pub mod indicators;
 pub mod result;
 mod walk;
 
@@ -34,9 +38,10 @@ pub use discretised::{
     DEFAULT_MAX_BRANCHES,
 };
 pub use exact::{exact_domain_report, explore_exact, DomainViolation, ExactSettings};
+pub use indicators::{BoundedValue, ExploredIndicators, IndicatorRequest, IndicatorValues};
 pub use result::{
     read_exploration, Algorithm, CutoffTallies, CutoffTally, Cutoffs, Discretisation,
     ExplorationResult, ExploredEvent, ExploredSequence, ExploredStep, Precision,
     ReadExplorationError, Refinement, DEFAULT_GAP_TOLERANCE, EXPLORATION_FORMAT,
-    EXPLORATION_VERSION,
+    EXPLORATION_VERSION, INDICATORS_VERSION,
 };

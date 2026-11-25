@@ -96,6 +96,7 @@ use raichu_core::{
 use raichu_numeric::{Law, LawError};
 use std::path::Path;
 
+use crate::indicators::{attach_estimates, IndicatorPlan, IndicatorRequest};
 use crate::result::{
     Algorithm, Cutoffs, Discretisation, ExplorationResult, Precision, Refinement,
     DEFAULT_GAP_TOLERANCE,
@@ -140,6 +141,9 @@ pub struct DiscretisedSettings {
     /// Worker threads (`None` = rayon default). The result does not
     /// depend on it.
     pub threads: Option<usize>,
+    /// Indicators to report ([`crate::indicators`]), `None` by default:
+    /// the result then carries none and keeps format version 2.
+    pub indicators: Option<IndicatorRequest>,
 }
 
 impl DiscretisedSettings {
@@ -159,16 +163,18 @@ impl DiscretisedSettings {
             level: DEFAULT_LEVEL,
             refine: true,
             threads: None,
+            indicators: None,
         }
     }
 
-    fn common(&self) -> Common<'_> {
+    fn common<'a>(&'a self, indicators: Option<&'a IndicatorPlan>) -> Common<'a> {
         Common {
             target: &self.target,
             horizon: self.horizon,
             cutoffs: &self.cutoffs,
             gap_tolerance: self.gap_tolerance,
             threads: self.threads,
+            indicators,
         }
     }
 }
@@ -189,7 +195,9 @@ impl DiscretisedSettings {
 ///   non-finite horizon, a minimal probability outside `(0, 1]`, a branch
 ///   cap of 0, a gap tolerance outside `[0, 1]`, 0 threads, a failure
 ///   cut-off on a model declaring no `failure`, or a level of 0 (or one
-///   whose double overflows, with refinement).
+///   whose double overflows, with refinement), or an indicator request
+///   naming an unknown, repeated or non-state indicator, or instants that
+///   are not strictly increasing in `[0, horizon]`.
 /// - [`EngineError::InstantaneousCycle`] when more than
 ///   [`EngineConfig::max_fixpoint_iterations`] instantaneous firings
 ///   follow one another along an explored sequence.
@@ -231,7 +239,12 @@ fn explore_discretised_impl(
     settings: &DiscretisedSettings,
     prepared: Option<&raichu_core::PreparedCoSimulation>,
 ) -> Result<ExplorationResult, EngineError> {
-    validate_common(model, &settings.common())?;
+    validate_common(model, &settings.common(None))?;
+    let plan = settings
+        .indicators
+        .as_ref()
+        .map(|request| IndicatorPlan::new(model, request, settings.horizon))
+        .transpose()?;
     let max_level = if settings.refine {
         u32::MAX / 2
     } else {
@@ -246,7 +259,7 @@ fn explore_discretised_impl(
             ),
         ));
     }
-    let mut base = run(model, settings, settings.level, prepared)?;
+    let mut base = run(model, settings, plan.as_ref(), settings.level, prepared)?;
     if !settings.refine {
         base.discretisation = Some(Discretisation {
             level: settings.level,
@@ -255,7 +268,10 @@ fn explore_discretised_impl(
         return Ok(base);
     }
     let fine_level = 2 * settings.level;
-    let mut fine = run(model, settings, fine_level, prepared)?;
+    let mut fine = run(model, settings, plan.as_ref(), fine_level, prepared)?;
+    if let (Some(fine), Some(base)) = (fine.indicators.as_mut(), base.indicators.as_ref()) {
+        attach_estimates(fine, base);
+    }
     let error_estimate = (fine.lower - base.lower)
         .abs()
         .max((fine.upper - base.upper).abs());
@@ -285,10 +301,11 @@ fn explore_discretised_impl(
 fn run(
     model: &CompiledModel,
     settings: &DiscretisedSettings,
+    plan: Option<&IndicatorPlan>,
     level: u32,
     prepared: Option<&raichu_core::PreparedCoSimulation>,
 ) -> Result<ExplorationResult, EngineError> {
-    let common = settings.common();
+    let common = settings.common(plan);
     let config = EngineConfig {
         t_max: settings.horizon,
         allow_fmu_import: prepared.is_some() && !model.fmu_units.is_empty(),
@@ -643,6 +660,7 @@ impl Strategy for DiscretisedStrategy<'_> {
                 }],
                 shared: (),
                 snapshot: None,
+                residual: 0.0,
             }));
         }
         if t0 >= self.horizon {
@@ -671,6 +689,7 @@ impl Strategy for DiscretisedStrategy<'_> {
                 children,
                 shared: (),
                 snapshot: Some(snapshot),
+                residual: 0.0,
             }));
         }
         if t_end - t0 <= self.tol_event.max(1e-14 * t0.abs().max(1.0)) {
@@ -712,6 +731,7 @@ impl Strategy for DiscretisedStrategy<'_> {
                 children,
                 shared: (),
                 snapshot: Some(snapshot),
+                residual: 0.0,
             }));
         }
 
@@ -798,8 +818,12 @@ impl Strategy for DiscretisedStrategy<'_> {
                 }
             }
         }
+        let survival = (-total_end).exp();
+        // At the horizon the survival mass is dropped from the tree: it
+        // stays in the node's state to the end.
+        let mut residual = survival;
         if end_event.is_some() || communication_at_end {
-            let survival = (-total_end).exp();
+            residual = 0.0;
             if survival > 0.0 {
                 children.push(Child {
                     action: if communication_at_end {
@@ -819,6 +843,7 @@ impl Strategy for DiscretisedStrategy<'_> {
             children,
             shared: (),
             snapshot: Some(snapshot),
+            residual,
         }))
     }
 
@@ -884,6 +909,16 @@ impl Strategy for DiscretisedStrategy<'_> {
                 transition, branch, ..
             } => Some((transition as u32, branch as u32)),
             Action::Advance { .. } | Action::Communicate { .. } => None,
+        }
+    }
+
+    fn exit_time(&self, child: &Child, entered: f64) -> f64 {
+        match child.action {
+            Action::Now { .. } => entered,
+            Action::At { time, .. }
+            | Action::Advance { time }
+            | Action::Communicate { time }
+            | Action::AdvanceAndFire { time, .. } => time,
         }
     }
 }

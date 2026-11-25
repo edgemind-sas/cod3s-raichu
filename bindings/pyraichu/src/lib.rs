@@ -32,7 +32,7 @@ use raichu::raichu_core::{
 use raichu::raichu_explore::{
     exact_domain_report, explore_discretised, explore_discretised_with_fmu, explore_exact,
     read_exploration as read_exploration_result, Algorithm, Cutoffs, DiscretisedSettings,
-    ExactSettings, ExplorationResult, Precision,
+    ExactSettings, ExplorationResult, IndicatorRequest, Precision,
 };
 use raichu::raichu_expr::{AttrRef, CmpOp};
 use raichu::raichu_fta::{
@@ -1214,7 +1214,11 @@ fn importance_options(
 ///   is repeated at `2 x level`, which is the reported one, and the
 ///   difference is the error estimate. `max_branches` defaults to
 ///   `DEFAULT_MAX_BRANCHES` per pass when omitted; `rel_precision` and
-///   `max_terms` must be omitted (they do not apply).
+///   `max_terms` must be omitted (they do not apply). `indicators` (state
+///   indicator names) and `instants` request the mean value of each at
+///   every instant and its sojourn time, with bounds, plus the mean time
+///   to the target truncated at the horizon; either one alone requests
+///   them, `instants` defaulting to `[horizon]` and `indicators` to none.
 ///
 /// An unknown algorithm, a setting that does not apply to the selected
 /// one, an invalid setting, a model outside the algorithm's domain, and a
@@ -1224,7 +1228,7 @@ fn importance_options(
 ///
 /// The GIL is released while the exploration runs.
 #[pyfunction]
-#[pyo3(signature = (model_json, target, horizon, algorithm = "exact", min_probability = None, max_length = None, max_failures = None, max_branches = None, gap_tolerance = None, rel_precision = None, max_terms = None, threads = None, level = None, refine = true, allow_fmu_import = false, fmu_base_dir = None))]
+#[pyo3(signature = (model_json, target, horizon, algorithm = "exact", min_probability = None, max_length = None, max_failures = None, max_branches = None, gap_tolerance = None, rel_precision = None, max_terms = None, threads = None, level = None, refine = true, allow_fmu_import = false, fmu_base_dir = None, indicators = None, instants = None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword signature
 fn explore_json(
     py: Python<'_>,
@@ -1244,6 +1248,8 @@ fn explore_json(
     refine: bool,
     allow_fmu_import: bool,
     fmu_base_dir: Option<&str>,
+    indicators: Option<Vec<String>>,
+    instants: Option<Vec<f64>>,
 ) -> PyResult<String> {
     let parsed: Algorithm = algorithm.parse().map_err(|e| {
         SimulationError::new_err(format!(
@@ -1264,6 +1270,12 @@ fn explore_json(
             }
             if !refine {
                 return Err(not_applicable("refine", "discretised"));
+            }
+            if indicators.is_some() {
+                return Err(not_applicable("indicators", "discretised"));
+            }
+            if instants.is_some() {
+                return Err(not_applicable("instants", "discretised"));
             }
             let mut settings = ExactSettings::new(target, horizon);
             settings.cutoffs = Cutoffs {
@@ -1308,6 +1320,12 @@ fn explore_json(
             }
             settings.refine = refine;
             settings.threads = threads;
+            if indicators.is_some() || instants.is_some() {
+                settings.indicators = Some(IndicatorRequest {
+                    names: indicators.unwrap_or_default(),
+                    instants: instants.unwrap_or_else(|| vec![horizon]),
+                });
+            }
             py.detach(|| {
                 let result = if compiled.fmu_units.is_empty() {
                     explore_discretised(&compiled, &settings)

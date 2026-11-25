@@ -1,6 +1,7 @@
 //! The result of a sequence-tree exploration, in its own open format:
 //! `raichu.exploration`, version 1 for an exact result and version 2 for a
-//! discretised one ([`Algorithm::format_version`]).
+//! discretised one ([`Algorithm::format_version`]), version 3 for a
+//! result carrying indicators ([`INDICATORS_VERSION`]).
 //!
 //! An exploration answers "which sequences lead to the feared event by
 //! the horizon, and with what probability", and says how much it left
@@ -35,11 +36,19 @@
 //! algorithm name. A document declaring an algorithm that its version
 //! predates (a `discretised` result at version 1) is refused as
 //! inconsistent ([`ReadExplorationError::AlgorithmVersion`]).
+//!
+//! Version 3 added the optional `indicators` field
+//! ([`crate::ExploredIndicators`]). It is written only when indicators were
+//! requested, so a result without them keeps the version of its algorithm,
+//! byte for byte; a document carrying indicators at a version below 3 is
+//! refused as inconsistent ([`ReadExplorationError::IndicatorsVersion`]).
 
 use raichu_analysis::{minimal_sequences, ReductionReport, SequenceReducer};
 use raichu_core::{CycleGroupDecision, SeqEvent, Sequence};
 use raichu_model::TransitionKind;
 use serde::{Deserialize, Serialize};
+
+use crate::indicators::ExploredIndicators;
 
 /// The `format` of an exploration result.
 pub const EXPLORATION_FORMAT: &str = "raichu.exploration";
@@ -48,7 +57,11 @@ pub const EXPLORATION_FORMAT: &str = "raichu.exploration";
 /// the most recent algorithm. Each result is written at its algorithm's
 /// own version ([`Algorithm::format_version`]): 1 for [`Algorithm::Exact`],
 /// 2 for [`Algorithm::Discretised`].
-pub const EXPLORATION_VERSION: u32 = 2;
+pub const EXPLORATION_VERSION: u32 = 3;
+
+/// The format version of a result carrying indicators, whatever its
+/// algorithm.
+pub const INDICATORS_VERSION: u32 = 3;
 
 /// Default relative gap `(upper - lower) / upper` above which a result is
 /// flagged inconclusive.
@@ -133,6 +146,17 @@ pub enum ReadExplorationError {
         /// The first version that knows the algorithm.
         required: u32,
     },
+    /// The document carries indicators but declares a version below
+    /// [`INDICATORS_VERSION`]: it was not written by this format's writer.
+    #[error(
+        "inconsistent exploration document: it carries indicators, which need format version \
+         {required} or above, but declares version {version}",
+        required = INDICATORS_VERSION
+    )]
+    IndicatorsVersion {
+        /// The declared version.
+        version: u32,
+    },
     /// A sequence refers to a step outside the result's step table.
     #[error("sequence {sequence} refers to step {step}, but the step table holds {table} steps")]
     DanglingStep {
@@ -176,6 +200,11 @@ pub fn read_exploration(json: &str) -> Result<ExplorationResult, ReadExploration
             algorithm: result.algorithm,
             version: result.version,
             required,
+        });
+    }
+    if result.indicators.is_some() && result.version < INDICATORS_VERSION {
+        return Err(ReadExplorationError::IndicatorsVersion {
+            version: result.version,
         });
     }
     for (sequence, explored) in result.sequences.iter().enumerate() {
@@ -457,6 +486,11 @@ pub struct ExplorationResult {
     /// or a later one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cycle_groups: Option<Vec<CycleGroupDecision>>,
+    /// The requested indicators' values with their bounds, `None` when
+    /// none were requested (and then absent from the document, whose
+    /// version is its algorithm's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indicators: Option<ExploredIndicators>,
 }
 
 /// The discretisation a [`Algorithm::Discretised`] result was computed

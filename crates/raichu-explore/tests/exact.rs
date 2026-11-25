@@ -259,7 +259,10 @@ fn parallel_pair_yields_both_orderings_with_their_closed_forms() {
     // An exact result stays at format version 1, byte for byte as before
     // the discretised algorithm raised the readable version.
     assert_eq!(result.version, 1);
-    assert_eq!(EXPLORATION_VERSION, 2);
+    // Version 3 added the optional indicators, which an exact result
+    // does not carry.
+    assert_eq!(EXPLORATION_VERSION, 3);
+    assert!(result.indicators.is_none());
 }
 
 #[test]

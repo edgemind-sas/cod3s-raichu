@@ -248,7 +248,8 @@ def test_reading_refuses_another_format():
     with pytest.raises(pyraichu.SimulationError, match="raichu.exploration"):
         pyraichu.read_exploration(json.dumps(document))
     document["format"] = "raichu.exploration"
-    document["version"] = 3
+    # Version 3 (indicators) is the highest this engine reads.
+    document["version"] = 4
     with pytest.raises(pyraichu.SimulationError, match="version"):
         pyraichu.read_exploration(json.dumps(document))
     document["version"] = 1
@@ -494,3 +495,99 @@ def test_the_discretised_result_does_not_depend_on_the_thread_count():
     one = pyraichu.explore(model, "b_down", 2.0, algorithm="discretised", level=4, threads=1)
     four = pyraichu.explore(model, "b_down", 2.0, algorithm="discretised", level=4, threads=4)
     assert one == four
+
+
+# ---- indicators (discretised algorithm) -------------------------------------
+
+
+def _weibull_with_indicator():
+    """The single Weibull unit with a state indicator on its failed state."""
+    return pyraichu.load_model(
+        {
+            "name": "single_weibull",
+            "components": [_unit("W", _weibull(WEIBULL_SHAPE, WEIBULL_SCALE))],
+            "targets": [{"name": "w_down", "component": "W", "automaton": "fail", "state": "nok"}],
+            "indicators": [
+                {"name": "W_down", "target": "state", "component": "W", "automaton": "fail",
+                 "state": "nok"}
+            ],
+        }
+    )
+
+
+def _weibull_cdf(t):
+    return -math.expm1(-((t / WEIBULL_SCALE) ** WEIBULL_SHAPE))
+
+
+def test_indicators_report_the_mean_and_sojourn_with_bounds():
+    instants = [0.5, 1.0, WEIBULL_HORIZON]
+    result = pyraichu.explore(
+        _weibull_with_indicator(),
+        "w_down",
+        WEIBULL_HORIZON,
+        algorithm="discretised",
+        level=16,
+        indicators=["W_down"],
+        instants=instants,
+    )
+    assert result.version == 3
+    assert result.indicators["instants"] == instants
+    values = result.indicator("W_down")
+    assert not values["inconclusive"]
+    for k, t in enumerate(instants):
+        mean = values["mean"][k]
+        assert mean["lower"] == pytest.approx(mean["upper"], abs=1e-12)
+        assert mean["lower"] == pytest.approx(_weibull_cdf(t), abs=0.02)
+        assert mean["error_estimate"] >= 0.0
+        # The sojourn time is the integral of the mean value.
+        h = t / 1000
+        sojourn = sum(_weibull_cdf((i + 0.5) * h) for i in range(1000)) * h
+        assert values["sojourn"][k]["lower"] == pytest.approx(sojourn, abs=0.02 * t)
+    # The mean time to the target truncated at the horizon.
+    h = WEIBULL_HORIZON / 1000
+    expected = sum(1.0 - _weibull_cdf((i + 0.5) * h) for i in range(1000)) * h
+    assert result.indicators["time_to_target"]["lower"] == pytest.approx(expected, abs=0.02)
+    with pytest.raises(KeyError):
+        result.indicator("nope")
+
+
+def test_indicators_round_trip_through_the_open_format():
+    result = pyraichu.explore(
+        _weibull_with_indicator(),
+        "w_down",
+        WEIBULL_HORIZON,
+        algorithm="discretised",
+        level=4,
+        indicators=["W_down"],
+    )
+    # `instants` defaults to the horizon.
+    assert result.indicators["instants"] == [WEIBULL_HORIZON]
+    text = result.to_json()
+    assert json.loads(text)["version"] == 3
+    again = pyraichu.read_exploration(text)
+    assert again == result
+    assert again.to_json() == text
+
+
+def test_indicators_are_refused_by_the_exact_algorithm_and_when_unknown():
+    with pytest.raises(pyraichu.SimulationError, match="indicators"):
+        pyraichu.explore(_weibull_with_indicator(), "w_down", 1.0, indicators=["W_down"])
+    with pytest.raises(pyraichu.SimulationError, match="instants"):
+        pyraichu.explore(_weibull_with_indicator(), "w_down", 1.0, instants=[1.0])
+    with pytest.raises(pyraichu.SimulationError, match="nope"):
+        pyraichu.explore(
+            _weibull_with_indicator(),
+            "w_down",
+            1.0,
+            algorithm="discretised",
+            indicators=["nope"],
+        )
+    with pytest.raises(pyraichu.SimulationError, match="instants"):
+        pyraichu.explore(
+            _weibull_with_indicator(),
+            "w_down",
+            1.0,
+            algorithm="discretised",
+            indicators=["W_down"],
+            instants=[2.0],
+        )
