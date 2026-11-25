@@ -76,6 +76,30 @@
 //!
 //! Instantaneous phases (zero sojourn) are no-ops, and a phase of rate 0 is
 //! never left, so any path containing one has probability exactly 0.
+//!
+//! # Profile at several instants
+//!
+//! [`PhaseTypeAccumulator::absorption_profile`] reads, at instants `t` up
+//! to the horizon, `P(S_k <= t)` and its integral
+//! `∫_0^t P(S_k <= s) ds = E[(t - S_k)^+]`. The discrete chain of the
+//! uniformization does not depend on `t`, only the Poisson weights do, so
+//! the absorption sequence `a_n` kept for the horizon serves every
+//! instant: `P(S_k <= t) = sum_n w_n(L t) a_n`, and since
+//! `∫_0^t w_n(L s) ds = P(N(L t) > n) / L`,
+//!
+//! ```text
+//! ∫_0^t P(S_k <= s) ds = (1 / L) sum_n a_n P(N(L t) > n),
+//! ```
+//!
+//! again a sum of nonnegative terms. The term count sized for the horizon
+//! covers every earlier instant. The truncation bound of the integral adds
+//! `sum_{n<=N} a_n` times the Poisson tail beyond `N` (the tails summed
+//! from the kept weights miss it) and the terms beyond `N`, bounded either
+//! by `x P(N(x) > N - 1)` or, through the union bound above, by
+//! `prod(p_i) x^k / k! (x P(N(x) > N - k - 1) + k P(N(x) > N - k))`. A path
+//! whose horizon computation fell back to scaling and squaring has no
+//! uniformized chain to read, and its profile is refused
+//! ([`PhaseTypeError::ProfileTermCap`]).
 
 use std::sync::Arc;
 
@@ -154,6 +178,25 @@ pub enum PhaseTypeError {
         /// The refused horizon.
         horizon: f64,
     },
+    /// An instant of a profile lies outside `[0, horizon]`.
+    #[error("profile instant must lie in [0, {horizon}] (the horizon), got {instant}")]
+    InvalidInstant {
+        /// The refused instant.
+        instant: f64,
+        /// The accumulator's horizon.
+        horizon: f64,
+    },
+    /// The path needs more uniformization terms than
+    /// [`PhaseTypeSettings::max_terms`], so its absorption was computed by
+    /// scaling and squaring, which yields no profile.
+    #[error(
+        "the absorption profile of this path needs more than {max_terms} uniformization terms \
+         (max_terms)"
+    )]
+    ProfileTermCap {
+        /// The cap that was exceeded.
+        max_terms: usize,
+    },
     /// A setting is out of its domain.
     #[error("invalid phase-type settings: {reason}")]
     InvalidSettings {
@@ -214,6 +257,32 @@ impl Absorption {
             error_bound,
             flagged,
             method,
+        }
+    }
+}
+
+/// `P(S_k <= t)` and `∫_0^t P(S_k <= s) ds` at one instant `t`, each with
+/// a guaranteed bound on its absolute error (truncation plus first-order
+/// rounding), read by [`PhaseTypeAccumulator::absorption_profile`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProfilePoint {
+    /// `P(S_k <= t)`, dimensionless.
+    pub cdf: f64,
+    /// Bound on the absolute error of `cdf`.
+    pub cdf_error: f64,
+    /// `∫_0^t P(S_k <= s) ds`, in the unit of time of the rates.
+    pub integral: f64,
+    /// Bound on the absolute error of `integral`.
+    pub integral_error: f64,
+}
+
+impl ProfilePoint {
+    fn exact(cdf: f64, integral: f64) -> Self {
+        ProfilePoint {
+            cdf,
+            cdf_error: 0.0,
+            integral,
+            integral_error: 0.0,
         }
     }
 }
@@ -376,6 +445,48 @@ impl PhaseTypeAccumulator {
         self.result
     }
 
+    /// `P(S_k <= t)` and `∫_0^t P(S_k <= s) ds` at each of `instants`, with
+    /// their error bounds (see the module documentation). An empty path is
+    /// absorbed at 0 (probability 1, integral `t`); a path holding a phase
+    /// of rate 0 never is.
+    ///
+    /// `O(N)` per instant, `N + 1` the term count of the horizon.
+    ///
+    /// # Errors
+    /// [`PhaseTypeError::InvalidInstant`] for an instant outside
+    /// `[0, horizon]` (or NaN); [`PhaseTypeError::ProfileTermCap`] for a
+    /// path whose horizon computation fell back to scaling and squaring.
+    pub fn absorption_profile(
+        &self,
+        instants: &[f64],
+    ) -> Result<Vec<ProfilePoint>, PhaseTypeError> {
+        if let Some(&instant) = instants
+            .iter()
+            .find(|&&t| t.is_nan() || t < 0.0 || t > self.horizon)
+        {
+            return Err(PhaseTypeError::InvalidInstant {
+                instant,
+                horizon: self.horizon,
+            });
+        }
+        let k = self.rates.len();
+        if k == 0 {
+            return Ok(instants
+                .iter()
+                .map(|&t| ProfilePoint::exact(1.0, t))
+                .collect());
+        }
+        if self.blocked || self.horizon == 0.0 {
+            return Ok(vec![ProfilePoint::exact(0.0, 0.0); instants.len()]);
+        }
+        let Some(state) = self.uniform.as_ref() else {
+            return Err(PhaseTypeError::ProfileTermCap {
+                max_terms: self.settings.max_terms,
+            });
+        };
+        Ok(instants.iter().map(|&t| profile_at(state, k, t)).collect())
+    }
+
     /// The horizon the accumulator was built for.
     #[must_use]
     pub fn horizon(&self) -> f64 {
@@ -514,6 +625,75 @@ fn evaluate(state: &UniformState, k: usize) -> (f64, f64, f64) {
     let trunc = MARGIN * tail_all.min(tail_path);
     let round = MARGIN * (value * (6.0 * (last + k) as f64 + 10.0) * U + weight_err);
     (value, trunc, round)
+}
+
+/// The profile point at `t` of a path of `k` timed phases, from its
+/// uniformized chain (see the module documentation).
+fn profile_at(state: &UniformState, k: usize, t: f64) -> ProfilePoint {
+    if t == 0.0 {
+        return ProfilePoint::exact(0.0, 0.0);
+    }
+    let last = state.weights.last();
+    let lambda = state.lambda;
+    let x = lambda * t;
+    let mut weight = Vec::with_capacity(last + 1);
+    let mut max_rel: f64 = 0.0;
+    let mut cdf = 0.0;
+    let mut weight_err = 0.0;
+    let mut absorbed = 0.0;
+    let mut absorbed_sum = 0.0;
+    for n in 0..=last {
+        let (lw, abs_err) = ln_poisson_pmf(n, x);
+        let w = lw.exp();
+        let rel = abs_err + 2.0 * U;
+        max_rel = max_rel.max(rel);
+        weight.push(w);
+        absorbed += state.inflow[n];
+        absorbed_sum += absorbed;
+        let term = w * absorbed;
+        cdf += term;
+        weight_err += term * rel;
+    }
+    // Tails P(N(x) > n) summed from the kept weights, backward.
+    let mut tail = vec![0.0; last + 1];
+    for n in (0..last).rev() {
+        tail[n] = tail[n + 1] + weight[n + 1];
+    }
+    let mut absorbed = 0.0;
+    let mut sum = 0.0;
+    for (inflow, tail) in state.inflow.iter().zip(&tail) {
+        absorbed += inflow;
+        sum += absorbed * tail;
+    }
+    let integral = sum / lambda;
+
+    let tail_beyond = |m: usize| ln_poisson_tail(x, m).exp().min(1.0);
+    let path_head = (state.ln_prod_p + k as f64 * x.ln() - ln_factorial(k)).exp();
+    let cdf_trunc = if last >= k {
+        tail_beyond(last).min(path_head * tail_beyond(last - k))
+    } else {
+        tail_beyond(last)
+    };
+    let cdf_round = cdf * (6.0 * (last + k) as f64 + 10.0) * U + weight_err;
+    let beyond_all = if last >= 1 {
+        x * tail_beyond(last - 1)
+    } else {
+        x
+    };
+    let beyond = if last > k {
+        beyond_all
+            .min(path_head * (x * tail_beyond(last - k - 1) + k as f64 * tail_beyond(last - k)))
+    } else {
+        beyond_all
+    };
+    let integral_trunc = (absorbed_sum * tail_beyond(last) + beyond) / lambda;
+    let integral_round = integral * ((8.0 * (last + k) as f64 + 12.0) * U + max_rel);
+    ProfilePoint {
+        cdf,
+        cdf_error: MARGIN * (cdf_trunc + cdf_round),
+        integral,
+        integral_error: MARGIN * (integral_trunc + integral_round),
+    }
 }
 
 /// Bound on `ln sum_{n > m} w_n` (Poisson upper tail), by the ratio test

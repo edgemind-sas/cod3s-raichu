@@ -29,7 +29,7 @@ use raichu_core::{
 };
 use raichu_model::TransitionKind;
 
-use crate::indicators::{IndicatorPlan, IndicatorSums};
+use crate::indicators::{IndicatorPlan, IndicatorSums, Profile};
 use crate::result::{
     relative_gap, Algorithm, CutoffTallies, Cutoffs, ExplorationResult, ExploredEvent,
     ExploredSequence, ExploredStep, Precision, EXPLORATION_FORMAT, INDICATORS_VERSION,
@@ -124,10 +124,32 @@ pub(crate) trait Strategy: Sync {
     /// nothing (it only lets time pass).
     fn step(&self, child: &Self::Child) -> Option<(u32, u32)>;
 
-    /// The instant `child` leaves a node entered at `entered`: the
-    /// instant the child node is entered. Read only for indicators, which
-    /// only a driver with a known clock reports.
-    fn exit_time(&self, child: &Self::Child, entered: f64) -> f64;
+    /// Indicators: when the node reached via `via`, from siblings sharing
+    /// `parent`, is entered (`entered` is the engine's clock there), as a
+    /// profile over the plan's points.
+    fn node_entry(
+        &self,
+        plan: &IndicatorPlan,
+        parent: &Self::Shared,
+        via: Option<&Self::Child>,
+        entered: f64,
+    ) -> Result<Profile, EngineError>;
+
+    /// Indicators: when `child` of a node entered at `entered`, its
+    /// children sharing `shared`, is entered.
+    fn child_entry(
+        &self,
+        plan: &IndicatorPlan,
+        shared: &Self::Shared,
+        child: &Self::Child,
+        entered: f64,
+    ) -> Result<Profile, EngineError>;
+
+    /// Whether every child of a node is entered at the same (random)
+    /// instant, so that [`Strategy::child_entry`] is computed once per node.
+    fn children_enter_together(&self) -> bool {
+        false
+    }
 }
 
 /// A node's probability measure (see [`Strategy::node_mass`]).
@@ -174,6 +196,9 @@ enum Node<C, Sh> {
         shared: Sh,
         child_streak: usize,
         snapshot: Option<Box<Snapshot>>,
+        /// Indicators: when every child is entered, if they all are at
+        /// once.
+        exit: Option<Profile>,
     },
 }
 
@@ -201,6 +226,8 @@ struct Frame<C, Sh> {
     dirty: bool,
     /// Whether reaching this node pushed a step on the path.
     pushed: bool,
+    /// Indicators: when every child is entered, if they all are at once.
+    exit: Option<Profile>,
 }
 
 /// A depth-first walker over one engine.
@@ -267,9 +294,13 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
         streak: usize,
     ) -> Result<Node<S::Child, S::Shared>, EngineError> {
         let entered = self.engine.current_time();
-        if let Some(plan) = self.common.indicators {
-            plan.read(&self.engine, &mut self.values);
-        }
+        let entry = match self.common.indicators {
+            Some(plan) => {
+                plan.read(&self.engine, &mut self.values);
+                Some(self.strategy.node_entry(plan, parent, via, entered)?)
+            }
+            None => None,
+        };
         let (children, shared, child_streak, snapshot, residual) =
             if let Some(idx) = self.strategy.immediate(&mut self.engine)? {
                 if streak >= self.max_instantaneous {
@@ -283,7 +314,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                 let (children, shared) = self
                     .strategy
                     .instantaneous_children(self.model, idx, parent, via);
-                (children, shared, streak + 1, None, 0.0)
+                (children, shared, streak + 1, None, None)
             } else {
                 // 2. Target reached: a retained sequence (or another
                 //    target: a leaf that contributes nothing).
@@ -292,7 +323,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                     if reached {
                         self.record(pi, parent, via);
                     }
-                    self.stay(reached, pi, entered);
+                    self.stay(reached, pi, entry.as_ref());
                     return Ok(Node::Leaf);
                 }
                 // 3. Timed branching, per the driver.
@@ -301,7 +332,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                     .timed(&mut self.engine, parent, via, &self.path)?
                 {
                     None => {
-                        self.stay(false, pi, entered);
+                        self.stay(false, pi, entry.as_ref());
                         return Ok(Node::Leaf);
                     }
                     Some(expansion) => (
@@ -309,14 +340,19 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                         expansion.shared,
                         0,
                         expansion.snapshot.map(Box::new),
-                        expansion.residual,
+                        Some(expansion.residual),
                     ),
                 }
             };
 
         // Branch cap: counts expanded nodes.
         let capped = self.budget.is_some_and(|budget| budget == 0);
-        self.occupy_node(pi, entered, &children, &shared, residual, capped);
+        let exit = match entry {
+            Some(entry) => {
+                self.occupy_node(pi, entered, &entry, &children, &shared, residual, capped)?
+            }
+            None => None,
+        };
         if let Some(budget) = self.budget.as_mut() {
             if capped {
                 let mass = self.strategy.node_mass(pi, parent, via);
@@ -331,6 +367,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
             shared,
             child_streak,
             snapshot,
+            exit,
         })
     }
 
@@ -362,6 +399,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
             next: 0,
             dirty: false,
             pushed: false,
+            exit: None,
         }];
         while let Some(top) = stack.len().checked_sub(1) {
             let frame = &mut stack[top];
@@ -374,8 +412,14 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                 continue;
             };
             frame.next += 1;
-            let Some((child_pi, child_failures)) =
-                self.admit(frame.pi, frame.time, frame.failures, &frame.shared, &child)
+            let Some((child_pi, child_failures)) = self.admit(
+                frame.pi,
+                frame.time,
+                frame.exit.as_ref(),
+                frame.failures,
+                &frame.shared,
+                &child,
+            )?
             else {
                 continue;
             };
@@ -406,6 +450,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                     shared,
                     child_streak,
                     snapshot,
+                    exit,
                 } => {
                     let snapshot = if children.len() > 1 {
                         snapshot
@@ -425,6 +470,7 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
                         next: 0,
                         dirty: false,
                         pushed: step.is_some(),
+                        exit,
                     });
                 }
             }
@@ -433,20 +479,22 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
     }
 
     /// Apply the cut-offs to `child` of a node (path probability `pi`,
-    /// `failures` so far, children sharing `shared`): `None` when it
-    /// carries no mass or is pruned (its mass then tallied), otherwise its
-    /// path probability and failure count.
+    /// entered at `entered`, its children entered together at `exit` when
+    /// known, `failures` so far, children sharing `shared`): `None` when
+    /// it carries no mass or is pruned (its mass then tallied), otherwise
+    /// its path probability and failure count.
     fn admit(
         &mut self,
         pi: f64,
         entered: f64,
+        exit: Option<&Profile>,
         failures: u64,
         shared: &S::Shared,
         child: &S::Child,
-    ) -> Option<(f64, u64)> {
+    ) -> Result<Option<(f64, u64)>, EngineError> {
         let (child_pi, mass, score) = self.strategy.child_mass(pi, shared, child);
         if mass <= 0.0 {
-            return None;
+            return Ok(None);
         }
         let step = self.strategy.step(child);
         let is_failure = step.is_some_and(|(idx, branch)| {
@@ -464,67 +512,96 @@ impl<'a, 'm, S: Strategy> Walker<'a, 'm, S> {
         } else if cutoffs.max_failures.is_some_and(|n| child_failures > n) {
             &mut tallies.max_failures
         } else {
-            return Some((child_pi, child_failures));
+            return Ok(Some((child_pi, child_failures)));
         };
         tally.add(mass);
         if let Some(plan) = self.common.indicators {
-            let from = self.strategy.exit_time(child, entered);
-            plan.unknown(&mut self.out.indicators, child_pi, from);
+            let from = match exit {
+                Some(exit) => exit.clone(),
+                None => self.strategy.child_entry(plan, shared, child, entered)?,
+            };
+            plan.unknown(&mut self.out.indicators, child_pi, &from);
         }
-        None
+        Ok(None)
     }
 
-    /// Indicators: the node's whole mass `pi` stays in its state from
-    /// `entered` on (a leaf), the target `reached` or not.
-    fn stay(&mut self, reached: bool, pi: f64, entered: f64) {
-        if let Some(plan) = self.common.indicators {
+    /// Indicators: the node's whole mass `pi` stays in its state from its
+    /// `entry` on (a leaf), the target `reached` or not.
+    fn stay(&mut self, reached: bool, pi: f64, entry: Option<&Profile>) {
+        if let (Some(plan), Some(entry)) = (self.common.indicators, entry) {
             plan.occupy(
                 &mut self.out.indicators,
                 &self.values,
                 reached,
                 pi,
-                entered,
-                f64::INFINITY,
+                entry,
+                None,
             );
         }
     }
 
     /// Indicators: an expanded node of path probability `pi`, entered at
-    /// `entered`, holds each child's mass until the child leaves and the
-    /// `residual` fraction to the end. When the branch cap stops the node
-    /// (`capped`), each child's mass is unknown once it leaves.
+    /// `entered` (profile `entry`), holds each child's mass until the child
+    /// is entered and the `residual` fraction to the end; an instantaneous
+    /// node (`residual` `None`) holds nothing, its children being entered
+    /// when it is. When the branch cap stops the node (`capped`), each
+    /// child's mass is unknown once the child would be entered. Returns
+    /// the profile every child is entered at, when they all are at once.
+    #[allow(clippy::too_many_arguments)]
     fn occupy_node(
         &mut self,
         pi: f64,
         entered: f64,
+        entry: &Profile,
         children: &[S::Child],
         shared: &S::Shared,
-        residual: f64,
+        residual: Option<f64>,
         capped: bool,
-    ) {
+    ) -> Result<Option<Profile>, EngineError> {
         let Some(plan) = self.common.indicators else {
-            return;
+            return Ok(None);
         };
-        let sums = &mut self.out.indicators;
+        let Some(residual) = residual else {
+            if capped {
+                for child in children {
+                    let (child_pi, _, _) = self.strategy.child_mass(pi, shared, child);
+                    plan.unknown(&mut self.out.indicators, child_pi, entry);
+                }
+            }
+            return Ok(Some(entry.clone()));
+        };
+        let together = match (self.strategy.children_enter_together(), children.first()) {
+            (true, Some(first)) => Some(self.strategy.child_entry(plan, shared, first, entered)?),
+            _ => None,
+        };
         for child in children {
             let (child_pi, _, _) = self.strategy.child_mass(pi, shared, child);
             if child_pi <= 0.0 {
                 continue;
             }
-            let left = self.strategy.exit_time(child, entered);
-            plan.occupy(sums, &self.values, false, child_pi, entered, left);
+            let own;
+            let left = match &together {
+                Some(left) => left,
+                None => {
+                    own = self.strategy.child_entry(plan, shared, child, entered)?;
+                    &own
+                }
+            };
+            let sums = &mut self.out.indicators;
+            plan.occupy(sums, &self.values, false, child_pi, entry, Some(left));
             if capped {
                 plan.unknown(sums, child_pi, left);
             }
         }
         plan.occupy(
-            sums,
+            &mut self.out.indicators,
             &self.values,
             false,
             pi * residual,
-            entered,
-            f64::INFINITY,
+            entry,
+            None,
         );
+        Ok(together)
     }
 
     /// Record the current node as a retained sequence, merged with an

@@ -1214,11 +1214,13 @@ fn importance_options(
 ///   is repeated at `2 x level`, which is the reported one, and the
 ///   difference is the error estimate. `max_branches` defaults to
 ///   `DEFAULT_MAX_BRANCHES` per pass when omitted; `rel_precision` and
-///   `max_terms` must be omitted (they do not apply). `indicators` (state
-///   indicator names) and `instants` request the mean value of each at
-///   every instant and its sojourn time, with bounds, plus the mean time
-///   to the target truncated at the horizon; either one alone requests
-///   them, `instants` defaulting to `[horizon]` and `indicators` to none.
+///   `max_terms` must be omitted (they do not apply).
+///
+/// With either algorithm, `indicators` (state indicator names) and
+/// `instants` request the mean value of each at every instant and its
+/// sojourn time, with bounds, plus the mean time to the target truncated
+/// at the horizon; either one alone requests them, `instants` defaulting
+/// to `[horizon]` and `indicators` to none.
 ///
 /// An unknown algorithm, a setting that does not apply to the selected
 /// one, an invalid setting, a model outside the algorithm's domain, and a
@@ -1271,12 +1273,6 @@ fn explore_json(
             if !refine {
                 return Err(not_applicable("refine", "discretised"));
             }
-            if indicators.is_some() {
-                return Err(not_applicable("indicators", "discretised"));
-            }
-            if instants.is_some() {
-                return Err(not_applicable("instants", "discretised"));
-            }
             let mut settings = ExactSettings::new(target, horizon);
             settings.cutoffs = Cutoffs {
                 min_probability,
@@ -1293,6 +1289,7 @@ fn explore_json(
                 max_terms: max_terms.unwrap_or(defaults.max_terms),
             };
             settings.threads = threads;
+            settings.indicators = indicator_request(indicators, instants, horizon);
             py.detach(|| {
                 let result = explore_exact(&compiled, &settings).map_err(engine_error)?;
                 serde_json::to_string(&result).map_err(|e| SimulationError::new_err(e.to_string()))
@@ -1320,12 +1317,7 @@ fn explore_json(
             }
             settings.refine = refine;
             settings.threads = threads;
-            if indicators.is_some() || instants.is_some() {
-                settings.indicators = Some(IndicatorRequest {
-                    names: indicators.unwrap_or_default(),
-                    instants: instants.unwrap_or_else(|| vec![horizon]),
-                });
-            }
+            settings.indicators = indicator_request(indicators, instants, horizon);
             py.detach(|| {
                 let result = if compiled.fmu_units.is_empty() {
                     explore_discretised(&compiled, &settings)
@@ -1342,6 +1334,19 @@ fn explore_json(
             })
         }
     }
+}
+
+/// The indicator request of `explore_json`'s keywords: none when neither
+/// is given.
+fn indicator_request(
+    indicators: Option<Vec<String>>,
+    instants: Option<Vec<f64>>,
+    horizon: f64,
+) -> Option<IndicatorRequest> {
+    (indicators.is_some() || instants.is_some()).then(|| IndicatorRequest {
+        names: indicators.unwrap_or_default(),
+        instants: instants.unwrap_or_else(|| vec![horizon]),
+    })
 }
 
 /// The static exact-domain report of a model, as a JSON array: every

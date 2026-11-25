@@ -1259,8 +1259,7 @@ def explore(
       ``refine=False`` no estimate is made. ``max_branches`` defaults to
       1 000 000 expanded nodes per pass when omitted.
 
-    With the discretised driver, ``indicators`` (names of state indicators
-    of the model) and ``instants`` (strictly increasing, in ``[0,
+    ``indicators`` (names of state indicators of the model) and ``instants`` (strictly increasing, in ``[0,
     horizon]``) request, for each indicator, its mean value at every
     instant (the probability of being in the state) and its sojourn time
     by every instant, each with a lower and an upper bound, plus the mean
@@ -1269,10 +1268,11 @@ def explore(
     target: once it is reached, every state stays as it is. Either one
     alone requests them; ``instants`` defaults to ``[horizon]`` and
     ``indicators`` to none. An indicator on an attribute or a threshold is
-    refused.
+    refused. With the exact driver the bounds are guaranteed, numerical
+    error included; with the discretised one they are bounds on the
+    discretised model, each value with its error estimate.
 
-    ``level``, ``refine=False``, ``indicators`` and ``instants`` apply to
-    discretised exploration only,
+    ``level`` and ``refine=False`` apply to discretised exploration only,
     ``rel_precision`` and ``max_terms`` to exact exploration only; passing
     one to the other method raises. Raises :class:`SimulationError` for an
     unknown algorithm or an invalid setting (before anything runs), for a

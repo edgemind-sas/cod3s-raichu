@@ -18,7 +18,7 @@
 //!   an error estimate by refinement.
 //! - [`indicators`]: the mean value of state indicators at declared
 //!   instants and their sojourn times, with bounds, and the mean time to
-//!   the target truncated at the horizon (discretised driver).
+//!   the target truncated at the horizon, from either driver.
 //! - [`result`]: the result type and its open format,
 //!   `raichu.exploration` (version 1 for an exact result, 2 for a
 //!   discretised one, 3 for a result carrying indicators).

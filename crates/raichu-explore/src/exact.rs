@@ -81,6 +81,7 @@ use raichu_core::{CompiledModel, Engine, EngineError};
 use raichu_numeric::{PhaseTypeAccumulator, PhaseTypeError};
 use serde::{Deserialize, Serialize};
 
+use crate::indicators::{IndicatorPlan, IndicatorRequest, Profile};
 use crate::result::{Algorithm, Cutoffs, ExplorationResult, Precision, DEFAULT_GAP_TOLERANCE};
 use crate::walk::{
     assemble, drive, engine_config, instantaneous_branches, invalid, path_names, validate_common,
@@ -107,6 +108,9 @@ pub struct ExactSettings {
     /// Worker threads (`None` = rayon default). The result does not
     /// depend on it.
     pub threads: Option<usize>,
+    /// Indicators to report ([`crate::indicators`]), `None` by default:
+    /// the result then carries none and keeps format version 1.
+    pub indicators: Option<IndicatorRequest>,
 }
 
 impl ExactSettings {
@@ -121,6 +125,7 @@ impl ExactSettings {
             gap_tolerance: DEFAULT_GAP_TOLERANCE,
             precision: Precision::default(),
             threads: None,
+            indicators: None,
         }
     }
 }
@@ -336,8 +341,13 @@ pub fn explore_exact(
     model: &CompiledModel,
     settings: &ExactSettings,
 ) -> Result<ExplorationResult, EngineError> {
-    let common = settings.common();
     validate(model, settings)?;
+    let plan = settings
+        .indicators
+        .as_ref()
+        .map(|request| IndicatorPlan::new(model, request, settings.horizon))
+        .transpose()?;
+    let common = settings.common(plan.as_ref());
     let violations = exact_domain_report(model);
     if !violations.is_empty() {
         return Err(EngineError::OutsideExactDomain {
@@ -365,21 +375,21 @@ pub fn explore_exact(
 }
 
 impl ExactSettings {
-    fn common(&self) -> Common<'_> {
+    fn common<'a>(&'a self, indicators: Option<&'a IndicatorPlan>) -> Common<'a> {
         Common {
             target: &self.target,
             horizon: self.horizon,
             cutoffs: &self.cutoffs,
             gap_tolerance: self.gap_tolerance,
             threads: self.threads,
-            indicators: None,
+            indicators,
         }
     }
 }
 
 /// Up-front validation of the settings against the model.
 fn validate(model: &CompiledModel, settings: &ExactSettings) -> Result<(), EngineError> {
-    validate_common(model, &settings.common())?;
+    validate_common(model, &settings.common(None))?;
     PhaseTypeAccumulator::new(0.0, (&settings.precision).into()).map_err(|e| match e {
         PhaseTypeError::InvalidSettings { reason } => invalid("precision", reason),
         other => invalid("precision", other.to_string()),
@@ -523,11 +533,53 @@ impl Strategy for ExactStrategy<'_> {
         Some((child.transition as u32, child.branch as u32))
     }
 
-    /// The exact driver never moves the clock: a node's dates are random,
-    /// so it reports no indicator and this is never read for one.
-    fn exit_time(&self, _child: &Child, entered: f64) -> f64 {
-        entered
+    /// The node is entered when the sojourns leading to it are over: the
+    /// absorption profile of its parent's accumulator.
+    fn node_entry(
+        &self,
+        plan: &IndicatorPlan,
+        parent: &PhaseTypeAccumulator,
+        _via: Option<&Child>,
+        _entered: f64,
+    ) -> Result<Profile, EngineError> {
+        absorption_profile(plan, parent)
     }
+
+    /// Every child is entered when the node's own sojourn is over.
+    fn child_entry(
+        &self,
+        plan: &IndicatorPlan,
+        shared: &PhaseTypeAccumulator,
+        _child: &Child,
+        _entered: f64,
+    ) -> Result<Profile, EngineError> {
+        absorption_profile(plan, shared)
+    }
+
+    fn children_enter_together(&self) -> bool {
+        true
+    }
+}
+
+/// The profile of the instant the sojourns of `acc` are over, refused by
+/// name when the path is too stiff for its uniformization.
+fn absorption_profile(
+    plan: &IndicatorPlan,
+    acc: &PhaseTypeAccumulator,
+) -> Result<Profile, EngineError> {
+    acc.absorption_profile(&plan.point_list())
+        .map(Profile)
+        .map_err(|e| match e {
+            PhaseTypeError::ProfileTermCap { .. } => invalid(
+                "max_terms",
+                format!(
+                    "{e}: the indicators of an exact exploration need the uniformized chain \
+                     of every explored path; raise `max_terms`, or explore with \
+                     `algorithm=\"discretised\"`"
+                ),
+            ),
+            other => invalid("indicators", other.to_string()),
+        })
 }
 
 /// Whether a law fires with zero sojourn: an instantaneous branching or a

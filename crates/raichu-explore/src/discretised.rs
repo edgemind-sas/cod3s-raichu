@@ -96,7 +96,7 @@ use raichu_core::{
 use raichu_numeric::{Law, LawError};
 use std::path::Path;
 
-use crate::indicators::{attach_estimates, IndicatorPlan, IndicatorRequest};
+use crate::indicators::{attach_estimates, IndicatorPlan, IndicatorRequest, Profile};
 use crate::result::{
     Algorithm, Cutoffs, Discretisation, ExplorationResult, Precision, Refinement,
     DEFAULT_GAP_TOLERANCE,
@@ -912,14 +912,36 @@ impl Strategy for DiscretisedStrategy<'_> {
         }
     }
 
-    fn exit_time(&self, child: &Child, entered: f64) -> f64 {
-        match child.action {
-            Action::Now { .. } => entered,
-            Action::At { time, .. }
-            | Action::Advance { time }
-            | Action::Communicate { time }
-            | Action::AdvanceAndFire { time, .. } => time,
-        }
+    fn node_entry(
+        &self,
+        plan: &IndicatorPlan,
+        _parent: &(),
+        _via: Option<&Child>,
+        entered: f64,
+    ) -> Result<Profile, EngineError> {
+        Ok(plan.deterministic(entered))
+    }
+
+    fn child_entry(
+        &self,
+        plan: &IndicatorPlan,
+        _shared: &(),
+        child: &Child,
+        entered: f64,
+    ) -> Result<Profile, EngineError> {
+        Ok(plan.deterministic(exit_time(child, entered)))
+    }
+}
+
+/// The instant `child` leaves a node entered at `entered`: the instant the
+/// child node is entered.
+fn exit_time(child: &Child, entered: f64) -> f64 {
+    match child.action {
+        Action::Now { .. } => entered,
+        Action::At { time, .. }
+        | Action::Advance { time }
+        | Action::Communicate { time }
+        | Action::AdvanceAndFire { time, .. } => time,
     }
 }
 

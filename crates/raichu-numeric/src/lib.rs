@@ -54,6 +54,7 @@ pub use laws::{Law, LawError};
 pub use linear::{LinearSolveError, LuFactorization, SingularMatrix, DEFAULT_PIVOT_TOLERANCE};
 pub use phase_type::{
     Absorption, AbsorptionMethod, PhaseTypeAccumulator, PhaseTypeError, PhaseTypeSettings,
+    ProfilePoint,
 };
 
 use thiserror::Error;

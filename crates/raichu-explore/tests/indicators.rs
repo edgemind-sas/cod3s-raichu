@@ -12,8 +12,8 @@
 
 use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError};
 use raichu_explore::{
-    explore_discretised, read_exploration, BoundedValue, DiscretisedSettings, ExplorationResult,
-    ExploredIndicators, IndicatorRequest, ReadExplorationError,
+    explore_discretised, explore_exact, read_exploration, BoundedValue, DiscretisedSettings,
+    ExactSettings, ExplorationResult, ExploredIndicators, IndicatorRequest, ReadExplorationError,
 };
 use raichu_model::Model;
 use rayon::prelude::*;
@@ -631,4 +631,143 @@ fn an_indicator_that_is_not_a_state_is_refused_by_name() {
         detail.contains("level") && detail.contains("state"),
         "{detail}"
     );
+}
+
+// ---- exact algorithm ----------------------------------------------------------
+
+fn exact_settings(target: &str, horizon: f64, names: &[&str], instants: &[f64]) -> ExactSettings {
+    let mut s = ExactSettings::new(target, horizon);
+    s.indicators = Some(IndicatorRequest {
+        names: names.iter().map(|&n| n.to_owned()).collect(),
+        instants: instants.to_vec(),
+    });
+    s
+}
+
+fn assert_rel_within(value: &BoundedValue, expected: f64, tol: f64, what: &str) {
+    let slack = tol * expected.abs().max(1e-300);
+    assert_within(value, expected, slack, what);
+    assert!(
+        value.upper - value.lower <= 2.0 * slack,
+        "{what}: bounds [{}, {}] wider than the tolerance",
+        value.lower,
+        value.upper
+    );
+}
+
+#[test]
+fn exact_indicators_match_their_closed_forms() {
+    let result = explore_exact(
+        &pair(),
+        &exact_settings("sys_down", HORIZON, &["A_ko", "B_ko"], &INSTANTS),
+    )
+    .unwrap();
+    assert_eq!(result.version, 3);
+    let found = indicators(&result);
+    for (indicator, rate) in found.values.iter().zip([A, B]) {
+        assert!(!indicator.inconclusive);
+        for (k, &t) in INSTANTS.iter().enumerate() {
+            let mean = -(-rate * t).exp_m1();
+            let what = format!("{} at {t}", indicator.name);
+            assert_rel_within(&indicator.mean[k], mean, 1e-9, &format!("mean of {what}"));
+            assert_rel_within(
+                &indicator.sojourn[k],
+                t - mean / rate,
+                1e-9,
+                &format!("sojourn of {what}"),
+            );
+            assert!(indicator.mean[k].error_estimate.is_none());
+        }
+    }
+    // E[min(T, H)] with T = max(T_A, T_B).
+    let g = |r: f64| -(-r * HORIZON).exp_m1() / r;
+    let expected = g(A) + g(B) - g(A + B);
+    assert_rel_within(&found.time_to_target, expected, 1e-9, "time to target");
+}
+
+#[test]
+fn exact_bounds_hold_and_tighten_on_a_repairable_unit() {
+    let instants = [2.0, 5.0, 10.0];
+    let run = |max_length: usize| {
+        let mut s = exact_settings("b_down", 10.0, &["A_ko"], &instants);
+        s.cutoffs.max_length = Some(max_length);
+        explore_exact(&repairable_until_b(), &s).unwrap()
+    };
+    let (short, long) = (run(4), run(10));
+    let gap = |r: &ExplorationResult, k: usize| {
+        let v = &indicators(r).values[0].mean[k];
+        v.upper - v.lower
+    };
+    for (k, &t) in instants.iter().enumerate() {
+        let expected = frozen_unavailability(t);
+        let sojourn = simpson(frozen_unavailability, t);
+        for (result, name) in [(&short, "max_length 4"), (&long, "max_length 10")] {
+            let indicator = &indicators(result).values[0];
+            let what = format!("{name} at {t}");
+            assert_within(&indicator.mean[k], expected, 1e-9, &format!("mean, {what}"));
+            assert_within(
+                &indicator.sojourn[k],
+                sojourn,
+                1e-8,
+                &format!("sojourn, {what}"),
+            );
+        }
+        assert!(gap(&long, k) < gap(&short, k), "the gap shrinks at {t}");
+    }
+    // Ten firings leave almost nothing unknown by 10.
+    assert!(gap(&long, 2) < 1e-4, "gap {}", gap(&long, 2));
+}
+
+#[test]
+fn exact_and_discretised_indicators_agree_on_the_pair() {
+    let exact = explore_exact(
+        &pair(),
+        &exact_settings("sys_down", HORIZON, &["A_ko"], &INSTANTS),
+    )
+    .unwrap();
+    let discretised = explore_discretised(
+        &pair(),
+        &settings("sys_down", HORIZON, 32, &["A_ko"], &INSTANTS),
+    )
+    .unwrap();
+    let (e, d) = (
+        &indicators(&exact).values[0],
+        &indicators(&discretised).values[0],
+    );
+    for ((t, ds), es) in INSTANTS.iter().zip(&d.sojourn).zip(&e.sojourn) {
+        let slack = 2.0 * ds.error_estimate.unwrap() + 1e-3 * t;
+        assert_close(mid(ds), mid(es), slack, "sojourn");
+    }
+}
+
+#[test]
+fn exact_indicators_are_identical_with_one_and_four_threads() {
+    let run = |threads: usize| {
+        let mut s = exact_settings("b_down", 10.0, &["A_ko"], &[5.0, 10.0]);
+        s.cutoffs.max_length = Some(6);
+        s.threads = Some(threads);
+        explore_exact(&repairable_until_b(), &s).unwrap()
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn the_exact_algorithm_refuses_invalid_requests_like_the_discretised_one() {
+    let mut s = exact_settings("sys_down", HORIZON, &["nope"], &INSTANTS);
+    match explore_exact(&pair(), &s) {
+        Err(EngineError::InvalidStudyParameter { parameter, .. }) => {
+            assert_eq!(parameter, "indicators");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    s.indicators = Some(IndicatorRequest {
+        names: vec!["A_ko".to_owned()],
+        instants: vec![2.0 * HORIZON],
+    });
+    match explore_exact(&pair(), &s) {
+        Err(EngineError::InvalidStudyParameter { parameter, .. }) => {
+            assert_eq!(parameter, "instants");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
 }
