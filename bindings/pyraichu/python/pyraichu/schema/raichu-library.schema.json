@@ -6176,7 +6176,7 @@
               "type": "object"
             },
             {
-              "description": "Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a\nspontaneous PDMP jump with survival\n`P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,\nand exactly one of the two rate forms:\n\n- `rate`: fixed positive λ; the firing date is sampled as\n  `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a\n  guard turning true re-arms with a fresh draw.\n- `rate_expr`: **state-dependent** λ(x) as an expression. The\n  engine realises the survival integral with a cumulative\n  hazard: a threshold `E ~ Exp(1)` is drawn at source-state\n  entry and the transition fires when `∫ λ dt` reaches `E`.\n  When λ depends only on discretely-updated state the hazard is\n  piecewise-constant and the firing date is rescheduled at each\n  discrete change (`reschedule_modifiable`); when it depends on\n  ODE-integrated attributes (or time), the hazard is integrated\n  alongside the continuous state and the firing time is located\n  like a watched boundary crossing. λ must evaluate ≥ 0.",
+              "description": "Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a\nspontaneous PDMP jump with survival\n`P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,\nand exactly one of the two rate forms:\n\n- `rate`: fixed λ ≥ 0; the firing date is sampled as\n  `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a\n  guard turning true re-arms with a fresh draw.\n- `rate_expr`: **state-dependent** λ(x) as an expression. The\n  engine realises the survival integral with a cumulative\n  hazard: a threshold `E ~ Exp(1)` is drawn at source-state\n  entry and the transition fires when `∫ λ dt` reaches `E`.\n  When λ depends only on discretely-updated state the hazard is\n  piecewise-constant and the firing date is rescheduled at each\n  discrete change (`reschedule_modifiable`); when it depends on\n  ODE-integrated attributes (or time), the hazard is integrated\n  alongside the continuous state and the firing time is located\n  like a watched boundary crossing. λ must evaluate ≥ 0.",
               "properties": {
                 "distrib": {
                   "const": "exp",
@@ -6184,7 +6184,7 @@
                 },
                 "rate": {
                   "$ref": "#/$defs/Template_number_or_null_double",
-                  "description": "Fixed occurrence rate λ > 0 (events per time unit)."
+                  "description": "Fixed occurrence rate λ ≥ 0 (events per time unit). At 0 the\ntransition is armed and never fires."
                 },
                 "rate_expr": {
                   "anyOf": [

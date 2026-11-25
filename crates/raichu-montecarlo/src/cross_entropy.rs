@@ -331,10 +331,14 @@ pub fn cross_entropy_families(
                 transition: name.clone(),
             });
         };
-        if !matches!(t.distrib, CLaw::Exp(_)) {
+        if !matches!(t.distrib, CLaw::Exp(rate) if rate > 0.0) {
+            let law = match t.distrib {
+                CLaw::Exp(_) => "exponential with a zero rate",
+                _ => law_label(&t.distrib),
+            };
             return Err(CrossEntropyError::IneligibleTransition {
                 transition: name.clone(),
-                law: law_label(&t.distrib).to_owned(),
+                law: law.to_owned(),
             });
         }
     }
@@ -345,6 +349,11 @@ pub fn cross_entropy_families(
         let CLaw::Exp(rate) = t.distrib else {
             continue;
         };
+        // A zero rate cannot fire: it has nothing to bias, and a family of
+        // such transitions would have no event to learn a factor from.
+        if rate == 0.0 && !names.contains_key(&t.name) {
+            continue;
+        }
         let label = match names.get(&t.name) {
             Some(label) => label.clone(),
             None => automatic_label(model, idx, rate),

@@ -41,7 +41,7 @@ deliberate departures.
 |---|---|
 | `setDistLaw(defer, t)` | `"distrib": "delay", "time": t` |
 | `setDistLaw(inst, p)` | `"distrib": "inst", "probs": [...]`: N−1 **constant** probabilities for N targets, where PyCATSHOO also accepts N values and variable parameters |
-| `setDistLaw(expo, rate)` | `"distrib": "exp", "rate": λ` |
+| `setDistLaw(expo, rate)` | `"distrib": "exp", "rate": λ`. A rate of 0 is accepted on both engines as a transition that never fires (measured on the distributed version 1.4.1.0: no firing in 2 000 runs to `t = 1e6`) |
 | `expo` + modifiable rate (discrete / continuous) | `"distrib": "exp", "rate_expr": …`: re-evaluated on change; on continuous attributes the cumulative hazard is integrated exactly. See [Modifiable parameters](#modifiable-parameters) |
 | `setCondition(fun)` + watched transition | `"distrib": "watched"` + a `guard` containing at least one ordering comparison, possibly composed with and/or/not (the boundary is root-found). One target state; no real-valued boundary-checker method |
 | `setCondition(fun)` on a timed transition | a `"guard"` on the transition |
@@ -108,7 +108,7 @@ the user manual V1.3.7.2 describes `res_time`, `nb_visits` and
 
 | PyCATSHOO | RAICHU | equivalence |
 |---|---|---|
-| `simple` | value (`mean`, `std`, …) | identical |
+| `simple` | value (`mean`, `std`, …) | the mean is identical. The standard deviation is not the same estimator: RAICHU divides the sum of squared deviations by `n − 1`, the unbiased estimator of the variance, where the reference divides by `n` (measured on the distributed version 1.4.1.0: 0.8478 on 5 runs whose `n − 1` deviation is 0.9479). The two differ by the factor `sqrt(n / (n − 1))`, 5.4 % on 10 runs and 0.05 % on 1 000 |
 | `res_time` | sojourn (`sojourn_mean`, …) | identical: both integrate the value over time, sign included. A value held at 2 for 10 time units gives 20 on both |
 | `nb_visits` | zero departures (`zero_departures_mean`, …) | identical: both count the departures from exactly 0 to any non-zero value, a non-zero initial value not counted, a transition firing at `t = 0` counted. RAICHU's own occurrences (`nb_occurrences_mean`, …) count every rise from ≤ 0 to > 0, an active initial value included: a state active from `t = 0` and never re-entered counts 0 departures and 1 occurrence |
 | `realized` | non-zero reached (`nonzero_reached_mean`, …) | identical: 1 once the value has been non-zero, the initial value included. RAICHU's own reached (`reached_mean`, …) holds once the value has been positive |
