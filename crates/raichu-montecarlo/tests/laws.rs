@@ -134,6 +134,41 @@ fn lognormal_matches_closed_form() {
 }
 
 #[test]
+fn truncated_normal_matches_closed_form() {
+    // F(t) = (Phi(z) - Phi(a)) / (Phi(b) - Phi(a)) on the interval. The
+    // first law loses 15.9 % of its untruncated mass below 0: a draw moved
+    // to the bound instead would put that mass at t = 0, and F(1) would
+    // read 0.18 where the truncated law gives 0.030.
+    let truncated = |mu: f64, sigma: f64, low: f64, high: f64| {
+        move |t: f64| {
+            let phi = |x: f64| normal_cdf((x - mu) / sigma);
+            let upper = if high.is_finite() { phi(high) } else { 1.0 };
+            ((phi(t.clamp(low, high)) - phi(low)) / (upper - phi(low))).clamp(0.0, 1.0)
+        }
+    };
+    assert_matches_cdf(
+        Distrib::Normal {
+            mu: 10.0,
+            sigma: 10.0,
+            low: 0.0,
+            high: None,
+        },
+        &[1.0, 10.0, 25.0],
+        truncated(10.0, 10.0, 0.0, f64::INFINITY),
+    );
+    assert_matches_cdf(
+        Distrib::Normal {
+            mu: 2.0,
+            sigma: 3.0,
+            low: 1.0,
+            high: Some(6.0),
+        },
+        &[2.0, 4.0, 5.5, 7.0],
+        truncated(2.0, 3.0, 1.0, 6.0),
+    );
+}
+
+#[test]
 fn gamma_erlang2_matches_closed_form() {
     // shape = 2 (Erlang-2): F(t) = 1 − (1 + t/θ)·e^{−t/θ}.
     let (shape, scale) = (2.0, 3.0);

@@ -155,6 +155,7 @@ enum Kind {
     Lognormal { mu: f64, sigma: f64 },
     Gamma { shape: f64, scale: f64 },
     Uniform { low: f64, high: f64 },
+    Normal(TruncatedNormal),
     Empirical(Vec<(f64, f64)>),
 }
 
@@ -254,6 +255,43 @@ impl Law {
         })
     }
 
+    /// Normal law `N(mu, sigma^2)` **truncated** to `[low, high]`: the
+    /// normal law conditioned on the interval, its density renormalised
+    /// by the mass `Phi((high - mu) / sigma) - Phi((low - mu) / sigma)`.
+    /// No probability sits on a bound (a draw outside is not moved to
+    /// it). `mu` finite, `sigma > 0`, `0 <= low < high`, `high` possibly
+    /// `+inf`; the interval must carry a mass the doubles can represent.
+    pub fn normal(mu: f64, sigma: f64, low: f64, high: f64) -> Result<Self, LawError> {
+        if !mu.is_finite() {
+            return Err(invalid("normal", "mu", mu, "finite"));
+        }
+        check_positive("normal", "sigma", sigma)?;
+        if !low.is_finite() || low < 0.0 {
+            return Err(invalid("normal", "low", low, "finite and >= 0"));
+        }
+        if high.is_nan() || high <= low {
+            return Err(invalid("normal", "high", high, "> low"));
+        }
+        let law = TruncatedNormal {
+            mu,
+            sigma,
+            low,
+            high,
+        };
+        // Below this the renormalisation divides by rounding noise.
+        if law.mass().partial_cmp(&1e-300) != Some(std::cmp::Ordering::Greater) {
+            return Err(invalid(
+                "normal",
+                "low",
+                low,
+                "an interval [low, high] the law gives a positive probability to",
+            ));
+        }
+        Ok(Self {
+            kind: Kind::Normal(law),
+        })
+    }
+
     /// Empirical law given by a table of `(time, cumulative probability)`
     /// points, validated like the model schema: non-empty, times finite
     /// and `>= 0`, probabilities in `[0, 1]`, both non-decreasing, and the
@@ -291,7 +329,7 @@ impl Law {
     }
 
     /// Name of the law family (`"delay"`, `"exponential"`, `"weibull"`,
-    /// `"lognormal"`, `"gamma"`, `"uniform"` or `"empirical"`).
+    /// `"lognormal"`, `"gamma"`, `"uniform"`, `"normal"` or `"empirical"`).
     pub fn name(&self) -> &'static str {
         match self.kind {
             Kind::Delay(_) => "delay",
@@ -300,6 +338,7 @@ impl Law {
             Kind::Lognormal { .. } => "lognormal",
             Kind::Gamma { .. } => "gamma",
             Kind::Uniform { .. } => "uniform",
+            Kind::Normal(_) => "normal",
             Kind::Empirical(_) => "empirical",
         }
     }
@@ -372,6 +411,20 @@ impl Law {
                     }
                 }
             }
+            Kind::Normal(law) => {
+                if t <= law.low {
+                    Tail::BEFORE
+                } else if t >= law.high {
+                    Tail::AFTER
+                } else {
+                    let mass = law.mass();
+                    let z = law.standardise(t);
+                    Tail::from_cdf_sf(
+                        (normal_between(law.standardise(law.low), z) / mass).min(1.0),
+                        (normal_between(z, law.standardise(law.high)) / mass).min(1.0),
+                    )
+                }
+            }
             Kind::Empirical(points) => {
                 let cdf = empirical_cdf(points, t);
                 Tail::from_cdf_sf(cdf, 1.0 - cdf)
@@ -400,6 +453,7 @@ impl Law {
         match &self.kind {
             Kind::Delay(d) => *d,
             Kind::Uniform { low, .. } => *low,
+            Kind::Normal(law) => law.low,
             Kind::Empirical(points) => sample_empirical(points, 0.0),
             _ => 0.0,
         }
@@ -410,6 +464,7 @@ impl Law {
         match &self.kind {
             Kind::Delay(d) => *d,
             Kind::Uniform { high, .. } => *high,
+            Kind::Normal(law) => law.high,
             Kind::Empirical(points) => sample_empirical(points, 1.0),
             _ => f64::INFINITY,
         }
@@ -435,6 +490,7 @@ impl Law {
             Kind::Weibull { shape, scale } => scale * (-(-u).ln_1p()).powf(1.0 / shape),
             Kind::Uniform { low, high } => low + u * (high - low),
             Kind::Lognormal { mu, sigma } => (mu + sigma * standard_normal_quantile(u)).exp(),
+            Kind::Normal(law) => law.quantile_from_low(u),
             Kind::Gamma { shape, scale } => {
                 if u <= 0.5 {
                     scale * gamma_inverse(*shape, u, Side::Lower)
@@ -463,6 +519,7 @@ impl Law {
             Kind::Weibull { shape, scale } => scale * (-p.ln()).powf(1.0 / shape),
             Kind::Uniform { low, high } => high - p * (high - low),
             Kind::Lognormal { mu, sigma } => (mu - sigma * standard_normal_quantile(p)).exp(),
+            Kind::Normal(law) => law.quantile_from_high(p),
             Kind::Gamma { shape, scale } => {
                 if p <= 0.5 {
                     scale * gamma_inverse(*shape, p, Side::Upper)
@@ -576,6 +633,7 @@ impl Law {
         match &self.kind {
             Kind::Delay(d) => d - age,
             Kind::Uniform { low, .. } => (low - age).max(0.0),
+            Kind::Normal(law) => (law.low - age).max(0.0),
             Kind::Empirical(points) => {
                 let at_age = empirical_cdf(points, age);
                 match points.iter().position(|&(_, c)| c > at_age) {
@@ -586,6 +644,73 @@ impl Law {
             }
             _ => 0.0,
         }
+    }
+}
+
+/// The parameters of a normal law truncated to `[low, high]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TruncatedNormal {
+    mu: f64,
+    sigma: f64,
+    low: f64,
+    high: f64,
+}
+
+impl TruncatedNormal {
+    fn standardise(&self, t: f64) -> f64 {
+        (t - self.mu) / self.sigma
+    }
+
+    /// The probability the untruncated law gives to `[low, high]`.
+    fn mass(&self) -> f64 {
+        normal_between(self.standardise(self.low), self.standardise(self.high))
+    }
+
+    /// The date whose probability from `low` is `u`, for `u` in `(0, 1)`.
+    fn quantile_from_low(&self, u: f64) -> f64 {
+        let (a, b) = (self.standardise(self.low), self.standardise(self.high));
+        // The target is formed on the tail where the interval lies, so
+        // that it keeps its relative precision far from the mean.
+        let z = if a > 0.0 {
+            -standard_normal_quantile(standard_normal_cdf(-a) - u * self.mass())
+        } else {
+            let target = standard_normal_cdf(a) + u * self.mass();
+            if target <= 0.5 || b <= 0.0 {
+                standard_normal_quantile(target)
+            } else {
+                -standard_normal_quantile(standard_normal_cdf(-b) + (1.0 - u) * self.mass())
+            }
+        };
+        (self.mu + self.sigma * z).clamp(self.low, self.high)
+    }
+
+    /// The date whose probability up to `high` is `p`, for `p` in `(0, 1)`.
+    fn quantile_from_high(&self, p: f64) -> f64 {
+        let (a, b) = (self.standardise(self.low), self.standardise(self.high));
+        let z = if b < 0.0 {
+            standard_normal_quantile(standard_normal_cdf(b) - p * self.mass())
+        } else {
+            let target = standard_normal_cdf(-b) + p * self.mass();
+            if target <= 0.5 || a >= 0.0 {
+                -standard_normal_quantile(target)
+            } else {
+                standard_normal_quantile(standard_normal_cdf(a) + (1.0 - p) * self.mass())
+            }
+        };
+        (self.mu + self.sigma * z).clamp(self.low, self.high)
+    }
+}
+
+/// `Phi(y) - Phi(x)` for `x <= y`, formed on the tail both lie in so that
+/// two values far above the mean do not cancel against 1.
+fn normal_between(x: f64, y: f64) -> f64 {
+    if x > 0.0 {
+        standard_normal_cdf(-x) - standard_normal_cdf(-y)
+    } else if y < 0.0 {
+        standard_normal_cdf(y) - standard_normal_cdf(x)
+    } else {
+        // Straddling the mean: neither part is small against the result.
+        (0.5 - standard_normal_cdf(x)) + (0.5 - standard_normal_cdf(-y))
     }
 }
 

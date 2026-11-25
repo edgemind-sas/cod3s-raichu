@@ -52,7 +52,9 @@ deliberate departures.
 | `weib` (scale, shape and a time shift) | `"distrib": "weibull"` with `shape` and `scale`: no time shift |
 | `cstd` (firing at a fixed date) | *(no equivalent)*: a `delay` counts from the source state's entry |
 | user-defined laws | `"distrib": "empirical"`, a tabulated CDF |
-| *(no equivalent)* | `lognormal`, `gamma`, `uniform`, each validated against its closed form |
+| `uniform` (t min, t max, global probability) | *(no equivalent)*: a window in simulation dates, not a duration. Measured on the distributed version 1.4.1.0 with `uniform(100, 200, p)`, 2 000 runs per case: a state entered at 50 fires between 100 and 200, one entered at 150 between 150 and 200, one entered at 300 never, and `p = 0.5` fires in 980 runs whatever the entry date. RAICHU's `uniform` draws a duration in `[low, high)` from the instant the transition is armed |
+| `normal` (mean, standard deviation, t min, t max, global probability) | *(no equivalent)* for the law as declared, whose bounds are instants like the uniform law's (not measured). RAICHU's `normal` draws a duration from the normal law truncated to `[low, high]` |
+| *(no equivalent)* | `lognormal`, `gamma`, and `uniform` and `normal` as durations, each validated against its closed form |
 
 ### Modifiable parameters
 
@@ -71,7 +73,7 @@ PyCATSHOO transition therefore gives different numbers on the two engines
 as soon as the rate changes while the transition is pending.
 
 Only the exponential law has a state-dependent parameter. `delay.time`,
-the Weibull, lognormal, gamma and uniform parameters and `inst.probs` are
+the Weibull, lognormal, gamma, uniform and normal parameters and `inst.probs` are
 constants of the model.
 
 ## Simulation and results

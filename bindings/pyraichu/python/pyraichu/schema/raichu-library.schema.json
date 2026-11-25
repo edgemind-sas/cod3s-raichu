@@ -6336,6 +6336,37 @@
               "type": "object"
             },
             {
+              "description": "Normal distribution truncated to `[low, high]`: the delay follows\n`N(mu, sigma²)` conditioned on the interval, its density\nrenormalised by the probability the untruncated law gives to it.\nA draw is never moved to a bound, so no probability sits on one.\nA delay cannot be negative, hence the lower bound, 0 unless\nstated; the upper bound is optional.",
+              "properties": {
+                "distrib": {
+                  "const": "normal",
+                  "type": "string"
+                },
+                "high": {
+                  "$ref": "#/$defs/Template_number_or_null_double",
+                  "description": "Upper bound of the delay (> low); unbounded when absent."
+                },
+                "low": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Lower bound of the delay (≥ 0); 0 when absent."
+                },
+                "mu": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Mean of the untruncated law (time units)."
+                },
+                "sigma": {
+                  "$ref": "#/$defs/Template_number_double",
+                  "description": "Standard deviation of the untruncated law (> 0, time units)."
+                }
+              },
+              "required": [
+                "distrib",
+                "mu",
+                "sigma"
+              ],
+              "type": "object"
+            },
+            {
               "description": "Empirical / user-defined distribution (M4): inverse-CDF sampling from a\ntable of `(time, cumulative probability)` points: any\ndistribution supplied as a sampled CDF. `u < points[0].1` maps\nto `points[0].0` (probability mass at the first time); between\npoints the CDF is linearly interpolated; the last cumulative\nprobability must be 1.",
               "properties": {
                 "distrib": {

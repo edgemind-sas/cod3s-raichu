@@ -411,6 +411,7 @@ fn law_label(law: &CLaw) -> &'static str {
         CLaw::Weibull(..) => "weibull",
         CLaw::Lognormal(..) => "lognormal",
         CLaw::Gamma(..) => "gamma",
+        CLaw::Normal(..) => "normal",
         CLaw::Uniform(..) => "uniform",
         CLaw::Empirical(..) => "empirical",
     }

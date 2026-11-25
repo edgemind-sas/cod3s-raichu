@@ -187,6 +187,18 @@ pub enum BasicLaw {
         /// Scale.
         scale: f64,
     },
+    /// Normal time to occurrence truncated to `[low, high]`.
+    Normal {
+        /// Mean of the untruncated law.
+        mu: f64,
+        /// Deviation of the untruncated law.
+        sigma: f64,
+        /// Lower bound.
+        low: f64,
+        /// Upper bound; unbounded when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        high: Option<f64>,
+    },
     /// Uniform time to occurrence on `[low, high)`.
     Uniform {
         /// Lower bound.
@@ -2258,6 +2270,12 @@ impl Builder<'_> {
             CLaw::Gamma(shape, scale) => BasicLaw::Gamma {
                 shape: *shape,
                 scale: *scale,
+            },
+            CLaw::Normal(mu, sigma, low, high) => BasicLaw::Normal {
+                mu: *mu,
+                sigma: *sigma,
+                low: *low,
+                high: high.is_finite().then_some(*high),
             },
             CLaw::Uniform(low, high) => BasicLaw::Uniform {
                 low: *low,

@@ -213,6 +213,10 @@ pub enum CLaw {
     Gamma(f64, f64),
     /// Uniform distribution (M4): [low, high).
     Uniform(f64, f64),
+    /// Normal distribution truncated to an interval: μ, σ of the
+    /// untruncated law, then the bounds (the upper one `+∞` when the
+    /// model states none).
+    Normal(f64, f64, f64, f64),
     /// Empirical inverse-CDF table (M4): (time, cumulative prob).
     Empirical(Vec<(f64, f64)>),
 }
@@ -1940,6 +1944,29 @@ impl CompiledModel {
                         Distrib::Weibull { shape, scale } => CLaw::Weibull(*shape, *scale),
                         Distrib::Lognormal { mu, sigma } => CLaw::Lognormal(*mu, *sigma),
                         Distrib::Gamma { shape, scale } => CLaw::Gamma(*shape, *scale),
+                        Distrib::Normal {
+                            mu,
+                            sigma,
+                            low,
+                            high,
+                        } => {
+                            let high = high.unwrap_or(f64::INFINITY);
+                            // The one check validation cannot make: it
+                            // needs the normal distribution function.
+                            if raichu_numeric::laws::Law::normal(*mu, *sigma, *low, high).is_err() {
+                                return Err(ModelError::NormalIntervalWithoutMass {
+                                    component: component.name.clone(),
+                                    automaton: automaton.name.clone(),
+                                    transition: transition.name.clone(),
+                                    mu: *mu,
+                                    sigma: *sigma,
+                                    low: *low,
+                                    high,
+                                }
+                                .into());
+                            }
+                            CLaw::Normal(*mu, *sigma, *low, high)
+                        }
                         Distrib::Uniform { low, high } => CLaw::Uniform(*low, *high),
                         Distrib::Empirical { points } => CLaw::Empirical(points.clone()),
                         Distrib::Inst { probs } => {

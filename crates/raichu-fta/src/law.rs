@@ -52,6 +52,20 @@ pub enum Law {
         /// Scale.
         scale: f64,
     },
+    /// Normal time to occurrence truncated to `[low, high]`: the normal
+    /// distribution function between `low` and `t`, over what it gives to
+    /// the whole interval.
+    Normal {
+        /// Mean of the untruncated law.
+        mu: f64,
+        /// Deviation of the untruncated law.
+        sigma: f64,
+        /// Lower bound.
+        low: f64,
+        /// Upper bound; unbounded when absent.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        high: Option<f64>,
+    },
     /// Uniform time to occurrence on `[low, high)`.
     Uniform {
         /// Lower bound.
@@ -82,6 +96,7 @@ impl Law {
             Law::Weibull { .. } => "weibull",
             Law::Lognormal { .. } => "lognormal",
             Law::Gamma { .. } => "gamma",
+            Law::Normal { .. } => "normal",
             Law::Uniform { .. } => "uniform",
             Law::Delay { .. } => "delay",
             Law::Empirical { .. } => "empirical",
@@ -160,6 +175,14 @@ impl Law {
                 }
                 regularized_lower_gamma(*shape, t / scale)
             }
+            Law::Normal {
+                mu,
+                sigma,
+                low,
+                high,
+            } => truncated_normal(*mu, *sigma, *low, *high)
+                .map_err(bad)?
+                .cdf(t),
             Law::Uniform { low, high } => {
                 if !(low.is_finite() && high.is_finite() && low < high) {
                     return Err(bad(format!("bounds [{low}, {high}) are not an interval")));
@@ -236,6 +259,24 @@ impl Law {
                 finite_positive(*shape, *scale, &format!("shape {shape} and scale {scale}"))?;
                 shape * scale
             }
+            Law::Normal {
+                mu,
+                sigma,
+                low,
+                high,
+            } => {
+                // mu + sigma (phi(a) - phi(b)) / (Phi(b) - Phi(a)).
+                truncated_normal(*mu, *sigma, *low, *high).map_err(bad)?;
+                let density =
+                    |x: f64| libm::exp(-x * x / 2.0) / libm::sqrt(2.0 * core::f64::consts::PI);
+                let a = (low - mu) / sigma;
+                let (b_density, upper) = match high {
+                    Some(high) => (density((high - mu) / sigma), *high),
+                    None => (0.0, f64::INFINITY),
+                };
+                let mass = untruncated_mass(*mu, *sigma, *low, upper);
+                mu + sigma * (density(a) - b_density) / mass
+            }
             Law::Uniform { low, high } => {
                 if !(low.is_finite() && high.is_finite() && low < high) {
                     return Err(bad(format!("bounds [{low}, {high}) are not an interval")));
@@ -263,6 +304,32 @@ impl Law {
             }
         };
         Ok(Some(mean))
+    }
+}
+
+/// The truncated normal law of the engine, built with the engine's own
+/// checks: a law read from OpenPSA attributes never went through them.
+fn truncated_normal(
+    mu: f64,
+    sigma: f64,
+    low: f64,
+    high: Option<f64>,
+) -> Result<raichu_numeric::laws::Law, String> {
+    raichu_numeric::laws::Law::normal(mu, sigma, low, high.unwrap_or(f64::INFINITY))
+        .map_err(|error| error.to_string())
+}
+
+/// What `N(mu, sigma^2)` gives to `[low, high]`, each part formed on the
+/// tail it lies in.
+fn untruncated_mass(mu: f64, sigma: f64, low: f64, high: f64) -> f64 {
+    let upper_tail = |x: f64| 0.5 * libm::erfc(x / core::f64::consts::SQRT_2);
+    let (a, b) = ((low - mu) / sigma, (high - mu) / sigma);
+    if a > 0.0 {
+        upper_tail(a) - upper_tail(b)
+    } else if b < 0.0 {
+        upper_tail(-b) - upper_tail(-a)
+    } else {
+        (0.5 - upper_tail(-a)) + (0.5 - upper_tail(b))
     }
 }
 
@@ -466,6 +533,40 @@ mod tests {
 
     fn mean(law: Law) -> f64 {
         law.mean("e").unwrap().unwrap()
+    }
+
+    #[test]
+    fn truncated_normal_is_its_closed_form() {
+        // Reference values at 50 digits (mpmath), as in raichu-numeric.
+        let wide = || Law::Normal {
+            mu: 10.0,
+            sigma: 10.0,
+            low: 0.0,
+            high: None,
+        };
+        assert_eq!(at(wide(), 0.0), 0.0);
+        assert!((at(wide(), 10.0) - 0.405_713_291_327_469_9).abs() < 1e-12);
+        assert!((at(wide(), 25.0) - 0.920_594_736_484_614_1).abs() < 1e-12);
+        assert!((mean(wide()) - 12.875_999_709_391_784).abs() < 1e-10);
+        let bounded = || Law::Normal {
+            mu: 2.0,
+            sigma: 3.0,
+            low: 1.0,
+            high: Some(6.0),
+        };
+        assert_eq!(at(bounded(), 6.0), 1.0);
+        assert_eq!(at(bounded(), 100.0), 1.0);
+        assert!((at(bounded(), 4.0) - 0.700_969_531_266_461_5).abs() < 1e-12);
+        assert!((mean(bounded()) - 3.186_840_636_420_508_4).abs() < 1e-10);
+        // An interval the law gives nothing to is refused, not divided by.
+        let empty = Law::Normal {
+            mu: 0.0,
+            sigma: 1.0,
+            low: 50.0,
+            high: None,
+        };
+        assert!(empty.probability("e", Some(60.0)).is_err());
+        assert!(empty.mean("e").is_err());
     }
 
     #[test]

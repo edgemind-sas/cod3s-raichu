@@ -488,7 +488,7 @@ randomness lives:
 - **Timed**: the firing *date* is drawn (or fixed) and the transition
   has a single effective destination. It is either **deterministic**
   (`delay`) or **stochastic** (`exp`, `weibull`, `gamma`, `lognormal`,
-  `uniform`, `empirical`).
+  `uniform`, `normal`, `empirical`).
 - **Instantaneous**: the transition fires at the instant its guard
   holds; the randomness is in the **choice of destination** among its
   targets (`inst`, with `probs`).
@@ -506,7 +506,23 @@ on the same transition object.
 | `lognormal` | `mu`, `sigma`: number | |
 | `gamma` | `shape`, `scale`: number | |
 | `uniform` | `low`, `high`: number | |
+| `normal` | `mu`, `sigma`: number; optional `low` (default 0) and `high` (default none): number | normal law **truncated** to `[low, high]`, see below |
 | `empirical` | `points`: array of `[t, F(t)]` | measured CDF (time, cumulative probability) |
+
+Every law draws a **duration**, counted from the instant the transition
+is armed: the entry into its source state with its guard holding, or the
+instant the guard starts to hold.
+
+A duration cannot be negative, so the `normal` law is the normal law
+`N(mu, sigma²)` **conditioned on the interval** `[low, high]`: its density
+is renormalised by the probability the untruncated law gives to the
+interval. A draw is never moved to a bound, so no probability sits on one;
+`mu` and `sigma` are the parameters of the untruncated law, and the mean
+of the delay differs from `mu` as soon as a bound bites (with `mu` 10,
+`sigma` 10 and the default bounds, the mean delay is 12.88). `low` must be
+≥ 0 and `high` above `low`; an interval the law gives no representable
+probability to is refused when the model is compiled. With `mu` several
+`sigma` above 0 the default bounds change nothing measurable.
 
 ### Instantaneous distribution (the destination branch)
 

@@ -36,6 +36,7 @@ The stochastic distributions are all built in:
 | `lognormal` | `mu`, `sigma` | repair durations, multiplicative effects |
 | `gamma` | `shape`, `scale` | sums of exponential stages |
 | `uniform` | `low`, `high` | a bounded, equiprobable duration |
+| `normal` | `mu`, `sigma`, optional `low`, `high` | a duration scattered around a nominal value, truncated to `[low, high]` (0 and none by default) |
 | `empirical` | `points` = `[[t, F(t)], …]` | a measured CDF |
 
 Each distribution is a drop-in replacement. Here we fail one component seven

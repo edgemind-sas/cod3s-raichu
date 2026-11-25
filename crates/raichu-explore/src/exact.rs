@@ -549,6 +549,9 @@ fn law_label(law: &CLaw) -> String {
         CLaw::Weibull(shape, scale) => format!("weibull shape {shape} scale {scale}"),
         CLaw::Lognormal(mu, sigma) => format!("lognormal mu {mu} sigma {sigma}"),
         CLaw::Gamma(shape, scale) => format!("gamma shape {shape} scale {scale}"),
+        CLaw::Normal(mu, sigma, low, high) => {
+            format!("normal mu {mu} sigma {sigma} on [{low}, {high}]")
+        }
         CLaw::Uniform(low, high) => format!("uniform [{low}, {high})"),
         CLaw::Empirical(_) => "empirical".to_owned(),
     }

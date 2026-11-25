@@ -392,6 +392,24 @@ pub enum Distrib {
         /// Upper bound (> low).
         high: f64,
     },
+    /// Normal distribution truncated to `[low, high]`: the delay follows
+    /// `N(mu, sigma²)` conditioned on the interval, its density
+    /// renormalised by the probability the untruncated law gives to it.
+    /// A draw is never moved to a bound, so no probability sits on one.
+    /// A delay cannot be negative, hence the lower bound, 0 unless
+    /// stated; the upper bound is optional.
+    Normal {
+        /// Mean of the untruncated law (time units).
+        mu: f64,
+        /// Standard deviation of the untruncated law (> 0, time units).
+        sigma: f64,
+        /// Lower bound of the delay (≥ 0); 0 when absent.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        low: f64,
+        /// Upper bound of the delay (> low); unbounded when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        high: Option<f64>,
+    },
     /// Empirical / user-defined distribution (M4): inverse-CDF sampling from a
     /// table of `(time, cumulative probability)` points: any
     /// distribution supplied as a sampled CDF. `u < points[0].1` maps
@@ -402,6 +420,12 @@ pub enum Distrib {
         /// Non-decreasing `(time, cumulative probability)` table.
         points: Vec<(f64, f64)>,
     },
+}
+
+/// Whether a bound holds its default of 0 and is left out when written.
+#[allow(clippy::trivially_copy_pass_by_ref)] // the signature serde calls
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 /// The kind of a continuous-evolution equation (CEvol of the paper).
@@ -1848,6 +1872,29 @@ pub enum ModelError {
         parameter: &'static str,
         /// The offending value.
         value: f64,
+    },
+    /// A truncated normal law whose interval the law gives no probability
+    /// to: there is nothing to renormalise and no delay to draw.
+    #[error(
+        "normal transition `{transition}` of `{component}.{automaton}`: the law \
+         N({mu}, {sigma}²) gives no probability to the interval from {low} to {high}, \
+         so it cannot be truncated to it"
+    )]
+    NormalIntervalWithoutMass {
+        /// The owning component.
+        component: String,
+        /// The automaton.
+        automaton: String,
+        /// The transition.
+        transition: String,
+        /// Mean of the untruncated law.
+        mu: f64,
+        /// Standard deviation of the untruncated law.
+        sigma: f64,
+        /// Lower bound.
+        low: f64,
+        /// Upper bound (`inf` when unbounded).
+        high: f64,
     },
     /// An empirical table is malformed.
     #[error("empirical transition `{transition}` of `{component}.{automaton}`: {detail}")]
@@ -4314,6 +4361,37 @@ impl Model {
                         automaton,
                         transition,
                     )?;
+                }
+                Distrib::Normal {
+                    mu,
+                    sigma,
+                    low,
+                    high,
+                } => {
+                    Self::check_single_target("normal", component, automaton, transition)?;
+                    let invalid =
+                        |parameter: &'static str, value: f64| ModelError::InvalidLawParameter {
+                            distribution: "normal",
+                            component: component.name.clone(),
+                            automaton: automaton.name.clone(),
+                            transition: transition.name.clone(),
+                            parameter,
+                            value,
+                        };
+                    if !mu.is_finite() {
+                        return Err(invalid("mu", *mu));
+                    }
+                    Self::check_positive(
+                        "normal", "sigma", *sigma, component, automaton, transition,
+                    )?;
+                    if !low.is_finite() || *low < 0.0 {
+                        return Err(invalid("low", *low));
+                    }
+                    if let Some(high) = high {
+                        if !high.is_finite() || *high <= *low {
+                            return Err(invalid("high", *high));
+                        }
+                    }
                 }
                 Distrib::Gamma { shape, scale } => {
                     Self::check_single_target("gamma", component, automaton, transition)?;

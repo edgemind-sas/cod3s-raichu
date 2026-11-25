@@ -598,3 +598,229 @@ fn gamma_and_lognormal_quantiles_hold_in_both_tails_across_shapes() {
         );
     }
 }
+
+// --- truncated normal --------------------------------------------------------
+
+/// `(t, F, S, H)` rows and `(u, quantile)` rows of one truncated normal
+/// law, generated with mpmath at 50 digits like the tables above:
+/// `F(t) = (Phi((t - mu) / sigma) - Phi(a)) / (Phi(b) - Phi(a))` with
+/// `a`, `b` the standardised bounds.
+type NormalCase = (
+    (f64, f64, f64, f64),
+    f64,
+    &'static [(f64, f64, f64, f64)],
+    &'static [(f64, f64)],
+);
+
+const NORMAL_CASES: &[NormalCase] = &[
+    // A wide law cut at 0: 15.9 % of the untruncated mass lies below.
+    (
+        (10.0, 10.0, 0.0, f64::INFINITY),
+        12.875_999_709_391_784,
+        &[
+            (
+                1.0,
+                0.030_195_554_835_297_854,
+                0.969_804_445_164_702_1,
+                0.030_660_830_732_297_015,
+            ),
+            (
+                10.0,
+                0.405_713_291_327_469_9,
+                0.594_286_708_672_530_1,
+                0.520_393_401_536_495_4,
+            ),
+            (
+                25.0,
+                0.920_594_736_484_614_1,
+                0.079_405_263_515_385_87,
+                2.533_190_621_800_44,
+            ),
+            (
+                60.0,
+                0.999_999_659_293_561_6,
+                3.407_064_383_757_867e-7,
+                14.892_244_614_965_276,
+            ),
+        ],
+        &[
+            (0.1, 3.026_430_838_427_425),
+            (0.5, 12.001_736_861_668_91),
+            (0.9, 23.777_873_615_993_073),
+        ],
+    ),
+    // The usual case, mu far above sigma: the bound at 0 changes nothing.
+    (
+        (100.0, 5.0, 0.0, f64::INFINITY),
+        100.0,
+        &[
+            (
+                90.0,
+                0.022_750_131_948_179_21,
+                0.977_249_868_051_820_8,
+                0.023_012_909_328_963_488,
+            ),
+            (100.0, 0.5, 0.5, std::f64::consts::LN_2),
+            (
+                110.0,
+                0.977_249_868_051_820_8,
+                0.022_750_131_948_179_21,
+                3.783_184_333_682_032,
+            ),
+        ],
+        &[(0.5, 100.0), (0.975, 109.799_819_922_700_27)],
+    ),
+    // Both bounds bite.
+    (
+        (2.0, 3.0, 1.0, 6.0),
+        3.186_840_636_420_508_4,
+        &[
+            (
+                2.0,
+                0.242_067_821_432_279_2,
+                0.757_932_178_567_720_8,
+                0.277_161_371_527_884,
+            ),
+            (
+                4.0,
+                0.700_969_531_266_461_5,
+                0.299_030_468_733_538_5,
+                1.207_209_808_664_260_9,
+            ),
+            (
+                5.5,
+                0.943_521_962_682_725_3,
+                0.056_478_037_317_274_73,
+                2.873_903_436_449_199,
+            ),
+        ],
+        &[
+            (0.25, 2.032_172_189_446_718_3),
+            (0.5, 3.068_283_165_303_647_8),
+            (0.99, 5.903_430_080_919_269),
+        ],
+    ),
+    // The whole support in the upper tail, 3 sigma above the mean.
+    (
+        (0.0, 1.0, 3.0, f64::INFINITY),
+        3.283_098_654_930_436_5,
+        &[
+            (
+                3.1,
+                0.283_202_737_876_497_75,
+                0.716_797_262_123_502_3,
+                0.332_962_236_910_878_6,
+            ),
+            (
+                4.0,
+                0.976_538_048_733_299_7,
+                0.023_461_951_266_700_29,
+                3.752_375_265_016_941_3,
+            ),
+            (
+                6.0,
+                0.999_999_269_139_133_5,
+                7.308_608_664_658_366e-7,
+                14.129_042_728_464_356,
+            ),
+        ],
+        &[(0.5, 3.205_154_920_598_933), (0.999, 4.692_429_483_730_139)],
+    ),
+];
+
+#[test]
+fn truncated_normal_matches_mpmath() {
+    for ((mu, sigma, low, high), _, rows, quantiles) in NORMAL_CASES {
+        let law = Law::normal(*mu, *sigma, *low, *high).unwrap();
+        let what = format!("normal({mu}, {sigma}) on [{low}, {high})");
+        for &(t, f, s, h) in *rows {
+            assert_rel(law.cdf(t), f, 1e-11, &format!("{what} F({t})"));
+            assert_rel(law.survival(t), s, 1e-11, &format!("{what} S({t})"));
+            assert_rel(
+                law.cumulative_hazard(t),
+                h,
+                1e-11,
+                &format!("{what} H({t})"),
+            );
+            assert_rel(
+                law.inverse_cumulative_hazard(h).unwrap(),
+                t,
+                1e-10,
+                &format!("{what} H^-1({h})"),
+            );
+        }
+        for &(u, q) in *quantiles {
+            assert_rel(
+                law.quantile(u).unwrap(),
+                q,
+                1e-11,
+                &format!("{what} Q({u})"),
+            );
+            assert_rel(
+                law.inverse_survival(1.0 - u).unwrap(),
+                q,
+                1e-10,
+                &format!("{what} S^-1({})", 1.0 - u),
+            );
+        }
+    }
+}
+
+#[test]
+fn truncated_normal_puts_no_mass_outside_its_bounds_nor_on_them() {
+    let law = Law::normal(10.0, 10.0, 0.0, f64::INFINITY).unwrap();
+    assert_eq!(law.cdf(0.0), 0.0);
+    assert_eq!(law.cdf(-1.0), 0.0);
+    assert_eq!(law.quantile(0.0).unwrap(), 0.0);
+    assert_eq!(law.quantile(1.0).unwrap(), f64::INFINITY);
+    // Truncated, not clamped: a small probability is a small delay, where
+    // clamping would return exactly 0 for every u below Phi(-1) = 0.159.
+    let small = law.quantile(1e-6).unwrap();
+    assert!(small > 0.0 && small < 1e-3, "{small}");
+
+    let bounded = Law::normal(2.0, 3.0, 1.0, 6.0).unwrap();
+    assert_eq!(bounded.cdf(1.0), 0.0);
+    assert_eq!(bounded.survival(6.0), 0.0);
+    assert_eq!(bounded.cumulative_hazard(6.0), f64::INFINITY);
+    assert_eq!(bounded.quantile(0.0).unwrap(), 1.0);
+    assert_eq!(bounded.quantile(1.0).unwrap(), 6.0);
+    for u in [1e-12, 0.3, 1.0 - 1e-12] {
+        let q = bounded.quantile(u).unwrap();
+        assert!((1.0..=6.0).contains(&q), "Q({u}) = {q}");
+    }
+}
+
+#[test]
+fn truncated_normal_conditional_on_an_age() {
+    // S(a + s) / S(a), from the table of the first case.
+    let law = Law::normal(10.0, 10.0, 0.0, f64::INFINITY).unwrap();
+    let expected = 0.079_405_263_515_385_87 / 0.594_286_708_672_530_1;
+    assert_rel(
+        law.conditional_survival(10.0, 15.0).unwrap(),
+        expected,
+        1e-11,
+        "S(25) / S(10)",
+    );
+    let remaining = law.conditional_quantile(10.0, 1.0 - expected).unwrap();
+    assert_rel(remaining, 15.0, 1e-9, "conditional quantile");
+}
+
+#[test]
+fn truncated_normal_refuses_invalid_parameters() {
+    let inf = f64::INFINITY;
+    assert!(Law::normal(f64::NAN, 1.0, 0.0, inf).is_err());
+    assert!(Law::normal(inf, 1.0, 0.0, inf).is_err());
+    assert!(Law::normal(0.0, 0.0, 0.0, inf).is_err());
+    assert!(Law::normal(0.0, -1.0, 0.0, inf).is_err());
+    assert!(
+        Law::normal(0.0, 1.0, -1.0, inf).is_err(),
+        "a delay is not negative"
+    );
+    assert!(Law::normal(0.0, 1.0, 2.0, 2.0).is_err());
+    assert!(Law::normal(0.0, 1.0, 2.0, 1.0).is_err());
+    assert!(Law::normal(0.0, 1.0, 0.0, f64::NAN).is_err());
+    // An interval the law gives no representable mass to cannot be drawn in.
+    assert!(Law::normal(0.0, 1.0, 50.0, inf).is_err());
+    assert!(Law::normal(100.0, 1.0, 0.0, 1.0).is_err());
+    assert_eq!(Law::normal(5.0, 1.0, 0.0, inf).unwrap().name(), "normal");
+}

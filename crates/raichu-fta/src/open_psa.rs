@@ -525,6 +525,14 @@ enum JsonLaw {
         shape: f64,
         scale: f64,
     },
+    Normal {
+        mu: f64,
+        sigma: f64,
+        #[serde(default)]
+        low: f64,
+        #[serde(default)]
+        high: Option<f64>,
+    },
     Uniform {
         low: f64,
         high: f64,
@@ -555,6 +563,17 @@ fn law_from_json(value: serde_json::Value) -> Result<Law, String> {
     Ok(match law {
         JsonLaw::Lognormal { mu, sigma } => Law::Lognormal { mu, sigma },
         JsonLaw::Gamma { shape, scale } => Law::Gamma { shape, scale },
+        JsonLaw::Normal {
+            mu,
+            sigma,
+            low,
+            high,
+        } => Law::Normal {
+            mu,
+            sigma,
+            low,
+            high,
+        },
         JsonLaw::Uniform { low, high } => Law::Uniform { low, high },
         JsonLaw::Delay { time } => Law::Delay { time },
         JsonLaw::Empirical { points } => Law::Empirical { points },

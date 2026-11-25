@@ -280,7 +280,7 @@ one of `ode`, `watched` or `reads_time`; an empty list means none was
 found.
 
 **During the run**, the first armed transition whose law is outside the
-domain (a non-zero delay, Weibull, lognormal, gamma, uniform, empirical,
+domain (a non-zero delay, Weibull, lognormal, gamma, uniform, normal, empirical,
 or an exponential whose rate varies continuously) stops the exploration
 with a `SimulationError` naming the transition and the sequence that
 armed it. Replacing `A`'s repair in the example by a fixed delay of 2
@@ -331,7 +331,7 @@ Bouissou 1992).
 
 `algorithm="discretised"` lifts the restriction to the Markov family. It
 covers every law the engine carries (delay, exponential with a constant
-or state-dependent rate, Weibull, lognormal, gamma, uniform, empirical),
+or state-dependent rate, Weibull, lognormal, gamma, uniform, normal, empirical),
 the interruption policies, and continuous evolution with watched
 transitions. It is RAICHU's own method: it does not reproduce
 PyCATSHOO's sampling algorithm (see the

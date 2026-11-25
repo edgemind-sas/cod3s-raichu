@@ -24,6 +24,17 @@ impl From<&BasicLaw> for Law {
                 shape: *shape,
                 scale: *scale,
             },
+            BasicLaw::Normal {
+                mu,
+                sigma,
+                low,
+                high,
+            } => Law::Normal {
+                mu: *mu,
+                sigma: *sigma,
+                low: *low,
+                high: *high,
+            },
             BasicLaw::Uniform { low, high } => Law::Uniform {
                 low: *low,
                 high: *high,
