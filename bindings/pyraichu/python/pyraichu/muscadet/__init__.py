@@ -7321,11 +7321,33 @@ class ObjFlow:
 
         Three inputs keep what they are offered, as muscadet's do: one no
         connection feeds, one no rule consumes, and one a volume of this
-        component holds, which is filled by what arrives instead."""
+        component holds, which is filled by what arrives instead. A pure
+        sink releases too, against its demand rather than a consumption:
+        :meth:`System._releasing_inputs` decides it, since it needs the
+        number of suppliers."""
         return (
             flow in self._wired_in
             and self._capacity_of(flow) is None
             and any(flow in rule_set.consumed() for rule_set in self.rule_sets)
+        )
+
+    def _is_sink(self, flow: str) -> bool:
+        """Whether the continuous input `flow` ends here: no rule set
+        consumes it, it does not cross the component, no conduit meters
+        it, no mixture group draws it and no mixed volume feeds it.
+
+        muscadet's `sink_input_flows`. What such an input needs is its
+        published demand, ``{flow}_demand_in``, which the release reads
+        where a rule input reads ``{flow}_consumed_in``. A sink fed by a mixed volume is
+        left out: what it is handed is a share of a pooled excess, which
+        the release does not measure against a demand."""
+        return (
+            any(declared.name == flow for declared in self.flows_continuous_in)
+            and not any(flow in rule_set.consumed() for rule_set in self.rule_sets)
+            and not self._passes_through(flow)
+            and self._conduit_on(flow) is None
+            and not any(flow in group.flows for group in self.mixtures)
+            and flow not in self._mixture_sources
         )
 
     def _offered(self, flow: str) -> dict[str, Any]:
@@ -8867,12 +8889,24 @@ class System:
 
         Which inputs release is :meth:`ObjFlow._releases_surplus`: one a
         volume upstream of the rules holds is filled by what arrives
-        instead, and one no rule consumes keeps what it is offered, as
-        muscadet's does."""
+        instead, as muscadet's does.
+
+        **A pure sink fed twice or more releases too** (muscadet 6.1.0,
+        :meth:`ObjFlow._is_sink`): each supplier serves it its whole
+        published demand, so it kept the sum of the offers, two sources of
+        9 and 3 delivering 12 to a demand of 6. Its need is that demand.
+        A single supplier already serves no more than it, so it releases
+        nothing and the input is left as it was."""
         releasing: set[tuple[str, str]] = set()
-        for name, flow in in_edges:
+        for (name, flow), edges in in_edges.items():
             obj = self.comp.get(name)
-            if obj is not None and obj._releases_surplus(flow):
+            if obj is None:
+                continue
+            if obj._releases_surplus(flow) or (
+                len(edges) >= 2
+                and obj._capacity_of(flow) is None
+                and obj._is_sink(flow)
+            ):
                 releasing.add((name, flow))
         return releasing
 
@@ -9155,7 +9189,14 @@ class System:
                     # what arrives is that sliding motion's own average,
                     # the content held at zero.
                     offered = obj._offered(flow.name)
-                    need = _var(name, f"{flow.name}_consumed_in")
+                    # A rule needs what it consumes at its draw, a sink
+                    # the demand it published.
+                    need = _var(
+                        name,
+                        f"{flow.name}_demand_in"
+                        if obj._is_sink(flow.name)
+                        else f"{flow.name}_consumed_in",
+                    )
                     held = [
                         {
                             "op": "if",

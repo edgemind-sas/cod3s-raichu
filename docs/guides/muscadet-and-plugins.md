@@ -443,8 +443,16 @@ first and the other suppliers share the rest: scaled with them it would
 hand on less than it receives, refill, leave its empty bound and chatter
 on it, and passing on what arrives is that motion's own average, the
 content held at zero. An input a volume upstream of the rules holds is
-filled by what arrives instead, and an input no rule consumes keeps
-everything it is offered, as it does in muscadet.
+filled by what arrives instead, as it is in muscadet.
+
+A **pure sink**, an input no rule consumes, no pass-through carries and no
+conduit or mixture group draws, releases too when two suppliers or more
+feed it (muscadet 6.1.0). Its need is the demand it published: offered 9
+and 3 for a demand of 6, the suppliers deliver 4 and 2, as they would to
+a rule taking the flow one for one. It used to keep all 12. A single
+supplier already serves no more than the demand, and a sink declaring an
+unbounded demand still takes everything offered. In the declarative
+library this is `muscadet.surplus_release` without `consumed`.
 
 #### A volume beside the rules: `side`
 
