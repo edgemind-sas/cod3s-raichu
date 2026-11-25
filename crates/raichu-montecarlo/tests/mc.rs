@@ -1,4 +1,4 @@
-//! Monte-Carlo driver tests: M2 exit criteria: closed-form agreement,
+//! Monte-Carlo driver tests: closed-form agreement,
 //! thread-count-independent bytes, seed reproducibility.
 
 #![allow(clippy::unwrap_used, clippy::panic)]

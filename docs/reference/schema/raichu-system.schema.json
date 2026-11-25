@@ -25,12 +25,12 @@
         },
         {
           "const": "mean",
-          "description": "Arithmetic mean of connected numeric values (M3: sensor\naveraging: cod3s `compute_reference_mean`). 0.0 with no\nconnection.",
+          "description": "Arithmetic mean of connected numeric values (sensor averaging).\n0.0 with no connection.",
           "type": "string"
         },
         {
           "const": "median",
-          "description": "Median of connected numeric values (M3: redundant-sensor\nmedian/vote). Even count averages the\ntwo central values; 0.0 with no connection.",
+          "description": "Median of connected numeric values (median vote over redundant\nsensors). An even count averages the two central values; 0.0\nwith no connection.",
           "type": "string"
         }
       ]
@@ -110,7 +110,7 @@
       ]
     },
     "Expr": {
-      "description": "A serializable expression tree (M0 subset).\n\nThe serde representation is tag-based (`op` field), so adding variants\nin later milestones (arithmetic, math functions, ODE right-hand sides)\nkeeps old model files loadable.",
+      "description": "A serializable expression tree.\n\nIt evaluates to a [`Value`] on the current model state: attribute\nvalues, active automaton states and simulation time. The serde\nrepresentation is tag-based (`op` field, snake-case variant name), so\nadding a variant keeps existing model files loadable.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -258,7 +258,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "N-ary sum (M1).",
+          "description": "N-ary sum: an integer when every operand is an integer, a float\notherwise.",
           "properties": {
             "args": {
               "description": "Operands (≥ 1, validated at model build).",
@@ -423,7 +423,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Sine (M4: sinusoidal sources, RLC generator).",
+          "description": "Sine of the operand, as a float (sinusoidal sources).",
           "properties": {
             "arg": {
               "$ref": "#/$defs/Expr",
@@ -461,7 +461,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Current simulation time (M4). Meaningful in continuously\nevaluated expressions (equations, watched margins, guards);\nsensitive functions are *not* re-triggered by the passage of\ntime alone.",
+          "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nwatched margins, guards); sensitive functions are *not*\nre-triggered by the passage of time alone.",
           "properties": {
             "op": {
               "const": "time",
@@ -1210,7 +1210,7 @@
       "type": "object"
     },
     "Value": {
-      "description": "A runtime value carried by attributes and expressions.\n\nM0 kinds only: booleans, integers, floats. `String` discrete state is\nreserved (a deliberate departure) and will extend this enum\nwithout breaking serialized models (tagged representation).",
+      "description": "A runtime value carried by attributes and expressions.\n\nThree kinds: booleans, 64-bit signed integers and 64-bit floats.\nThere is no string kind. The serde representation is tagged (`kind`,\n`value`).",
       "oneOf": [
         {
           "additionalProperties": false,

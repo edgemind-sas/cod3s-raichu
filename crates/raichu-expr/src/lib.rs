@@ -1,20 +1,35 @@
 //! # raichu-expr: serializable expression trees
 //!
-//! Guards, sensitive-function effects and (from milestone M1) ODE
-//! right-hand sides are **pure data**: expression trees serialized inside
-//! the model file and evaluated/compiled on the Rust side (SymPy/CasADi
-//! style). This is what keeps the engine free of Python callbacks on the
+//! Guards, sensitive-function effects, equation right-hand sides
+//! (explicit and ODE) and state-dependent rates are **pure data**:
+//! expression trees serialized inside the model file and
+//! evaluated/compiled on the Rust side (SymPy/CasADi style). This is what keeps the engine free of Python callbacks on the
 //! hot path (Performance contract) while keeping models fully
 //! serializable.
 //!
-//! M0 subset (frozen: see the M0 plan): constant/attribute leaves,
-//! comparison and boolean operators, port aggregation (sum/count/all/any),
-//! direct assignment. Arithmetic and math functions arrive in M1; the
-//! [`Expr`] enum is `#[non_exhaustive]`-in-spirit (tagged serde repr) so
-//! extension does not break serialized models.
+//! An [`Expr`] is built from:
 //!
-//! An optional Rust trait escape hatch for compiled custom behaviour is
-//! part of the design (reserved API), not exercised in M0.
+//! - leaves: a constant, an attribute read, the activity of an automaton
+//!   state, the current simulation time;
+//! - port aggregation over the values connected to an in-port (sum,
+//!   count, all, any, mean, median), optionally per connection channel;
+//! - comparison and boolean operators;
+//! - arithmetic (sum, difference, product, division, minimum, maximum)
+//!   and the conditional `if`;
+//! - the functions sine and natural exponential;
+//! - two signals of an abscissa, usually time: a periodic
+//!   piecewise-linear shape and a smoothed Gaussian noise ([`signal`]).
+//!
+//! An [`Assignment`] writes the value of an expression to an attribute.
+//!
+//! Values are booleans, 64-bit integers or 64-bit floats ([`Value`]). A
+//! sum, a difference or a product of integers is an integer, and a
+//! float as soon as one operand is a float; a division, a sine and an
+//! exponential are always floats.
+//!
+//! The serde representation of [`Expr`] is tagged by its `op` field, so
+//! a new operator does not change the serialized form of the existing
+//! ones.
 
 use serde::{Deserialize, Serialize};
 mod affine;
@@ -22,9 +37,9 @@ pub mod signal;
 
 /// A runtime value carried by attributes and expressions.
 ///
-/// M0 kinds only: booleans, integers, floats. `String` discrete state is
-/// reserved (a deliberate departure) and will extend this enum
-/// without breaking serialized models (tagged representation).
+/// Three kinds: booleans, 64-bit signed integers and 64-bit floats.
+/// There is no string kind. The serde representation is tagged (`kind`,
+/// `value`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -136,13 +151,12 @@ pub enum AggOp {
     All,
     /// True iff at least one connected boolean value is true.
     Any,
-    /// Arithmetic mean of connected numeric values (M3: sensor
-    /// averaging: cod3s `compute_reference_mean`). 0.0 with no
-    /// connection.
+    /// Arithmetic mean of connected numeric values (sensor averaging).
+    /// 0.0 with no connection.
     Mean,
-    /// Median of connected numeric values (M3: redundant-sensor
-    /// median/vote). Even count averages the
-    /// two central values; 0.0 with no connection.
+    /// Median of connected numeric values (median vote over redundant
+    /// sensors). An even count averages the two central values; 0.0
+    /// with no connection.
     Median,
 }
 
@@ -161,11 +175,12 @@ impl AggOp {
     }
 }
 
-/// A serializable expression tree (M0 subset).
+/// A serializable expression tree.
 ///
-/// The serde representation is tag-based (`op` field), so adding variants
-/// in later milestones (arithmetic, math functions, ODE right-hand sides)
-/// keeps old model files loadable.
+/// It evaluates to a [`Value`] on the current model state: attribute
+/// values, active automaton states and simulation time. The serde
+/// representation is tag-based (`op` field, snake-case variant name), so
+/// adding a variant keeps existing model files loadable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -218,7 +233,8 @@ pub enum Expr {
         /// The referenced state.
         state: StateRef,
     },
-    /// N-ary sum (M1).
+    /// N-ary sum: an integer when every operand is an integer, a float
+    /// otherwise.
     Add {
         /// Operands (≥ 1, validated at model build).
         args: Vec<Expr>,
@@ -263,7 +279,7 @@ pub enum Expr {
         /// Value otherwise.
         otherwise: Box<Expr>,
     },
-    /// Sine (M4: sinusoidal sources, RLC generator).
+    /// Sine of the operand, as a float (sinusoidal sources).
     Sin {
         /// Operand (radians).
         arg: Box<Expr>,
@@ -274,10 +290,10 @@ pub enum Expr {
         /// Operand.
         arg: Box<Expr>,
     },
-    /// Current simulation time (M4). Meaningful in continuously
-    /// evaluated expressions (equations, watched margins, guards);
-    /// sensitive functions are *not* re-triggered by the passage of
-    /// time alone.
+    /// Current simulation time, as a float in the model's time unit.
+    /// Meaningful in continuously evaluated expressions (equations,
+    /// watched margins, guards); sensitive functions are *not*
+    /// re-triggered by the passage of time alone.
     Time,
     /// Periodic piecewise-linear shape of `arg` (usually `time`): the
     /// drawn shape and the ramped square wave of a time profile.
@@ -583,8 +599,8 @@ impl Expr {
     }
 }
 
-/// A direct assignment `target := value`: the M0 form of a
-/// sensitive-function *effect* (the mutation is declarative data).
+/// A direct assignment `target := value`: the *effect* of a sensitive
+/// function, as declarative data (the mutation is not a callback).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Assignment {

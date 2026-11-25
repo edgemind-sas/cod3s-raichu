@@ -1,11 +1,10 @@
-//! Engine benchmarks (M1 goal condition): expression-evaluation /
+//! Engine benchmarks: expression-evaluation /
 //! fixpoint throughput on the discrete cycle, and hybrid ODE
 //! integration with watched-transition location.
 //!
 //! Run with `cargo bench`. These establish the baseline demanded by the
-//! performance contract: regressions become visible; the
-//! blocking side-by-side thresholds arrive with the Monte-Carlo
-//! milestone (M2), where volumes are realistic.
+//! performance contract: regressions become visible. They set no
+//! blocking threshold.
 //!
 //! Two of them come as a **pair**, on the same synthetic network of a
 //! few hundred edges. `wide_network_watched_scan` carries a watched

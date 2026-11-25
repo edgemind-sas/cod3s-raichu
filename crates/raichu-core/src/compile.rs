@@ -172,14 +172,18 @@ pub enum CExpr {
 }
 
 /// Compiled occurrence distribution.
+///
+/// A delay is a duration in the model's time unit, counted from the
+/// instant the transition is armed; a law that dates its firing draws
+/// the delay at that instant.
 #[derive(Debug, Clone)]
 pub enum CLaw {
-    /// Deterministic delay.
+    /// Deterministic delay (`schedule_deterministic`): the duration.
     Delay(f64),
     /// Instantaneous branching; probabilities include the reconstructed
     /// complement (length == number of targets).
     Inst(Vec<f64>),
-    /// Watched transition (M1): fires when `margin` crosses from
+    /// Watched transition: fires when `margin` crosses from
     /// negative to non-negative during continuous evolution (`schedule_boundary`).
     /// The margin is the signed boundary distance derived from the
     /// guard comparison: guard true ⇔ margin ≥ 0.
@@ -187,8 +191,10 @@ pub enum CLaw {
         /// Signed boundary margin.
         margin: CExpr,
     },
-    /// Exponential distribution (M2, `schedule_stochastic`): firing date sampled at
-    /// source-state entry.
+    /// Exponential distribution with a fixed rate λ ≥ 0, in events per
+    /// time unit (`schedule_stochastic`): the delay is drawn when the
+    /// transition is armed. At λ = 0 the transition is armed without a
+    /// draw and never fires.
     Exp(f64),
     /// Exponential distribution with a state-dependent rate λ(x) (`reschedule_modifiable`):
     /// realised by a cumulative hazard against an `Exp(1)` threshold
@@ -205,19 +211,25 @@ pub enum CLaw {
         /// each discrete change (`reschedule_modifiable` proper).
         continuous: bool,
     },
-    /// Weibull distribution (M4): shape k, scale λ.
+    /// Weibull distribution: shape k, then scale λ (time units); the
+    /// delay has CDF `1 − exp(−(t/λ)^k)`.
     Weibull(f64, f64),
-    /// Log-normal distribution (M4): μ, σ of the underlying normal.
+    /// Log-normal distribution: μ, then σ of the underlying normal
+    /// (`ln(delay) ~ N(μ, σ²)`).
     Lognormal(f64, f64),
-    /// Gamma distribution (M4): shape k, scale θ.
+    /// Gamma distribution: shape k, then scale θ (time units); mean
+    /// `k·θ`.
     Gamma(f64, f64),
-    /// Uniform distribution (M4): [low, high).
+    /// Uniform distribution: the delay is drawn in `[low, high)`.
     Uniform(f64, f64),
     /// Normal distribution truncated to an interval: μ, σ of the
     /// untruncated law, then the bounds (the upper one `+∞` when the
     /// model states none).
     Normal(f64, f64, f64, f64),
-    /// Empirical inverse-CDF table (M4): (time, cumulative prob).
+    /// Empirical law, sampled by inverse CDF from a table of
+    /// `(delay, cumulative probability)` points: the first cumulative
+    /// probability is a mass at the first delay, and the CDF is linear
+    /// between two points.
     Empirical(Vec<(f64, f64)>),
 }
 
