@@ -116,9 +116,10 @@ def test_a_single_supplier_is_unchanged():
     assert abs(sampled(result, "EL_e_fed_in", 0.5) - NEED) < TOL
 
 
-def test_a_consumer_with_no_rule_keeps_what_it_is_offered_as_the_reference_does():
-    """No rule consumes the input, so nothing sizes a need to release
-    against: both engines deliver 15 + 20 to a consumer asking 20."""
+def test_a_consumer_with_no_rule_takes_its_demand_as_the_reference_does():
+    """No rule consumes the input, so its published demand is the need the
+    offers are released against (muscadet 6.1.0): 15 and 100 offered to a
+    consumer asking 20 deliver 20, not 35."""
 
     class Consumer(mu.ObjFlow):
         def add_flows(self):
@@ -127,7 +128,7 @@ def test_a_consumer_with_no_rule_keeps_what_it_is_offered_as_the_reference_does(
     result = two_suppliers(15.0, source("e", 100.0), Consumer).simulate(
         t_max=1.0, samples=[0.5]
     )
-    assert abs(sampled(result, "EL_e_fed_in", 0.5) - 35.0) < TOL
+    assert abs(sampled(result, "EL_e_fed_in", 0.5) - NEED) < TOL
 
 
 def test_a_supplier_also_feeding_a_volume_keeps_the_balance():

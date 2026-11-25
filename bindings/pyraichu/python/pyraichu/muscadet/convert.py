@@ -1387,6 +1387,18 @@ def _continuous_uses(spec: dict, name: str, network: _Network) -> tuple[list[dic
             # recipe limited by another input consumes less of this one
             # than it asked for (`ObjFlow._releases_surplus`).
             uses.append({"fragment": "muscadet.surplus_release", "with": {"name": flow.name, "consumed": True}})
+        elif (
+            network.suppliers.get((name, flow.name), 0) >= 2
+            and obj._capacity_of(flow.name) is None
+            and (name, flow.name) not in network.pooled_fed
+            and obj._is_sink(flow.name)
+        ):
+            # A pure sink takes its published demand and hands the rest
+            # back, as muscadet 6.1.0 does (`sink_input_flows`): against
+            # `{flow}_demand_in`, which the fragment reads when it is not
+            # told the rules consume. A single supplier already delivers
+            # no more than the demand, so it needs no release.
+            uses.append({"fragment": "muscadet.surplus_release", "with": {"name": flow.name}})
         if flow.publish_rate is not None:
             uses.append({"fragment": "muscadet.rate_publisher", "with": {"name": flow.name, "of": authoring.RATE_DELIVERED}})
         if obj._passes_through(flow.name) or flow.name in consumed_by or flow.name in grouped:
