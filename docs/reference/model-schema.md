@@ -501,7 +501,7 @@ on the same transition object.
 | `distrib` | parameters | notes |
 |---|---|---|
 | `delay` | `time`: number | fixed deterministic duration |
-| `exp` | `rate`: number **or** `rate_expr`: [Expr](#expressions) | exponential; `rate_expr` is a state-dependent rate |
+| `exp` | `rate`: number ≥ 0 **or** `rate_expr`: [Expr](#expressions) | exponential; `rate_expr` is a state-dependent rate. A rate of 0 is a transition that is armed and never fires: it draws no random number |
 | `weibull` | `shape`, `scale`: number | |
 | `lognormal` | `mu`, `sigma`: number | |
 | `gamma` | `shape`, `scale`: number | |

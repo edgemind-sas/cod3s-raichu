@@ -341,7 +341,7 @@ pub enum Distrib {
     /// `P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,
     /// and exactly one of the two rate forms:
     ///
-    /// - `rate`: fixed positive λ; the firing date is sampled as
+    /// - `rate`: fixed λ ≥ 0; the firing date is sampled as
     ///   `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a
     ///   guard turning true re-arms with a fresh draw.
     /// - `rate_expr`: **state-dependent** λ(x) as an expression. The
@@ -355,7 +355,8 @@ pub enum Distrib {
     ///   alongside the continuous state and the firing time is located
     ///   like a watched boundary crossing. λ must evaluate ≥ 0.
     Exp {
-        /// Fixed occurrence rate λ > 0 (events per time unit).
+        /// Fixed occurrence rate λ ≥ 0 (events per time unit). At 0 the
+        /// transition is armed and never fires.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rate: Option<f64>,
         /// State-dependent occurrence rate λ(x) ≥ 0 (events per time
@@ -1911,7 +1912,7 @@ pub enum ModelError {
     /// An exponential rate must be finite and strictly positive.
     #[error(
         "exp transition `{transition}` of `{component}.{automaton}` has invalid \
-         rate {rate} (must be finite and > 0)"
+         rate {rate} (must be finite and >= 0)"
     )]
     InvalidExpRate {
         /// The owning component.
@@ -4313,7 +4314,9 @@ impl Model {
                     Self::check_single_target("exp", component, automaton, transition)?;
                     match (rate, rate_expr) {
                         (Some(rate), None) => {
-                            if !rate.is_finite() || *rate <= 0.0 {
+                            // A rate of 0 is a transition that cannot
+                            // fire, not an error.
+                            if !rate.is_finite() || *rate < 0.0 {
                                 return Err(ModelError::InvalidExpRate {
                                     component: component.name.clone(),
                                     automaton: automaton.name.clone(),

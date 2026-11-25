@@ -447,9 +447,16 @@ impl<'m> Engine<'m> {
                                 .get(trans_idx)
                                 .copied()
                                 .unwrap_or(1.0);
-                        let distribution = rand_distr::Exp::new(rate)
-                            .map_err(|e| bad_law(format!("exp({rate}): {e}")))?;
-                        self.time + distribution.sample(&mut self.rng)
+                        if rate == 0.0 {
+                            // A zero rate cannot fire: armed without a
+                            // date and without a draw, so a dormant
+                            // transition leaves the stream untouched.
+                            f64::INFINITY
+                        } else {
+                            let distribution = rand_distr::Exp::new(rate)
+                                .map_err(|e| bad_law(format!("exp({rate}): {e}")))?;
+                            self.time + distribution.sample(&mut self.rng)
+                        }
                     }
                     CLaw::Weibull(shape, scale) => {
                         let distribution = rand_distr::Weibull::new(*scale, *shape)
