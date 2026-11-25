@@ -30,6 +30,7 @@ deliberate departures.
 | `addStartMethod` | the initialisation step | every sensitive function runs to its fixpoint at `t = 0`, in declaration order; there is no imperative start method |
 | steps (`IStep`), check, pre, in and post methods | *(no equivalent)* | the order of discrete evaluation is the fixpoint's, not a user-defined schedule |
 | PDMP manager (`addEquationMethod`, `addODEVariable`) | `equations: [{target, kind: ode\|explicit, expr}]` | no manager object and a single continuous system per model; a model has continuous semantics wherever it declares equations |
+| a variable declared the integral of another (`integrate`, user manual V1.3.7.2, section 9.3.50.4.15) | an `ode` equation whose `expr` reads the integrated attribute | the model then has continuous semantics; numerical parity on such a variable has not been measured |
 | equation-method order (alphabetical unless set) | declaration order, or [`evaluation_order`](../reference/model-schema.md#evaluation-order) | a model relying on PyCATSHOO's alphabetical default must state the order explicitly |
 | algebraic variables, Jacobian, stiff solvers, sign constraints (`setVariableConstraint`) | linear algebraic cycles only, solved as blocks; Dormand-Prince 4(5) (a fixed-step Euler backend exists for Rust-level debugging only) | a nonlinear algebraic cycle is refused at build time; no stiff integrator |
 | `ISLEManager` (linear systems) | [linear algebraic cycles](../reference/model-schema.md#linear-algebraic-cycles), detected automatically | no manager to declare |
@@ -194,14 +195,82 @@ intentional differences:
 ## Not covered
 
 Capabilities of PyCATSHOO with no RAICHU counterpart, beyond those named
-in the tables above:
+in the tables above. Each entry names where PyCATSHOO declares the
+capability: a section of the user manual V1.3.7.2, or the public headers
+of the distributed version 1.4.1.0 for what that manual predates.
 
-- strategy optimisation over a Markov decision process (`IStrategy`, PEI
-  and MRAS algorithms, user manual V1.3.7.2, section 6);
+### Modelling
+
+- array variables, of every scalar type, with their dimensions
+  (`TVarType`, `setDimensions`, headers of version 1.4.1.0): an attribute
+  is a scalar;
+- a cap on the number of connections a variable accepts (`setCnctMax`,
+  section 9.3.49.5.4): a port takes any number of connections;
+- the numerical derivative of a variable's value over a step
+  (`derivative`, `dtDerivative`, sections 9.3.50.4.7 and 9.3.50.4.9): no
+  expression reads a rate of change;
+- a variable interpolated between its memorisation points when a sequence
+  is analysed (`setInterpolated`, section 9.3.50.4.34): an indicator is
+  evaluated by the engine at the requested sample instants, and nothing
+  is read between them afterwards;
 - inhibiting a target or a transition (`inhibateTarget`,
   `inhibateTrans`);
 - several named PDMP managers in one system, and begin or end methods
   around an integration.
+
+### Simulation and indicators
+
+- distributing the sequences of a simulation over several processes or
+  machines through MPI (section 5.5.1, `setNoMPI`, `MPIRank`,
+  `MPINbTasks`): a RAICHU campaign runs on the threads of one process;
+- the `all_values` restitution, every sequence's value of an indicator
+  (section 9.3.60): a campaign returns statistics. The nearest
+  counterpart is an [observation](../reference/sequence-format.md#observations)
+  of a sequence campaign, one attribute read at one instant on every
+  trajectory of the raw corpus;
+- the `seq_max_values`, `seq_min_values` and `seq_last_values`
+  restitutions, one value per sequence taken over its sampled values
+  (`TIndicatorType`, headers of version 1.4.1.0): `extremes` are taken
+  over the replicas at each instant, not over the instants of each
+  replica;
+- the likelihood of an individual sequence (`ISequence::likelyhood`,
+  `setEvalLikelyhood`, sections 9.3.40.3.9 and 9.3.12.7.116): the
+  cross-entropy estimator weights each replica by its likelihood ratio
+  and reports the weighted estimate and its effective sample size, not
+  the weight of each sequence;
+- strategy optimisation over a Markov decision process (`IStrategy`, PEI
+  and MRAS algorithms, section 6).
+
+### Sequence-tree exploration
+
+- the SRI algorithm and its residence-time tolerance (`setAlgoSRI`,
+  `setResidenceTimeTolerance`, headers of version 1.4.1.0).
+
+### Fault trees
+
+The fault-tree generator (section 5.5.6) maps to
+[`pyraichu.fault_tree`](../guides/fault-tree.md). It declares the
+following, which RAICHU's generator and quantifier do not have:
+
+- generating a non-coherent tree, with XOR gates, at-most gates and
+  children called with a negation (`ITreeNode`, section 9.3.48, and
+  `TTreeNodeType`, section 9.3.82): RAICHU's generator refuses a top
+  that is not monotone in its events, naming the negation. Its
+  quantifier does evaluate a non-coherent tree read from an OpenPSA
+  file, probability and importance measures exactly, without minimal
+  cut sets;
+- several named profiles held by one generator as variants of the
+  generation (`addProfile`, `IProfile`, sections 8.3.16 and 9.3.33): a
+  RAICHU generation takes one `profile`, and a variant is another
+  generation;
+- a textual condition attached to a transition for tree generation only
+  (`setConditionFT`, section 5.5.6): RAICHU's generator explains the
+  transition's own `guard`;
+- the GLM and periodically tested basic-event models (`TBEType`: `GLM`,
+  `periodic4`, `periodic5`, `periodic11`, section 9.3.53): a basic
+  event carries one of the engine's laws, read at the mission time;
+- minimal path sets (`buildMPS`, headers of version 1.4.1.0): RAICHU
+  computes minimal cut sets only.
 
 The [migration guide](migration-guide.md) puts this mapping to work on
 two concrete models.
