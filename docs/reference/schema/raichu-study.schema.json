@@ -751,7 +751,7 @@
       ]
     },
     "Distrib": {
-      "description": "Occurrence distribution of a transition (M0 deterministic subset; `Exp` and the\nwider distribution library arrive in milestone M2).",
+      "description": "Occurrence distribution of a transition: when it fires once armed, and,\nfor an instantaneous branching, which target it reaches.\n\nFour families: a deterministic delay (`Delay`), an instantaneous\nbranching (`Inst`), a watched boundary crossing (`Watched`), and seven\nlaws of a random delay (`Exp`, `Weibull`, `Lognormal`, `Gamma`,\n`Uniform`, `Normal`, `Empirical`). Every law except `Inst` has exactly\none target state.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -798,7 +798,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Watched transition (paper rule `schedule_boundary`, M1): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
+          "description": "Watched transition (paper rule `schedule_boundary`): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
           "properties": {
             "distrib": {
               "const": "watched",
@@ -845,7 +845,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Weibull distribution (M4): delay sampled with CDF `1 − e^{−(t/scale)^shape}`.",
+          "description": "Weibull distribution: delay sampled with CDF `1 − e^{−(t/scale)^shape}`.",
           "properties": {
             "distrib": {
               "const": "weibull",
@@ -871,7 +871,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Log-normal distribution (M4): `ln(delay) ~ N(mu, sigma²)`.",
+          "description": "Log-normal distribution: `ln(delay) ~ N(mu, sigma²)`.",
           "properties": {
             "distrib": {
               "const": "lognormal",
@@ -897,7 +897,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Gamma distribution (M4): shape/scale parametrisation\n(mean = shape·scale).",
+          "description": "Gamma distribution: shape/scale parametrisation\n(mean = shape·scale).",
           "properties": {
             "distrib": {
               "const": "gamma",
@@ -923,7 +923,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Uniform distribution (M4): delay drawn uniformly in `[low, high)`.",
+          "description": "Uniform distribution: delay drawn uniformly in `[low, high)`.",
           "properties": {
             "distrib": {
               "const": "uniform",
@@ -988,7 +988,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Empirical / user-defined distribution (M4): inverse-CDF sampling from a\ntable of `(time, cumulative probability)` points: any\ndistribution supplied as a sampled CDF. `u < points[0].1` maps\nto `points[0].0` (probability mass at the first time); between\npoints the CDF is linearly interpolated; the last cumulative\nprobability must be 1.",
+          "description": "Empirical / user-defined distribution: inverse-CDF sampling from a\ntable of `(time, cumulative probability)` points: any\ndistribution supplied as a sampled CDF. `u < points[0].1` maps\nto `points[0].0` (probability mass at the first time); between\npoints the CDF is linearly interpolated; the last cumulative\nprobability must be 1.",
           "properties": {
             "distrib": {
               "const": "empirical",
