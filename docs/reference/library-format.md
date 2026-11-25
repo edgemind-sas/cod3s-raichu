@@ -494,7 +494,7 @@ rather than part of the model.
 | `unbounded_rate` | declared by the expander on a continuous network; the system's `unbounded_rate` otherwise |
 | `evaluation_order` | derived by the expander from what each step reads; not written (see below) |
 | `attributes`, `ports`, `interfaces`, `automata`, `sensitive_functions`, `equations`, `allocations` | a type's `body`, verbatim, or the fragments it applies; references to the instance itself are written `$self` |
-| transition laws (`delay`, `exp`, `weibull`, `lognormal`, `gamma`, `uniform`, `empirical`, `inst`, `watched`) | written on a transition of a type body, or taken from a `law` parameter with `$law`; in a study, the laws of catalogued modes, common-cause orders and feared-event confirmation times |
+| transition laws (`delay`, `exp`, `weibull`, `lognormal`, `gamma`, `uniform`, `normal`, `empirical`, `inst`, `watched`) | written on a transition of a type body, or taken from a `law` parameter with `$law`; in a study, the laws of catalogued modes, common-cause orders and feared-event confirmation times |
 | interruption policy (`on_interruption`) | a transition of a type body, or a mode activation |
 | run settings of `simulate` and `monte_carlo` | the study's `simulation` (`options` for confidence, quantiles, threads, solver tolerances and flow policy) |
 | sequence campaigns (`run_sequences`) | the study's `simulation` with `method: sequences` |

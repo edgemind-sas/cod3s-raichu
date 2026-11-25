@@ -35,7 +35,8 @@ emphasis on **reproducibility, numerical rigour and inspectability**.
   serializable, diffable, validated at build time with precise typed
   errors instead of crashes.
 - **A rich distribution library.** Exponential (with state-dependent rates),
-  Weibull, lognormal, gamma, uniform, empirical, deterministic delay:
+  Weibull, lognormal, gamma, uniform, truncated normal, empirical,
+  deterministic delay:
   each validated against its closed form.
 - **Estimates that state their precision.** Every Monte-Carlo estimator
   carries a confidence interval, at a level the study declares rather

@@ -429,6 +429,7 @@ fn fixed_law(law: &CLaw) -> Option<Result<Law, LawError>> {
         CLaw::Weibull(shape, scale) => Law::weibull(*shape, *scale),
         CLaw::Lognormal(mu, sigma) => Law::lognormal(*mu, *sigma),
         CLaw::Gamma(shape, scale) => Law::gamma(*shape, *scale),
+        CLaw::Normal(mu, sigma, low, high) => Law::normal(*mu, *sigma, *low, *high),
         CLaw::Uniform(low, high) => Law::uniform(*low, *high),
         CLaw::Empirical(points) => Law::empirical(points.clone()),
         _ => return None,

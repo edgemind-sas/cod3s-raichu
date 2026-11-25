@@ -613,6 +613,7 @@ impl<'m> Engine<'m> {
             | CLaw::Weibull(..)
             | CLaw::Lognormal(..)
             | CLaw::Gamma(..)
+            | CLaw::Normal(..)
             | CLaw::Uniform(..)
             | CLaw::Empirical(_) => Ok(transition.targets[0]),
             CLaw::Inst(probs) => {

@@ -155,6 +155,7 @@ pub(super) fn fireable_kind(distrib: &CLaw) -> FireableKind {
         | CLaw::Weibull(..)
         | CLaw::Lognormal(..)
         | CLaw::Gamma(..)
+        | CLaw::Normal(..)
         | CLaw::Uniform(..)
         | CLaw::Empirical(_) => FireableKind::Stochastic,
     }
@@ -464,6 +465,18 @@ impl<'m> Engine<'m> {
                         let distribution = rand_distr::Gamma::new(*shape, *scale)
                             .map_err(|e| bad_law(format!("gamma: {e}")))?;
                         self.time + distribution.sample(&mut self.rng)
+                    }
+                    CLaw::Normal(mu, sigma, low, high) => {
+                        // Inverse-CDF sampling of the truncated law: one
+                        // random number per draw, whatever the interval,
+                        // where rejection would consume a varying count.
+                        let law = raichu_numeric::laws::Law::normal(*mu, *sigma, *low, *high)
+                            .map_err(|e| bad_law(format!("normal: {e}")))?;
+                        let u: f64 = rand::Rng::random(&mut self.rng);
+                        let delay = law
+                            .quantile(u)
+                            .map_err(|e| bad_law(format!("normal: {e}")))?;
+                        self.time + delay
                     }
                     CLaw::Uniform(low, high) => {
                         let distribution = rand_distr::Uniform::new(*low, *high)

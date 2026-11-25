@@ -1855,6 +1855,11 @@ fn law_json(law: &raichu::raichu_core::compile::CLaw) -> serde_json::Value {
         CLaw::Gamma(shape, scale) => {
             serde_json::json!({"distrib": "gamma", "shape": shape, "scale": scale})
         }
+        CLaw::Normal(mu, sigma, low, high) => serde_json::json!({
+            "distrib": "normal", "mu": mu, "sigma": sigma, "low": low,
+            // JSON has no infinity: an unbounded law states no upper bound.
+            "high": high.is_finite().then_some(*high),
+        }),
         CLaw::Uniform(low, high) => {
             serde_json::json!({"distrib": "uniform", "low": low, "high": high})
         }

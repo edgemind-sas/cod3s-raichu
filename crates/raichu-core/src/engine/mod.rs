@@ -406,6 +406,7 @@ impl<'m> Engine<'m> {
                     | CLaw::Weibull(..)
                     | CLaw::Lognormal(..)
                     | CLaw::Gamma(..)
+                    | CLaw::Normal(..)
                     | CLaw::Uniform(..)
                     | CLaw::Empirical(_)
             )

@@ -379,6 +379,34 @@ fn a_law_openpsa_cannot_express_round_trips_through_attributes() {
     assert_eq!(back.events, original.events);
 }
 
+#[test]
+fn a_truncated_normal_law_round_trips_with_and_without_an_upper_bound() {
+    // JSON has no infinity: an unbounded law writes no upper bound.
+    for high in [None, Some(20.0)] {
+        let events = vec![BasicEvent {
+            name: "repair".to_owned(),
+            law: Law::Normal {
+                mu: 10.0,
+                sigma: 2.0,
+                low: 0.0,
+                high,
+            },
+            repairs: Vec::new(),
+        }];
+        let original = Tree {
+            name: "t".to_owned(),
+            events,
+            gates: vec![GateDef {
+                name: "G".to_owned(),
+                formula: e(0),
+            }],
+            top: Formula::Gate { gate: 0 },
+        };
+        let back = read_open_psa(&write_open_psa(&original), None).unwrap();
+        assert_eq!(back.events, original.events, "high {high:?}");
+    }
+}
+
 // ---------------------------------------------------------------------
 // Findings of the review, each pinned by its reproducer.
 // ---------------------------------------------------------------------

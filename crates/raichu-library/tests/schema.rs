@@ -138,6 +138,18 @@ fn every_distrib() -> Vec<Distrib> {
             shape: 2.0,
             scale: 3.0,
         },
+        Distrib::Normal {
+            mu: 10.0,
+            sigma: 2.0,
+            low: 0.0,
+            high: None,
+        },
+        Distrib::Normal {
+            mu: 10.0,
+            sigma: 2.0,
+            low: 5.0,
+            high: Some(20.0),
+        },
         Distrib::Uniform {
             low: 1.0,
             high: 2.0,
@@ -156,6 +168,7 @@ fn every_distrib() -> Vec<Distrib> {
             | Distrib::Weibull { .. }
             | Distrib::Lognormal { .. }
             | Distrib::Gamma { .. }
+            | Distrib::Normal { .. }
             | Distrib::Uniform { .. }
             | Distrib::Empirical { .. } => {}
         }

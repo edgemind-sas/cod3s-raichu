@@ -33,8 +33,8 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
   step at a resolution the study can set, then located by bisection to
   an explicit tolerance.
 - **A rich occurrence-law library**: exponential (with an optional
-  state-dependent rate), Weibull, lognormal, gamma, uniform,
-  deterministic/delay and empirical laws behind a single interface.
+  state-dependent rate), Weibull, lognormal, gamma, uniform, truncated
+  normal, deterministic/delay and empirical laws behind a single interface.
 - **Estimates that state their precision**: every Monte-Carlo estimator
   carries a confidence interval at a level the study declares (Wilson
   for a probability, central-limit otherwise), so a reported figure
