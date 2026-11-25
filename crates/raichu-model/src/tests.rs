@@ -4,7 +4,7 @@
 
 use super::*;
 use proptest::prelude::*;
-use raichu_expr::{AggOp, BoolOp, CmpOp, StateRef};
+use raichu_expr::{AggOp, Assignment, AttrRef, BoolOp, CmpOp, Expr, PortRef, StateRef, Value};
 
 fn program_model() -> Model {
     let mut model = sample_model();
