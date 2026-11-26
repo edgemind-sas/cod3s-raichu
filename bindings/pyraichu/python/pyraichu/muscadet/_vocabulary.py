@@ -380,7 +380,7 @@ def prod_cond_unconditional(where: str, declared: Any, inner_mode: str) -> bool:
       its inputs and whatever its declared default (measured on the reference
       engine 2026-10-15). True is returned, and the caller builds the output
       that declares no condition and starts produced. No writer is the
-      reference's behaviour too: a sensitive method subscribed to no operand
+      reference's behaviour too: a callback subscribed to no operand
       runs at the initial evaluation and never again, so a mode that latches
       the production later keeps its latch;
     - under ``"or"`` an empty clause is FALSE and the output would never

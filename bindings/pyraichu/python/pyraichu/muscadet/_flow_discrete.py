@@ -250,7 +250,7 @@ class _DiscreteFlowsMixin:
         for the whole mission. Reading the location subscribes the function to
         the automaton (`state_triggers`), whose boundary transitions fire AT the
         crossing. muscadet wires the same thing the other way round, hanging a
-        sensitive method on the same automaton
+        callback on the same automaton
         (`add_prod_cond_threshold_automata`).
 
         The two agree everywhere but at t = 0, where the automaton is still in
@@ -570,7 +570,7 @@ class _DiscreteFlowsMixin:
         and a failure mode may latch it to start a dormant output. An
         inline expression has nothing to latch. With a condition the
         function rewrites the variable at every evaluation and a mode's
-        effect is erased by it, which is what muscadet's sensitive method
+        effect is erased by it, which is what muscadet's callback
         does to the same variable."""
         me = self.name
         for flow in self.flows_out:

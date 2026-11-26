@@ -446,7 +446,7 @@ impl Expr {
 
     /// Visit every attribute reference in the tree (used by model
     /// validation to check that all references resolve, and by the engine
-    /// to derive sensitivity sets: which attribute changes must re-trigger
+    /// to derive trigger sets: which attribute changes must re-trigger
     /// which functions).
     pub fn for_each_attr_ref(&self, f: &mut impl FnMut(&AttrRef)) {
         if let Expr::Attr { attr } = self {
@@ -472,7 +472,7 @@ impl Expr {
     }
 
     /// Visit every automaton-state reference in the tree (model
-    /// validation; state-sensitivity derivation in the engine).
+    /// validation; state-trigger derivation in the engine).
     pub fn for_each_state_ref(&self, f: &mut impl FnMut(&StateRef)) {
         if let Expr::StateActive { state } = self {
             f(state);

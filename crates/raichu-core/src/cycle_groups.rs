@@ -596,7 +596,8 @@ fn two_state_switch<'a>(
     let (Some(g1), Some(g2)) = (&first.guard, &second.guard) else {
         return None;
     };
-    if dependency::sensitivity(g1).1.contains(&a) || dependency::sensitivity(g2).1.contains(&a) {
+    if dependency::trigger_reads(g1).1.contains(&a) || dependency::trigger_reads(g2).1.contains(&a)
+    {
         return None;
     }
     Some((g1, g2))

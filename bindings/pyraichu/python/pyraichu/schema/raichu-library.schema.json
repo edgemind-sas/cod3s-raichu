@@ -5639,7 +5639,7 @@
           "type": "object"
         }
       ],
-      "description": "A propagation: declarative effects re-evaluated whenever one of\nthe attributes read by its expressions changes (the sensitivity set is\n*derived* from the expressions: no trigger is registered by hand).\nEffects run to a fixpoint during the discrete-evolution phase (paper rule `propagate_effects`)."
+      "description": "A propagation: declarative effects re-evaluated whenever one of\nthe attributes read by its expressions changes (the trigger set is\n*derived* from the expressions: no trigger is registered by hand).\nEffects run to a fixpoint during the discrete-evolution phase (paper rule `propagate_effects`)."
     },
     "StateRef": {
       "anyOf": [
