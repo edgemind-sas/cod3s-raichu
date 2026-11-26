@@ -569,11 +569,33 @@ def test_indicators_round_trip_through_the_open_format():
     assert again.to_json() == text
 
 
-def test_indicators_are_refused_by_the_exact_algorithm_and_when_unknown():
-    with pytest.raises(pyraichu.SimulationError, match="indicators"):
-        pyraichu.explore(_weibull_with_indicator(), "w_down", 1.0, indicators=["W_down"])
-    with pytest.raises(pyraichu.SimulationError, match="instants"):
-        pyraichu.explore(_weibull_with_indicator(), "w_down", 1.0, instants=[1.0])
+def test_the_exact_algorithm_reports_indicators_in_closed_form():
+    lam = RATE_A
+    model = pyraichu.load_model(
+        {
+            "name": "exact_unit",
+            "components": [_unit("E", {"distrib": "exp", "rate": lam})],
+            "targets": [{"name": "e_down", "component": "E", "automaton": "fail", "state": "nok"}],
+            "indicators": [
+                {"name": "E_down", "target": "state", "component": "E", "automaton": "fail",
+                 "state": "nok"}
+            ],
+        }
+    )
+    result = pyraichu.explore(model, "e_down", HORIZON, indicators=["E_down"], instants=[2.0, HORIZON])
+    assert result.algorithm == "exact"
+    values = result.indicator("E_down")
+    for k, t in enumerate([2.0, HORIZON]):
+        mean = -math.expm1(-lam * t)
+        assert values["mean"][k]["lower"] == pytest.approx(mean, rel=1e-9)
+        assert values["mean"][k]["upper"] == pytest.approx(mean, rel=1e-9)
+        assert values["sojourn"][k]["lower"] == pytest.approx(t - mean / lam, rel=1e-9)
+        assert "error_estimate" not in values["mean"][k]
+    expected = -math.expm1(-lam * HORIZON) / lam
+    assert result.indicators["time_to_target"]["lower"] == pytest.approx(expected, rel=1e-9)
+
+
+def test_unknown_indicators_and_instants_are_refused():
     with pytest.raises(pyraichu.SimulationError, match="nope"):
         pyraichu.explore(
             _weibull_with_indicator(),

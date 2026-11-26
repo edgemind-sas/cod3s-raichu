@@ -21,16 +21,25 @@
 //!
 //! # How a node contributes
 //!
-//! A node of the tree is entered at a known instant with a known path
-//! probability, and each of its children leaves it at a known instant
-//! (the discretised driver fires a child at its cell's representative
-//! instant, or lets time run to the window's end). Between those
-//! instants the discrete state does not change, so a state indicator is
-//! constant on the node: the node adds its value, weighted by the mass
-//! still in it, to the mean at every instant it covers, and to the
-//! sojourn time over the time it covers. Mass that never leaves (a leaf,
-//! the target, the survival mass dropped at the horizon) stays until the
-//! end.
+//! Between two firings the discrete state does not change, so a state
+//! indicator is constant on a node. A node adds its value, weighted by
+//! the mass in it, to the mean at every instant and to the sojourn time,
+//! from the instant its mass enters it until the instant each child's
+//! mass enters the child. Mass that never leaves (a leaf, the target, the
+//! survival mass a discretised window drops at the horizon) stays until
+//! the end.
+//!
+//! An entry instant is described by its [`Profile`] over the requested
+//! instants and the horizon: the probability it has happened by `t`, and
+//! the integral of that probability over `[0, t]`. The discretised driver
+//! knows every instant (a child fires at its cell's representative
+//! instant, or time runs to the window's end), so its profiles are steps.
+//! The exact driver enters a node after the sum of the exponential
+//! sojourns along its path, so its profiles are phase-type distribution
+//! functions and their integrals
+//! ([`raichu_numeric::PhaseTypeAccumulator::absorption_profile`]), each
+//! with a guaranteed error bound by which the reported bounds are
+//! widened.
 //!
 //! # Bounds
 //!
@@ -39,13 +48,14 @@
 //! state (0), the upper bound as in it (1), from that instant on: the
 //! same construction as the bounds on the target probability, so at the
 //! horizon the gap of a mean value is at most the gap of the target
-//! probability. Both bounds are bounds on the explored (discretised)
-//! model; the discretisation error is estimated by refinement, value by
-//! value.
+//! probability. On the discretised driver both bounds are bounds on the
+//! discretised model, and the discretisation error is estimated by
+//! refinement, value by value.
 
 use raichu_core::compile::CIndicatorTarget;
 use raichu_core::{CompiledModel, Engine, EngineError};
 use raichu_expr::Value;
+use raichu_numeric::ProfilePoint;
 use serde::{Deserialize, Serialize};
 
 use crate::result::relative_gap;
@@ -198,6 +208,33 @@ impl IndicatorPlan {
         );
     }
 
+    /// The points every profile covers: the requested instants, then the
+    /// horizon when it is not the last of them (it carries the mean time
+    /// to the target).
+    fn points(&self) -> impl Iterator<Item = f64> + '_ {
+        let extra = (self.instants.last() != Some(&self.horizon)).then_some(self.horizon);
+        self.instants.iter().copied().chain(extra)
+    }
+
+    /// The instants and the horizon, as a profile is computed over them.
+    pub(crate) fn point_list(&self) -> Vec<f64> {
+        self.points().collect()
+    }
+
+    /// The profile of a known entry instant `at`.
+    pub(crate) fn deterministic(&self, at: f64) -> Profile {
+        Profile(
+            self.points()
+                .map(|t| ProfilePoint {
+                    cdf: if at <= t { 1.0 } else { 0.0 },
+                    cdf_error: 0.0,
+                    integral: (t - at).max(0.0),
+                    integral_error: 0.0,
+                })
+                .collect(),
+        )
+    }
+
     /// Empty sums for this plan.
     pub(crate) fn sums(&self) -> IndicatorSums {
         let (n, k) = (self.indices.len(), self.instants.len());
@@ -206,69 +243,87 @@ impl IndicatorPlan {
             sojourn: vec![0.0; n * k],
             unknown_mean: vec![0.0; k],
             unknown_sojourn: vec![0.0; k],
-            time_to_target: 0.0,
-            unknown_time_to_target: 0.0,
+            error_mean: vec![0.0; k],
+            error_sojourn: vec![0.0; k],
+            ..IndicatorSums::default()
         }
     }
 
     /// Mass `weight` in a state where the requested indicators read
-    /// `values` and the target is `reached` or not, over `[from, to)`
-    /// (`to` infinite for mass that never leaves).
+    /// `values` and the target is `reached` or not, from its `entry` until
+    /// its `exit` (`None` for mass that never leaves).
     pub(crate) fn occupy(
         &self,
         sums: &mut IndicatorSums,
         values: &[bool],
         reached: bool,
         weight: f64,
-        from: f64,
-        to: f64,
+        entry: &Profile,
+        exit: Option<&Profile>,
     ) {
-        if weight <= 0.0 || to <= from {
-            return;
-        }
-        let k = self.instants.len();
-        for (j, &t) in self.instants.iter().enumerate() {
-            if t < from {
-                continue;
-            }
-            let present = t < to;
-            let covered = to.min(t) - from;
-            for (i, _) in values.iter().enumerate().filter(|(_, &v)| v) {
-                if present {
-                    sums.mean[i * k + j] += weight;
-                }
-                sums.sojourn[i * k + j] += weight * covered;
-            }
-        }
-        if !reached && from < self.horizon {
-            sums.time_to_target += weight * (to.min(self.horizon) - from);
-        }
-    }
-
-    /// Mass `weight` whose state is unknown from `from` on (a cut-off
-    /// discarded it).
-    pub(crate) fn unknown(&self, sums: &mut IndicatorSums, weight: f64, from: f64) {
         if weight <= 0.0 {
             return;
         }
-        for (j, &t) in self.instants.iter().enumerate() {
-            if t >= from {
-                sums.unknown_mean[j] += weight;
-                sums.unknown_sojourn[j] += weight * (t - from);
+        let k = self.instants.len();
+        let none = ProfilePoint {
+            cdf: 0.0,
+            cdf_error: 0.0,
+            integral: 0.0,
+            integral_error: 0.0,
+        };
+        let at = |j: usize| {
+            let e = entry.0[j];
+            let x = exit.map_or(none, |exit| exit.0[j]);
+            (
+                e.cdf - x.cdf,
+                e.cdf_error + x.cdf_error,
+                e.integral - x.integral,
+                e.integral_error + x.integral_error,
+            )
+        };
+        for j in 0..k {
+            let (present, present_error, covered, covered_error) = at(j);
+            sums.error_mean[j] += weight * present_error;
+            sums.error_sojourn[j] += weight * covered_error;
+            for (i, _) in values.iter().enumerate().filter(|(_, &v)| v) {
+                sums.mean[i * k + j] += weight * present;
+                sums.sojourn[i * k + j] += weight * covered;
             }
         }
-        if from < self.horizon {
-            sums.unknown_time_to_target += weight * (self.horizon - from);
+        if !reached {
+            let (_, _, covered, covered_error) = at(entry.0.len() - 1);
+            sums.time_to_target += weight * covered;
+            sums.error_time_to_target += weight * covered_error;
+        }
+    }
+
+    /// Mass `weight` whose state is unknown from its entry `from` on (a
+    /// cut-off discarded it).
+    pub(crate) fn unknown(&self, sums: &mut IndicatorSums, weight: f64, from: &Profile) {
+        if weight <= 0.0 {
+            return;
+        }
+        for (j, point) in from.0.iter().take(self.instants.len()).enumerate() {
+            sums.unknown_mean[j] += weight * point.cdf;
+            sums.unknown_sojourn[j] += weight * point.integral;
+            sums.error_mean[j] += weight * point.cdf_error;
+            sums.error_sojourn[j] += weight * point.integral_error;
+        }
+        if let Some(point) = from.0.last() {
+            sums.unknown_time_to_target += weight * point.integral;
+            sums.error_time_to_target += weight * point.integral_error;
         }
     }
 
     /// The reported values of `sums`, flagged inconclusive against
-    /// `gap_tolerance`, without error estimates.
+    /// `gap_tolerance`, without error estimates. Each bound is widened by
+    /// the numerical error bound of what it sums (zero for a discretised
+    /// exploration, whose instants are known).
     pub(crate) fn finish(&self, sums: &IndicatorSums, gap_tolerance: f64) -> ExploredIndicators {
         let k = self.instants.len();
-        let bounded = |lower: f64, unknown: f64| BoundedValue {
-            lower,
-            upper: lower + unknown,
+        let bounded = |known: f64, unknown: f64, error: f64| BoundedValue {
+            lower: (known - error).max(0.0),
+            upper: known + unknown + error,
             error_estimate: None,
         };
         let values = self
@@ -277,10 +332,22 @@ impl IndicatorPlan {
             .enumerate()
             .map(|(i, name)| {
                 let mean: Vec<BoundedValue> = (0..k)
-                    .map(|j| bounded(sums.mean[i * k + j], sums.unknown_mean[j]))
+                    .map(|j| {
+                        bounded(
+                            sums.mean[i * k + j],
+                            sums.unknown_mean[j],
+                            sums.error_mean[j],
+                        )
+                    })
                     .collect();
                 let sojourn: Vec<BoundedValue> = (0..k)
-                    .map(|j| bounded(sums.sojourn[i * k + j], sums.unknown_sojourn[j]))
+                    .map(|j| {
+                        bounded(
+                            sums.sojourn[i * k + j],
+                            sums.unknown_sojourn[j],
+                            sums.error_sojourn[j],
+                        )
+                    })
                     .collect();
                 let inconclusive = mean
                     .iter()
@@ -297,10 +364,21 @@ impl IndicatorPlan {
         ExploredIndicators {
             instants: self.instants.clone(),
             values,
-            time_to_target: bounded(sums.time_to_target, sums.unknown_time_to_target),
+            time_to_target: bounded(
+                sums.time_to_target,
+                sums.unknown_time_to_target,
+                sums.error_time_to_target,
+            ),
         }
     }
 }
+
+/// When a mass enters a node, as a profile over the plan's points
+/// ([`IndicatorPlan::point_list`]): at each point `t`, the probability it
+/// has entered by `t` and the integral of that probability over `[0, t]`,
+/// with their error bounds.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Profile(pub(crate) Vec<ProfilePoint>);
 
 /// Running sums of one worker, merged in exploration order.
 #[derive(Debug, Clone, Default)]
@@ -313,8 +391,13 @@ pub(crate) struct IndicatorSums {
     unknown_mean: Vec<f64>,
     /// Integral of the unknown mass up to each instant.
     unknown_sojourn: Vec<f64>,
+    /// Bound on the numerical error of the sums at each instant (the same
+    /// for every indicator, so a bound for each).
+    error_mean: Vec<f64>,
+    error_sojourn: Vec<f64>,
     time_to_target: f64,
     unknown_time_to_target: f64,
+    error_time_to_target: f64,
 }
 
 impl IndicatorSums {
@@ -330,8 +413,11 @@ impl IndicatorSums {
         add(&mut self.sojourn, &other.sojourn);
         add(&mut self.unknown_mean, &other.unknown_mean);
         add(&mut self.unknown_sojourn, &other.unknown_sojourn);
+        add(&mut self.error_mean, &other.error_mean);
+        add(&mut self.error_sojourn, &other.error_sojourn);
         self.time_to_target += other.time_to_target;
         self.unknown_time_to_target += other.unknown_time_to_target;
+        self.error_time_to_target += other.error_time_to_target;
     }
 }
 

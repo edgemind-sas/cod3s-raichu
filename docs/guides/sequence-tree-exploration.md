@@ -334,7 +334,8 @@ covers every law the engine carries (delay, exponential with a constant
 or state-dependent rate, Weibull, lognormal, gamma, uniform, normal, empirical),
 the interruption policies, and continuous evolution with watched
 transitions. It is RAICHU's own method: it does not reproduce
-PyCATSHOO's sampling algorithm (see the
+PyCATSHOO's discretisation algorithm, named `sampling` although it draws
+nothing at random, which discretises each law separately (see the
 [concept mapping](../pycatshoo/concept-mapping.md#sequence-tree-exploration)).
 Its published analogue on piecewise-deterministic processes is the
 quadrature-based dynamic event tree (Elhareef and Yim 2026).
@@ -511,8 +512,8 @@ release is 0.46.0 rather than a patch: a struct literal written without
 
 ## Indicators
 
-A discretised exploration also reports, on request, the state indicators
-of the model: for each one, its **mean value** at chosen instants (the
+An exploration also reports, on request, the state indicators of the
+model: for each one, its **mean value** at chosen instants (the
 probability of being in the state) and its **sojourn time** by those
 instants (the expected time spent in the state), plus the **mean time to
 the target truncated at the horizon**, `E[min(T, horizon)]`. Each value
@@ -588,10 +589,56 @@ its own `error_estimate`.
 on an attribute or on a threshold over one may change between two
 firings, along a continuous evolution, and its bounds would not hold.
 Unknown or repeated names, and instants that are not strictly increasing
-in `[0, horizon]`, are refused before anything runs. The exact algorithm
-does not report indicators: its dates are random, and the computation it
-needs (the distribution of the instant each state is entered and left)
-is not implemented yet.
+in `[0, horizon]`, are refused before anything runs.
+
+**Exact exploration.** The exact algorithm reports the same quantities.
+Its dates are random: a node reached after `k` sojourns is entered at
+`S_k`, the sum of the `k` exponential sojourns along its path, and left
+at `S_{k+1}`. It is occupied at `t` with probability
+`P(S_k <= t) - P(S_{k+1} <= t)`, times the probability of its path in
+the jump chain, and its contribution to a sojourn time is the integral
+of that difference. Both come from the uniformization that already
+computes the sequence probabilities: the discrete chain does not depend
+on `t`, only the Poisson weights do, and the integral of a Poisson
+weight is a Poisson tail, so every term stays nonnegative. Each value
+has a guaranteed numerical error bound, and the reported bounds are
+widened by it: on the exact algorithm, `lower` and `upper` bound the
+true value, numerical error included, and no `error_estimate` is given.
+
+On a single exponential unit of rate 0.1 with an indicator on its failed
+state:
+
+```python
+unit_model = pyraichu.load_model({
+    "name": "single_unit",
+    "components": [{"name": "U", "automata": [{
+        "name": "fail", "states": ["ok", "nok"], "init": "ok",
+        "transitions": [{"name": "occ", "source": "ok", "targets": ["nok"],
+                         "distrib": "exp", "rate": 0.1}]}]}],
+    "targets": [{"name": "u_down", "component": "U",
+                 "automaton": "fail", "state": "nok"}],
+    "indicators": [{"name": "U_down", "target": "state", "component": "U",
+                    "automaton": "fail", "state": "nok"}],
+})
+exact = pyraichu.explore(unit_model, "u_down", horizon=10.0,
+                         indicators=["U_down"], instants=[5.0, 10.0])
+for t, mean in zip(exact.indicators["instants"], exact.indicator("U_down")["mean"]):
+    print(f"t={t:4}  P(U down) in [{mean['lower']:.12f}, {mean['upper']:.12f}]")
+```
+
+```text
+t= 5.0  P(U down) in [0.393469340287, 0.393469340287]
+t=10.0  P(U down) in [0.632120558829, 0.632120558829]
+```
+
+The closed form is `1 - exp(-0.1 t)`: 0.393469340287 and
+0.632120558829. The cost is one profile per explored node and per
+instant, each linear in the number of uniformization terms, about
+`max_rate x horizon`: requesting indicators multiplies the exploration
+time by about the number of instants plus one. A path so stiff that its
+probability fell back to scaling and squaring (`max_terms` exceeded) has
+no profile; its indicators are refused by name, with `max_terms` and the
+discretised algorithm as the two ways out.
 
 ## Relation to minimal cut sequences
 
