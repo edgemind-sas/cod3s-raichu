@@ -873,7 +873,7 @@ def test_another_inner_mode_on_a_continuous_output_is_refused_naming_the_default
 
 def test_what_a_continuous_input_was_fed_says_nothing_at_zero():
     """On an INPUT, `var_fed_default` seeds the `{name}_fed_in` MIRROR, which
-    the sensitive method overwrites with what the connections delivered and
+    the flow's callback overwrites with what the connections delivered and
     which nothing on this side reads: a continuous input is read through its
     connections, precisely because the mirror lags a step."""
     spec = a_heat_pump(

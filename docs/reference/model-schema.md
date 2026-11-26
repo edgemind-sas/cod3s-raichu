@@ -1101,8 +1101,8 @@ count the initial value, count a move to a negative value, and ignore a
 move between two non-zero values. A value that is only ever negative is
 non-zero reached and never reached. On a state, a `predicate` or a `bool`
 attribute that starts inactive the two pairs coincide. Zero departures
-and non-zero reached are what the reference engine's `nb_visits` and
-`realized` computations return on a natively built model whose value is
+and non-zero reached are what the reference engine's visit count and
+has-been-non-zero flag return on a natively built model whose value is
 set by start methods, and a cod3s or muscadet study reads its
 `nb-occurrences` and `had_value` measures on them
 ([Platform import](../guides/platform-import.md#matching-the-studys-measures)).

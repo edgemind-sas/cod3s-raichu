@@ -325,7 +325,7 @@ at t = 0 and never again -- measured, on a volume filling past its threshold
 with the output left unfed for the whole mission. Reading the location
 subscribes the function to the automaton, whose boundary transitions fire **at**
 the crossing. muscadet wires the same thing the other way round, hanging a
-sensitive method on the same automaton
+callback on the same automaton
 (`muscadet.flow.add_prod_cond_threshold_automata`).
 
 The two readings agree everywhere but at t = 0, where the automaton is still

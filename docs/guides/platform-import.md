@@ -78,16 +78,16 @@ declaration carries it too:
 - `nb-occurrences` → `IndicatorEstimate.zero_departures_mean` / `_std`:
   the number of departures of the value from exactly `0` by each instant,
   the initial state not counted, which is the reference engine's
-  `nb_visits` computation (the one cod3s selects for this measure) (with
+  visit count (the one cod3s selects for this measure) (with
   targets: the probability the event occurred by each instant);
 - `sojourn-time` → `IndicatorEstimate.sojourn_mean` / `_std`, the signed
-  time-integral of the value, the reference's `res_time` (with targets:
+  time-integral of the value, the reference's residence time (with targets:
   mean time elapsed since the first occurrence);
 - `value` → `IndicatorEstimate.mean` / `std`, the sampled value;
 - `had_value` → `IndicatorEstimate.nonzero_reached_mean` / `_std`: the
   probability the value has been non-zero at least once by each instant,
   the initial value included. Per trajectory it stays at 1 after the
-  value falls back, as the reference engine's `realized` computation
+  value falls back, as the reference engine's has-been-non-zero flag
   does.
 
 `pyraichu.muscadet.engine.MEASURE_SERIES` holds this map, and

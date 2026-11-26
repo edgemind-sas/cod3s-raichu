@@ -337,7 +337,7 @@ def test_a_threshold_on_a_moving_quantity_is_read_at_its_own_date():
     condition is evaluated at t = 0 and never again -- measured, the output
     stayed unfed for the whole mission with the volume at 16 against a
     threshold of 10. It reads the location of a boundary threshold automaton
-    instead, which is what muscadet hangs a sensitive method on for the same
+    instead, which is what muscadet hangs a callback on for the same
     reason.
     """
     result = _filling_tank({"name": "tank", "op": ">=", "value": THRESHOLD}).simulate(

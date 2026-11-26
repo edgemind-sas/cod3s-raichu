@@ -500,7 +500,7 @@ impl<'m> Engine<'m> {
         // fixpoint below like any change.
         self.apply_transition_effects(trans_idx)?;
 
-        // Discrete evolution: functions sensitive to this automaton.
+        // Discrete evolution: functions this automaton triggers.
         self.worklist.extend(
             self.model.state_triggers[self.model.transitions[trans_idx].automaton]
                 .iter()

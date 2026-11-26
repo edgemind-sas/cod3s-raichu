@@ -826,7 +826,7 @@ def test_a_blinded_boolean_output_falls_back_and_comes_back():
     The reading holds the condition for the whole run, so the signal is
     true except while the mode blinds it: false from t = 2, true again at
     t = 5. muscadet needs an automaton of its own for that return, a
-    PyCATSHOO sensitive method having to hang off something that
+    PyCATSHOO callback having to hang off something that
     announces; here the emission reads the availability directly and the
     engine derives the trigger from that read, on both edges."""
     result = pyraichu.simulate(pyraichu.load_model(a_blinded_signal()), t_max=6.0)

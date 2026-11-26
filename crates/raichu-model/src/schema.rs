@@ -788,7 +788,7 @@ pub struct Automaton {
 }
 
 /// A propagation: declarative effects re-evaluated whenever one of
-/// the attributes read by its expressions changes (the sensitivity set is
+/// the attributes read by its expressions changes (the trigger set is
 /// *derived* from the expressions: no trigger is registered by hand).
 /// Effects run to a fixpoint during the discrete-evolution phase (paper rule `propagate_effects`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

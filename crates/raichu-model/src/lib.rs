@@ -11,7 +11,7 @@
 //! - The model layer is pure data (serde), side-effect-free, validated at
 //!   build time with **typed errors: never a crash on bad input**.
 //! - Behaviour (guards, propagation effects) is expressed as
-//!   serializable expression trees from `raichu-expr`. Sensitivity sets
+//!   serializable expression trees from `raichu-expr`. Trigger sets
 //!   (which attribute change re-triggers which function) are *derived*
 //!   from the expressions, not declared by hand: one modeller error
 //!   class removed.

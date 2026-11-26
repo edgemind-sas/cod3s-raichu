@@ -3,7 +3,7 @@
 //! A propagation's effects are a LEVEL, re-evaluated whenever what
 //! they read changes. A failure mode on the reference engine can also write
 //! on the firing EDGE only (`occ_effects_trans` / `not_occ_effects_trans` in
-//! cod3s, a sensitive method on the transition): the value is written once
+//! cod3s, a callback on the transition): the value is written once
 //! and stays until something else writes it, which is how a detection is
 //! made to latch on a gate nothing resets. Every expected figure is a date
 //! written in the test.

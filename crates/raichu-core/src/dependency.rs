@@ -135,7 +135,7 @@ pub(crate) fn fmu_var(model: &CompiledModel, binding: &raichu_model::FmuBinding)
 
 /// `node` reads what `expr` reads.
 fn reads(node: Node, expr: &CExpr, graph: &mut HashMap<Node, Vec<Node>>) {
-    let (vars, auts) = sensitivity(expr);
+    let (vars, auts) = trigger_reads(expr);
     let entry = graph.entry(node).or_default();
     entry.extend(vars.into_iter().map(Node::Var));
     // Reading another automaton's STATE is an edge of its own: the value
@@ -192,10 +192,10 @@ fn program_edges(program: &CProgram, graph: &mut HashMap<Node, Vec<Node>>) {
 
 /// The variables and automata one expression reads, sorted and
 /// deduplicated.
-pub(crate) fn sensitivity(expr: &CExpr) -> (Vec<usize>, Vec<usize>) {
+pub(crate) fn trigger_reads(expr: &CExpr) -> (Vec<usize>, Vec<usize>) {
     let mut vars = Vec::new();
     let mut auts = Vec::new();
-    expr.collect_sensitivity(&mut vars, &mut auts);
+    expr.collect_trigger_reads(&mut vars, &mut auts);
     vars.sort_unstable();
     vars.dedup();
     auts.sort_unstable();

@@ -516,7 +516,7 @@ _DISCRETE_OUT_ON_TRIGGER = _Vocabulary(
 #: What a CONTINUOUS INPUT has been fed before anything flows. muscadet's
 #: read-back writes the field on every flow and writes `0.0` there, and on an
 #: input it is the seed of the MIRROR `{name}_fed_in` (`FlowModel`, muscadet
-#: `flow.py`), which the sensitive method overwrites with what the connections
+#: `flow.py`), which the flow's callback overwrites with what the connections
 #: delivered. Nothing on this side reads that mirror: a continuous input is
 #: read through its connections precisely because the mirror lags a step, so
 #: the seed says nothing and `0.0` is accepted.

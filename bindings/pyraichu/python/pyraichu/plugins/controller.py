@@ -108,7 +108,7 @@ differently, none of them a weakening.
 
 2. **Blinding needs no automaton of its own.** muscadet carries one two-state
    automaton per boolean output whose state *is* "this output is blinded",
-   because a PyCATSHOO sensitive method must be attached to something that
+   because a PyCATSHOO callback must be attached to something that
    announces, and the returning edge is load-bearing: a signal variable is
    not reinitialised, so releasing the clamp puts nothing back. Here the
    emission reads ``{output}_signal_available`` directly and RAICHU derives

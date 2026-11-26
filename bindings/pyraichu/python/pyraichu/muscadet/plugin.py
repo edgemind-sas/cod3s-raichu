@@ -2601,7 +2601,7 @@ def _expand_objlogicgate(
 
     Each ``out_elements`` entry exports ``result`` through one out port; a
     gate feeding several targets (broadcast) is simply several out ports /
-    connections. Mirrors muscadet's ``result`` variable + sensitive method
+    connections. Mirrors muscadet's ``result`` variable + callback
     (`obj_logic.py:95-138`)."""
     name = spec["name"]
     kind = spec.get("kind", "or")

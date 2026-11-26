@@ -517,8 +517,8 @@ pub enum CStep {
 }
 
 /// Which fixpoint steps (functions, then programs) sit on a cycle of the
-/// step graph: `s → t` when `s` writes an attribute that `t` is sensitive
-/// to. A step that writes an attribute it reads is its own cycle.
+/// step graph: `s → t` when `s` writes an attribute that triggers
+/// `t`. A step that writes an attribute it reads is its own cycle.
 ///
 /// Within one fixpoint the steps are the only writers (transitions fire
 /// between fixpoints), so a step on no cycle is re-enqueued only by a
@@ -587,10 +587,10 @@ pub struct CProgramAffine {
 }
 
 impl CProgramAffine {
-    fn collect_sensitivity(&self, vars: &mut Vec<VarIdx>, auts: &mut Vec<AutIdx>) {
-        self.constant.collect_sensitivity(vars, auts);
+    fn collect_trigger_reads(&self, vars: &mut Vec<VarIdx>, auts: &mut Vec<AutIdx>) {
+        self.constant.collect_trigger_reads(vars, auts);
         for (_, coefficient) in &self.terms {
-            coefficient.collect_sensitivity(vars, auts);
+            coefficient.collect_trigger_reads(vars, auts);
         }
     }
 }
@@ -1116,22 +1116,22 @@ fn torn_reads(explicit: &[CStep]) -> Vec<VarIdx> {
     for (index, step) in explicit.iter().enumerate() {
         vars.clear();
         match step {
-            CStep::Equation { expr, .. } => expr.collect_sensitivity(&mut vars, &mut auts),
+            CStep::Equation { expr, .. } => expr.collect_trigger_reads(&mut vars, &mut auts),
             CStep::Allocate(allocation) => {
                 allocation
                     .available
-                    .collect_sensitivity(&mut vars, &mut auts);
+                    .collect_trigger_reads(&mut vars, &mut auts);
                 vars.extend_from_slice(&allocation.demands);
             }
             // A block reads what its constants and coefficients read;
             // its members appear only as solved columns.
             CStep::Block(block) => {
                 for expr in &block.constants {
-                    expr.collect_sensitivity(&mut vars, &mut auts);
+                    expr.collect_trigger_reads(&mut vars, &mut auts);
                 }
                 for row in &block.coefficients {
                     for (_, coefficient) in row {
-                        coefficient.collect_sensitivity(&mut vars, &mut auts);
+                        coefficient.collect_trigger_reads(&mut vars, &mut auts);
                     }
                 }
             }
@@ -1412,13 +1412,13 @@ fn order_condensation(
     Ok(ordered)
 }
 impl CExpr {
-    /// Collect the attribute and automaton sensitivity sets of this
+    /// Collect the attribute and automaton trigger sets of this
     /// expression (which changes must re-trigger a function reading it).
-    pub(crate) fn collect_sensitivity(&self, vars: &mut Vec<VarIdx>, auts: &mut Vec<AutIdx>) {
+    pub(crate) fn collect_trigger_reads(&self, vars: &mut Vec<VarIdx>, auts: &mut Vec<AutIdx>) {
         self.collect_dependencies(vars, auts, true);
     }
 
-    /// Sweep ordering follows values, whereas the historical sensitivity
+    /// Sweep ordering follows values, whereas the historical trigger
     /// relation also subscribes to sources of a topology-only `count`.
     fn collect_value_reads(&self, vars: &mut Vec<VarIdx>) {
         self.collect_dependencies(vars, &mut Vec::new(), false);
@@ -1575,7 +1575,7 @@ fn expr_is_continuous(expr: &CExpr, continuous_vars: &BTreeSet<VarIdx>) -> bool 
     }
     let mut vars = Vec::new();
     let mut auts = Vec::new();
-    expr.collect_sensitivity(&mut vars, &mut auts);
+    expr.collect_trigger_reads(&mut vars, &mut auts);
     vars.iter().any(|var| continuous_vars.contains(var))
 }
 
@@ -1785,7 +1785,7 @@ impl CompiledModel {
             }
             // Materialised channel attributes sit right after the
             // component's declared ones: ordinary float attributes, so
-            // sensitivity triggers, the journal, the snapshot, indicators
+            // the triggers, the journal, the snapshot, indicators
             // and the estimators need no special case for them.
             for entry in channel_attributes
                 .iter()
@@ -2269,7 +2269,7 @@ impl CompiledModel {
                 let mut auts = Vec::new();
                 allocation
                     .available
-                    .collect_sensitivity(&mut deps, &mut auts);
+                    .collect_trigger_reads(&mut deps, &mut auts);
                 deps.extend_from_slice(&allocation.demands);
                 deps.sort_unstable();
                 deps.dedup();
@@ -2310,7 +2310,7 @@ impl CompiledModel {
             };
             let mut vars = Vec::new();
             let mut auts = Vec::new();
-            guard.collect_sensitivity(&mut vars, &mut auts);
+            guard.collect_trigger_reads(&mut vars, &mut auts);
             vars.sort_unstable();
             vars.dedup();
             auts.sort_unstable();
@@ -2437,14 +2437,14 @@ impl CompiledModel {
             })
             .collect::<Result<Vec<CProgram>, CompileError>>()?;
 
-        // Pass 4: sensitivity sets → trigger tables.
+        // Pass 4: trigger sets → trigger tables.
         let mut var_triggers = vec![Vec::new(); var_names.len()];
         let mut state_triggers = vec![Vec::new(); automata.len()];
         for (fn_idx, function) in functions.iter().enumerate() {
             let mut vars = Vec::new();
             let mut auts = Vec::new();
             for (_, value) in &function.effects {
-                value.collect_sensitivity(&mut vars, &mut auts);
+                value.collect_trigger_reads(&mut vars, &mut auts);
             }
             vars.sort_unstable();
             vars.dedup();
@@ -2460,27 +2460,29 @@ impl CompiledModel {
         for (program_idx, program) in programs.iter().enumerate() {
             let mut vars = Vec::new();
             let mut auts = Vec::new();
-            program.objective.collect_sensitivity(&mut vars, &mut auts);
+            program
+                .objective
+                .collect_trigger_reads(&mut vars, &mut auts);
             for variable in &program.variables {
                 for expr in [variable.lower.as_ref(), variable.upper.as_ref()]
                     .into_iter()
                     .flatten()
                 {
-                    expr.collect_sensitivity(&mut vars, &mut auts);
+                    expr.collect_trigger_reads(&mut vars, &mut auts);
                 }
             }
             for constraint in &program.constraints {
-                constraint.expr.collect_sensitivity(&mut vars, &mut auts);
+                constraint.expr.collect_trigger_reads(&mut vars, &mut auts);
                 for expr in [constraint.lower.as_ref(), constraint.upper.as_ref()]
                     .into_iter()
                     .flatten()
                 {
-                    expr.collect_sensitivity(&mut vars, &mut auts);
+                    expr.collect_trigger_reads(&mut vars, &mut auts);
                 }
             }
             if let CProgramTieBreak::Objectives(objectives) = &program.tie_break {
                 for (_, objective) in objectives {
-                    objective.collect_sensitivity(&mut vars, &mut auts);
+                    objective.collect_trigger_reads(&mut vars, &mut auts);
                 }
             }
             vars.sort_unstable();
