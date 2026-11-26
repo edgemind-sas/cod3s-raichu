@@ -46,7 +46,7 @@ impl<'m> Engine<'m> {
                     self.flush_samples_before(date);
                     self.time = date;
                     self.note_time_change();
-                    self.watched_streak = (date, 0);
+                    self.boundary_streak = (date, 0);
                 }
                 self.flush_samples_through(date);
                 self.record_indicators();
@@ -96,7 +96,7 @@ impl<'m> Engine<'m> {
                 self.flush_samples_before(date);
                 self.time = date;
                 self.note_time_change();
-                self.watched_streak = (date, 0);
+                self.boundary_streak = (date, 0);
             }
             self.flush_samples_through(date);
             self.record_indicators();
@@ -224,22 +224,22 @@ impl<'m> Engine<'m> {
     /// Lists the date-scheduled transitions (delay / inst / stochastic)
     /// with their firing date, the stochastic transitions armed without a
     /// date in deferred mode ([`StochasticDates::Deferred`], date `None`,
-    /// paused ones left out), plus the watched transitions armed in
+    /// paused ones left out), plus the boundary transitions armed in
     /// their source state (date = the current instant when their guard
     /// already holds, else `None`: the boundary being located only
     /// during continuous evolution). A located transition waiting for its
     /// condition to start holding is listed with date `None` and the
-    /// kind of its own law ([`FireableKind::Delay`]), never as watched.
+    /// kind of its own law ([`FireableKind::Delay`]), never as boundary.
     ///
     /// The list is what is **armed**, not only what can be fired now. An
     /// entry with a date is what [`Engine::fire_idx`] fires (advancing to
-    /// that date). An entry without one has no firing date yet: a watched
+    /// that date). An entry without one has no firing date yet: a boundary
     /// boundary or a located condition nobody has crossed yet, which
     /// `fire_idx` refuses with [`EngineError::NotFireable`] leaving the
     /// engine unchanged, or a deferred stochastic transition, fired
     /// through the deferred or operator interfaces that set its date.
     ///
-    /// Sorted for display by date (unlocated watched last), then transition
+    /// Sorted for display by date (unlocated boundary last), then transition
     /// index. Automatic execution also respects arming waves and observer
     /// priority, so its next firing need not be the first displayed entry.
     /// Use [`Engine::next_immediate_transition`] for automatic selection at
@@ -269,13 +269,13 @@ impl<'m> Engine<'m> {
                 });
             }
         }
-        for &idx in &self.model.watched {
+        for &idx in &self.model.boundary {
             let transition = &self.model.transitions[idx];
             if self.states[transition.automaton] != transition.source {
                 continue;
             }
             // An armed located transition is listed with its date among the
-            // scheduled transitions; an idle one waits, like a watched
+            // scheduled transitions; an idle one waits, like a boundary
             // transition, for a crossing nobody has located yet, but keeps
             // the kind of its own law: it fires a delay after the crossing.
             if transition.located.is_some() {
@@ -294,13 +294,13 @@ impl<'m> Engine<'m> {
             // guard type error is treated as "not fireable now" here; it
             // resurfaces when the transition is actually stepped/fired.
             let date = self
-                .is_immediate_watched(idx)
+                .is_immediate_boundary(idx)
                 .unwrap_or(false)
                 .then_some(self.time);
             out.push(Fireable {
                 index: idx,
                 transition: transition.name.clone(),
-                kind: FireableKind::Watched,
+                kind: FireableKind::Boundary,
                 date,
             });
         }
@@ -359,7 +359,7 @@ impl<'m> Engine<'m> {
     /// **Interactive control**: fire a chosen armed transition by index at
     /// its scheduled date (as [`Engine::fire_idx`]), **forcing** its
     /// destination to the target at position `branch` of the compiled
-    /// target list ([`crate::compile::CTransition::targets`], declared
+    /// target list ([`crate::compile::CompiledTransition::targets`], declared
     /// order kept).
     ///
     /// The index form avoids the state-name lookup of
@@ -390,7 +390,7 @@ impl<'m> Engine<'m> {
     ///
     /// "Armed" means date-scheduled (any date, including the `+∞` of a
     /// zero-rate exponential, which this method does fire if asked),
-    /// armed without a date in deferred mode and not paused, or a watched
+    /// armed without a date in deferred mode and not paused, or a boundary
     /// transition whose guard already holds.
     ///
     /// The firing itself draws nothing when `branch` is given, but the
@@ -428,8 +428,8 @@ impl<'m> Engine<'m> {
         };
         if self.is_armed(trans_idx) {
             self.fire(trans_idx, forced)
-        } else if self.is_immediate_watched(trans_idx)? {
-            self.note_watched_firing()?;
+        } else if self.is_immediate_boundary(trans_idx)? {
+            self.note_boundary_firing()?;
             self.fire(trans_idx, forced)
         } else {
             Err(EngineError::NotFireable {
@@ -451,7 +451,7 @@ impl<'m> Engine<'m> {
     ///   attribute or time), the value is the *instantaneous* hazard
     ///   rate at the current instant only: the two cases are told apart
     ///   by the compiled law, `CLaw::ExpVar { continuous, .. }` in
-    ///   [`crate::compile::CTransition::distrib`].
+    ///   [`crate::compile::CompiledTransition::distrib`].
     ///
     /// A rate of zero (a dormant spare) is returned as `Some(0.0)`: the
     /// transition is armed, it simply cannot fire from this state.
@@ -459,7 +459,7 @@ impl<'m> Engine<'m> {
     /// Returns `Ok(None)` for a transition that is not armed (neither
     /// date-scheduled nor running in deferred mode, including a countdown
     /// paused by a `resume` interruption) and for every other law (delay, instantaneous,
-    /// watched, Weibull, lognormal, gamma, uniform, empirical). The law
+    /// boundary, Weibull, lognormal, gamma, uniform, empirical). The law
     /// family and, for an instantaneous branching, its branch
     /// probabilities are read from the public compiled model
     /// ([`crate::compile::CLaw`]), not through the engine.
@@ -503,7 +503,7 @@ impl<'m> Engine<'m> {
 
     /// **Interactive control**: override the scheduled firing date of an
     /// armed transition (manual date-setting). The transition must be
-    /// date-scheduled (`pending`, i.e. not a watched boundary), and the
+    /// date-scheduled (`pending`, i.e. not a boundary), and the
     /// new date must not lie in the past (`>=` the current time).
     ///
     /// The override sticks for delay / inst / fixed-rate transitions
@@ -642,7 +642,7 @@ impl<'m> Engine<'m> {
             indicator_series: self.indicator_series.clone(),
             sampled: self.sampled.clone(),
             sample_cursor: self.sample_cursor,
-            watched_streak: self.watched_streak,
+            boundary_streak: self.boundary_streak,
             firings: self.firings.clone(),
             first_firing: self.first_firing.clone(),
             flow_restarts: self.flow_restarts,
@@ -730,7 +730,7 @@ impl<'m> Engine<'m> {
         self.indicator_series = snap.indicator_series.clone();
         self.sampled = snap.sampled.clone();
         self.sample_cursor = snap.sample_cursor;
-        self.watched_streak = snap.watched_streak;
+        self.boundary_streak = snap.boundary_streak;
         self.firings = snap.firings.clone();
         self.first_firing = snap.first_firing.clone();
         self.flow_restarts = snap.flow_restarts;
@@ -739,10 +739,10 @@ impl<'m> Engine<'m> {
         self.noise_seed = snap.noise_seed;
         self.worklist = snap.worklist.clone();
         self.exposure = snap.exposure.clone();
-        // The indexed watched set is *derived*, never carried: rewinding
+        // The indexed boundary set is *derived*, never carried: rewinding
         // the state rewinds the arming and discards every cached verdict,
         // which is what keeps a replay from a restored snapshot exact.
-        self.rebuild_watched_index();
+        self.rebuild_boundary_index();
     }
 
     /// **Interactive control**: the events fired so far, in
@@ -821,7 +821,7 @@ impl<'m> Engine<'m> {
             series.points.clear();
         }
         self.sample_cursor = 0;
-        self.watched_streak = (0.0, 0);
+        self.boundary_streak = (0.0, 0);
         self.rng = raichu_rng::replica_rng(self.config.seed, self.config.rng_stream);
         self.noise_seed = raichu_rng::replica_noise_seed(self.config.seed, self.config.rng_stream);
         self.worklist.clear();
@@ -838,11 +838,11 @@ impl<'m> Engine<'m> {
     ///
     /// - A date-scheduled transition (delay / inst / stochastic) fires at
     ///   its `pending` date; with continuous evolution the state is
-    ///   integrated up to that date first, and a **watched boundary**
+    ///   integrated up to that date first, and a **boundary**
     ///   crossed en route fires *instead* (a forced jump cannot be
     ///   skipped: the returned event is that boundary transition, whose
     ///   branch is never forced).
-    /// - A watched transition may be fired only while its guard already
+    /// - A boundary transition may be fired only while its guard already
     ///   holds (at the current instant).
     /// - A located transition whose condition stops holding on the way
     ///   (its countdown interrupted, or restarted with a later date) is no
@@ -925,10 +925,10 @@ impl<'m> Engine<'m> {
                 // passed over like every other one before the date asked
                 // for: it stays overdue and fires at the next step. The
                 // advance goes on past it, in one call and so under one
-                // restart budget. A watched boundary is a forced jump and
+                // restart budget. A boundary is a forced jump and
                 // fires instead.
                 if let Some(stop_idx) = self.advance_continuous_with(t_new, Countdowns::PassOver)? {
-                    self.note_watched_firing()?;
+                    self.note_boundary_firing()?;
                     return self.fire(stop_idx, None);
                 }
                 if let Some(before) = before.filter(|_| self.pending[trans_idx] != Some(date)) {
@@ -944,10 +944,10 @@ impl<'m> Engine<'m> {
             }
             self.time = t_new;
             self.note_time_change();
-            self.watched_streak = (t_new, 0);
+            self.boundary_streak = (t_new, 0);
             self.fire(trans_idx, forced)
-        } else if self.is_immediate_watched(trans_idx)? {
-            self.note_watched_firing()?;
+        } else if self.is_immediate_boundary(trans_idx)? {
+            self.note_boundary_firing()?;
             self.fire(trans_idx, forced)
         } else {
             Err(EngineError::NotFireable {
@@ -1012,12 +1012,12 @@ impl<'m> Engine<'m> {
             })
     }
 
-    /// Whether `trans_idx` is a watched transition sitting in its source
+    /// Whether `trans_idx` is a boundary transition sitting in its source
     /// state with its guard already true: i.e. fireable at the current
     /// instant.
-    fn is_immediate_watched(&self, trans_idx: TransIdx) -> Result<bool, EngineError> {
+    fn is_immediate_boundary(&self, trans_idx: TransIdx) -> Result<bool, EngineError> {
         let transition = &self.model.transitions[trans_idx];
-        if !matches!(transition.distrib, CLaw::Watched { .. }) {
+        if !matches!(transition.distrib, CLaw::Boundary { .. }) {
             return Ok(false);
         }
         if self.states[transition.automaton] != transition.source {
@@ -1186,7 +1186,7 @@ impl<'m> Engine<'m> {
             // zero-order-held inputs. A choice or remaining same-date firing
             // must be resolved first, including after a bounded continuation.
             if self.host.is_some()
-                && self.immediate_watched()?.is_none()
+                && self.immediate_boundary()?.is_none()
                 && !self
                     .next_pending()
                     .is_some_and(|(_, pending)| pending <= self.time)
@@ -1202,7 +1202,7 @@ impl<'m> Engine<'m> {
                 .min(fmu_point.unwrap_or(f64::INFINITY));
             let (_, reason) = self.probe_inner(bound)?;
             let idx = match reason {
-                ProbeStop::Watched { index } | ProbeStop::Deterministic { index } => Some(index),
+                ProbeStop::Boundary { index } | ProbeStop::Deterministic { index } => Some(index),
                 _ => None,
             };
             if let Some(idx) = idx {
@@ -1211,8 +1211,8 @@ impl<'m> Engine<'m> {
                     stop = OperatorStop::Choice;
                     break;
                 }
-                if matches!(reason, ProbeStop::Watched { .. }) {
-                    self.note_watched_firing()?;
+                if matches!(reason, ProbeStop::Boundary { .. }) {
+                    self.note_boundary_firing()?;
                 }
                 events.push(self.fire(idx, None)?);
                 event_instant = Some(self.time);

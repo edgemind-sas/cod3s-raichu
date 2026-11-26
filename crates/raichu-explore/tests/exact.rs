@@ -47,7 +47,7 @@ fn component(name: &str, automaton: Automaton) -> Component {
         automata: vec![automaton],
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: vec![],
+        propagations: vec![],
     }
 }
 
@@ -531,9 +531,9 @@ fn a_model_declaring_an_ode_is_refused_before_exploration() {
 }
 
 #[test]
-fn the_domain_report_names_a_reachable_watched_transition_and_a_time_read() {
+fn the_domain_report_names_a_reachable_boundary_transition_and_a_time_read() {
     let mut m = parallel_pair(0.1, 0.2);
-    let mut w = unit("W", Distrib::Watched, None, false);
+    let mut w = unit("W", Distrib::Boundary, None, false);
     w.attributes.push(Attribute {
         name: "x".into(),
         kind: AttrKind::Float,
@@ -554,7 +554,7 @@ fn the_domain_report_names_a_reachable_watched_transition_and_a_time_read() {
     m.components.push(clock);
     let report = exact_domain_report(&compile(&m));
     assert!(
-        report.contains(&DomainViolation::Watched {
+        report.contains(&DomainViolation::Boundary {
             transition: "W.fail.occ".into()
         }),
         "{report:?}"

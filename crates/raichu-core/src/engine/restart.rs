@@ -17,7 +17,7 @@ impl<'m> Engine<'m> {
     /// Pending stochastic durations are redrawn conditional on their elapsed
     /// active age, with survival `S(a + r) / S(a)`. A paused `resume` clock
     /// keeps its age and is redrawn when it rearms. Deterministic dates and
-    /// watched transitions are preserved. Recorded history is discarded.
+    /// boundary transitions are preserved. Recorded history is discarded.
     /// Unlike [`Engine::from_snapshot`], this does not replay the old future.
     ///
     /// Call at a completed instant, after all simultaneous events have fired.

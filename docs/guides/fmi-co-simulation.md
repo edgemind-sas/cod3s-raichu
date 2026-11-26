@@ -133,14 +133,14 @@ A unit with step `h` has regular points at `t0 + k × h`, using an integer grid
 index. RAICHU holds its outputs between points. At a point, model transitions
 due at that date fire first; the unit then advances with the inputs sampled at
 the previous point. RAICHU writes all due units' outputs together, settles
-sensitive functions and watched guards, then samples inputs for the next
+propagations and boundary guards, then samples inputs for the next
 interval. Several units therefore use Jacobi coupling: changing their order
 in the document does not change the result.
 
 If a model event changes an input between regular points, a unit that declares
 variable communication step size receives an additional point at the event
 date. Fixed-step units keep their previously sampled input until the next
-regular point. An additional point never shifts the regular grid. A watched
+regular point. An additional point never shifts the regular grid. A boundary
 threshold on an FMU output can fire only when that output changes at a point;
 its date resolution is the communication step, not RAICHU's ODE event
 tolerance.

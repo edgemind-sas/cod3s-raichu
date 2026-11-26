@@ -4,7 +4,7 @@ Eight findings of one review pass, each pinned by the property it broke
 rather than by the diff that closed it. Three of them were conservation
 holes, and those three are asserted **in the quantity**: what entered a
 component equals what left it plus what it stored. A test that only
-watched an exception be raised would keep passing if the refusal were
+boundary an exception be raised would keep passing if the refusal were
 later relaxed for the wrong reason.
 
 - a capacity and a rule set on one flow of one component made matter,
@@ -683,7 +683,7 @@ def test_a_guard_read_over_a_measurement_link_is_located_at_the_crossing():
         ("vol_fill_w", 0.05),
     ],
 )
-def test_every_measurement_channel_makes_the_mode_transition_watched(channel, value):
+def test_every_measurement_channel_makes_the_mode_transition_boundary(channel, value):
     """The cheap regression beside the located one, over the whole
     vocabulary of a link: each of the four channels is a published
     capacity level or a fill computed from one, so each is continuous and
@@ -693,7 +693,7 @@ def test_every_measurement_channel_makes_the_mode_transition_watched(channel, va
     )
     reader = next(c for c in document["components"] if c["name"] == "R")
     mode = next(a for a in reader["automata"] if a["name"] == "duty_mode")
-    assert {t["distrib"] for t in mode["transitions"]} == {"watched"}
+    assert {t["distrib"] for t in mode["transitions"]} == {"boundary"}
 
 
 def a_component_guarded_on(kind: str, op: str) -> mu.ObjFlow:

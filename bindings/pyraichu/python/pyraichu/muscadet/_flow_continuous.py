@@ -115,7 +115,7 @@ class _ContinuousFlowsMixin:
         noise (`noise_amplitude`, `noise_time_scale`, `noise_key`, the
         key defaulting to :func:`flow_noise_key` of this flow).
         A Python callable is refused: continuity is an attestation this
-        layer cannot make for the modeller, and it derives no watched
+        layer cannot make for the modeller, and it derives no boundary
         transition from a function's breakpoints. The profile composes
         with the derating rate by **product**, never by minimum: an
         output at 0.3 of its profile that is also derated to 0.5

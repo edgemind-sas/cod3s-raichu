@@ -8,7 +8,7 @@ use crate::strict::{located, typed};
 use crate::template::{bind, substitute, Ctx, Env};
 use raichu_expr::Expr;
 use raichu_model::{
-    Allocation, Attribute, Automaton, Component, Equation, Interface, Port, SensitiveFunction,
+    Allocation, Attribute, Automaton, Component, Equation, Interface, Port, Propagation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -27,8 +27,8 @@ pub(crate) struct BodyParts {
     interfaces: Vec<Interface>,
     #[serde(default)]
     automata: Vec<Automaton>,
-    #[serde(default)]
-    sensitive_functions: Vec<SensitiveFunction>,
+    #[serde(default, alias = "sensitive_functions")]
+    propagations: Vec<Propagation>,
     #[serde(default)]
     equations: Vec<Equation>,
     #[serde(default)]
@@ -158,7 +158,7 @@ impl Category {
             Category::Port => "port",
             Category::Interface => "interface",
             Category::Automaton => "automaton",
-            Category::Function => "sensitive function",
+            Category::Function => "propagation",
             Category::Equation => "equation of",
             Category::Allocation => "allocation",
         }
@@ -200,7 +200,7 @@ fn names_of(parts: &BodyParts) -> Vec<(Category, String)> {
     );
     out.extend(
         parts
-            .sensitive_functions
+            .propagations
             .iter()
             .map(|f| (Category::Function, f.name.clone())),
     );
@@ -264,9 +264,7 @@ fn merge(into: &mut Piece, other: Piece, ctx: &Ctx<'_>) -> Result<(), ExpandErro
     into.parts.ports.extend(parts.ports);
     into.parts.interfaces.extend(parts.interfaces);
     into.parts.automata.extend(parts.automata);
-    into.parts
-        .sensitive_functions
-        .extend(parts.sensitive_functions);
+    into.parts.propagations.extend(parts.propagations);
     into.parts.equations.extend(parts.equations);
     into.parts.allocations.extend(parts.allocations);
     into.targetable.extend(other.targetable);
@@ -442,7 +440,7 @@ fn check_self_references(
             }
         }
     }
-    for function in &component.sensitive_functions {
+    for function in &component.propagations {
         for effect in &function.effects {
             exprs.push(&effect.value);
             targets.push(&effect.target);
@@ -575,7 +573,7 @@ pub(crate) fn instantiate(
         ports: parts.ports,
         interfaces: parts.interfaces,
         automata: parts.automata,
-        sensitive_functions: parts.sensitive_functions,
+        propagations: parts.propagations,
         equations: parts.equations,
         allocations: parts.allocations,
     };

@@ -52,7 +52,7 @@
 //! discretised model, and the discretisation error is estimated by
 //! refinement, value by value.
 
-use raichu_core::compile::CIndicatorTarget;
+use raichu_core::compile::CompiledIndicatorTarget;
 use raichu_core::{CompiledModel, Engine, EngineError};
 use raichu_expr::Value;
 use raichu_numeric::ProfilePoint;
@@ -152,7 +152,10 @@ impl IndicatorPlan {
                     ),
                 ));
             };
-            if !matches!(model.indicators[idx].target, CIndicatorTarget::State(..)) {
+            if !matches!(
+                model.indicators[idx].target,
+                CompiledIndicatorTarget::State(..)
+            ) {
                 return Err(invalid(
                     "indicators",
                     format!(

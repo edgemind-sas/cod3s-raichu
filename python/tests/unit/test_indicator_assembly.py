@@ -348,7 +348,7 @@ def test_an_indicator_the_rebuild_cannot_re_emit_is_kept():
 
 
 def a_gauged_cistern():
-    """A volume authored class-side, watched by a plugin controller.
+    """A volume authored class-side, boundary by a plugin controller.
 
     The plugin section holds the CONTROLLER alone, so nothing engages the
     continuous rebuild: this is the expansion's FIRST pass, where a plugin

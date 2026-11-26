@@ -30,7 +30,7 @@ def _const(value: float) -> dict:
 
 
 def short_episode_model() -> pyraichu.Model:
-    """`x = sin(t)` and a watched transition into `seen` while `x` is within
+    """`x = sin(t)` and a boundary transition into `seen` while `x` is within
     `1 - cos(HALF_WIDTH)` of its apex, a margin that holds for 1e-4."""
     return pyraichu.load_model(
         {
@@ -58,7 +58,7 @@ def short_episode_model() -> pyraichu.Model:
                                     "name": "cross",
                                     "source": "waiting",
                                     "targets": ["seen"],
-                                    "distrib": "watched",
+                                    "distrib": "boundary",
                                     "guard": {
                                         "op": "cmp",
                                         "cmp": "ge",

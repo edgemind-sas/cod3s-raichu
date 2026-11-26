@@ -492,7 +492,7 @@ class IndicatorEstimate:
     sojourn_quantiles: dict[float, list[float]]
     #: Mean number of departures from zero by each instant: moves of the
     #: value from exactly 0 to any non-zero value, sign ignored, the initial
-    #: value never counted (the reference engine's ``nb_visits``, which a
+    #: value never counted (the reference engine's visit count, which a
     #: cod3s/muscadet ``nb-occurrences`` indicator is defined against).
     #: Unlike ``nb_occurrences_mean`` it does not count an active initial
     #: value, and it counts a move to a negative value.
@@ -501,7 +501,7 @@ class IndicatorEstimate:
     zero_departures_ci: ConfidenceInterval = field(default_factory=lambda: _absent_interval())
     zero_departures_extremes: Extremes = field(default_factory=lambda: Extremes(min=[], max=[]))
     #: Probability of having been non-zero at least once by each instant,
-    #: the initial value included (the reference engine's ``realized``,
+    #: the initial value included (the reference engine's has-been-non-zero flag,
     #: which a cod3s/muscadet ``had_value`` indicator is defined against).
     #: Unlike ``reached_mean`` it holds for a value that is only ever
     #: negative.
@@ -756,7 +756,7 @@ def _warn_reduction(reduction: dict[str, Any], full_report: str) -> None:
         else:
             cause = (
                 "Either a repaired failure has an effect the per-group decision does not see "
-                "(a latch or a counter a sensitive function keeps; declare "
+                "(a latch or a counter a propagation keeps; declare "
                 "`cycle_cancellation: never` on its group)"
             )
         warnings.warn(
@@ -1322,7 +1322,7 @@ def read_exploration(source: str | Path) -> Exploration:
 def exploration_domain(model: Model) -> list[dict[str, Any]]:
     """Screen ``model`` for the exact exploration domain without exploring
     it: every reason found statically that it is outside (an ODE, a
-    watched transition its automaton can reach, an expression reading
+    boundary transition its automaton can reach, an expression reading
     time), each ``{kind, ..., message}``. Empty when none is found; a law
     outside the domain (delay, Weibull, ...) is only found during a run,
     and only when it becomes armed.
@@ -1595,7 +1595,7 @@ def fault_tree(
     The explanation is backward chaining: a state is entered by a
     transition whose draw is a basic event, from a source state that has
     to be reached, under a guard that has to hold. An attribute a
-    sensitive function or an explicit equation computes is **unrolled**
+    propagation or an explicit equation computes is **unrolled**
     into what computes it, down to the states (a muscadet flow variable
     is one); an attribute nothing writes keeps its initial value, or the
     value ``profile`` gives it by qualified name (``"component.attribute"``).
@@ -2283,8 +2283,8 @@ def unfed_triggers(model: Model) -> list[dict]:
     ``P.E_capability_in`` rather than ``P.E_in``. The fold therefore
     **crosses a definition** to reach the port, on one condition: the
     attribute must have exactly one writer and that writer must be an
-    explicit equation. An attribute an ODE integrates, a sensitive
-    function assigns or two writers share moves, and the fold stops at
+    explicit equation. An attribute an ODE integrates, a
+    propagation assigns or two writers share moves, and the fold stops at
     it; an attribute *nothing* writes is the opposite case and is read as
     the constant it is.
 
@@ -2301,7 +2301,7 @@ def unfed_triggers(model: Model) -> list[dict]:
     inside the guard, and ``add_rule_set`` on a **continuous** condition,
     through the equation of the input it thresholds. The same rule set on
     a boolean condition stays out of reach, ``{flow}_fed_in`` being
-    assigned by a sensitive function.
+    assigned by a propagation.
 
     Out of reach, and with nothing there to report. A boolean in-flow
     answers for its own emptiness: muscadet gives it a declared
@@ -2426,8 +2426,8 @@ class Fireable:
 
     index: int
     transition: str
-    kind: str  # "delay" | "stochastic" | "inst" | "watched"
-    # Firing date. None when the transition has none yet: a watched
+    kind: str  # "delay" | "stochastic" | "inst" | "boundary"
+    # Firing date. None when the transition has none yet: a boundary
     # boundary or a located condition not crossed yet (``fire`` refuses
     # it), or a deferred stochastic transition (dated by the deferred or
     # operator interfaces).
@@ -2436,7 +2436,7 @@ class Fireable:
     def __repr__(self) -> str:
         if self.date is not None:
             when = f"t={self.date}"
-        elif self.kind == "watched":
+        elif self.kind == "boundary":
             when = "boundary"
         elif self.kind == "stochastic":
             when = "deferred"

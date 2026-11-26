@@ -44,7 +44,7 @@ def _target(name):
         "ports": [],
         "interfaces": [],
         "automata": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
 
@@ -105,10 +105,10 @@ def _model(objects, targets=("A", "B")):
 
 
 def _writers(expanded):
-    """`(component, attribute)` → the sensitive functions writing it."""
+    """`(component, attribute)` → the propagations writing it."""
     writers: dict[tuple[str, str], list[str]] = {}
     for component in expanded["components"]:
-        for function in component.get("sensitive_functions") or []:
+        for function in component.get("propagations") or []:
             for effect in function.get("effects") or []:
                 key = (effect["target"]["component"], effect["target"]["attribute"])
                 writers.setdefault(key, []).append(
@@ -164,7 +164,7 @@ def test_one_writer_per_reinitialized_attribute():
         effect["target"]["component"]: effect["value"]
         for component in expanded["components"]
         if component["name"] == "mode_a"
-        for function in component["sensitive_functions"]
+        for function in component["propagations"]
         for effect in function["effects"]
     }
     # The rest branch is now reached only when NEITHER mode holds the
@@ -340,7 +340,7 @@ def test_the_merge_survives_the_continuous_rebuild():
     assert _writers(expanded)[("B1", "Elec_fed_available_out")] == ["B1.apply_mode_a"]
     written = next(
         effect
-        for function in target["sensitive_functions"]
+        for function in target["propagations"]
         if function["name"] == "apply_mode_a"
         for effect in function["effects"]
     )
@@ -388,7 +388,7 @@ def _gain_store():
         "ports": [],
         "interfaces": [],
         "automata": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
 

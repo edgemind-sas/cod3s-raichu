@@ -16,14 +16,14 @@
 use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError, FireableKind};
 use raichu_expr::{Assignment, AttrRef, Expr, StateRef, Value};
 use raichu_model::{
-    AttrKind, Attribute, Automaton, Component, Distrib, Equation, EquationKind, Model,
-    SensitiveFunction, Transition,
+    AttrKind, Attribute, Automaton, Component, Distrib, Equation, EquationKind, Model, Propagation,
+    Transition,
 };
 
 /// A component with a single two-state failure automaton `fail`
 /// (`ok → nok` after `ttf`, `nok → ok` after `ttr`), with a boolean
-/// attribute `up` mirrored from the automaton state by a sensitive
-/// function so state changes are observable through `attribute`.
+/// attribute `up` mirrored from the automaton state by a
+/// propagation so state changes are observable through `attribute`.
 fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
     Component {
         name: name.into(),
@@ -72,7 +72,7 @@ fn failing_component(name: &str, ttf: f64, ttr: f64) -> Component {
         // `up` reflects the automaton: true iff `fail` sits in `ok`.
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: vec![SensitiveFunction {
+        propagations: vec![Propagation {
             name: "reflect".into(),
             effects: vec![raichu_expr::Assignment {
                 target: raichu_expr::AttrRef {
@@ -249,7 +249,7 @@ fn interactive_firing_reaches_the_same_state_as_stepping() {
 /// / `failure` mirrored from the outcome state. `ok_prob` is the first
 /// branch probability (the `ko` complement is reconstructed at compile).
 fn demand_model(ok_prob: f64) -> Model {
-    let reflect = |attr: &str, state: &str| SensitiveFunction {
+    let reflect = |attr: &str, state: &str| Propagation {
         name: format!("reflect_{attr}"),
         effects: vec![Assignment {
             target: AttrRef {
@@ -307,7 +307,7 @@ fn demand_model(ok_prob: f64) -> Model {
             }],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![reflect("success", "ok"), reflect("failure", "ko")],
+            propagations: vec![reflect("success", "ok"), reflect("failure", "ko")],
         }],
         connections: vec![],
         indicators: vec![],
@@ -544,7 +544,7 @@ fn input_requires_explicit_permission_and_replays_from_snapshot() {
 }
 
 #[test]
-fn input_change_fires_watched_guard_at_current_point() {
+fn input_change_fires_boundary_guard_at_current_point() {
     let mut model = two_component_model();
     model.components[0].attributes.push(Attribute {
         name: "trigger".into(),
@@ -552,7 +552,7 @@ fn input_change_fires_watched_guard_at_current_point() {
         init: Value::Float(0.0),
     });
     let transition = &mut model.components[0].automata[0].transitions[0];
-    transition.distrib = Distrib::Watched;
+    transition.distrib = Distrib::Boundary;
     transition.guard = Some(Expr::Cmp {
         cmp: raichu_expr::CmpOp::Ge,
         lhs: Box::new(Expr::attr("A", "trigger")),
@@ -747,7 +747,7 @@ fn operator_stock_model() -> Model {
     Model::from_json(r#"{"name":"operator_stock","components":[
       {"name":"stock","attributes":[{"name":"level","kind":"float","init":{"kind":"float","value":4.0}}],
        "equations":[{"target":"level","kind":"ode","expr":{"op":"if","cond":{"op":"state_active","state":{"component":"stock","automaton":"bound","state":"full"}},"then":{"op":"const","value":{"kind":"float","value":-1.0}},"otherwise":{"op":"const","value":{"kind":"float","value":0.0}}}}],
-       "automata":[{"name":"bound","states":["full","empty"],"init":"full","transitions":[{"name":"empty","source":"full","targets":["empty"],"distrib":"watched","guard":{"op":"cmp","cmp":"le","lhs":{"op":"attr","attr":{"component":"stock","attribute":"level"}},"rhs":{"op":"const","value":{"kind":"float","value":0.0}}}}]}]},
+       "automata":[{"name":"bound","states":["full","empty"],"init":"full","transitions":[{"name":"empty","source":"full","targets":["empty"],"distrib":"boundary","guard":{"op":"cmp","cmp":"le","lhs":{"op":"attr","attr":{"component":"stock","attribute":"level"}},"rhs":{"op":"const","value":{"kind":"float","value":0.0}}}}]}]},
       {"name":"failure","automata":[{"name":"mode","states":["ok","failed"],"init":"ok","transitions":[{"name":"fail","source":"ok","targets":["failed"],"distrib":"exp","rate":0.5}]}]}
     ]}"#).unwrap()
 }
@@ -903,39 +903,37 @@ fn operator_countdowns_follow_each_interruption_policy() {
 fn operator_firing_error_rolls_back_native_mutations() {
     let mut model = two_component_model();
     // Initialization is stable; the fired state enables a genuine
-    // sensitive-action oscillation, after native state/time/history changed.
+    // propagation oscillation, after native state/time/history changed.
     model.components[0].attributes.push(Attribute {
         name: "loop".into(),
         kind: AttrKind::Bool,
         init: Value::Bool(false),
     });
-    model.components[0]
-        .sensitive_functions
-        .push(SensitiveFunction {
-            name: "oscillate".into(),
-            effects: vec![Assignment {
-                target: AttrRef {
-                    component: "A".into(),
-                    attribute: "loop".into(),
-                },
-                value: Expr::If {
-                    cond: Box::new(Expr::StateActive {
-                        state: StateRef {
-                            component: "A".into(),
-                            automaton: "fail".into(),
-                            state: "nok".into(),
-                        },
-                    }),
-                    then: Box::new(Expr::Bool {
-                        bool_op: raichu_expr::BoolOp::Not,
-                        args: vec![Expr::attr("A", "loop")],
-                    }),
-                    otherwise: Box::new(Expr::Const {
-                        value: Value::Bool(false),
-                    }),
-                },
-            }],
-        });
+    model.components[0].propagations.push(Propagation {
+        name: "oscillate".into(),
+        effects: vec![Assignment {
+            target: AttrRef {
+                component: "A".into(),
+                attribute: "loop".into(),
+            },
+            value: Expr::If {
+                cond: Box::new(Expr::StateActive {
+                    state: StateRef {
+                        component: "A".into(),
+                        automaton: "fail".into(),
+                        state: "nok".into(),
+                    },
+                }),
+                then: Box::new(Expr::Bool {
+                    bool_op: raichu_expr::BoolOp::Not,
+                    args: vec![Expr::attr("A", "loop")],
+                }),
+                otherwise: Box::new(Expr::Const {
+                    value: Value::Bool(false),
+                }),
+            },
+        }],
+    });
     let compiled = compile(&model);
     let mut engine = operator_engine(&compiled);
     assert!(engine.advance_operator_to(10.0, 100).is_err());

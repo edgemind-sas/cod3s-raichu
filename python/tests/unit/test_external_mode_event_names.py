@@ -42,7 +42,7 @@ def _target(name):
         "ports": [],
         "interfaces": [],
         "automata": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
 

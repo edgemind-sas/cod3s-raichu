@@ -1,5 +1,5 @@
 //! The continuous system handed to the ODE solver: right-hand sides,
-//! the watched-boundary event functions, and the frozen flow picture a
+//! the boundary event functions, and the frozen flow picture a
 //! segment integrates against.
 
 use super::*;
@@ -22,7 +22,7 @@ pub(super) struct FrozenFlow<'m> {
 
 /// Which crossing of a monitored margin ends the segment.
 ///
-/// A watched transition and an idle located transition wait for their
+/// A boundary transition and an idle located transition wait for their
 /// condition to start holding. A located transition whose countdown is
 /// running waits for it to stop holding, which interrupts the countdown;
 /// under the `continue` policy nothing interrupts it, so its margin is
@@ -42,7 +42,7 @@ pub(super) struct ContinuousSystem<'m> {
     pub(super) model: &'m CompiledModel,
     pub(super) vars: Vec<Value>,
     pub(super) states: Vec<StateIdx>,
-    /// Active watched transitions and located transitions monitored this
+    /// Active boundary transitions and located transitions monitored this
     /// segment.
     pub(super) margins: Vec<TransIdx>,
     /// Which crossing of each entry of `margins` ends the segment.
@@ -51,13 +51,13 @@ pub(super) struct ContinuousSystem<'m> {
     /// `(transition, remaining threshold E − H)`. Each occupies one
     /// auxiliary state slot after the ODE attributes, integrating
     /// `dH/dt = λ(x)`; the firing is the event `H − (E − H₀) = 0`,
-    /// located exactly like a watched boundary crossing (`reschedule_modifiable`
+    /// located exactly like a boundary crossing (`reschedule_modifiable`
     /// under continuous evolution).
     pub(super) hazards: Vec<(TransIdx, f64)>,
     /// The **frozen active set** of this segment: one entry per
     /// distribution operator, each carrying the saturation class of every
     /// edge as it was settled at the segment boundary. Their margins ride
-    /// alongside the watched ones, so the instant the frozen pattern
+    /// alongside the boundary ones, so the instant the frozen pattern
     /// stops holding is *located*, not noticed at the next discrete date.
     pub(super) flows: Vec<FrozenFlow<'m>>,
     /// The threshold indicators whose flips this segment locates, as
@@ -401,7 +401,7 @@ impl OdeSystem for ContinuousSystem<'_> {
         for (slot, (_, remaining)) in self.hazards.iter().enumerate() {
             out[n_margins + slot] = y[ode_len + slot] - remaining;
         }
-        // Active-set margins. They are watched guards like the ones
+        // Active-set margins. They are boundary guards like the ones
         // above: the segment ends where the frozen saturation pattern
         // stops holding, and the crossing instant is bisected to the same
         // event tolerance.

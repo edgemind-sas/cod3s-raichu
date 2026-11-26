@@ -23,7 +23,7 @@ over a whole winter. The parameters are illustrative.
 | Room | $\dfrac{dT}{dt} = P - 0.1\,\big(T - T_{out}(t)\big)$: heating minus losses, which relax the room to the outside in about 10 h |
 | Outside | $T_{out}(t) = 2 + 6 \sin\big(2\pi (t - 9)/24\big)$ °C, peaking at 15:00 at 8 °C, lowest at 03:00 at −4 °C |
 | Heaters | each running and healthy heater gives $P = 3$ °C/h, enough on its own to hold the room on the coldest night |
-| Thermostats | main: on below 19 °C, off above 21 °C. Backup: on below 17 °C, off above 20 °C. Both are watched crossings |
+| Thermostats | main: on below 19 °C, off above 21 °C. Backup: on below 17 °C, off above 20 °C. Both are boundary crossings |
 | Failures | each heater fails at rate 1/500 h⁻¹, whether it runs or not, and is repaired at rate 1/24 h⁻¹ |
 | Feared event | the room under 10 °C (*frozen*), cleared above 12 °C |
 | Initial state | 20 °C at midnight, main heater on, backup off, both healthy |
@@ -62,7 +62,7 @@ temperature = attr("room", "temperature")
 ```
 
 A heater has two automata: its thermostat, whose two transitions are
-**watched** crossings of the room temperature, and its health, whose
+**boundary** crossings of the room temperature, and its health, whose
 failure and repair are exponential. The pair is `monitored` and grouped
 in one `cycle_group`, so a sequence campaign records them. It does not
 cancel a heater failure repaired before the feared event: the room
@@ -83,9 +83,9 @@ def heater(name, on_below, off_above, running):
             {"name": "thermostat", "states": ["on", "off"],
              "init": "on" if running else "off", "transitions": [
                 {"name": "switch_off", "source": "on", "targets": ["off"],
-                 "guard": cmp("gt", temperature, num(off_above)), "distrib": "watched"},
+                 "guard": cmp("gt", temperature, num(off_above)), "distrib": "boundary"},
                 {"name": "switch_on", "source": "off", "targets": ["on"],
-                 "guard": cmp("lt", temperature, num(on_below)), "distrib": "watched"},
+                 "guard": cmp("lt", temperature, num(on_below)), "distrib": "boundary"},
             ]},
             {"name": "health", "states": ["ok", "failed"], "init": "ok", "transitions": [
                 {"name": "fail", "source": "ok", "targets": ["failed"],
@@ -94,7 +94,7 @@ def heater(name, on_below, off_above, running):
                  "distrib": "exp", "rate": REPAIR, "monitored": True, "cycle_group": name},
             ]},
         ],
-        "sensitive_functions": [{"name": "update_power", "effects": [
+        "propagations": [{"name": "update_power", "effects": [
             {"target": {"component": name, "attribute": "power"},
              "value": {"op": "if", "cond": delivering, "then": num(POWER), "otherwise": num(0.0)}}]}],
     }
@@ -120,9 +120,9 @@ room = {
     "ports": [{"name": "power_in", "dir": "in"}],
     "automata": [{"name": "comfort", "states": ["ok", "frozen"], "init": "ok", "transitions": [
         {"name": "freeze", "source": "ok", "targets": ["frozen"],
-         "guard": cmp("lt", temperature, num(FROZEN)), "distrib": "watched"},
+         "guard": cmp("lt", temperature, num(FROZEN)), "distrib": "boundary"},
         {"name": "thaw", "source": "frozen", "targets": ["ok"],
-         "guard": cmp("gt", temperature, num(THAWED)), "distrib": "watched"},
+         "guard": cmp("gt", temperature, num(THAWED)), "distrib": "boundary"},
     ]}],
     # dT/dt = heating − LOSS · (T − T_outside(t))
     "equations": [{"target": "temperature", "kind": "ode", "expr": {"op": "sub",

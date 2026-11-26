@@ -431,7 +431,7 @@
           }
          ]
         },
-        "distrib": "watched"
+        "distrib": "boundary"
        },
        {
         "name": "fill_up",
@@ -535,7 +535,7 @@
           }
          ]
         },
-        "distrib": "watched"
+        "distrib": "boundary"
        },
        {
         "name": "restart",
@@ -880,7 +880,7 @@
       }
      }
     ],
-    "sensitive_functions": [
+    "propagations": [
      {
       "name": "production",
       "effects": [

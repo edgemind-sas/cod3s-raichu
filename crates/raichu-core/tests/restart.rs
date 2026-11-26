@@ -429,12 +429,12 @@ fn step_until_returns_one_event_and_leaves_later_dates_untouched() {
 }
 
 #[test]
-fn step_until_integrates_and_locates_watched_guards() {
+fn step_until_integrates_and_locates_boundary_guards() {
     let model: Model = serde_json::from_value(json!({"name":"ramp", "components":[{
         "name":"ramp", "attributes":[{"name":"x","kind":"float","init":{"kind":"float","value":0.0}}],
         "equations":[{"target":"x","kind":"ode","expr":constant(1.0)}],
         "automata":[{"name":"phase","states":["before","after"],"init":"before","transitions":[{
-            "name":"cross","source":"before","targets":["after"],"distrib":"watched",
+            "name":"cross","source":"before","targets":["after"],"distrib":"boundary",
             "guard":{"op":"cmp","cmp":"ge","lhs":{"op":"attr","attr":{"component":"ramp","attribute":"x"}},"rhs":constant(2.0)}
         }]}]
     }]})).unwrap();

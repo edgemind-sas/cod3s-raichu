@@ -7,7 +7,7 @@
 //! The channel is declared once, on the producing port; the compiler
 //! materialises one float attribute per (connection, channel) on the
 //! producing component. Materialised attributes are ordinary float
-//! attributes: they are written by equations and sensitive functions,
+//! attributes: they are written by equations and propagations,
 //! they appear in the causal journal, and they ride in the snapshot.
 //!
 //! These tests also pin the counted-work counters, the machine-independent
@@ -437,8 +437,8 @@ fn a_channel_list_on_an_in_port_is_rejected() {
     );
 }
 
-/// A materialised attribute is an ordinary float attribute: a sensitive
-/// function writes it, the causal journal records the write under the
+/// A materialised attribute is an ordinary float attribute: a
+/// propagation writes it, the causal journal records the write under the
 /// stable topology-derived name, and the value rides in the snapshot.
 const JOURNAL_MODEL: &str = r#"
 {
@@ -460,7 +460,7 @@ const JOURNAL_MODEL: &str = r#"
             "distrib": "delay", "time": 2.0}
          ]}
       ],
-      "sensitive_functions": [
+      "propagations": [
         {"name": "allocate",
          "effects": [
            {"target": {"component": "producer", "attribute": "out__share__consumer__input"},

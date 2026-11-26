@@ -1,6 +1,6 @@
 //! # raichu-numeric: continuous evolution
 //!
-//! ODE integration with dense output and event location for watched
+//! ODE integration with dense output and event location for boundary
 //! transitions (the `schedule_boundary` rule). Two separate controls
 //! govern it: the **detection resolution** (`max_step`, `sub_samples`,
 //! `event_resolution`) sets the spacing at which boundary margins are

@@ -163,7 +163,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 },
                 {
                   "name": "stop",
@@ -218,7 +218,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 },
                 {
                   "name": "stuck_on_from_on",
@@ -727,7 +727,7 @@
               ]
             }
           ],
-          "sensitive_functions": [
+          "propagations": [
             {
               "name": "update_flowing",
               "effects": [
@@ -956,7 +956,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 },
                 {
                   "name": "overflow",
@@ -984,7 +984,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 },
                 {
                   "name": "overheat",
@@ -1012,7 +1012,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 }
               ]
             }

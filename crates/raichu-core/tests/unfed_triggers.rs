@@ -18,7 +18,7 @@ use raichu_core::{unfed_triggers, CompiledModel};
 use raichu_expr::{AggOp, Assignment, AttrRef, BoolOp, CmpOp, Expr, PortRef, Value};
 use raichu_model::{
     AttrKind, Attribute, Automaton, Component, Connection, Distrib, Equation, EquationKind, Model,
-    Port, PortDir, SensitiveFunction, Transition,
+    Port, PortDir, Propagation, Transition,
 };
 
 #[path = "support/unfed_standby.rs"]
@@ -181,8 +181,8 @@ fn a_guard_that_also_reads_something_moving_is_silent() {
     // and a diagnostic here would be a guess.
     //
     // "Moving" is a property of the model and not of the word: the
-    // attribute is read by the guard AND written by a sensitive
-    // function, which is what makes it able to turn the condition. An
+    // attribute is read by the guard AND written by a
+    // propagation, which is what makes it able to turn the condition. An
     // attribute nobody writes would not move, and the test below is
     // where that case is held.
     let mut model = standby("or", false, "up");
@@ -192,7 +192,7 @@ fn a_guard_that_also_reads_something_moving_is_silent() {
         kind: AttrKind::Bool,
         init: Value::Bool(false),
     });
-    backup.sensitive_functions.push(SensitiveFunction {
+    backup.propagations.push(Propagation {
         name: "update_inhibited".into(),
         effects: vec![Assignment {
             target: AttrRef {
@@ -229,7 +229,7 @@ fn a_guard_that_also_reads_the_clock_is_silent() {
 fn an_attribute_nothing_writes_is_read_as_the_constant_it_is() {
     // The companion of the test above, and the fact that separates them:
     // "reads an attribute" is not the same as "reads something moving".
-    // No equation, no ODE and no sensitive function writes `inhibited`
+    // No equation, no ODE and no propagation writes `inhibited`
     // here, so it holds its declared `false` from the initial instant to
     // the end of the run, the disjunction is decided by the empty port
     // alone, and the mode is sealed exactly as it was without the
@@ -373,7 +373,7 @@ fn duty(wired: bool, draws: bool, floor: f64, below: bool) -> Model {
                 automata: vec![],
                 equations: vec![],
                 allocations: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
             },
             Component {
                 name: "Pump".into(),
@@ -473,7 +473,7 @@ fn duty(wired: bool, draws: bool, floor: f64, below: bool) -> Model {
                     },
                 ],
                 allocations: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
             },
         ],
         connections: if wired {
@@ -562,18 +562,16 @@ fn an_attribute_two_writers_share_stops_the_crossing() {
     // first writer says, so the fold stops at it and the port behind is
     // out of reach. Silence rather than a guess.
     let mut model = duty(false, false, 4.0, true);
-    model.components[1]
-        .sensitive_functions
-        .push(SensitiveFunction {
-            name: "force_received".into(),
-            effects: vec![Assignment {
-                target: AttrRef {
-                    component: "Pump".into(),
-                    attribute: "received".into(),
-                },
-                value: Expr::attr("Supply", "carried"),
-            }],
-        });
+    model.components[1].propagations.push(Propagation {
+        name: "force_received".into(),
+        effects: vec![Assignment {
+            target: AttrRef {
+                component: "Pump".into(),
+                attribute: "received".into(),
+            },
+            value: Expr::attr("Supply", "carried"),
+        }],
+    });
     assert!(unfed_triggers(&model).is_empty(), "{model:?}");
 }
 

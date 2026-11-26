@@ -1,4 +1,4 @@
-//! The indexed watched set: what the immediate-guard scan and the
+//! The indexed boundary set: what the immediate-guard scan and the
 //! per-segment margin filter must cost, and what they must never change.
 //!
 //! Two claims are separable and both are tested here. The **behavioural**
@@ -19,15 +19,15 @@
 use raichu_core::{CompiledModel, Engine, EngineConfig, SimulationResult};
 use raichu_expr::{Assignment, AttrRef, CmpOp, Expr, StateRef, Value};
 use raichu_model::{
-    AttrKind, Attribute, Automaton, Component, Distrib, Model, SensitiveFunction, Transition,
+    AttrKind, Attribute, Automaton, Component, Distrib, Model, Propagation, Transition,
 };
 
 // ---------------------------------------------------------------------
-// A wide, local network: many watched guards, one moving attribute.
+// A wide, local network: many boundary guards, one moving attribute.
 // ---------------------------------------------------------------------
 
 /// One branch of the synthetic network: an attribute driven low by a
-/// delay, and a watched protection that opens when it goes low.
+/// delay, and a boundary protection that opens when it goes low.
 ///
 /// `reads` names the attribute the protection guard watches. Passing the
 /// branch's own attribute makes the branch independent of every other
@@ -58,10 +58,10 @@ fn branch(index: usize, delay: f64, reads: (&str, &str), driven: bool) -> Compon
             cycle_cancellation: Default::default(),
             kind: None,
             effects: vec![],
-            distrib: Distrib::Watched,
+            distrib: Distrib::Boundary,
         }],
     }];
-    let mut sensitive_functions = vec![];
+    let mut propagations = vec![];
     if driven {
         automata.push(Automaton {
             name: "drive".into(),
@@ -82,7 +82,7 @@ fn branch(index: usize, delay: f64, reads: (&str, &str), driven: bool) -> Compon
                 distrib: Distrib::Delay { time: delay },
             }],
         });
-        sensitive_functions.push(SensitiveFunction {
+        propagations.push(Propagation {
             name: "update_level".into(),
             effects: vec![Assignment {
                 target: AttrRef {
@@ -119,7 +119,7 @@ fn branch(index: usize, delay: f64, reads: (&str, &str), driven: bool) -> Compon
         automata,
         allocations: vec![],
         equations: vec![],
-        sensitive_functions,
+        propagations,
     }
 }
 
@@ -187,7 +187,7 @@ fn shared_boundary(n: usize) -> Model {
             }],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![SensitiveFunction {
+            propagations: vec![Propagation {
                 name: "update_level".into(),
                 effects: vec![Assignment {
                     target: AttrRef {
@@ -264,7 +264,7 @@ fn trace(result: &SimulationResult) -> Vec<(String, String, String, String)> {
 /// One active protection among two hundred produces the trace the full
 /// scan produced, event for event.
 #[test]
-fn one_active_watched_among_many_reproduces_the_full_scan_trace() {
+fn one_active_boundary_among_many_reproduces_the_full_scan_trace() {
     let result = run(&independent_branches(200, 137), 20.0);
     assert_eq!(
         trace(&result),
@@ -290,7 +290,7 @@ fn one_active_watched_among_many_reproduces_the_full_scan_trace() {
 /// fire in ascending transition index, exactly as they did before the
 /// index existed.
 #[test]
-fn watched_transitions_crossing_at_one_instant_keep_their_firing_order() {
+fn boundary_transitions_crossing_at_one_instant_keep_their_firing_order() {
     let result = run(&shared_boundary(5), 20.0);
     let fired: Vec<String> = result
         .events
@@ -379,7 +379,7 @@ fn a_scan_over_an_unmoving_network_costs_one_cold_pass() {
 /// *located* crossing, which reads the per-segment margin set, and not
 /// merely an immediate one.
 #[test]
-fn a_restored_snapshot_replays_the_same_watched_trajectory() {
+fn a_restored_snapshot_replays_the_same_boundary_trajectory() {
     let Some(json) = fixture("tank_01") else {
         return;
     };
@@ -414,7 +414,7 @@ fn a_restored_snapshot_replays_the_same_watched_trajectory() {
     assert!(!reference.is_empty(), "the replay must cover real events");
     assert_eq!(
         replay, reference,
-        "a replay from a restored snapshot fires the same watched events"
+        "a replay from a restored snapshot fires the same boundary events"
     );
 
     // The same through the rebuild seam a stateful facade uses.
@@ -425,7 +425,7 @@ fn a_restored_snapshot_replays_the_same_watched_trajectory() {
     }
     assert_eq!(
         again, reference,
-        "an engine rebuilt on the snapshot replays the same watched events"
+        "an engine rebuilt on the snapshot replays the same boundary events"
     );
 }
 
@@ -460,15 +460,15 @@ fn a_reset_engine_rearms_from_the_initial_state() {
 // The compiled index is a faithful inversion.
 // ---------------------------------------------------------------------
 
-/// The index inverts the watched guards faithfully: every automaton owns
-/// exactly the watched transitions it declares, and every attribute
+/// The index inverts the boundary guards faithfully: every automaton owns
+/// exactly the boundary transitions it declares, and every attribute
 /// registration is a guard that names it.
 ///
 /// Faithfulness is checked against the declarations themselves rather
 /// than against a pinned table. The operator half of the same index is
 /// checked where the models carrying operators live, in `active_set.rs`.
 #[test]
-fn the_compiled_index_inverts_the_watched_guards() {
+fn the_compiled_index_inverts_the_boundary_guards() {
     let Some(json) = fixture("pool_02") else {
         return;
     };
@@ -477,21 +477,21 @@ fn the_compiled_index_inverts_the_watched_guards() {
     let index = &compiled.margin_index;
 
     assert!(
-        !compiled.watched.is_empty(),
-        "pool_02 must carry watched transitions for this to test anything"
+        !compiled.boundary.is_empty(),
+        "pool_02 must carry boundary transitions for this to test anything"
     );
 
-    // Ownership: each automaton owns exactly its own watched positions,
+    // Ownership: each automaton owns exactly its own boundary positions,
     // in ascending order.
     let mut owned_total = 0;
-    for (automaton, positions) in index.watched_by_owner.iter().enumerate() {
+    for (automaton, positions) in index.boundary_by_owner.iter().enumerate() {
         assert!(
             positions.windows(2).all(|w| w[0] < w[1]),
             "the owner index must be ascending"
         );
         for &position in positions {
             assert_eq!(
-                compiled.transitions[compiled.watched[position]].automaton, automaton,
+                compiled.transitions[compiled.boundary[position]].automaton, automaton,
                 "a position registered under the wrong automaton"
             );
         }
@@ -499,21 +499,21 @@ fn the_compiled_index_inverts_the_watched_guards() {
     }
     assert_eq!(
         owned_total,
-        compiled.watched.len(),
-        "every watched transition is owned exactly once"
+        compiled.boundary.len(),
+        "every boundary transition is owned exactly once"
     );
 
     // Attributes: every registration is real, and no dependency is
     // missing (checked by rebuilding the expected inversion from the
     // guards through the engine's own comparison of names).
-    for (var, positions) in index.watched_by_var.iter().enumerate() {
+    for (var, positions) in index.boundary_by_var.iter().enumerate() {
         assert!(
             positions.windows(2).all(|w| w[0] < w[1]),
             "the attribute index must be ascending and deduplicated"
         );
         for &position in positions {
             assert!(
-                compiled.transitions[compiled.watched[position]]
+                compiled.transitions[compiled.boundary[position]]
                     .guard
                     .is_some(),
                 "only guarded transitions are registered under {}",
@@ -562,12 +562,12 @@ fn digest(result: &SimulationResult) -> (usize, String) {
     (result.events.len(), format!("{hash:016x}"))
 }
 
-/// Every fixture that carries a watched transition reproduces its event
+/// Every fixture that carries a boundary transition reproduces its event
 /// trace bit for bit. Dates enter the digest at full precision, so a
 /// crossing located one ulp elsewhere fails here rather than passing on
 /// a tolerance.
 #[test]
-fn every_watched_fixture_reproduces_its_event_dates() {
+fn every_boundary_fixture_reproduces_its_event_dates() {
     // (fixture, t_max, event count, FNV-1a of the trace)
     let expected: [(&str, f64, usize, &str); 5] = [
         ("tank_01", 40.0, 5, "11de1238f6c514a4"),
@@ -589,11 +589,11 @@ fn every_watched_fixture_reproduces_its_event_dates() {
     }
 }
 
-/// A discrete-only fixture with no watched transition pays the change
+/// A discrete-only fixture with no boundary transition pays the change
 /// detection the explicit pass now performs and receives none of the
 /// narrowing: its counted-work profile must be untouched.
 #[test]
-fn a_discrete_fixture_with_no_watched_transition_keeps_its_profile() {
+fn a_discrete_fixture_with_no_boundary_transition_keeps_its_profile() {
     let Some(json) = fixture("delay_001") else {
         return;
     };

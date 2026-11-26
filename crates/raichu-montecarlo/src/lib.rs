@@ -58,9 +58,9 @@ use raichu_analysis::{
     ImportanceGroup, ImportanceReducer,
 };
 use raichu_core::{
-    CIndicator, CIndicatorTarget, CoSimulationHost, CompiledModel, Engine, EngineConfig,
-    EngineError, FlowConfig, FmuProvenance, IndicatorSeries, PreparedCoSimulation, Sequence,
-    SolverParams,
+    CoSimulationHost, CompiledIndicator, CompiledIndicatorTarget, CompiledModel, Engine,
+    EngineConfig, EngineError, FlowConfig, FmuProvenance, IndicatorSeries, PreparedCoSimulation,
+    Sequence, SolverParams,
 };
 use raichu_expr::Value;
 use serde::{Deserialize, Serialize};
@@ -218,7 +218,7 @@ pub struct IndicatorEstimate {
     /// Mean number of **departures from zero** up to each instant: moves
     /// of the value from exactly `0` to any non-zero value, whatever its
     /// sign, the initial value never counted. This is the reference
-    /// engine's `nb_visits` computation, the one a cod3s/muscadet
+    /// engine's visit count, the one a cod3s/muscadet
     /// `nb-occurrences` indicator is defined against. It differs from
     /// [`Self::nb_occurrences_mean`] on an active initial value (not
     /// counted here), on a negative value (a departure here, not a rising
@@ -238,7 +238,7 @@ pub struct IndicatorEstimate {
     pub zero_departures_extremes: Extremes,
     /// Probability that the value has been **non-zero** at least once by
     /// each instant, the initial value included: the reference engine's
-    /// `realized` computation, the one a cod3s/muscadet `had_value`
+    /// has-been-non-zero flag, the one a cod3s/muscadet `had_value`
     /// indicator is defined against. It differs from
     /// [`Self::reached_mean`] on a value that is only ever negative
     /// (non-zero, so reached here; never above zero, so not reached
@@ -543,14 +543,14 @@ fn nb_occurrences_at(points: &[(f64, Value)], instant: f64) -> f64 {
 /// The value a change-point series **starts** from: its first entry.
 ///
 /// The engine records an indicator once the initialization axiom has run
-/// its sensitive functions to their fixpoint (`Engine::initialize`), so the
+/// its propagations to their fixpoint (`Engine::initialize`), so the
 /// first entry is that fixpoint, the initial state. Every later entry, an
 /// entry dated `0` included, is the work of a transition: a delay-0
 /// initiating failure fires at `t = 0` and is an event of the trajectory,
 /// not part of where it starts. That is muscadet's rule since 5.14.0
 /// (conformance point `initial_state_occurrence`), and the reference
 /// engine's: measured on PyCATSHOO 1.3.8.0 (cod3s 1.21.0, muscadet 5.14.1,
-/// 2026-10-12), `nb_visits` counts a delay-0 transition firing at `t = 0`
+/// 2026-10-12), its visit count takes a delay-0 transition firing at `t = 0`
 /// as one departure, and a value already true once the start phase has
 /// settled as none. Up to 0.91.0 every entry dated at the first date was
 /// read as part of the initial value, which dropped those `t = 0` events.
@@ -562,7 +562,7 @@ fn initial_index(points: &[(f64, Value)]) -> Option<usize> {
 /// Number of **departures from zero** up to `instant`: moves of the value
 /// from exactly `0` to any non-zero value, sign ignored, the initial value
 /// (see [`initial_index`]) never counted. The reference engine's
-/// `nb_visits` computation, measured on PyCATSHOO 1.3.8.0 (2026-10-02).
+/// visit count, measured on PyCATSHOO 1.3.8.0 (2026-10-02).
 /// The bound is inclusive, as in [`nb_occurrences_at`].
 fn zero_departures_at(points: &[(f64, Value)], instant: f64) -> f64 {
     let Some(start) = initial_index(points) else {
@@ -588,7 +588,7 @@ fn zero_departures_at(points: &[(f64, Value)], instant: f64) -> f64 {
 
 /// Whether the value has been **non-zero** at or before `instant`, the
 /// initial value (see [`initial_index`]) included: `1.0` or `0.0`. The
-/// reference engine's `realized` computation, measured on PyCATSHOO
+/// reference engine's has-been-non-zero flag, measured on PyCATSHOO
 /// 1.3.8.0 (2026-10-02). The bound is inclusive, as in
 /// [`nb_occurrences_at`].
 fn nonzero_reached_at(points: &[(f64, Value)], instant: f64) -> f64 {
@@ -640,14 +640,14 @@ struct ReplicaSamples {
 /// indicator that happened to stay in `{0, 1}` over one campaign is not
 /// a probability, and calling it one would make the reported precision
 /// depend on the draw.
-fn is_declared_binary(model: &CompiledModel, indicator: &CIndicator) -> bool {
+fn is_declared_binary(model: &CompiledModel, indicator: &CompiledIndicator) -> bool {
     match indicator.target {
         // 1.0 in the state, 0.0 out of it: binary by construction.
-        CIndicatorTarget::State(_, _) => true,
+        CompiledIndicatorTarget::State(_, _) => true,
         // An attribute is binary exactly when it is declared `bool`;
         // the initial value carries that declared kind (validation
         // refuses an initial value of another kind).
-        CIndicatorTarget::Var(var) => model
+        CompiledIndicatorTarget::Var(var) => model
             .var_init
             .get(var)
             .is_some_and(|value| matches!(value, Value::Bool(_))),
@@ -655,7 +655,7 @@ fn is_declared_binary(model: &CompiledModel, indicator: &CIndicator) -> bool {
         // compares: binary by declaration, and the reason the variant
         // exists -- its mean is a probability and its sojourn a duration,
         // where the raw attribute's sojourn is an area.
-        CIndicatorTarget::Predicate(_, _, _) => true,
+        CompiledIndicatorTarget::Predicate(_, _, _) => true,
     }
 }
 
@@ -2029,7 +2029,7 @@ mod departure_tests {
     fn a_move_at_the_first_date_is_an_event_after_the_initial_value() {
         // The first entry is the initial fixpoint; a later entry dated 0 is
         // a transition firing at t = 0 (a delay-0 initiating failure), which
-        // the reference counts: PyCATSHOO `nb_visits` reads 1 at t = 0 on a
+        // the reference counts: PyCATSHOO's visit count reads 1 at t = 0 on a
         // flag a delay-0 transition raises (cod3s 1.21.0, 2026-10-12).
         let points = series(&[(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (2.0, -1.0)]);
         assert_eq!(zero_departures_at(&points, 0.0), 1.0);
@@ -2042,7 +2042,7 @@ mod departure_tests {
         assert_eq!(nonzero_reached_at(&points, 0.0), 1.0);
         assert_eq!(zero_departures_at(&points, 3.0), 1.0);
         // Left and entered again within one instant: two entries dated 1,
-        // one departure, as `nb_visits` counts a delay-0 re-entry.
+        // one departure, as the reference visit count takes a delay-0 re-entry.
         let points = series(&[(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)]);
         assert_eq!(zero_departures_at(&points, 1.0), 2.0);
     }

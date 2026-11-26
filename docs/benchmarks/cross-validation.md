@@ -13,7 +13,7 @@ simulation engine, on three models of increasing coupling:
 |---|---|
 | `pure_exp` | two-state exponential component: pure discrete-stochastic, zero callbacks |
 | `heaters_s1` | a thermostatic heater: conditional switching + failures |
-| `heated_room_s3` | a room-temperature ODE + watched thermostats + failures: fully hybrid |
+| `heated_room_s3` | a room-temperature ODE + boundary thermostats + failures: fully hybrid |
 
 ## The same model, three ways
 

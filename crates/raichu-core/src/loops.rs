@@ -43,7 +43,7 @@ pub struct SwitchingLoop {
 }
 
 impl SwitchingLoop {
-    /// The one-line diagnostic, phrased for someone who has just watched
+    /// The one-line diagnostic, phrased for someone who has just boundary
     /// a run take too long.
     ///
     /// It leads with what to change rather than with the whole cycle: a

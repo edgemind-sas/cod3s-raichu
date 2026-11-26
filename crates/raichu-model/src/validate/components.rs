@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 impl Model {
     /// An edge effect's target must have no other writer that would erase
     /// the one-shot write at the next evaluation: an explicit equation or a
-    /// sensitive function. The target of an ODE equation is not such a
+    /// propagation. The target of an ODE equation is not such a
     /// writer: integration starts from the attribute's current value, so an
     /// edge effect on it is a reset map, the jump of a piecewise-
     /// deterministic Markov process.
@@ -43,8 +43,8 @@ impl Model {
     }
 
     /// The writers that set an attribute as a *level*, re-evaluated
-    /// whenever what they read changes: explicit equations and sensitive
-    /// functions, first writer in declaration order. ODE equations are left
+    /// whenever what they read changes: explicit equations and
+    /// propagations, first writer in declaration order. ODE equations are left
     /// out: they move their target from its current value instead of
     /// recomputing it.
     fn level_writers(&self) -> HashMap<(&str, &str), String> {
@@ -63,7 +63,7 @@ impl Model {
                         )
                     });
             }
-            for function in &component.sensitive_functions {
+            for function in &component.propagations {
                 for assignment in &function.effects {
                     writers
                         .entry((
@@ -71,7 +71,7 @@ impl Model {
                             assignment.target.attribute.as_str(),
                         ))
                         .or_insert_with(|| {
-                            format!("sensitive function `{}.{}`", component.name, function.name)
+                            format!("propagation `{}.{}`", component.name, function.name)
                         });
                 }
             }
@@ -218,10 +218,10 @@ impl Model {
         Self::check_cycle_cancellation(component)?;
 
         let mut function_names = HashSet::new();
-        for function in &component.sensitive_functions {
+        for function in &component.propagations {
             if !function_names.insert(function.name.as_str()) {
                 return Err(ModelError::DuplicateInComponent {
-                    kind: "sensitive function",
+                    kind: "propagation",
                     name: function.name.clone(),
                     component: component.name.clone(),
                 });
@@ -632,9 +632,9 @@ impl Model {
                         }
                     }
                 }
-                Distrib::Watched => {
+                Distrib::Boundary => {
                     if transition.targets.len() != 1 {
-                        return Err(ModelError::WatchedTargetCount {
+                        return Err(ModelError::BoundaryTargetCount {
                             component: component.name.clone(),
                             automaton: automaton.name.clone(),
                             transition: transition.name.clone(),
@@ -643,15 +643,15 @@ impl Model {
                     }
                     match &transition.guard {
                         None => {
-                            return Err(ModelError::WatchedGuardMissing {
+                            return Err(ModelError::BoundaryGuardMissing {
                                 component: component.name.clone(),
                                 automaton: automaton.name.clone(),
                                 transition: transition.name.clone(),
                             });
                         }
-                        Some(guard) if Self::is_watched_guard(guard) => {}
+                        Some(guard) if Self::is_boundary_guard(guard) => {}
                         Some(_) => {
-                            return Err(ModelError::WatchedGuardNotComparison {
+                            return Err(ModelError::BoundaryGuardNotComparison {
                                 component: component.name.clone(),
                                 automaton: automaton.name.clone(),
                                 transition: transition.name.clone(),
@@ -664,17 +664,17 @@ impl Model {
         Ok(())
     }
 
-    /// A watched guard must expose exactly one *ordering comparison*
+    /// A boundary guard must expose exactly one *ordering comparison*
     /// (the located boundary), optionally conjoined/disjoined with
     /// discrete gate expressions (which only change at discrete events):
     /// `cmp`, `and(gates…, cmp)` or `or(gates…, cmp)`.
-    /// A watched guard must contain at least one ordering comparison
+    /// A boundary guard must contain at least one ordering comparison
     /// (the continuous boundary) anywhere under `and`/`or`/`not`
     /// connectives (the other operands act as discrete gates). The
     /// margin compiler maps `and` to the `min` of the operand margins,
     /// `or` to the `max`, `not` to the negation, and any other boolean
     /// operand to ±1.
-    fn is_watched_guard(guard: &Expr) -> bool {
+    fn is_boundary_guard(guard: &Expr) -> bool {
         match guard {
             Expr::Cmp {
                 cmp:
@@ -687,11 +687,11 @@ impl Model {
             Expr::Bool {
                 bool_op: raichu_expr::BoolOp::And | raichu_expr::BoolOp::Or,
                 args,
-            } => args.iter().any(Self::is_watched_guard),
+            } => args.iter().any(Self::is_boundary_guard),
             Expr::Bool {
                 bool_op: raichu_expr::BoolOp::Not,
                 args,
-            } => args.iter().any(Self::is_watched_guard),
+            } => args.iter().any(Self::is_boundary_guard),
             _ => false,
         }
     }

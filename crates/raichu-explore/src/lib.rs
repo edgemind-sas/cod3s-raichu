@@ -25,7 +25,7 @@
 //!
 //! The engine stays the single source of semantics: the explorer drives
 //! one [`raichu_core::Engine`] per worker, never re-implementing guards,
-//! effects, sensitive functions or interruption policies.
+//! effects, propagations or interruption policies.
 
 pub mod discretised;
 pub mod exact;

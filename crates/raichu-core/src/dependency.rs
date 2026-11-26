@@ -28,7 +28,7 @@ pub(crate) enum EdgeSet {
     /// What decides a mode and what defines a value: an automaton leads
     /// to what its guards read, a variable to what its defining
     /// expression reads (explicit equations, distribution operators,
-    /// linear blocks, ODE right-hand sides, sensitive functions). The
+    /// linear blocks, ODE right-hand sides, propagations). The
     /// set [`crate::loops::switching_loops`] has always used.
     Decisions,
     /// [`EdgeSet::Decisions`], plus everything else through which one
@@ -90,7 +90,7 @@ pub(crate) fn build(model: &CompiledModel, set: EdgeSet) -> HashMap<Node, Vec<No
             let automaton = Node::Aut(transition.automaton);
             match &transition.distrib {
                 CLaw::ExpVar { rate, .. } => reads(automaton, rate, &mut graph),
-                CLaw::Watched { margin } => reads(automaton, margin, &mut graph),
+                CLaw::Boundary { margin } => reads(automaton, margin, &mut graph),
                 _ => {}
             }
             for (target, expr) in &transition.effects {

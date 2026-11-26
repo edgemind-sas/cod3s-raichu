@@ -36,7 +36,7 @@ def _model():
                                   "targets": ["on", "failed"], "distrib": "inst",
                                   "probs": [0.9], "guard": _state("need", "yes")}]},
             ],
-            "sensitive_functions": [{"name": "follow", "effects": [{
+            "propagations": [{"name": "follow", "effects": [{
                 "target": {"component": "B", "attribute": "running"},
                 "value": _state("unit", "on")}]}],
         }],

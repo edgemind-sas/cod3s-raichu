@@ -6,12 +6,12 @@ use super::*;
 
 /// What an indicator records at the current instant.
 ///
-/// The one reading of a [`CIndicatorTarget`], shared by the three sites
+/// The one reading of a [`CompiledIndicatorTarget`], shared by the three sites
 /// that record one: the change-point series, the dense-sample flush, and
 /// the solver's own sample callback inside a continuous segment. Three
 /// copies of the rule is three chances for a target to be honoured on one
 /// recording path and dropped on another, which is the class of silence
-/// [`CIndicatorTarget::Predicate`] exists to end.
+/// [`CompiledIndicatorTarget::Predicate`] exists to end.
 ///
 /// Infallible on purpose: none of the three callers can report an error,
 /// and none has to. Kind compatibility is refused at model build
@@ -19,16 +19,16 @@ use super::*;
 /// without an answer is one against a NaN, settled below the way IEEE
 /// settles it.
 pub(super) fn indicator_value(
-    target: &CIndicatorTarget,
+    target: &CompiledIndicatorTarget,
     vars: &[Value],
     states: &[StateIdx],
 ) -> Value {
     match *target {
-        CIndicatorTarget::Var(idx) => vars[idx],
-        CIndicatorTarget::State(aut, state) => {
+        CompiledIndicatorTarget::Var(idx) => vars[idx],
+        CompiledIndicatorTarget::State(aut, state) => {
             Value::Float(if states[aut] == state { 1.0 } else { 0.0 })
         }
-        CIndicatorTarget::Predicate(idx, cmp, bound) => {
+        CompiledIndicatorTarget::Predicate(idx, cmp, bound) => {
             Value::Bool(predicate_holds(vars[idx], cmp, bound))
         }
     }

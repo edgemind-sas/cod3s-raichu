@@ -1,15 +1,15 @@
 //! Engine benchmarks: expression-evaluation /
 //! fixpoint throughput on the discrete cycle, and hybrid ODE
-//! integration with watched-transition location.
+//! integration with boundary-transition location.
 //!
 //! Run with `cargo bench`. These establish the baseline demanded by the
 //! performance contract: regressions become visible. They set no
 //! blocking threshold.
 //!
 //! Two of them come as a **pair**, on the same synthetic network of a
-//! few hundred edges. `wide_network_watched_scan` carries a watched
+//! few hundred edges. `wide_network_boundary_scan` carries a boundary
 //! protection on every branch, which is the population the scan sites
-//! walk; `wide_network_no_watched` is the same network without them,
+//! walk; `wide_network_no_boundary` is the same network without them,
 //! which pays whatever the explicit pass costs per written attribute and
 //! receives none of the narrowing. Reading them together is what
 //! separates a scan that got cheaper from a pass that got dearer: a
@@ -22,10 +22,10 @@ use raichu_core::{CompiledModel, Engine, EngineConfig};
 use raichu_expr::{Assignment, AttrRef, CmpOp, Expr, PortRef, StateRef, Value};
 use raichu_model::{
     AttrKind, Attribute, Automaton, Component, Connection, Distrib, Equation, EquationKind, Model,
-    Port, PortDir, SensitiveFunction, Transition,
+    Port, PortDir, Propagation, Transition,
 };
 
-/// delay_001-class model: discrete cycle + sensitive-function fixpoint
+/// delay_001-class model: discrete cycle + propagation fixpoint
 /// (expression evaluation dominates).
 fn delay_model() -> Model {
     Model {
@@ -84,7 +84,7 @@ fn delay_model() -> Model {
                 }],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![SensitiveFunction {
+                propagations: vec![Propagation {
                     name: "update_flow_out".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -119,7 +119,7 @@ fn delay_model() -> Model {
                 automata: vec![],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![SensitiveFunction {
+                propagations: vec![Propagation {
                     name: "update_fed".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -159,7 +159,7 @@ fn delay_model() -> Model {
     }
 }
 
-/// tank_01-class model: ODE integration + watched-transition location.
+/// tank_01-class model: ODE integration + boundary-transition location.
 fn tank_model() -> Model {
     let content = || Expr::attr("tank", "content");
     Model {
@@ -197,7 +197,7 @@ fn tank_model() -> Model {
                         cycle_cancellation: Default::default(),
                         kind: None,
                         effects: vec![],
-                        distrib: Distrib::Watched,
+                        distrib: Distrib::Boundary,
                     },
                     Transition {
                         name: "stop".into(),
@@ -217,7 +217,7 @@ fn tank_model() -> Model {
                         cycle_cancellation: Default::default(),
                         kind: None,
                         effects: vec![],
-                        distrib: Distrib::Watched,
+                        distrib: Distrib::Boundary,
                     },
                 ],
             }],
@@ -246,7 +246,7 @@ fn tank_model() -> Model {
                     }),
                 },
             }],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![],
@@ -275,10 +275,10 @@ fn discrete_fixpoint_cycle(bencher: divan::Bencher) {
     });
 }
 
-/// Hybrid cycle: 160 time units ≈ 20 watched crossings, each located by
+/// Hybrid cycle: 160 time units ≈ 20 boundary crossings, each located by
 /// dense-output scan + bisection over the adaptive DP45 integration.
 #[divan::bench]
-fn ode_integration_with_watched_events(bencher: divan::Bencher) {
+fn ode_integration_with_boundary_events(bencher: divan::Bencher) {
     let model = tank_model();
     let compiled = CompiledModel::compile(&model).unwrap();
     bencher.bench(|| {
@@ -293,7 +293,7 @@ fn ode_integration_with_watched_events(bencher: divan::Bencher) {
 
 /// Width of the synthetic network: how many independent branches hang off
 /// the shared bus, hence how many connections (edges), explicit equations
-/// and watched trip guards the model carries.
+/// and boundary trip guards the model carries.
 ///
 /// A few hundred is the size at which the *scan* sites stop being noise:
 /// below it a full scan is short enough to hide inside the fixpoint,
@@ -313,10 +313,10 @@ const NETWORK_HORIZON: f64 = 60.0;
 /// The locality is the point. A branch failing moves two attributes of
 /// that branch and nothing else, so a scan whose cost tracks the whole
 /// model does `NETWORK_WIDTH` times the work the change justifies. With
-/// `watched` set, every branch also carries a protection pair whose
+/// `boundary` set, every branch also carries a protection pair whose
 /// guards read only that branch's supplied quantity: that is the
 /// population the immediate-guard scan walks.
-fn wide_network(watched: bool) -> Model {
+fn wide_network(boundary: bool) -> Model {
     let n = NETWORK_WIDTH;
     let mut components = Vec::with_capacity(n + 1);
     let mut connections = Vec::with_capacity(n);
@@ -373,7 +373,7 @@ fn wide_network(watched: bool) -> Model {
         }],
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: vec![SensitiveFunction {
+        propagations: vec![Propagation {
             name: "update_power".into(),
             effects: vec![Assignment {
                 target: AttrRef {
@@ -440,7 +440,7 @@ fn wide_network(watched: bool) -> Model {
                 },
             ],
         }];
-        if watched {
+        if boundary {
             let supplied = || Expr::attr(&load, "supplied");
             automata.push(Automaton {
                 name: "protection".into(),
@@ -465,7 +465,7 @@ fn wide_network(watched: bool) -> Model {
                         cycle_cancellation: Default::default(),
                         kind: None,
                         effects: vec![],
-                        distrib: Distrib::Watched,
+                        distrib: Distrib::Boundary,
                     },
                     Transition {
                         name: "close".into(),
@@ -485,7 +485,7 @@ fn wide_network(watched: bool) -> Model {
                         cycle_cancellation: Default::default(),
                         kind: None,
                         effects: vec![],
-                        distrib: Distrib::Watched,
+                        distrib: Distrib::Boundary,
                     },
                 ],
             });
@@ -531,7 +531,7 @@ fn wide_network(watched: bool) -> Model {
                     ],
                 },
             }],
-            sensitive_functions: vec![SensitiveFunction {
+            propagations: vec![Propagation {
                 name: "update_available".into(),
                 effects: vec![Assignment {
                     target: AttrRef {
@@ -571,10 +571,10 @@ fn wide_network(watched: bool) -> Model {
 
     Model {
         programs: vec![],
-        name: if watched {
+        name: if boundary {
             "bench_wide_network".into()
         } else {
-            "bench_wide_network_no_watched".into()
+            "bench_wide_network_no_boundary".into()
         },
         components,
         connections,
@@ -588,12 +588,12 @@ fn wide_network(watched: bool) -> Model {
     }
 }
 
-/// **Scan site.** A few hundred edges, each with a watched protection
+/// **Scan site.** A few hundred edges, each with a boundary protection
 /// pair, driven by *local* failures: the immediate-guard scan runs after
-/// every discrete fixpoint over the whole watched population, while at
+/// every discrete fixpoint over the whole boundary population, while at
 /// most one branch's quantities have moved.
 #[divan::bench]
-fn wide_network_watched_scan(bencher: divan::Bencher) {
+fn wide_network_boundary_scan(bencher: divan::Bencher) {
     let model = wide_network(true);
     let compiled = CompiledModel::compile(&model).unwrap();
     bencher.bench(|| {
@@ -606,12 +606,12 @@ fn wide_network_watched_scan(bencher: divan::Bencher) {
     });
 }
 
-/// **Control.** The same network with the watched protection pairs
+/// **Control.** The same network with the boundary protection pairs
 /// removed: it pays whatever the explicit pass costs per written
 /// attribute and receives none of the scan narrowing, which is what
 /// prices change detection on a discrete-only model.
 #[divan::bench]
-fn wide_network_no_watched(bencher: divan::Bencher) {
+fn wide_network_no_boundary(bencher: divan::Bencher) {
     let model = wide_network(false);
     let compiled = CompiledModel::compile(&model).unwrap();
     bencher.bench(|| {

@@ -151,7 +151,7 @@ fn an_occurrence_write_latches_past_the_repair() {
     );
     let rail = model.components.iter().find(|c| c.name == "R1").unwrap();
     assert!(rail
-        .sensitive_functions
+        .propagations
         .iter()
         .all(|f| !f.name.starts_with("modes__")));
 }

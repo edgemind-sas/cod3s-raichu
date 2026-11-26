@@ -1,4 +1,4 @@
-"""Event location: how a watched boundary is found inside one solver step.
+"""Event location: how a boundary is found inside one solver step.
 
 A schematic drawn from a smooth trajectory, not from an engine run: the
 solver takes a step, its dense output is scanned at sub-sample points, the

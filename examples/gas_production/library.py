@@ -232,10 +232,10 @@ def buffer_reservoir() -> dict:
                          "guard": M.cmp("lt", flow, num(0.0)), **inst},
                         {"name": "run_dry", "source": "partial", "targets": ["empty"],
                          "guard": M.both(M.cmp("le", level, num(0.0)), M.cmp("lt", flow, num(0.0))),
-                         "distrib": "watched"},
+                         "distrib": "boundary"},
                         {"name": "fill_up", "source": "partial", "targets": ["full"],
                          "guard": M.both(M.cmp("ge", level, num(param("capacity"))), M.cmp("gt", flow, num(0.0))),
-                         "distrib": "watched"},
+                         "distrib": "boundary"},
                         {"name": "restart", "source": "empty", "targets": ["partial"],
                          "guard": M.either(M.cmp("gt", flow, num(0.0)), M.cmp("gt", level, num(0.0))),
                          **inst},
@@ -243,7 +243,7 @@ def buffer_reservoir() -> dict:
                 }
             ],
             "equations": [{"target": "level", "kind": "ode", "expr": rate}],
-            "sensitive_functions": [
+            "propagations": [
                 {
                     "name": "production",
                     "effects": [

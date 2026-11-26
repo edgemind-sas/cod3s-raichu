@@ -127,7 +127,7 @@ pv = {
 ```
 
 The electrolyser's control is an automaton whose two transitions are
-**watched**: the engine locates the instant a threshold is crossed on the
+**boundary**: the engine locates the instant a threshold is crossed on the
 continuous quantities rather than checking it at the next event.
 
 ```python
@@ -143,12 +143,12 @@ elec = {
         {"name": "mode", "states": ["stopped", "running"], "init": "stopped",
          "transitions": [
             {"name": "start", "source": "stopped", "targets": ["running"],
-             "distrib": "watched", "guard": AND(
+             "distrib": "boundary", "guard": AND(
                  cmp("lt", p("ELEC", "level_in"), c(FULL_RESUME)),
                  OR(cmp("ge", p("ELEC", "pv_in"), c(START_PV)),
                     cmp("ge", p("ELEC", "reserve_in"), c(START_RES))))},
             {"name": "stop", "source": "running", "targets": ["stopped"],
-             "distrib": "watched", "guard": OR(
+             "distrib": "boundary", "guard": OR(
                  cmp("ge", p("ELEC", "level_in"), c(STORE_CAP)),
                  AND(cmp("lt", p("ELEC", "pv_in"), c(STOP_PV)),
                      cmp("le", p("ELEC", "reserve_in"), c(STOP_RES))))}]},
@@ -176,10 +176,10 @@ batt = {
     "automata": [
         {"name": "charge", "states": ["charging", "full"], "init": "charging",
          "transitions": [
-            {"name": "full", "source": "charging", "targets": ["full"], "distrib": "watched",
+            {"name": "full", "source": "charging", "targets": ["full"], "distrib": "boundary",
              "guard": AND(cmp("ge", soc, c(BATT_CAP)), cmp("gt", net, c(0.0)))},
             {"name": "discharge", "source": "full", "targets": ["charging"],
-             "distrib": "watched", "guard": cmp("lt", net, c(0.0))}]},
+             "distrib": "boundary", "guard": cmp("lt", net, c(0.0))}]},
         health("BATT")],
     "equations": [
         {"target": "soc", "kind": "ode", "expr": IF(ok("BATT"), IF(
@@ -220,11 +220,11 @@ user = {
     "automata": [{"name": "supply", "states": ["supplied", "unsupplied"], "init": "supplied",
         "transitions": [
             {"name": "trip", "source": "supplied", "targets": ["unsupplied"],
-             "distrib": "watched", "guard": OR(
+             "distrib": "boundary", "guard": OR(
                  cmp("le", p("USER", "level_in"), c(TRIP)),
                  cmp("lt", p("USER", "comp_in"), c(0.5)))},
             {"name": "restart", "source": "unsupplied", "targets": ["supplied"],
-             "distrib": "watched", "guard": AND(
+             "distrib": "boundary", "guard": AND(
                  cmp("ge", p("USER", "level_in"), c(RESTART)),
                  cmp("ge", p("USER", "comp_in"), c(0.5)))}]}],
     "equations": [{"target": "draw", "kind": "explicit",

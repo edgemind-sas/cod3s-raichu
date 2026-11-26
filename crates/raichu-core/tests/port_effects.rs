@@ -226,9 +226,9 @@ fn an_effect_through_an_out_port_is_refused() {
 }
 
 #[test]
-fn a_sensitive_function_cannot_write_through_a_port() {
+fn a_propagation_cannot_write_through_a_port() {
     let message = refusal(|body| {
-        body["components"][1]["sensitive_functions"] = json!([{
+        body["components"][1]["propagations"] = json!([{
             "name": "push",
             "effects": [{"target": {"component": "$port", "attribute": "buffer_in"},
                          "value": {"op": "const", "value": float(1.0)}}]

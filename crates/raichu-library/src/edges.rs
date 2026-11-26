@@ -111,7 +111,7 @@ pub(crate) fn apply_edge_effects(
                 if let Some((_, writer)) = written.iter().find(|(a, _)| a == &effect.attribute) {
                     let by_a_mode = instance
                         .component
-                        .sensitive_functions
+                        .propagations
                         .iter()
                         .any(|f| f.name == held);
                     return Err(fail(if by_a_mode {

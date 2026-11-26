@@ -4,7 +4,7 @@
 //! the indicator has been active it stays reached, even after it falls back.
 //! Its mean over replicas is the probability of having reached it by `t`,
 //! which is what a RAMS study asks with "had value" (the reference engine's
-//! `realized` computation, measured 2026-09-25 on a room whose hydrogen
+//! has-been-non-zero flag, measured 2026-09-25 on a room whose hydrogen
 //! crosses a threshold and falls back: 0 before the first crossing, 1 at every
 //! instant after it).
 //!

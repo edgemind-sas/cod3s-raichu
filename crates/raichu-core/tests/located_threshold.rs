@@ -100,16 +100,16 @@ fn a_falling_comparison_is_located_too() {
     assert_flips(&flips(&model, 1.0, vec![1.0]), &[(0.0, true), (0.5, false)]);
 }
 
-/// `x' = sin(x t)` from 0.1, a watched transition at `x >= 0.9`, and one
+/// `x' = sin(x t)` from 0.1, a boundary transition at `x >= 0.9`, and one
 /// threshold indicator `x cmp 0.3` crossed on the way.
-fn watched_with_threshold(cmp: &str) -> Model {
+fn boundary_with_threshold(cmp: &str) -> Model {
     Model::from_json(&format!(
         r#"{{"name": "w", "components": [{{"name": "c", "ports": [],
   "attributes": [{{"name": "x", "kind": "float", "init": {{"kind": "float", "value": 0.1}}}}],
   "equations": [{{"target": "x", "kind": "ode", "expr": {{"op": "sin", "arg": {{"op": "mul", "args": [
       {{"op": "attr", "attr": {{"component": "c", "attribute": "x"}}}}, {{"op": "time"}}]}}}}}}],
   "automata": [{{"name": "watch", "states": ["run", "done"], "init": "run", "transitions": [
-      {{"name": "hit", "source": "run", "targets": ["done"], "distrib": "watched",
+      {{"name": "hit", "source": "run", "targets": ["done"], "distrib": "boundary",
         "guard": {{"op": "cmp", "cmp": "ge",
                   "lhs": {{"op": "attr", "attr": {{"component": "c", "attribute": "x"}}}},
                   "rhs": {{"op": "const", "value": {{"kind": "float", "value": 0.9}}}}}}}}]}}]}}],
@@ -122,11 +122,11 @@ fn watched_with_threshold(cmp: &str) -> Model {
 #[test]
 fn locating_a_threshold_does_not_move_the_trajectory() {
     // An observation reads the trajectory and must not move it. A located
-    // `ge` and a sampled `eq` on the same attribute must leave the watched
+    // `ge` and a sampled `eq` on the same attribute must leave the boundary
     // transition at the SAME date, to the bit: the solver takes the same
     // steps whatever is observed.
     let date = |cmp: &str| {
-        let compiled = CompiledModel::compile(&watched_with_threshold(cmp)).unwrap();
+        let compiled = CompiledModel::compile(&boundary_with_threshold(cmp)).unwrap();
         let result = Engine::new(
             &compiled,
             EngineConfig {

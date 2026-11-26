@@ -1,7 +1,7 @@
 """The "had value" measure crosses into Python as ``reached_*``.
 
 Per trajectory it is 1 from the first time the indicator is active on, and
-stays 1 after it falls back: the reference engine's ``realized`` computation,
+stays 1 after it falls back: the reference engine's has-been-non-zero flag,
 whose mean over replicas is the probability of having reached the indicator
 by each instant. The Rust suite pins its closed forms; this pins the
 estimate the binding hands a launcher.

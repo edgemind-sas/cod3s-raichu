@@ -382,7 +382,7 @@ fn external_mode(shape: Shape) -> CompiledModel {
             failure,
             {"name": "repair", "source": "occ", "targets": ["rep"], "distrib": "exp", "rate": 1.0,
              "guard": s("T", "M", "occ"), "monitored": false, "cycle_group": "fm"}]}],
-        "sensitive_functions": [{"name": "update_ctrl_M_T", "effects": [
+        "propagations": [{"name": "update_ctrl_M_T", "effects": [
             {"target": {"component": "M", "attribute": "ctrl_M_T"}, "value": control}]}],
         "equations": []
     });

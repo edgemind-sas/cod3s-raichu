@@ -112,7 +112,7 @@ pub struct EngineConfig {
     /// (typed error, not a run that never ends). `0` disables the cap.
     ///
     /// The two Zeno guards this sits beside catch a loop that does not
-    /// advance time: [`EngineError::WatchedLoop`] counts firings at one
+    /// advance time: [`EngineError::BoundaryLoop`] counts firings at one
     /// instant, [`EngineError::FlowChattering`] counts segment restarts
     /// at one instant. Neither sees a **limit cycle**, where time does
     /// advance, by a little, every turn. A volume oscillating across its
@@ -221,7 +221,7 @@ pub struct TransitionExposure {
 /// How the engine handles the firing date of a **stochastic** transition
 /// (exponential, state-dependent exponential, Weibull, lognormal, gamma,
 /// uniform, empirical). Deterministic delays, instantaneous branchings and
-/// watched transitions keep their model semantics. Operator mode additionally
+/// boundary transitions keep their model semantics. Operator mode additionally
 /// requires an explicit choice for probabilistic instantaneous branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StochasticDates {
@@ -438,7 +438,7 @@ pub enum EngineError {
         /// Human-readable detail.
         detail: String,
     },
-    /// The sensitive-function propagation did not reach a fixpoint: one
+    /// The propagation propagation did not reach a fixpoint: one
     /// step on a cycle of functions re-ran more than
     /// [`EngineConfig::max_fixpoint_iterations`] times.
     #[error(
@@ -478,7 +478,7 @@ pub enum EngineError {
     },
     /// The converged state depends on the function evaluation order.
     #[error(
-        "non-confluent model at t={time}: sensitive functions `{first}` and \
+        "non-confluent model at t={time}: propagations `{first}` and \
          `{second}` write conflicting values (converged state depends on \
          evaluation order)"
     )]
@@ -497,7 +497,7 @@ pub enum EngineError {
         transition: String,
     },
     /// Interactive control: the requested transition is not currently
-    /// armed. It is neither date-scheduled (`pending`) nor a watched
+    /// armed. It is neither date-scheduled (`pending`) nor a boundary
     /// transition whose guard already holds, so there is nothing to fire.
     #[error("transition `{transition}` is not fireable at t={time} (not armed)")]
     NotFireable {
@@ -581,13 +581,13 @@ pub enum EngineError {
         /// The declared unbounded magnitude.
         unbounded: f64,
     },
-    /// Watched transitions kept firing at the same instant (Zeno-like
+    /// Boundary transitions kept firing at the same instant (Zeno-like
     /// loop on a boundary).
     #[error(
-        "watched transitions keep firing at t={time} without time \
+        "boundary transitions keep firing at t={time} without time \
          advancing (boundary loop)"
     )]
-    WatchedLoop {
+    BoundaryLoop {
         /// The stuck instant.
         time: f64,
     },
@@ -623,7 +623,7 @@ pub enum EngineError {
         moving: String,
     },
     /// A located active-set boundary was crossed again and again without
-    /// time advancing: the continuous analogue of [`Self::WatchedLoop`],
+    /// time advancing: the continuous analogue of [`Self::BoundaryLoop`],
     /// for a crossing that fires no transition.
     #[error(
         "the active set of the continuous flow network keeps changing at \
@@ -698,7 +698,7 @@ pub enum EngineError {
     },
     /// Exact sequence-tree exploration: the model is outside the exact
     /// (Markov) domain **before** anything is explored. It declares
-    /// continuous evolution, a watched transition its automaton can
+    /// continuous evolution, a boundary transition its automaton can
     /// reach, or an expression reading the simulation time. Raised by
     /// the static domain check, so a model that cannot be explored
     /// exactly costs nothing.
@@ -736,7 +736,7 @@ pub enum EngineError {
     /// them. Their mass never decreases, so no probability cut-off stops
     /// the chain: it is diagnosed as a cycle of instantaneous
     /// transitions. Distinct from [`EngineError::InstantaneousLoop`],
-    /// which is about sensitive functions within one fixpoint; the cap
+    /// which is about propagations within one fixpoint; the cap
     /// is the same, [`EngineConfig::max_fixpoint_iterations`].
     #[error(
         "more than {firings} instantaneous transitions fire in a row after the \
@@ -802,7 +802,7 @@ pub enum EngineError {
     },
     /// [`Engine::fire_deferred_at`] asked for an instant after an event
     /// the engine would have to process first: the next deterministic
-    /// date, a watched boundary crossing located on the way, or the
+    /// date, a boundary crossing located on the way, or the
     /// horizon. Nothing is changed.
     #[error(
         "cannot fire deferred transition `{transition}` at t={date}: {cause} \
@@ -954,7 +954,7 @@ pub enum JournalRecord {
         /// Target state name.
         to: String,
     },
-    /// A sensitive function was triggered (`propagate_effects`).
+    /// A propagation was triggered (`propagate_effects`).
     FunctionTriggered {
         /// Simulation time.
         time: f64,
@@ -963,7 +963,7 @@ pub enum JournalRecord {
         /// Fixpoint iteration (`evolA`) that applies the function: the
         /// index of its pop from the pending set, counted from 1 and
         /// restarted at every fixpoint. One iteration applies exactly one
-        /// sensitive function or program: it opens with this record, or
+        /// propagation or program: it opens with this record, or
         /// with [`JournalRecord::ProgramSolved`] when it applies a program.
         iteration: usize,
     },
@@ -1102,9 +1102,9 @@ pub enum ProbeStop {
         /// Its transition index.
         index: usize,
     },
-    /// A watched boundary crossing was located (or already holds) at the
+    /// A boundary crossing was located (or already holds) at the
     /// stop instant. It is not fired.
-    Watched {
+    Boundary {
         /// Its transition index.
         index: usize,
     },
@@ -1230,9 +1230,9 @@ pub enum FireableKind {
     Stochastic,
     /// Instantaneous branching (fires at the current instant).
     Inst,
-    /// Watched boundary transition (fires when its margin is crossed
+    /// boundary transition (fires when its margin is crossed
     /// during continuous evolution).
-    Watched,
+    Boundary,
 }
 
 /// One armed transition offered to interactive control
@@ -1245,7 +1245,7 @@ pub struct Fireable {
     pub transition: String,
     /// Kind of occurrence law.
     pub kind: FireableKind,
-    /// Scheduled firing date; `None` for a watched transition whose
+    /// Scheduled firing date; `None` for a boundary transition whose
     /// boundary has not been located yet (its guard is not yet true:
     /// the crossing is found only during continuous evolution), and for
     /// a located transition whose countdown is not armed yet.
@@ -1282,7 +1282,7 @@ pub struct Snapshot {
     pub(super) indicator_series: Vec<IndicatorSeries>,
     pub(super) sampled: Vec<IndicatorSeries>,
     pub(super) sample_cursor: usize,
-    pub(super) watched_streak: (f64, usize),
+    pub(super) boundary_streak: (f64, usize),
     pub(super) firings: Vec<u64>,
     pub(super) first_firing: Vec<f64>,
     pub(super) flow_restarts: u64,
@@ -1412,16 +1412,16 @@ pub struct WorkCounters {
     /// counter is therefore how much the *policies* cost on top of the
     /// sweep itself.
     pub allocation_capping_passes: u64,
-    /// Watched-margin expressions evaluated inside solver callbacks.
+    /// Boundary-margin expressions evaluated inside solver callbacks.
     pub margin_evaluations: u64,
-    /// Watched guards **evaluated** by the immediate-guard scan that runs
+    /// Boundary guards **evaluated** by the immediate-guard scan that runs
     /// after every discrete fixpoint.
     ///
     /// Evaluated, not visited: the scan walks the armed positions and
     /// answers from a cached verdict for every guard whose inputs have
     /// not moved since it was last evaluated (see [`crate::MarginIndex`]), so
     /// this counts the work the model's *changes* justify rather than the
-    /// size of its watched population. A model whose network never moves
+    /// size of its boundary population. A model whose network never moves
     /// pays one cold pass and nothing after it.
     pub immediate_guard_scans: u64,
 }

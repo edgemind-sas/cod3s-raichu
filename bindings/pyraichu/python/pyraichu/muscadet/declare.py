@@ -2546,7 +2546,7 @@ def derived_out_states(spec: Any) -> set[str]:
     return states
 
 
-def _mode_automaton(where: str, obj: str, watched: dict) -> str:
+def _mode_automaton(where: str, obj: str, boundary: dict) -> str:
     """The automaton a reference to another two-state component's STATE names.
 
     An EVENT hosts its own, under the name it declares (:func:`event_automaton`).
@@ -2556,10 +2556,10 @@ def _mode_automaton(where: str, obj: str, watched: dict) -> str:
     "the state of that mode" names no one of them, so it is refused rather
     than resolved to the first.
     """
-    event = event_automaton(watched)
+    event = event_automaton(boundary)
     if event is not None:
         return event[0]
-    targets = len(watched.get("targets") or ["_"])
+    targets = len(boundary.get("targets") or ["_"])
     if targets > 1:
         raise ComponentSpecError(
             f"{where} watches a state of the mode `{obj}`, which is a "
@@ -2672,19 +2672,19 @@ def _mode_leaf(
         if leaf["attr"] in translated:
             leaf["attr"] = translated[leaf["attr"]]
 
-    watched = modes.get(leaf["obj"])
-    if watched is not None and "attr" in leaf:
-        states = _mode_state_names(watched)
+    boundary = modes.get(leaf["obj"])
+    if boundary is not None and "attr" in leaf:
+        states = _mode_state_names(boundary)
         if leaf["attr"] not in states:
             family = (
-                "an event" if event_automaton(watched) else "a standalone mode"
+                "an event" if event_automaton(boundary) else "a standalone mode"
             )
             raise ComponentSpecError(
                 f"{where} watches `{leaf['obj']}.{leaf['attr']}`, and "
                 f"`{leaf['obj']}` is {family}: it holds no variable, only the "
                 f"states {sorted(states)}"
             )
-        leaf["automaton"] = _mode_automaton(where, leaf["obj"], watched)
+        leaf["automaton"] = _mode_automaton(where, leaf["obj"], boundary)
         leaf["state"] = leaf.pop("attr")
     return leaf
 
@@ -4884,7 +4884,7 @@ def _refuse_a_latched_production_a_condition_also_writes(obj: dict, body: dict) 
     writers = {
         component.get("name"): {
             function.get("name")
-            for function in component.get("sensitive_functions") or []
+            for function in component.get("propagations") or []
         }
         for component in body.get("components") or []
     }

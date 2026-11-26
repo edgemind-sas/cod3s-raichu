@@ -1,8 +1,8 @@
 """The zero-departure pair crosses into Python as ``zero_departures_*`` and
 ``nonzero_reached_*``.
 
-They reproduce the reference engine's ``nb_visits`` and ``realized``
-computations on a natively built model whose value is set by start methods
+They reproduce the reference engine's visit count and has-been-non-zero
+flag on a natively built model whose value is set by start methods
 (measured on PyCATSHOO 1.3.8.0, 2026-10-02): a count of the moves from
 exactly 0 to any non-zero value, the initial value never counted, and 1 once
 the value has been non-zero, the initial value included. The Rust suite pins
@@ -25,7 +25,7 @@ def _float(x: float) -> dict:
 def stepping_model(levels: list[float]) -> dict:
     """A float attribute ``c.v`` holding ``levels[i]`` on ``[i, i + 1)``, the
     last level held to the horizon: one automaton state per level, unit
-    delays between them, and one sensitive function writing the level of the
+    delays between them, and one propagation writing the level of the
     active state. Indicator ``v`` observes the attribute."""
     level = _float(levels[-1])
     for i in reversed(range(len(levels) - 1)):
@@ -53,7 +53,7 @@ def stepping_model(levels: list[float]) -> dict:
                         ],
                     }
                 ],
-                "sensitive_functions": [
+                "propagations": [
                     {"name": "upd", "effects": [{"target": {"component": "c", "attribute": "v"}, "value": level}]}
                 ],
             }
@@ -68,8 +68,8 @@ def estimate(levels: list[float]) -> pyraichu.IndicatorEstimate:
 
 
 def test_a_nonzero_initial_value_is_reached_but_is_not_a_departure():
-    # Measured on the reference engine: nb_visits [0, 0, 1, 1, 1, 1],
-    # realized [1, 1, 1, 1, 1, 1].
+    # Measured on the reference engine: visit count [0, 0, 1, 1, 1, 1],
+    # flag [1, 1, 1, 1, 1, 1].
     indicator = estimate([1.0, 0.0, -1.0, 1.0, 0.0])
     assert indicator.zero_departures_mean == [0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
     assert indicator.nonzero_reached_mean == [1.0] * 6
@@ -85,7 +85,7 @@ def test_a_nonzero_initial_value_is_reached_but_is_not_a_departure():
 
 
 def test_a_departure_to_a_negative_value_counts():
-    # Measured: nb_visits [0, 1, 1, 2, 2, 2], realized [0, 1, 1, 1, 1, 1].
+    # Measured: visit count [0, 1, 1, 2, 2, 2], flag [0, 1, 1, 1, 1, 1].
     indicator = estimate([0.0, -3.0, 0.0, 2.0, 0.0])
     assert indicator.zero_departures_mean == [0.0, 1.0, 1.0, 2.0, 2.0, 2.0]
     assert indicator.nonzero_reached_mean == [0.0, 1.0, 1.0, 1.0, 1.0, 1.0]
@@ -93,8 +93,8 @@ def test_a_departure_to_a_negative_value_counts():
 
 
 def test_the_muscadet_route_reads_the_zero_departure_pair():
-    # cod3s defines `nb-occurrences` as `nb_visits` and `had_value` as
-    # `realized`, the zero-departure pair. muscadet 5.14.0 settles the
+    # cod3s defines `nb-occurrences` and `had_value` against the reference
+    # engine's visit count and has-been-non-zero flag, the zero-departure pair. muscadet 5.14.0 settles the
     # initial state to its fixpoint before anything counts (conformance
     # point `initial_state_occurrence`), so a predicate true there is no
     # occurrence on the reference either (measured 2026-10-12 on muscadet
@@ -115,7 +115,7 @@ def test_the_muscadet_route_reads_the_zero_departure_pair():
 def test_a_transition_firing_at_t0_is_a_departure_and_the_initial_state_is_not():
     """The first change point is the initial fixpoint; a delay-0 transition
     firing at t = 0 comes after it. Measured on PyCATSHOO 1.3.8.0 (cod3s
-    1.21.0, 2026-10-12): `nb_visits` reads 1 at t = 0 on a flag a delay-0
+    1.21.0, 2026-10-12): the visit count reads 1 at t = 0 on a flag a delay-0
     transition raises, and 0 on a state active from the start. Up to
     pyraichu 0.91.0 the t = 0 firing was read as part of the initial value."""
     model = {

@@ -350,7 +350,7 @@ def test_a_controller_is_read_and_its_grammar_fires_at_the_declared_levels():
 
     On a unit ramp the level reads `t`, so the comparison's 2 is crossed at
     t = 2 and the nested band's 3 at t = 3. The dates are the assertion:
-    asserting that the transitions came out `watched` would pass on a montage
+    asserting that the transitions came out `boundary` would pass on a montage
     where the crossing is never located.
     """
     fired = trajectory(a_filled_tank())
@@ -606,8 +606,8 @@ def test_an_unknown_operator_is_refused_naming_the_closed_list():
 
 def test_a_python_callable_is_refused_whatever_continuity_it_attests():
     """The property the closed grammar exists for: nothing can read a threshold
-    out of arbitrary Python, so nothing could compile one to a watched
-    transition, and the fallback would be a sensitive function on a reading,
+    out of arbitrary Python, so nothing could compile one to a boundary
+    transition, and the fallback would be a propagation on a reading,
     which never re-evaluates between discrete events."""
     with pytest.raises(declare.ComponentSpecError):
         declare.check_controller_spec(

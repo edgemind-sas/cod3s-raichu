@@ -46,7 +46,7 @@ feature:
   entered by one of the transitions into it; a transition is explained as its
   **basic event** (the draw of its law) AND its source state being reached AND
   its guard holding;
-- an attribute a **sensitive function** or an **explicit equation** computes
+- an attribute a **propagation** or an **explicit equation** computes
   is **unrolled**: replaced by the expression that computes it, recursively,
   down to the states and to the attributes nothing writes. A flow variable of
   a model built through the muscadet layer is such an attribute, so a
@@ -170,7 +170,7 @@ def block(name, rate):
             "automata": [{"name": "health", "states": ["ok", "nok"], "init": "ok",
                           "transitions": [{"name": "fail", "source": "ok", "targets": ["nok"],
                                            "distrib": "exp", "rate": rate}]}],
-            "sensitive_functions": [{"name": "update_up", "effects": [
+            "propagations": [{"name": "update_up", "effects": [
                 {"target": {"component": name, "attribute": "up"},
                  "value": {"op": "state_active",
                            "state": {"component": name, "automaton": "health", "state": "ok"}}}]}]}
@@ -186,7 +186,7 @@ parallel = pyraichu.load_model({
          "attributes": [{"name": "fed", "kind": "bool",
                          "init": {"kind": "bool", "value": False}}],
          "ports": [{"name": "in", "dir": "in"}],
-         "sensitive_functions": [{"name": "update_fed", "effects": [
+         "propagations": [{"name": "update_fed", "effects": [
              {"target": {"component": "T", "attribute": "fed"},
               "value": {"op": "port_agg", "port": {"component": "T", "port": "in"},
                         "agg": "any"}}]}]},

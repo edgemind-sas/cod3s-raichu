@@ -27,7 +27,7 @@ start with the [tutorial](docs/tutorial/01-first-model.md).
 ## What RAICHU provides
 
 - **Coupled discrete/continuous dynamics**: component-level automata
-  (delay, instantaneous, watched/boundary and stochastic transitions)
+  (delay, instantaneous, boundary/boundary and stochastic transitions)
   over a continuous state integrated with a Dormand-Prince 4(5)
   dense-output solver. Boundary crossings are detected by scanning each
   step at a resolution the study can set, then located by bisection to

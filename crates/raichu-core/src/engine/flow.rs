@@ -934,7 +934,7 @@ impl<'m> Engine<'m> {
     /// commonest stalls.
     ///
     /// Whatever the resolution moves is drained into the stale marks of
-    /// the indexed watched set on every exit path, the failing ones
+    /// the indexed boundary set on every exit path, the failing ones
     /// included: a resolution that raised still left the attribute vector
     /// where its last sweep put it.
     pub(super) fn resolve_flows(&mut self) -> Result<(), EngineError> {

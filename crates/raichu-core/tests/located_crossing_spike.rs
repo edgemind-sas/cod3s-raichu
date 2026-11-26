@@ -68,7 +68,7 @@ fn far_scheduled_automaton() -> Automaton {
     }
 }
 
-/// A watched transition firing when `y` reaches 5.
+/// A boundary transition firing when `y` reaches 5.
 fn boundary_automaton(component: &str) -> Automaton {
     Automaton {
         name: "gate".into(),
@@ -92,7 +92,7 @@ fn boundary_automaton(component: &str) -> Automaton {
             cycle_cancellation: Default::default(),
             kind: None,
             effects: vec![],
-            distrib: Distrib::Watched,
+            distrib: Distrib::Boundary,
         }],
     }
 }
@@ -140,7 +140,7 @@ fn same_component_model() -> Model {
                     },
                 },
             ],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![Indicator {
@@ -191,7 +191,7 @@ fn across_connection_model() -> Model {
                         value: Value::Float(1.0),
                     },
                 }],
-                sensitive_functions: vec![],
+                propagations: vec![],
             },
             Component {
                 name: "sink".into(),
@@ -225,7 +225,7 @@ fn across_connection_model() -> Model {
                         ],
                     },
                 }],
-                sensitive_functions: vec![],
+                propagations: vec![],
             },
         ],
         connections: vec![Connection {

@@ -12,8 +12,8 @@
 //! event** (the draw of its law) AND its **source state** being reached AND
 //! its **guard** holding.
 //!
-//! **Attributes are unrolled, not frozen.** An attribute a sensitive
-//! function or an explicit equation computes is replaced by the expression
+//! **Attributes are unrolled, not frozen.** An attribute a
+//! propagation or an explicit equation computes is replaced by the expression
 //! that computes it, recursively, down to the states and to the attributes
 //! nothing writes, which keep their initial value (or a declared
 //! **profile**'s). A flow variable of a model built through the muscadet
@@ -328,7 +328,7 @@ pub enum GateOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OriginKind {
-    /// An attribute a sensitive function or an explicit equation computes,
+    /// An attribute a propagation or an explicit equation computes,
     /// unrolled into the states that govern it (a muscadet flow is one).
     Attribute,
     /// A state being entered: one of the ways into it.
@@ -862,7 +862,7 @@ fn generate(
 /// Who computes an attribute.
 #[derive(Debug, Clone)]
 enum Writer {
-    /// A sensitive function's effect, or an explicit equation: the
+    /// A propagation's effect, or an explicit equation: the
     /// attribute is this expression of the model, once settled.
     Unrollable { by: String, expr: CExpr },
     /// Something whose result is not an expression of the current state
@@ -877,7 +877,7 @@ fn writers(model: &CompiledModel) -> Vec<Vec<Writer>> {
     for function in &model.functions {
         for (target, expr) in &function.effects {
             out[*target].push(Writer::Unrollable {
-                by: format!("the sensitive function `{}`", function.name),
+                by: format!("the propagation `{}`", function.name),
                 expr: expr.clone(),
             });
         }
@@ -1366,8 +1366,8 @@ impl Builder<'_> {
             [Writer::Opaque(by)] => {
                 return Err(FaultTreeError::Unsupported(format!(
                     "attribute `{name}` is computed by {by}, which the tree cannot \
-                     unroll into the states that govern it (only a sensitive \
-                     function's effect or an explicit equation can be)"
+                     unroll into the states that govern it (only a \
+                     propagation's effect or an explicit equation can be)"
                 )))
             }
             several => {
@@ -2298,14 +2298,14 @@ impl Builder<'_> {
                 }
                 BasicLaw::Probability { probability }
             }
-            CLaw::Watched { margin } => {
+            CLaw::Boundary { margin } => {
                 // A crossing no draw governs: with the states it reads at
                 // their initial values, it happens or it never does.
                 let margin = self.unroll(margin)?.plain();
                 let transition = &self.model.transitions[t_idx];
                 if reads_state(&margin) {
                     return Err(FaultTreeError::Unsupported(format!(
-                        "the boundary of watched transition `{}` reads a state",
+                        "the boundary of transition `{}` reads a state",
                         transition.name
                     )));
                 }
@@ -2745,8 +2745,7 @@ fn compile_top(model: &CompiledModel, expr: &Expr) -> Result<CExpr, FaultTreeErr
 }
 
 /// Propagate constants, collapse single-child gates and merge nested gates
-/// of one connective (the reference options `reduce_constant_gt`,
-/// `reduce_one_son_gt`, `reduce_same_op_gt`, always applied).
+/// of one connective (the three simplifications are always applied).
 ///
 /// A gate with an origin is never merged into its parent: the Boolean
 /// function is the same, and the gate says what it stands for. A gate with

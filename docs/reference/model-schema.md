@@ -79,7 +79,7 @@ A binding is `{"attribute": {"component": string, "attribute": string},
 "variable": string}`. A start value is `{"variable": string, "value":
 Value}`. Structural validation checks that each bound model attribute
 exists, each output attribute and output variable is bound at most once,
-no output attribute has another writer (equation, sensitive function or
+no output attribute has another writer (equation, propagation or
 transition effect), and `step` is finite and positive. Preparation checks
 the FMU description for variable names, causality and compatible types
 before loading its binary. The FMU's content hash identifies it in run
@@ -155,7 +155,7 @@ outside the exact `f64` range (absolute value above `2^53`) fail the run.
 
 The objective and constraint expressions must be affine in the decision
 attributes. Coefficients and bounds can read discrete attributes and states,
-including outputs of sensitive functions, transition effects and earlier
+including outputs of propagations, transition effects and earlier
 programs. A program cannot read one of its own outputs, use `time`, or read
 an ODE target, an explicit-equation target or an allocated channel, including
 through `port_agg`. Program dependencies cannot form a cycle. No other
@@ -224,7 +224,7 @@ Only `name` is required; every collection defaults to empty.
 | `ports` | array of [Port](#port) | connection points |
 | `interfaces` | array of [Interface](#interface) | named groups of ports |
 | `automata` | array of [Automaton](#automaton) | state machines |
-| `sensitive_functions` | array of [SensitiveFunction](#sensitivefunction) | declarative effects |
+| `propagations` | array of [Propagation](#propagation) | declarative effects |
 | `equations` | array of [Equation](#equation) | continuous dynamics |
 | `allocations` | array of [Allocation](#allocation) | conservative distribution operators |
 
@@ -271,7 +271,7 @@ where `<edge>` is the connection's `name` when it has one and
 materialises `out__share__consumer__input` on the producing component.
 
 Those attributes are **ordinary float attributes**: equations and
-sensitive functions write them, indicators observe them, the causal
+propagations write them, indicators observe them, the causal
 journal records them under that name, and the snapshot carries them. They
 are not declared in `attributes`, and a declared attribute that collides
 with a materialised name is refused at build time, naming both.
@@ -357,9 +357,9 @@ automaton**. `init` must be one of `states`.
 #### Edge effects
 
 `effects` lists assignments (`{"target": VarRef, "value": Expr}`, the
-shape a sensitive function's effects take) that the transition makes
+shape a propagation's effects take) that the transition makes
 **once**, when it fires, after its state change and before anything
-propagates, in declaration order. A sensitive function's effects are a
+propagates, in declaration order. A propagation's effects are a
 level, re-evaluated whenever what they read changes; an edge effect is
 never re-applied and nothing restores what it wrote, so the attribute
 keeps the value until something else writes it. That is a one-shot
@@ -367,13 +367,13 @@ effect, and on an attribute nothing else writes, a variable that
 memorises: a detection latched by a failure and cleared by its repair.
 An interrupted transition writes nothing.
 
-An edge effect on an attribute an explicit equation or a sensitive
-function also writes is refused: the next evaluation would erase it.
+An edge effect on an attribute an explicit equation or a
+propagation also writes is refused: the next evaluation would erase it.
 
 On the target of an **ODE** equation, an edge effect is a **reset map**,
 the jump of a piecewise-deterministic Markov process (Davis): the
 continuous state takes the written value at the firing instant and the
-integration of the next segment starts from it. Watched guards and
+integration of the next segment starts from it. Boundary guards and
 state-dependent hazards that read the variable see the new value from
 that instant. A tank refilled at once when a pump is repaired, a counter
 of accumulated wear reset by a maintenance, a bouncing ball whose
@@ -409,8 +409,8 @@ run in turn, each on the state the previous one left: with several
 connections, a value that reads the port being written sees the writes
 already made. An in port nothing is
 connected to writes nothing. A target naming a port that is not an in
-port of the component is refused, and so is a sensitive function writing
-through a port: a sensitive function is a level re-evaluated to a
+port of the component is refused, and so is a propagation writing
+through a port: a propagation is a level re-evaluated to a
 fixpoint, and one writing a neighbour has no place in it. A document
 carrying the form declares the `port_effects` feature as well as
 `transition_effects`.
@@ -558,9 +558,9 @@ other guarded transition was armed at the next discrete event. A model
 whose results relied on that late arming gives different numbers from
 0.142.0 on.
 
-### `watched`: a transition fired by the crossing itself
+### `boundary`: a transition fired by the crossing itself
 
-`"distrib": "watched"` is **not a third nature**. It marks a *guarded*
+`"distrib": "boundary"` is **not a third nature**. It marks a *guarded*
 transition with no law of its own: the engine **monitors the continuous
 trajectory** and fires the transition when the boundary is crossed
 (detected by scanning each integration step, then located by bisection).
@@ -570,12 +570,12 @@ An episode shorter than the scan spacing can be missed: see
 It is declared explicitly because the same comparison on another law
 gates that law instead (see
 [Guards on continuous attributes](#guards-on-continuous-attributes)). A
-watched transition takes no distribution parameters and requires a
+boundary transition takes no distribution parameters and requires a
 `guard` containing an ordering comparison (`lt`/`le`/`gt`/`ge`).
 
-A `not` in a watched guard is the **strict** complement: `not(x >= c)`
+A `not` in a boundary guard is the **strict** complement: `not(x >= c)`
 holds for `x < c`, as `lt` does, so a guard and its negation never hold
-together on the boundary, and a two-state automaton watched on `cond` and
+together on the boundary, and a two-state automaton boundary on `cond` and
 `not(cond)` settles at the crossing instead of firing back and forth.
 
 ### Interruption policy
@@ -588,12 +588,12 @@ together on the boundary, and a two-state automaton watched on `cond` and
 | `resume` | the countdown pauses and resumes where it left off |
 | `continue` | the countdown never stops, guard or not |
 
-## SensitiveFunction
+## Propagation
 
 `{ "name": string, "effects": [Assignment, …] }`. An **Assignment** is
 `{ "target": VarRef, "value": Expr }`, where **VarRef** is
 `{ "component": string, "attribute": string }`. The engine derives *when*
-to run a sensitive function from the attributes and states its
+to run a propagation from the attributes and states its
 expressions read: there is no manual trigger list, and no callback runs
 during numerical integration.
 
@@ -654,12 +654,12 @@ which say *when* something fires.
 | `allocated` | string | channel of `port` receiving what each consumer gets (written) |
 | `policy` | `"proportional"` \| `"shares"` \| `"priority"` | how a shortage is split |
 
-A [sensitive function](#sensitivefunction) effect writes **one** target,
+A [propagation](#propagation) effect writes **one** target,
 so it cannot express a split: the share handed to one consumer depends on
 what every other consumer asked for. The operator therefore writes the
 whole vector at once, as one step of the explicit sweep, and is evaluated
 at every evaluation point like an equation. That placement is what lets a
-[watched](#watched-a-transition-fired-by-the-crossing-itself) guard reading an
+[boundary](#boundary-a-transition-fired-by-the-crossing-itself) guard reading an
 allocated quantity be *located* at its crossing instant rather than
 noticed at the next discrete date.
 
@@ -692,7 +692,7 @@ them; both are refused at build time, naming the component and the flow.
   declaration index**: a property of the model file, never of the
   engine's evaluation order or of a hash order.
 - **One writer.** Nothing else may write an allocated quantity, neither an
-  equation nor a sensitive function nor a second operator: refused at
+  equation nor a propagation nor a second operator: refused at
   build time, because two writers mean the last one silently wins.
 
 Negative demands and a negative available quantity are read as zero (a
@@ -735,12 +735,12 @@ resolution existed.
 
 Only the *search* is done at the boundary. The resolved network is
 evaluated by the ordinary explicit pass at **every solver stage**, so a
-flow moves with the state and a [watched](#watched-a-transition-fired-by-the-crossing-itself)
+flow moves with the state and a [boundary](#boundary-a-transition-fired-by-the-crossing-itself)
 guard reading one is located at its crossing instant.
 
-The frozen active set is itself watched. Every operator contributes one
+The frozen active set is itself boundary. Every operator contributes one
 **active-set margin** per outgoing connection, monitored exactly like a
-watched guard: the segment ends the moment a consumer would become
+boundary guard: the segment ends the moment a consumer would become
 saturated (or stop being), the network is resolved again from that state,
 and integration continues. With `journal` enabled each of those crossings
 appears as an `active_set_crossed` record naming the operator, the edge,
@@ -754,7 +754,7 @@ flow tolerance and not the (ten times smaller) event-location tolerance.
 
 A **minimum** gets no margin of its own. A limiting reagent written as a
 minimum over inputs keeps a kink rather than a jump, which the integrator
-handles unaided, and one watched guard per input pair would add a
+handles unaided, and one boundary guard per input pair would add a
 quadratic population for accuracy the kink already provides. Which branch
 a minimum takes still enters the resolution's stopping test, where it is
 free.
@@ -1144,7 +1144,7 @@ Kind compatibility is refused at build time: a `bool` attribute takes
 
 **Where a threshold flips.** An ordering threshold (`lt`, `le`, `gt`,
 `ge`) on a number is located inside a continuous segment the way a
-[watched](#watched-a-transition-fired-by-the-crossing-itself) transition's boundary is, bisected to the
+[boundary](#boundary-a-transition-fired-by-the-crossing-itself) transition's boundary is, bisected to the
 event tolerance on the solver's dense output and recorded at that date.
 It is an **observation**, not an event: the solver takes exactly the
 steps it would take without it, so declaring a threshold never moves the
@@ -1253,10 +1253,10 @@ flowchart LR
 |---|---|
 | `schDT` | schedule a deterministic transition at its delay |
 | `schST` | schedule a stochastic transition at a date drawn from its law |
-| `schWT` | fire a watched transition at its boundary crossing, located during integration (never predicted in advance) |
+| `schWT` | fire a boundary transition at its boundary crossing, located during integration (never predicted in advance) |
 | `evolC` | integrate the continuous state up to the next scheduled date |
 | `evolT` | fire the earliest transition |
-| `evolA` | run the sensitive functions it triggers, to a fixpoint |
+| `evolA` | run the propagations it triggers, to a fixpoint |
 | `updateMT` | reschedule a modifiable transition whose rate changed (cumulative hazard) |
 | `updateIT` | drop an interruptible transition whose guard became false |
 

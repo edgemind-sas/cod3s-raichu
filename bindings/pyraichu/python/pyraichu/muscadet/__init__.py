@@ -2,8 +2,8 @@
 
 Recovers muscadet's productivity idioms: smart flow components,
 declarative failure modes, one-line connections, as a thin builder
-that *generates a native RAICHU model* (ports/interfaces, sensitive
-functions, expression trees).
+that *generates a native RAICHU model* (ports/interfaces,
+propagations, expression trees).
 
 The authoring surface mirrors `muscadet.ObjFlow`:
 
@@ -60,10 +60,10 @@ those flows in a shared volume. Per capacity ``c`` holding flow ``f``:
   ``c_fill`` their sum, so a volume holding two flows of different
   weights reports one fill consistent with both;
 - an automaton ``c_bounds`` sits in ``empty``, ``partial`` or ``full``,
-  its locations entered by **watched** transitions on the total fill.
+  its locations entered by **boundary** transitions on the total fill.
   The bounds are locations rather than branches inside the derivative:
   a branch would make the right-hand side discontinuous without the
-  solver being told, which is exactly what a watched transition exists
+  solver being told, which is exactly what a boundary transition exists
   to avoid;
 - at the full bound the capacity asks upstream only for what it can
   still take, and at the empty bound it serves downstream only what
@@ -121,7 +121,7 @@ least demanded output allow. Per rule set ``S``:
   what holds correlated outputs in their declared proportion;
 - a guarded set carries a mode automaton ``S_mode``, one location per
   rule plus one meaning "no rule applies", whose transitions are
-  **watched** when a guard reads a continuously-evolving quantity.
+  **boundary** when a guard reads a continuously-evolving quantity.
 
 Transfer pairs (mirroring `muscadet/transfer.py`) move a quantity that
 travels because a **gradient** drives it, which demand-pulled transport
@@ -152,7 +152,7 @@ continuous output's production, and they compose differently on purpose::
                x  {flow}_tap_rate            <- the taps, by sum
 
 - ``{flow}_out_profile`` is a declared **continuous** function of the
-  clock, published read-only. A discontinuous one would need a watched
+  clock, published read-only. A discontinuous one would need a boundary
   transition at each of its breakpoints, which this layer derives from
   no callable, so a profile that is not one of the declarable shapes is
   refused rather than integrated across an unannounced jump;
@@ -872,7 +872,7 @@ class ObjFlow(
             "ports": ports,
             "interfaces": [],
             "automata": automata,
-            "sensitive_functions": functions,
+            "propagations": functions,
             "equations": equations,
         }
 

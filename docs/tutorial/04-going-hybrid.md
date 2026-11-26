@@ -11,11 +11,11 @@ Two new ingredients:
 
 - **equations**: a continuous attribute governed by `dV/dt = …`
   (`ode`) or `V = …` (`explicit`);
-- **watched transitions**: a *guarded* transition whose guard involves a
+- **boundary transitions**: a *guarded* transition whose guard involves a
   continuous attribute. Because that attribute drifts between events, the
   engine must **watch the trajectory** and fire the transition when the
   guard flips: each integration step is scanned for the flip, and the
-  crossing is then located by bisection, not by stepping. You declare this intent explicitly (`"distrib": "watched"`): the
+  crossing is then located by bisection, not by stepping. You declare this intent explicitly (`"distrib": "boundary"`): the
   engine cannot guess, from a comparison alone, whether you mean "fire at
   the crossing" or merely "be eligible while true". The
   [boundaries chapter](../engine/boundaries.md) of "How the engine works"
@@ -53,17 +53,17 @@ room = {
 }
 ```
 
-## The heater: watched transitions and a failure
+## The heater: boundary transitions and a failure
 
-The heater's thermostat is two **watched transitions**: turn `ON` when
-the room falls below 15, `OFF` when it climbs above 20. A watched guard
+The heater's thermostat is two **boundary transitions**: turn `ON` when
+the room falls below 15, `OFF` when it climbs above 20. A boundary guard
 is a comparison on a continuous quantity: the engine treats it as a
 boundary and root-finds the crossing, so the switch happens at exactly
 the right temperature, not at the nearest time step.
 
 The heater also has a `health` automaton that can fail (exponentially)
 and be repaired. Its delivered `power` is `5` only when it is both `ON`
-and `OK`: a sensitive function with an `if` expression couples the
+and `OK`: a propagation with an `if` expression couples the
 discrete state to the continuous input of the room.
 
 ```python
@@ -83,9 +83,9 @@ heater = {
         {"name": "functional", "states": ["ON", "OFF"], "init": "ON",
          "transitions": [
             {"name": "ON_to_OFF", "source": "ON", "targets": ["OFF"],
-             "distrib": "watched", "guard": threshold("gt", 20.0)},
+             "distrib": "boundary", "guard": threshold("gt", 20.0)},
             {"name": "OFF_to_ON", "source": "OFF", "targets": ["ON"],
-             "distrib": "watched", "guard": threshold("lt", 15.0)},
+             "distrib": "boundary", "guard": threshold("lt", 15.0)},
          ]},
         {"name": "health", "states": ["OK", "KO"], "init": "OK",
          "transitions": [
@@ -95,7 +95,7 @@ heater = {
              "distrib": "exp", "rate": 0.2},
          ]},
     ],
-    "sensitive_functions": [{
+    "propagations": [{
         "name": "update_power",
         "effects": [{
             "target": {"component": "H", "attribute": "power"},
@@ -170,7 +170,7 @@ print("mean temperature:", [round(v, 1) for v in est.indicators["temp"].mean])
 ## Where to go next
 
 You now have the whole modelling vocabulary: components, attributes,
-ports, automata, distributions, sensitive functions, equations and watched
+ports, automata, distributions, propagations, equations and boundary
 transitions. From here:
 
 - the [Model schema reference](../reference/model-schema.md) documents

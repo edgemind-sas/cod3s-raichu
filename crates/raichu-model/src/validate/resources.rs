@@ -199,7 +199,7 @@ impl Model {
                         )
                     });
             }
-            for function in &component.sensitive_functions {
+            for function in &component.propagations {
                 for assignment in &function.effects {
                     writers
                         .entry((
@@ -207,7 +207,7 @@ impl Model {
                             assignment.target.attribute.as_str(),
                         ))
                         .or_insert_with(|| {
-                            format!("sensitive function `{}.{}`", component.name, function.name)
+                            format!("propagation `{}.{}`", component.name, function.name)
                         });
                 }
             }

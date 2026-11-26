@@ -184,7 +184,7 @@ _CONTINUITY_MESSAGE = (
     "continuity cannot be inspected, so it is declared: only the shapes "
     "this layer carries as data are accepted, and a Python function is "
     "not one of them. A discontinuous law (a thermostat switching at a "
-    "threshold, a schedule, a lookup table) needs a watched transition "
+    "threshold, a schedule, a lookup table) needs a boundary transition "
     "at each of its breakpoints so the solver stops AT the jump instead "
     "of crossing it inside an integration step; this layer derives no "
     "such transition from a callable, so it refuses the declaration "

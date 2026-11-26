@@ -617,7 +617,7 @@ def _reinit_effects(
 
 
 def _reinit_writer_sites(specs: list[dict]) -> dict[tuple[str, str], str]:
-    """The ``(component, sensitive function)`` pairs that carry ObjFM
+    """The ``(component, propagation)`` pairs that carry ObjFM
     reinitialization effects, read from the DECLARATIONS, each mapped to
     the mode that emitted it.
 
@@ -659,7 +659,7 @@ def _reinit_claims(
     """
     claims: dict[tuple[str, str], list[tuple[str, dict, dict]]] = {}
     for component in model.get("components", []) or []:
-        for function in component.get("sensitive_functions", []) or []:
+        for function in component.get("propagations", []) or []:
             site = (component.get("name"), function.get("name"))
             if site not in sites:
                 continue
@@ -1008,9 +1008,9 @@ def _latch_held_writes_on_persistent_gates(
     # A reinitialization function whose every effect became edge writes has
     # nothing left to evaluate.
     for component in components.values():
-        functions = component.get("sensitive_functions")
+        functions = component.get("propagations")
         if functions:
-            component["sensitive_functions"] = [f for f in functions if f.get("effects")]
+            component["propagations"] = [f for f in functions if f.get("effects")]
 
 
 def _one_shot_shape(spec: dict, attribute: str) -> str | None:
@@ -1204,10 +1204,10 @@ def _merge_reinit_writers(model: dict, specs: list[dict]) -> None:
     # drop it rather than emit an empty function, which is what the
     # expansion does for a mode with no effects at all.
     for component in model.get("components", []) or []:
-        functions = component.get("sensitive_functions")
+        functions = component.get("propagations")
         if not functions:
             continue
-        component["sensitive_functions"] = [
+        component["propagations"] = [
             function
             for function in functions
             if function.get("effects")
@@ -2070,7 +2070,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
             "ports": [],
             "interfaces": [],
             "automata": automata,
-            "sensitive_functions": functions,
+            "propagations": functions,
             "equations": [],
         }
         return [component], [], []
@@ -2132,7 +2132,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
         "ports": [],
         "interfaces": [],
         "automata": automata,
-        "sensitive_functions": ctrl_functions,
+        "propagations": ctrl_functions,
         "equations": [],
     }
 
@@ -2156,10 +2156,10 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
                 f"ObjFM `{name}` ({behaviour}): target `{target}` already has an "
                 f"automaton named `{name}`: rename the ObjFM or the automaton"
             )
-        if any(f.get("name") == apply_fn for f in comp.get("sensitive_functions", [])):
+        if any(f.get("name") == apply_fn for f in comp.get("propagations", [])):
             raise ValueError(
                 f"ObjFM `{name}` ({behaviour}): target `{target}` already has a "
-                f"sensitive function named `{apply_fn}`: rename the ObjFM"
+                f"propagation named `{apply_fn}`: rename the ObjFM"
             )
         ctrl = f"ctrl_{name}_{target}"
         if rep_indep and can_fire:
@@ -2265,7 +2265,7 @@ def _expand_objfm(spec: dict, model: dict) -> tuple[list[dict], list[dict], list
             repair_pulses=repair_edge,
         )
         if effects:
-            comp.setdefault("sensitive_functions", []).append(
+            comp.setdefault("propagations", []).append(
                 {"name": f"apply_{name}", "effects": effects}
             )
 
@@ -2509,7 +2509,7 @@ def _expand_objfm_inst(spec: dict, model: dict) -> tuple[list[dict], list[dict],
         "ports": [],
         "interfaces": [],
         "automata": automata,
-        "sensitive_functions": functions,
+        "propagations": functions,
         "equations": [],
     }
     return [component], [], []
@@ -2573,7 +2573,7 @@ def _expand_objevent(spec: dict, model: dict) -> tuple[list[dict], list[dict], l
                 ],
             }
         ],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
     # A feared event marked `"target": true` becomes a sequence-analysis
@@ -2590,8 +2590,8 @@ def _expand_objlogicgate(
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """muscadet `ObjLogicGate` (`muscadet/obj_logic.py`): a combinational
     boolean gate, **automaton-free**. A `result` attribute is recomputed
-    as `kind` over the condition leaves, edge-triggered by a sensitive
-    function whenever a referenced input changes. By convention `cond` is
+    as `kind` over the condition leaves, edge-triggered by a
+    propagation whenever a referenced input changes. By convention `cond` is
     one unit clause per source (`[[s1], [s2], …]`), so `kind` alone chooses
     the aggregation:
 
@@ -2655,7 +2655,7 @@ def _expand_objlogicgate(
         "ports": ports,
         "interfaces": [],
         "automata": [],
-        "sensitive_functions": [
+        "propagations": [
             {
                 "name": f"recompute_{name}",
                 "effects": [
@@ -2715,7 +2715,7 @@ def _lower_logic_gate_equalities(model: dict, specs: list[dict]) -> None:
 
     for component in model.get("components", []):
         if component["name"] in gates:
-            for function in component["sensitive_functions"]:
+            for function in component["propagations"]:
                 for effect in function["effects"]:
                     lower(effect["value"])
 

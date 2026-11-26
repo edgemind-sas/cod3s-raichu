@@ -314,16 +314,16 @@ does `port: "out"` on a flow the component carries only as an output.
 ### A threshold on a quantity that moves
 
 A comparison against a continuous quantity gets a **two-state threshold
-automaton** whose two transitions are `watched`, and the production condition
+automaton** whose two transitions are `boundary`, and the production condition
 reads that automaton's location rather than the quantity itself. The
 indirection is the mechanism, not a detour:
 
-the condition writes a variable through a sensitive function, and a sensitive
-function is re-run by a *discrete* change. An attribute an ODE moves announces
+the condition writes a variable through a propagation, and a
+propagation is re-run by a *discrete* change. An attribute an ODE moves announces
 nothing of its own, so a condition reading the quantity directly is evaluated
 at t = 0 and never again -- measured, on a volume filling past its threshold
 with the output left unfed for the whole mission. Reading the location
-subscribes the function to the automaton, whose watched transitions fire **at**
+subscribes the function to the automaton, whose boundary transitions fire **at**
 the crossing. muscadet wires the same thing the other way round, hanging a
 sensitive method on the same automaton
 (`muscadet.flow.add_prod_cond_threshold_automata`).

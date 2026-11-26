@@ -96,7 +96,7 @@ fn tank(indicators: Vec<Indicator>) -> Model {
                     }),
                 },
             }],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         indicators,
         connections: vec![],
@@ -369,7 +369,7 @@ fn draining(initial: f64) -> Model {
                     value: Value::Float(-1.0),
                 },
             }],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         indicators: vec![
             threshold_on("level", "positive", CmpOp::Gt, Value::Float(0.0)),
@@ -456,7 +456,7 @@ fn a_threshold_crossed_between_two_samples_is_located_at_its_crossing() {
     // The flip used to be detected at the first sample that saw it, so a
     // 22-hour condition read 25 hours on a five-hour grid and only the
     // fine grid got it right. It is now located as an event of the
-    // segment, bisected like a watched boundary: the grid no longer
+    // segment, bisected like a boundary: the grid no longer
     // decides the duration.
     let coarse = campaign_on(
         &draining(22.0),

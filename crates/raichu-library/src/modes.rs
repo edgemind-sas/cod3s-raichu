@@ -142,9 +142,9 @@ pub(crate) fn condition_expr(
 ///   chance the mode occurs on each rising edge of its condition);
 /// - a repair may be certain (`inst` with an empty `probs`), taken when its
 ///   repair condition is found true at a discrete event (a condition on a
-///   continuous attribute is refused by the caller: `watched` repairs on
+///   continuous attribute is refused by the caller: `boundary` repairs on
 ///   the boundary);
-/// - either may be `watched`: it fires when the continuous boundary its
+/// - either may be `boundary`: it fires when the continuous boundary its
 ///   condition states is crossed, so it needs that condition (`guarded`).
 pub(crate) fn law(
     value: &Value,
@@ -177,11 +177,11 @@ pub(crate) fn law(
             "a certain repair (`{\"distrib\": \"inst\", \"probs\": []}`) happens once the repair condition holds, so it needs a `repair_condition`".to_owned(),
         ),
         Distrib::Inst { .. } => refuse(
-            "a repair is timed, watched or certain (`inst` with no probability); a mode has two states, so a repair drawn among branches belongs in a type-body automaton".to_owned(),
+            "a repair is timed, boundary or certain (`inst` with no probability); a mode has two states, so a repair drawn among branches belongs in a type-body automaton".to_owned(),
         ),
-        Distrib::Watched if guarded => Ok(distrib),
-        Distrib::Watched => refuse(format!(
-            "a watched {role} fires when the continuous boundary its condition states is crossed, so it needs a {}",
+        Distrib::Boundary if guarded => Ok(distrib),
+        Distrib::Boundary => refuse(format!(
+            "a boundary {role} fires when the continuous boundary its condition states is crossed, so it needs a {}",
             if occurrence { "`condition`" } else { "`repair_condition`" }
         )),
         other => Ok(other),

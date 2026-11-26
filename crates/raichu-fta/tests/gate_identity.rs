@@ -48,7 +48,7 @@ fn model() -> CompiledModel {
                 {"name": "h2", "states": ["ok", "nok"], "init": "ok",
                  "transitions": [exp("fail", "ok", "nok", 2e-3)]}
             ],
-            "sensitive_functions": [{"name": "update", "effects": [
+            "propagations": [{"name": "update", "effects": [
                 {"target": {"component": "A", "attribute": "up"},
                  "value": {"op": "bool", "bool_op": "and",
                            "args": [state("A", "h1", "ok"), state("A", "h2", "ok")]}}

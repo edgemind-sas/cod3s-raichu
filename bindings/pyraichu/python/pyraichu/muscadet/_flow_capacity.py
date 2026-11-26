@@ -882,7 +882,7 @@ class _CapacitiesMixin:
         bounds automaton, the discharge gate where one is commanded, and
         the read-only ports publishing the level.
 
-        The bounds are automaton locations entered by watched transitions
+        The bounds are automaton locations entered by boundary transitions
         on the total weighted fill, never a branch inside the derivative:
         a branch would make the right-hand side discontinuous without the
         solver being told, and a bound would be stepped over instead of
@@ -1071,28 +1071,28 @@ class _CapacitiesMixin:
                             "name": f"{capacity.name}_leave_empty",
                             "source": "empty",
                             "targets": ["partial"],
-                            "distrib": "watched",
+                            "distrib": "boundary",
                             "guard": _fill_threshold(me, capacity, "ge", width),
                         },
                         {
                             "name": f"{capacity.name}_reach_empty",
                             "source": "partial",
                             "targets": ["empty"],
-                            "distrib": "watched",
+                            "distrib": "boundary",
                             "guard": _fill_threshold(me, capacity, "le", 0.0),
                         },
                         {
                             "name": f"{capacity.name}_reach_full",
                             "source": "partial",
                             "targets": ["full"],
-                            "distrib": "watched",
+                            "distrib": "boundary",
                             "guard": _fill_threshold(me, capacity, "ge", 1.0),
                         },
                         {
                             "name": f"{capacity.name}_leave_full",
                             "source": "full",
                             "targets": ["partial"],
-                            "distrib": "watched",
+                            "distrib": "boundary",
                             "guard": _fill_threshold(me, capacity, "le", 1.0 - width),
                         },
                     ],
@@ -1123,7 +1123,7 @@ class _CapacitiesMixin:
                                     "name": f"{stock}_leave_empty",
                                     "source": "empty",
                                     "targets": ["stocked"],
-                                    "distrib": "watched",
+                                    "distrib": "boundary",
                                     "guard": {
                                         "op": "cmp",
                                         "cmp": "ge",
@@ -1135,7 +1135,7 @@ class _CapacitiesMixin:
                                     "name": f"{stock}_reach_empty",
                                     "source": "stocked",
                                     "targets": ["empty"],
-                                    "distrib": "watched",
+                                    "distrib": "boundary",
                                     "guard": {
                                         "op": "cmp",
                                         "cmp": "le",

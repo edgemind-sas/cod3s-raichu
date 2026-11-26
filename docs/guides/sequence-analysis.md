@@ -179,8 +179,8 @@ justifies each one, and a campaign reports the ones it applied in
 [hydrogen installation](../examples/h2-installation.md) the compressors are
 cancellable and the production chain is kept, through the storage.
 
-What the analysis cannot see is a latch or a counter kept by a sensitive
-function. A transition declares `cycle_cancellation: never` for that: its
+What the analysis cannot see is a latch or a counter kept by a
+propagation. A transition declares `cycle_cancellation: never` for that: its
 group is then never cancelled. `always` forces the cancellation instead,
 when the analyst knows the effect is gone; `auto`, the default, lets the
 engine decide. Every transition of a group declares the same value, and a

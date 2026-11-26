@@ -173,7 +173,7 @@ def unit(name: str, other: str, case: int) -> dict:
 def reservoir(case: int) -> dict:
     """The reservoir: its level and whether it is empty, partly filled or
     full. The level follows the net flow, held at 0 while empty and at the
-    capacity while full; reaching either bound is a watched transition."""
+    capacity while full; reaching either bound is a boundary transition."""
     flow = net_flow()
     if case == 4:
         flow = if_(both(up("U1"), up("U2")), num(PHI1_MAX + PHI2_MAX - PHI_NOM), flow)
@@ -227,7 +227,7 @@ def reservoir(case: int) -> dict:
                         "guard": both(
                             cmp("le", LEVEL, num(0.0)), cmp("lt", flow, num(0.0))
                         ),
-                        "distrib": "watched",
+                        "distrib": "boundary",
                     },
                     # Full only while filling: at the capacity with a
                     # draining flow the reservoir is leaving `full`.
@@ -238,7 +238,7 @@ def reservoir(case: int) -> dict:
                         "guard": both(
                             cmp("ge", LEVEL, num(CAPACITY)), cmp("gt", flow, num(0.0))
                         ),
-                        "distrib": "watched",
+                        "distrib": "boundary",
                     },
                     # Out of empty when the flow turns positive (case 4) or
                     # when an instant refill restored the level (cases 1-3).
@@ -255,7 +255,7 @@ def reservoir(case: int) -> dict:
             }
         ],
         "equations": [{"target": "level", "kind": "ode", "expr": rate}],
-        "sensitive_functions": [
+        "propagations": [
             {
                 "name": "production",
                 "effects": [

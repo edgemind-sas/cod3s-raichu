@@ -117,7 +117,7 @@ fn every_distrib() -> Vec<Distrib> {
     let all = vec![
         Distrib::Delay { time: 2.0 },
         Distrib::Inst { probs: vec![0.25] },
-        Distrib::Watched,
+        Distrib::Boundary,
         Distrib::Exp {
             rate: Some(0.1),
             rate_expr: None,
@@ -163,7 +163,7 @@ fn every_distrib() -> Vec<Distrib> {
         match distrib {
             Distrib::Delay { .. }
             | Distrib::Inst { .. }
-            | Distrib::Watched
+            | Distrib::Boundary
             | Distrib::Exp { .. }
             | Distrib::Weibull { .. }
             | Distrib::Lognormal { .. }

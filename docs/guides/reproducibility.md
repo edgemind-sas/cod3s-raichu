@@ -45,7 +45,7 @@ print("exact replay")
 
 - The single-trajectory engine is **single-threaded and
   deterministic**: stochastic draws happen at scheduling time, in
-  transition-index order; the sensitive-function fixpoint runs in a
+  transition-index order; the propagation fixpoint runs in a
   documented, stable order (the [cross-validation](../benchmarks/cross-validation.md)
   compares converged states, and an optional confluence probe diagnoses
   order-dependence instead of hiding it).

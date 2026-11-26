@@ -79,7 +79,7 @@ outflow = {"op": "port_agg", "port": {"component": "tank", "port": "valve_in"}, 
 ```
 
 A unit is a four-state automaton. Its start and stop transitions are
-**watched**: they fire when the level crosses a set-point, detected by
+**boundary**: they fire when the level crosses a set-point, detected by
 scanning the solver's dense output and located by bisection. Its four failures draw an
 exponential law whose rate is an **expression of the temperature**, so the
 engine integrates the cumulative hazard along the trajectory rather than
@@ -103,8 +103,8 @@ def unit(name, base, on, is_valve):
     start = cmp("ge", level, num(HIGH)) if is_valve else cmp("le", level, num(LOW))
     stop = cmp("le", level, num(LOW)) if is_valve else cmp("ge", level, num(HIGH))
     transitions = [
-        {"name": "start", "source": "off", "targets": ["on"], "guard": start, "distrib": "watched"},
-        {"name": "stop", "source": "on", "targets": ["off"], "guard": stop, "distrib": "watched"},
+        {"name": "start", "source": "off", "targets": ["on"], "guard": start, "distrib": "boundary"},
+        {"name": "stop", "source": "on", "targets": ["off"], "guard": stop, "distrib": "boundary"},
     ] + [
         {"name": f"{stuck}_from_{src}", "source": src, "targets": [stuck],
          "distrib": "exp", "rate_expr": failure_rate(base), "monitored": True}
@@ -118,13 +118,13 @@ def unit(name, base, on, is_valve):
         "ports": [{"name": "flow_out", "dir": "out", "attr": "flowing"}],
         "automata": [{"name": "mode", "states": ["on", "off", "stuck_on", "stuck_off"],
                       "init": "on" if on else "off", "transitions": transitions}],
-        "sensitive_functions": [{"name": "update_flowing", "effects": [
+        "propagations": [{"name": "update_flowing", "effects": [
             {"target": {"component": name, "attribute": "flowing"}, "value": flowing}]}],
     }
 ```
 
 The tank carries the two differential equations and the three top events,
-watched as well. The top events are also the model's `targets`, which ends
+boundary as well. The top events are also the model's `targets`, which ends
 a sequence campaign's trajectory at the first of them:
 
 ```python
@@ -145,11 +145,11 @@ tank = {
     "automata": [{"name": "status", "states": ["ok", "dryout", "overflow", "overheat"],
                   "init": "ok", "transitions": [
         {"name": "dryout", "source": "ok", "targets": ["dryout"],
-         "guard": cmp("le", level, num(DRY)), "distrib": "watched"},
+         "guard": cmp("le", level, num(DRY)), "distrib": "boundary"},
         {"name": "overflow", "source": "ok", "targets": ["overflow"],
-         "guard": cmp("ge", level, num(OVER)), "distrib": "watched"},
+         "guard": cmp("ge", level, num(OVER)), "distrib": "boundary"},
         {"name": "overheat", "source": "ok", "targets": ["overheat"],
-         "guard": cmp("ge", theta, num(HOT)), "distrib": "watched"},
+         "guard": cmp("ge", theta, num(HOT)), "distrib": "boundary"},
     ]}],
     "equations": [
         # dh/dt = G (pumps − valve)

@@ -18,7 +18,7 @@ lives:
   its randomness is instead a **probabilistic choice of destination**
   (`inst`, with `probs`). We meet these in [chapter 4](04-going-hybrid.md);
   a guard on a *continuous* attribute makes an instantaneous transition
-  into a *watched* one.
+  into a *boundary* one.
 
 This chapter is about the timed, stochastic kind: the failure and repair
 distributions.

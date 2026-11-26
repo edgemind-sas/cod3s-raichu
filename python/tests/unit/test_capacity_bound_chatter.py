@@ -14,7 +14,7 @@ is four microseconds a turn, a quarter of a million turns over five units
 of time, and tens of millions over the horizon an industrial study asks
 for.
 
-Nothing saw it before. `WatchedLoop` counts watched firings **at one
+Nothing saw it before. `BoundaryLoop` counts boundary firings **at one
 instant** and these are at different instants; `FlowChattering` counts
 active-set restarts **within one segment** and each turn is its own
 segment. Time does advance, by a little, every turn. So the run did not

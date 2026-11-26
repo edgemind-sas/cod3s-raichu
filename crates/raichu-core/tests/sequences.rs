@@ -45,7 +45,7 @@ fn comp(
         }],
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: vec![],
+        propagations: vec![],
     }
 }
 

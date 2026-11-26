@@ -165,7 +165,7 @@ fn laws_model() -> Model {
 }
 
 /// `x' = slope` from `x0`; `F` fails at the continuously varying rate
-/// `k x`; `W` switches when `x >= 6` (watched), which pauses `H`
+/// `k x`; `W` switches when `x >= 6` (boundary), which pauses `H`
 /// (continuous rate, `resume`) and arms `G`.
 fn continuous_model(x0: f64, slope: f64, k: f64) -> Model {
     let x = json!({"name": "X", "ports": [],
@@ -178,7 +178,7 @@ fn continuous_model(x0: f64, slope: f64, k: f64) -> Model {
             "watch",
             &["lo", "hi"],
             vec![with(
-                tr("hit", "lo", &["hi"], json!({"distrib": "watched"})),
+                tr("hit", "lo", &["hi"], json!({"distrib": "boundary"})),
                 "guard",
                 ge(attr("X", "x"), c(6.0)),
             )],
@@ -442,7 +442,7 @@ fn close(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol * b.abs().max(1.0)
 }
 
-/// Delays only: a gate cycle, an integrated attribute crossing a watched
+/// Delays only: a gate cycle, an integrated attribute crossing a boundary
 /// boundary, and delayed workers under each interruption policy.
 fn deterministic_model() -> Model {
     let x = json!({"name": "X", "ports": [],
@@ -466,7 +466,7 @@ fn deterministic_model() -> Model {
             "watch",
             &["lo", "hi"],
             vec![with(
-                tr("hit", "lo", &["hi"], json!({"distrib": "watched"})),
+                tr("hit", "lo", &["hi"], json!({"distrib": "boundary"})),
                 "guard",
                 ge(attr("X", "x"), c(6.0)),
             )],
@@ -670,7 +670,7 @@ fn age_restarts_pauses_or_runs_on_under_each_policy() {
 
 #[test]
 fn a_continuous_hazard_matches_its_analytic_integral() {
-    // x' = 1 from 1 and λ = x: H(t) = t + t²/2, the watched boundary x >= 6
+    // x' = 1 from 1 and λ = x: H(t) = t + t²/2, the boundary x >= 6
     // at t = 5 far away.
     let compiled = CompiledModel::compile(&continuous_model(1.0, 1.0, 1.0)).unwrap();
     let mut engine = Engine::new(&compiled, deferred_config()).unwrap();
@@ -725,13 +725,13 @@ fn a_probe_stops_at_the_next_deterministic_event_without_firing_it() {
 }
 
 #[test]
-fn a_probe_stops_at_a_located_watched_crossing() {
+fn a_probe_stops_at_a_located_boundary_crossing() {
     // x' = 0.5 from 1 reaches 6 at t = 10.
     let compiled = CompiledModel::compile(&continuous_model(1.0, 0.5, 0.05)).unwrap();
     let mut engine = Engine::new(&compiled, deferred_config()).unwrap();
     let probe = engine.probe_deferred(20.0).unwrap();
     let hit = index(&compiled, "W.watch.hit");
-    assert_eq!(probe.reason, ProbeStop::Watched { index: hit });
+    assert_eq!(probe.reason, ProbeStop::Boundary { index: hit });
     assert!((probe.stop - 10.0).abs() < 1e-8, "{}", probe.stop);
     assert_eq!(engine.state("W.watch"), Some("lo"));
     // The hazard trace ends at the crossing.
@@ -888,7 +888,7 @@ fn firing_after_the_next_deterministic_event_is_a_typed_error() {
 }
 
 #[test]
-fn firing_after_a_watched_crossing_is_a_typed_error_and_changes_nothing() {
+fn firing_after_a_boundary_crossing_is_a_typed_error_and_changes_nothing() {
     let compiled = CompiledModel::compile(&continuous_model(1.0, 0.5, 0.05)).unwrap();
     let mut engine = Engine::new(&compiled, deferred_config()).unwrap();
     let f = index(&compiled, "F.fail.occ");

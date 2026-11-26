@@ -1,6 +1,6 @@
 //! Combination of the effects several active modes hold on one attribute.
 //!
-//! For each targeted attribute the expander writes one sensitive function
+//! For each targeted attribute the expander writes one propagation
 //! holding the combined value while at least one targeting mode is
 //! occurred, and the attribute's declared initial value otherwise. The
 //! nominal value takes no part in `min` or `max`: only the active modes'

@@ -52,7 +52,7 @@ fn probe_model() -> Model {
             }],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![Indicator {

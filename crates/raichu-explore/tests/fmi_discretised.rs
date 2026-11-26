@@ -90,7 +90,7 @@ fn a_run_side_grant_is_required_before_unpacking() {
 }
 
 #[test]
-fn a_serializable_reference_fmu_reaches_a_watched_target() {
+fn a_serializable_reference_fmu_reaches_a_boundary_target() {
     let compiled = model("Dahlquist.fmu");
     let result =
         explore_discretised_with_fmu(&compiled, &settings(), &fixture_dir(), true).unwrap();

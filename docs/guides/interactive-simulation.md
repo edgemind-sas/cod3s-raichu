@@ -34,8 +34,8 @@ and validated as `load_model` does. The keywords mean what they mean for
 
 `fireable()` lists the armed transitions, earliest first, each a `Fireable`
 with its `index`, qualified `transition` name, `kind` (`"delay"`,
-`"stochastic"`, `"inst"` or `"watched"`) and firing `date` (`None` for a
-watched boundary not located yet):
+`"stochastic"`, `"inst"` or `"boundary"`) and firing `date` (`None` for a
+boundary not located yet):
 
 ```python
 [armed] = session.fireable()
@@ -150,7 +150,7 @@ assert session.advance_operator_to(300.0) == result
 `OperatorAdvance`. Its fields are `requested_time`, `reached_time`, `stop`,
 `events` and `choice`. Dates use the model's time units. The command stops at
 the first relevant instant and completes deterministic reactions at that
-same instant, including located watched boundaries and controller reactions.
+same instant, including located boundary boundaries and controller reactions.
 It never continues into the next distinct event instant.
 
 | `stop` | committed state |

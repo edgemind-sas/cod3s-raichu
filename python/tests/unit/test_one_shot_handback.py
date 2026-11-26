@@ -53,7 +53,7 @@ def store(name: str) -> dict:
         "ports": [],
         "interfaces": [],
         "automata": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
 
@@ -94,7 +94,7 @@ def demander() -> dict:
                 ],
             }
         ],
-        "sensitive_functions": [
+        "propagations": [
             {
                 "name": "dem",
                 "effects": [
@@ -282,7 +282,7 @@ def test_the_hand_back_is_absorbed_into_the_held_effect():
     component = next(c for c in body["components"] if c["name"] == "m")
     edges = [t for a in component["automata"] for t in a["transitions"]]
     assert not any(t.get("effects") for t in edges)
-    (effect,) = component["sensitive_functions"][0]["effects"]
+    (effect,) = component["propagations"][0]["effects"]
     assert effect["value"]["then"]["value"]["value"] == C
     assert effect["value"]["otherwise"]["value"]["value"] == N
 

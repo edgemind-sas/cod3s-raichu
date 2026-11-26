@@ -7,7 +7,7 @@
 //! with nothing behind it. A model carrying one and nothing else found
 //! nothing to advance, evaluated its sweep once at the initial instant
 //! and reported that value at every sample instant for the rest of the
-//! run, and to every watched guard: a curve reported as a constant, with
+//! run, and to every boundary guard: a curve reported as a constant, with
 //! nothing to signal it.
 //!
 //! Both halves are pinned here, because the second is the one that
@@ -23,12 +23,12 @@ use raichu_model::{
     IndicatorTarget, Model, Transition,
 };
 
-/// The instant the ramp reaches the watched boundary.
+/// The instant the ramp reaches the boundary.
 const CROSSING: f64 = 2.5;
 
 /// `ramp = time`: the simplest equation that reads the clock and nothing
 /// else, so a failure cannot be blamed on the rest of the expression.
-fn clock_model(watched: bool) -> Model {
+fn clock_model(boundary: bool) -> Model {
     let mut component = Component {
         name: "C".into(),
         attributes: vec![Attribute {
@@ -45,9 +45,9 @@ fn clock_model(watched: bool) -> Model {
             kind: EquationKind::Explicit,
             expr: Expr::Time,
         }],
-        sensitive_functions: vec![],
+        propagations: vec![],
     };
-    if watched {
+    if boundary {
         // Fires when the ramp passes 2.5, which is the instant t = 2.5
         // and nothing else. Read against a ramp frozen at 0, the guard
         // never holds and the transition never fires at all.
@@ -73,7 +73,7 @@ fn clock_model(watched: bool) -> Model {
                 cycle_cancellation: Default::default(),
                 kind: None,
                 effects: vec![],
-                distrib: Distrib::Watched,
+                distrib: Distrib::Boundary,
             }],
         }];
     }
@@ -129,7 +129,7 @@ fn an_explicit_equation_over_the_clock_is_swept_as_time_advances() {
 }
 
 #[test]
-fn a_watched_guard_on_a_clock_reading_is_located() {
+fn a_boundary_guard_on_a_clock_reading_is_located() {
     let result = run(&clock_model(true), 10.0, vec![]);
     assert_eq!(result.events.len(), 1, "{:?}", result.events);
     let error: f64 = result.events[0].time - CROSSING;

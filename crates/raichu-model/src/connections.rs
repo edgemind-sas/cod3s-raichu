@@ -78,7 +78,7 @@ impl Model {
             || self.has_port_effects()
     }
 
-    /// Whether an edge effect or a sensitive function writes through a
+    /// Whether an edge effect or a propagation writes through a
     /// port ([`PORT`]).
     pub(crate) fn has_port_effects(&self) -> bool {
         let through = |effects: &[Assignment]| effects.iter().any(|a| a.target.component == PORT);
@@ -86,7 +86,7 @@ impl Model {
             c.automata
                 .iter()
                 .any(|a| a.transitions.iter().any(|t| through(&t.effects)))
-                || c.sensitive_functions.iter().any(|f| through(&f.effects))
+                || c.propagations.iter().any(|f| through(&f.effects))
         })
     }
 
@@ -128,11 +128,11 @@ impl Model {
         }
         for component in &mut self.components {
             if let Some(function) = component
-                .sensitive_functions
+                .propagations
                 .iter()
                 .find(|f| f.effects.iter().any(|a| a.target.component == PORT))
             {
-                return Err(ModelError::PortEffectInSensitiveFunction {
+                return Err(ModelError::PortEffectInPropagation {
                     function: format!("{}.{}", component.name, function.name),
                 });
             }
@@ -243,8 +243,8 @@ impl Model {
                     }
                 }
             }
-            for function in &component.sensitive_functions {
-                let here = || format!("sensitive function `{}.{}`", component.name, function.name);
+            for function in &component.propagations {
+                let here = || format!("propagation `{}.{}`", component.name, function.name);
                 for assignment in &function.effects {
                     f(&here, &assignment.value);
                 }
@@ -297,7 +297,7 @@ impl Model {
                     }
                 }
             }
-            for function in &mut component.sensitive_functions {
+            for function in &mut component.propagations {
                 for assignment in &mut function.effects {
                     f(&mut assignment.value);
                 }

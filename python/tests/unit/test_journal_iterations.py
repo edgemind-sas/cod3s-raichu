@@ -1,6 +1,6 @@
 """The causal journal numbers the fixpoint iterations (`evolA`).
 
-One iteration applies one sensitive function: the one with the lowest
+One iteration applies one propagation: the one with the lowest
 index among those pending. Every write it makes carries its iteration
 index, counted from 1 and restarted at every fixpoint. A fired
 transition's own edge effects are written before the fixpoint and carry
@@ -47,7 +47,7 @@ def _model():
                                            "value": {"kind": "bool", "value": True}}}],
                 }],
             }],
-            "sensitive_functions": [
+            "propagations": [
                 {"name": "low", "effects": [{"target": _ref("c"),
                                              "value": {"op": "attr", "attr": _ref("b")}}]},
                 {"name": "high", "effects": [{"target": _ref("b"), "value": _on()}]},

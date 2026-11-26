@@ -2,7 +2,7 @@
 //! demand per outgoing connection, one allocated quantity per outgoing
 //! connection, under a declared policy.
 //!
-//! A sensitive-function effect writes **one** target, so it cannot express
+//! A propagation effect writes **one** target, so it cannot express
 //! a split: the share handed to one consumer depends on what every other
 //! consumer asked for. The operator is therefore a construct of its own,
 //! declared on the producing component and evaluated on the
@@ -13,7 +13,7 @@
 //! (`crates/raichu-core/tests/located_crossing_spike.rs` pins it), and a
 //! trigger-driven entity never runs during integration. Quantities written
 //! from a trigger would stay frozen across an integration segment, every
-//! watched margin reading them would stay frozen too, and a boundary
+//! boundary margin reading them would stay frozen too, and a boundary
 //! crossing would silently degrade from *located* to *polled*.
 //!
 //! The second load-bearing property is order-independence. Each consumer's
@@ -297,7 +297,7 @@ fn the_counter_measures_the_capping_loop_and_not_the_sweep() {
 // reach the allocated quantities.
 // ---------------------------------------------------------------------
 
-/// The demand-writing sensitive function of one consumer: `a` always
+/// The demand-writing propagation of one consumer: `a` always
 /// asks for 6 and `b` for 4, whatever order the two are declared in.
 fn demand_function(consumer: &str, demand: f64) -> String {
     format!(
@@ -307,7 +307,7 @@ fn demand_function(consumer: &str, demand: f64) -> String {
     )
 }
 
-/// The same split, with the demands written by **sensitive functions**
+/// The same split, with the demands written by **propagations**
 /// instead of explicit equations, so the discrete fixpoint has something
 /// to converge and its visit order is observable. The two models differ
 /// only in the declaration order of those functions.
@@ -331,7 +331,7 @@ fn function_driven_model(reversed: bool) -> String {
         {{"name": "out", "dir": "out", "attr": "available",
           "channels": [{{"name": "demand"}}, {{"name": "alloc"}}]}}
       ],
-      "sensitive_functions": [{first}, {second}],
+      "propagations": [{first}, {second}],
       "allocations": [
         {{"name": "split", "port": "out", "demand": "demand", "allocated": "alloc",
           "available": {{"op": "attr",
@@ -399,7 +399,7 @@ fn run_probed(body: &str) -> raichu_core::SimulationResult {
 
 #[test]
 fn the_confluence_probe_accepts_an_allocation_model() {
-    // The operator sits on the explicit path, outside the sensitive-function
+    // The operator sits on the explicit path, outside the propagation
     // table the probe replays, and its outputs are recomputed from the
     // converged state afterwards. Forward and reverse must therefore agree,
     // and the probe must not report a divergence it cannot name a writer for.
@@ -483,7 +483,7 @@ const INTEGRATED_SPLIT: &str = r#"
       "automata": [
         {"name": "gate", "states": ["low", "high"], "init": "low",
          "transitions": [
-           {"name": "cross", "source": "low", "targets": ["high"], "distrib": "watched",
+           {"name": "cross", "source": "low", "targets": ["high"], "distrib": "boundary",
             "guard": {"op": "cmp", "cmp": "ge",
               "lhs": {"op": "attr", "attr": {"component": "a", "attribute": "got"}},
               "rhs": {"op": "const", "value": {"kind": "float", "value": 3.0}}}}]},
@@ -528,7 +528,7 @@ fn an_allocated_quantity_moves_inside_an_integration_segment() {
         .find(|event| event.transition.ends_with(".cross"))
         .unwrap_or_else(|| {
             panic!(
-                "the watched boundary on an allocated quantity never fired; \
+                "the boundary on an allocated quantity never fired; \
                  events were {:?}",
                 result.events
             )

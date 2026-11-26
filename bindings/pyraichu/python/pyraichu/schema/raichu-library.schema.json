@@ -288,7 +288,7 @@
           "type": "object"
         }
       ],
-      "description": "The **conservative distribution operator**: it reads one available\nquantity and one demand per outgoing connection of an out port, and\nwrites one allocated quantity per outgoing connection under a declared\npolicy.\n\n# Why it is not a sensitive function\n\nA [`SensitiveFunction`] effect writes **one** target. A split cannot be\nwritten that way: the share handed to one consumer depends on what\nevery other consumer asked for, so the operator writes the whole vector\nat once, as a single indivisible step.\n\n# Why it sits on the explicit-equation path\n\nThe engine runs only the explicit pass inside its solver callbacks; a\ntrigger-driven entity never runs during integration. Quantities written\nfrom a trigger would stay frozen across an integration segment, every\nwatched margin reading them would freeze with them, and a boundary\ncrossing would degrade silently from *located* to *polled*. The\noperator is therefore an ordinary step of the explicit sweep, named in\n[`Model::evaluation_order`] like an explicit equation, and evaluated at\nevery evaluation point.\n\nBoth channels live on the producing port: `demand` carries what each\nconsumer asks for (written upstream of this step), `allocated` carries\nwhat it gets. Nothing else may write the `allocated` quantities: a\nsecond writer is refused at build time\n([`ModelError::AllocationTargetWritten`])."
+      "description": "The **conservative distribution operator**: it reads one available\nquantity and one demand per outgoing connection of an out port, and\nwrites one allocated quantity per outgoing connection under a declared\npolicy.\n\n# Why it is not a propagation\n\nA [`Propagation`] effect writes **one** target. A split cannot be\nwritten that way: the share handed to one consumer depends on what\nevery other consumer asked for, so the operator writes the whole vector\nat once, as a single indivisible step.\n\n# Why it sits on the explicit-equation path\n\nThe engine runs only the explicit pass inside its solver callbacks; a\ntrigger-driven entity never runs during integration. Quantities written\nfrom a trigger would stay frozen across an integration segment, every\nboundary margin reading them would freeze with them, and a boundary\ncrossing would degrade silently from *located* to *polled*. The\noperator is therefore an ordinary step of the explicit sweep, named in\n[`Model::evaluation_order`] like an explicit equation, and evaluated at\nevery evaluation point.\n\nBoth channels live on the producing port: `demand` carries what each\nconsumer asks for (written upstream of this step), `allocated` carries\nwhat it gets. Nothing else may write the `allocated` quantities: a\nsecond writer is refused at build time\n([`ModelError::AllocationTargetWritten`])."
     },
     "Assignment": {
       "anyOf": [
@@ -333,7 +333,7 @@
           "type": "object"
         }
       ],
-      "description": "A direct assignment `target := value`: the *effect* of a sensitive\nfunction, as declarative data (the mutation is not a callback)."
+      "description": "A direct assignment `target := value`: the *effect* of a\npropagation, as declarative data (the mutation is not a callback)."
     },
     "AttrKind": {
       "anyOf": [
@@ -1032,19 +1032,19 @@
               ],
               "default": []
             },
-            "sensitive_functions": {
+            "propagations": {
               "anyOf": [
                 {
                   "items": {
                     "anyOf": [
                       {
-                        "$ref": "#/$defs/SensitiveFunction"
+                        "$ref": "#/$defs/Propagation"
                       },
                       {
-                        "$ref": "#/$defs/ForEach_SensitiveFunction"
+                        "$ref": "#/$defs/ForEach_Propagation"
                       },
                       {
-                        "$ref": "#/$defs/When_SensitiveFunction"
+                        "$ref": "#/$defs/When_Propagation"
                       }
                     ]
                   },
@@ -1066,13 +1066,13 @@
                             "items": {
                               "anyOf": [
                                 {
-                                  "$ref": "#/$defs/SensitiveFunction"
+                                  "$ref": "#/$defs/Propagation"
                                 },
                                 {
-                                  "$ref": "#/$defs/ForEach_SensitiveFunction"
+                                  "$ref": "#/$defs/ForEach_Propagation"
                                 },
                                 {
-                                  "$ref": "#/$defs/When_SensitiveFunction"
+                                  "$ref": "#/$defs/When_Propagation"
                                 }
                               ]
                             },
@@ -1470,7 +1470,7 @@
           "type": "object"
         }
       ],
-      "description": "A **per-connection channel** declared on an out port.\n\nAn out port exposes one attribute, so every in port connected to it\nreads the same number. A channel adds the opposite affordance: one\nquantity *per connection*, so a producer can hand a different share to\neach consumer over the same port (the conservative-flow shape).\n\nThe channel is declared once, here, on the port; the **compiler\nmaterialises** one float attribute per (connection, channel) on the\nproducing component, named by [`channel_attribute_name`]. Declaring\nthose attributes by hand would name the topology twice and let a model\ndeclare a channel with no matching connection.\n\nMaterialised attributes are ordinary float attributes: equations and\nsensitive functions write them, the causal journal records them, the\nsnapshot carries them, and indicators observe them."
+      "description": "A **per-connection channel** declared on an out port.\n\nAn out port exposes one attribute, so every in port connected to it\nreads the same number. A channel adds the opposite affordance: one\nquantity *per connection*, so a producer can hand a different share to\neach consumer over the same port (the conservative-flow shape).\n\nThe channel is declared once, here, on the port; the **compiler\nmaterialises** one float attribute per (connection, channel) on the\nproducing component, named by [`channel_attribute_name`]. Declaring\nthose attributes by hand would name the topology twice and let a model\ndeclare a channel with no matching connection.\n\nMaterialised attributes are ordinary float attributes: equations and\npropagations write them, the causal journal records them, the\nsnapshot carries them, and indicators observe them."
     },
     "CmpOp": {
       "anyOf": [
@@ -2214,7 +2214,7 @@
             },
             {
               "additionalProperties": false,
-              "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nwatched margins, guards); sensitive functions are *not*\nre-triggered by the passage of time alone.",
+              "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nboundary margins, guards); propagations are *not*\nre-triggered by the passage of time alone.",
               "properties": {
                 "op": {
                   "const": "time",
@@ -2580,7 +2580,7 @@
             },
             {
               "const": "never",
-              "description": "The group is never cancelled: its failures stay in the sequences,\nrepaired or not. For an effect the analysis cannot see, such as a\ncounter a sensitive function keeps.",
+              "description": "The group is never cancelled: its failures stay in the sequences,\nrepaired or not. For an effect the analysis cannot see, such as a\ncounter a propagation keeps.",
               "type": "string"
             },
             {
@@ -3472,7 +3472,7 @@
             },
             {
               "additionalProperties": false,
-              "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nwatched margins, guards); sensitive functions are *not*\nre-triggered by the passage of time alone.",
+              "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nboundary margins, guards); propagations are *not*\nre-triggered by the passage of time alone.",
               "properties": {
                 "op": {
                   "const": "time",
@@ -4519,7 +4519,7 @@
       ],
       "type": "object"
     },
-    "ForEach_SensitiveFunction": {
+    "ForEach_Propagation": {
       "additionalProperties": false,
       "description": "Repeats `items` once per element of a list parameter, bound to `as`, skipping the elements the list parameter `except` holds, or the one element a scalar `except` (a parameter, or the variable of an enclosing `$for_each`) is.",
       "properties": {
@@ -4536,13 +4536,13 @@
           "items": {
             "anyOf": [
               {
-                "$ref": "#/$defs/SensitiveFunction"
+                "$ref": "#/$defs/Propagation"
               },
               {
-                "$ref": "#/$defs/ForEach_SensitiveFunction"
+                "$ref": "#/$defs/ForEach_Propagation"
               },
               {
-                "$ref": "#/$defs/When_SensitiveFunction"
+                "$ref": "#/$defs/When_Propagation"
               }
             ]
           },
@@ -4801,7 +4801,7 @@
         "body": {
           "$ref": "#/$defs/BodyParts",
           "default": {},
-          "description": "Body in core constructs, templated (attributes, ports, interfaces,\nautomata, sensitive_functions, equations, allocations)."
+          "description": "Body in core constructs, templated (attributes, ports, interfaces,\nautomata, propagations, equations, allocations)."
         },
         "description": {
           "description": "Free text for the reader of the library.",
@@ -5537,7 +5537,7 @@
       ],
       "description": "Reference to a port by hierarchical name (authoring form)."
     },
-    "SensitiveFunction": {
+    "Propagation": {
       "anyOf": [
         {
           "additionalProperties": false,
@@ -5627,7 +5627,7 @@
             },
             "cases": {
               "additionalProperties": {
-                "$ref": "#/$defs/SensitiveFunction"
+                "$ref": "#/$defs/Propagation"
               },
               "type": "object"
             }
@@ -5639,7 +5639,7 @@
           "type": "object"
         }
       ],
-      "description": "A sensitive function: declarative effects re-evaluated whenever one of\nthe attributes read by its expressions changes (the sensitivity set is\n*derived* from the expressions: no manual `addSensitiveMethod`\nbookkeeping). Effects run to a fixpoint during the discrete-evolution\nphase (paper rule `propagate_effects`)."
+      "description": "A propagation: declarative effects re-evaluated whenever one of\nthe attributes read by its expressions changes (the sensitivity set is\n*derived* from the expressions: no trigger is registered by hand).\nEffects run to a fixpoint during the discrete-evolution phase (paper rule `propagate_effects`)."
     },
     "StateRef": {
       "anyOf": [
@@ -6163,10 +6163,10 @@
               "type": "object"
             },
             {
-              "description": "Watched transition (paper rule `schedule_boundary`): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
+              "description": "Boundary transition (paper rule `schedule_boundary`): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
               "properties": {
                 "distrib": {
-                  "const": "watched",
+                  "const": "boundary",
                   "type": "string"
                 }
               },
@@ -6176,7 +6176,7 @@
               "type": "object"
             },
             {
-              "description": "Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a\nspontaneous PDMP jump with survival\n`P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,\nand exactly one of the two rate forms:\n\n- `rate`: fixed λ ≥ 0; the firing date is sampled as\n  `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a\n  guard turning true re-arms with a fresh draw.\n- `rate_expr`: **state-dependent** λ(x) as an expression. The\n  engine realises the survival integral with a cumulative\n  hazard: a threshold `E ~ Exp(1)` is drawn at source-state\n  entry and the transition fires when `∫ λ dt` reaches `E`.\n  When λ depends only on discretely-updated state the hazard is\n  piecewise-constant and the firing date is rescheduled at each\n  discrete change (`reschedule_modifiable`); when it depends on\n  ODE-integrated attributes (or time), the hazard is integrated\n  alongside the continuous state and the firing time is located\n  like a watched boundary crossing. λ must evaluate ≥ 0.",
+              "description": "Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a\nspontaneous PDMP jump with survival\n`P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,\nand exactly one of the two rate forms:\n\n- `rate`: fixed λ ≥ 0; the firing date is sampled as\n  `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a\n  guard turning true re-arms with a fresh draw.\n- `rate_expr`: **state-dependent** λ(x) as an expression. The\n  engine realises the survival integral with a cumulative\n  hazard: a threshold `E ~ Exp(1)` is drawn at source-state\n  entry and the transition fires when `∫ λ dt` reaches `E`.\n  When λ depends only on discretely-updated state the hazard is\n  piecewise-constant and the firing date is rescheduled at each\n  discrete change (`reschedule_modifiable`); when it depends on\n  ODE-integrated attributes (or time), the hazard is integrated\n  alongside the continuous state and the firing time is located\n  like a boundary crossing. λ must evaluate ≥ 0.",
               "properties": {
                 "distrib": {
                   "const": "exp",
@@ -6620,7 +6620,7 @@
                   "type": "object"
                 }
               ],
-              "description": "**Edge effects**: assignments evaluated ONCE, when the transition\nfires, after its state change, in declaration order. Unlike a\nsensitive function's effects (a level, re-evaluated whenever what it\nreads changes), nothing re-applies them and nothing restores the\nvalue: the attribute keeps what was written until something else\nwrites it. That is a one-shot effect, and on an attribute nothing\nelse writes, a variable that memorises (a latched detection, an\nalarm). An interrupted transition writes nothing.\n\nOn the target of an ODE equation, an edge effect is a **reset\nmap**, the jump of a piecewise-deterministic Markov process: the\ncontinuous state takes the written value at the firing instant and\nthe integration restarts from it (the value must be a finite float).\n\nNon-baseline construct: a document carrying it must declare\n[`Feature::TransitionEffects`]. An effect on an attribute an explicit\nequation or a sensitive function writes is refused\n([`ModelError::TransitionEffectOverwritten`]): the next evaluation\nwould erase it."
+              "description": "**Edge effects**: assignments evaluated ONCE, when the transition\nfires, after its state change, in declaration order. Unlike a\npropagation's effects (a level, re-evaluated whenever what it\nreads changes), nothing re-applies them and nothing restores the\nvalue: the attribute keeps what was written until something else\nwrites it. That is a one-shot effect, and on an attribute nothing\nelse writes, a variable that memorises (a latched detection, an\nalarm). An interrupted transition writes nothing.\n\nOn the target of an ODE equation, an edge effect is a **reset\nmap**, the jump of a piecewise-deterministic Markov process: the\ncontinuous state takes the written value at the firing instant and\nthe integration restarts from it (the value must be a finite float).\n\nNon-baseline construct: a document carrying it must declare\n[`Feature::TransitionEffects`]. An effect on an attribute an explicit\nequation or a propagation writes is refused\n([`ModelError::TransitionEffectOverwritten`]): the next evaluation\nwould erase it."
             },
             "guard": {
               "anyOf": [
@@ -6980,7 +6980,7 @@
                   "type": "object"
                 }
               ],
-              "description": "**Edge effects**: assignments evaluated ONCE, when the transition\nfires, after its state change, in declaration order. Unlike a\nsensitive function's effects (a level, re-evaluated whenever what it\nreads changes), nothing re-applies them and nothing restores the\nvalue: the attribute keeps what was written until something else\nwrites it. That is a one-shot effect, and on an attribute nothing\nelse writes, a variable that memorises (a latched detection, an\nalarm). An interrupted transition writes nothing.\n\nOn the target of an ODE equation, an edge effect is a **reset\nmap**, the jump of a piecewise-deterministic Markov process: the\ncontinuous state takes the written value at the firing instant and\nthe integration restarts from it (the value must be a finite float).\n\nNon-baseline construct: a document carrying it must declare\n[`Feature::TransitionEffects`]. An effect on an attribute an explicit\nequation or a sensitive function writes is refused\n([`ModelError::TransitionEffectOverwritten`]): the next evaluation\nwould erase it."
+              "description": "**Edge effects**: assignments evaluated ONCE, when the transition\nfires, after its state change, in declaration order. Unlike a\npropagation's effects (a level, re-evaluated whenever what it\nreads changes), nothing re-applies them and nothing restores the\nvalue: the attribute keeps what was written until something else\nwrites it. That is a one-shot effect, and on an attribute nothing\nelse writes, a variable that memorises (a latched detection, an\nalarm). An interrupted transition writes nothing.\n\nOn the target of an ODE equation, an edge effect is a **reset\nmap**, the jump of a piecewise-deterministic Markov process: the\ncontinuous state takes the written value at the firing instant and\nthe integration restarts from it (the value must be a finite float).\n\nNon-baseline construct: a document carrying it must declare\n[`Feature::TransitionEffects`]. An effect on an attribute an explicit\nequation or a propagation writes is refused\n([`ModelError::TransitionEffectOverwritten`]): the next evaluation\nwould erase it."
             },
             "guard": {
               "anyOf": [
@@ -7243,7 +7243,7 @@
           "type": "object"
         }
       ],
-      "description": "A transition of an automaton.\n\nMaps to the paper's transitions ⟨q_src, guard, delay,\ndest-distribution⟩. The occurrence law ([`Distrib`]) selects the\nscheduling rule: a deterministic delay or an instantaneous branching\n(`schedule_deterministic`), a random delay (`schedule_stochastic`), or a\nwatched boundary crossing (`schedule_boundary`)."
+      "description": "A transition of an automaton.\n\nMaps to the paper's transitions ⟨q_src, guard, delay,\ndest-distribution⟩. The occurrence law ([`Distrib`]) selects the\nscheduling rule: a deterministic delay or an instantaneous branching\n(`schedule_deterministic`), a random delay (`schedule_stochastic`), or a\nboundary crossing (`schedule_boundary`)."
     },
     "TransitionKind": {
       "anyOf": [
@@ -8469,7 +8469,7 @@
       ],
       "type": "object"
     },
-    "When_SensitiveFunction": {
+    "When_Propagation": {
       "additionalProperties": false,
       "description": "Keeps `items` when the parameter's value is one of `is` (without `is`, when the boolean parameter is true), and drops them otherwise.",
       "properties": {
@@ -8501,13 +8501,13 @@
           "items": {
             "anyOf": [
               {
-                "$ref": "#/$defs/SensitiveFunction"
+                "$ref": "#/$defs/Propagation"
               },
               {
-                "$ref": "#/$defs/ForEach_SensitiveFunction"
+                "$ref": "#/$defs/ForEach_Propagation"
               },
               {
-                "$ref": "#/$defs/When_SensitiveFunction"
+                "$ref": "#/$defs/When_Propagation"
               }
             ]
           },

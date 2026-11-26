@@ -179,7 +179,7 @@ class _RuleGuardsMixin:
                 raise ValueError(
                     f"{where} compares the continuous quantity `{operand.name}` "
                     f"with `{operand.op}`; the mode transition carrying it is "
-                    "watched, and a crossing is located on an ordering "
+                    "boundary, and a crossing is located on an ordering "
                     f"comparison ({', '.join(_ORDERING_OPS)})"
                 )
         return rule
@@ -357,7 +357,7 @@ class _RuleGuardsMixin:
         One answer to that question, so the two things resting on it
         cannot drift apart: an equality on such a quantity is refused
         (:data:`_ORDERING_OPS`), and the mode transition carrying the
-        guard is declared **watched**, so the crossing is located instead
+        guard is declared **boundary**, so the crossing is located instead
         of noticed at whatever event happens to come next.
 
         A level read over a measurement link is as continuous as it is on
@@ -535,7 +535,7 @@ class _RuleGuardsMixin:
         for two reasons: the coefficient maps are then **frozen within a
         mode**, which breaks the algebraic coupling between the demand
         and the production bands; and a transition carrying a continuous
-        threshold is declared **watched**, so the solver stops the
+        threshold is declared **boundary**, so the solver stops the
         integration at the crossing instead of noticing it at the
         following step."""
         states = rule_set.states()
@@ -555,7 +555,7 @@ class _RuleGuardsMixin:
                     "guard": guard,
                 }
                 if located:
-                    transition["distrib"] = "watched"
+                    transition["distrib"] = "boundary"
                 else:
                     transition["distrib"] = "inst"
                     transition["probs"] = []

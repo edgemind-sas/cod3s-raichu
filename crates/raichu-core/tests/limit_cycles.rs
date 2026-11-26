@@ -2,7 +2,7 @@
 //! never gets anywhere.
 //!
 //! The engine had two Zeno guards and both look at ONE instant.
-//! `WatchedLoop` counts watched firings at the same instant;
+//! `BoundaryLoop` counts boundary firings at the same instant;
 //! `FlowChattering` counts active-set restarts at the same instant. A
 //! cycle that advances the clock by a hysteresis width, or by a solver
 //! step, escapes both: the run does not fail, it grinds, and the
@@ -22,7 +22,7 @@ use raichu_model::{
     AttrKind, Attribute, Automaton, Component, Distrib, Equation, EquationKind, Model, Transition,
 };
 
-/// A saw-tooth: `x` rises at 1, a watched pair sends it back down at 1
+/// A saw-tooth: `x` rises at 1, a boundary pair sends it back down at 1
 /// and up again at 0, so the two transitions fire forever, a hundred
 /// times per unit of time. Time advances every turn, so neither
 /// same-instant guard sees it.
@@ -69,7 +69,7 @@ fn sawtooth() -> Model {
                         cycle_cancellation: Default::default(),
                         kind: None,
                         effects: vec![],
-                        distrib: Distrib::Watched,
+                        distrib: Distrib::Boundary,
                     },
                     Transition {
                         name: "bottom".into(),
@@ -89,7 +89,7 @@ fn sawtooth() -> Model {
                         cycle_cancellation: Default::default(),
                         kind: None,
                         effects: vec![],
-                        distrib: Distrib::Watched,
+                        distrib: Distrib::Boundary,
                     },
                 ],
             }],
@@ -120,7 +120,7 @@ fn sawtooth() -> Model {
                     expr: Expr::attr("C", "rate"),
                 },
             ],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![],

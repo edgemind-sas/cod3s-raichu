@@ -270,13 +270,13 @@ Markov family:
 The domain is checked twice.
 
 **Before the run**, the model is refused if it integrates an ODE, if a
-watched transition sits in a state its automaton can reach from its
+boundary transition sits in a state its automaton can reach from its
 initial state (guards ignored), or if any guard, effect, rate,
-sensitive function or explicit equation reads the simulation time. The
+propagation or explicit equation reads the simulation time. The
 exploration never advances the clock, so none of these has a meaning in
 it. `pyraichu.exploration_domain(model)` runs this check alone and
 returns the list of violations, each `{kind, ..., message}` with `kind`
-one of `ode`, `watched` or `reads_time`; an empty list means none was
+one of `ode`, `boundary` or `reads_time`; an empty list means none was
 found.
 
 **During the run**, the first armed transition whose law is outside the
@@ -332,7 +332,7 @@ Bouissou 1992).
 `algorithm="discretised"` lifts the restriction to the Markov family. It
 covers every law the engine carries (delay, exponential with a constant
 or state-dependent rate, Weibull, lognormal, gamma, uniform, normal, empirical),
-the interruption policies, and continuous evolution with watched
+the interruption policies, and continuous evolution with boundary
 transitions. It is RAICHU's own method: it does not reproduce
 PyCATSHOO's discretisation algorithm, named `sampling` although it draws
 nothing at random, which discretises each law separately (see the
@@ -345,7 +345,7 @@ quadrature-based dynamic event tree (Elhareef and Yim 2026).
 and when. At an explored state where nothing fires at the current
 instant, every armed stochastic transition `j` is a competitor with a
 cumulative hazard `H_j` over a window that ends at the first of the next
-deterministic event, the next watched crossing and the horizon:
+deterministic event, the next boundary crossing and the horizon:
 
 - a law with a fixed shape contributes its cumulative hazard conditional
   on the age it has already accrued under its interruption policy;
@@ -361,10 +361,10 @@ among the competitors in proportion to their hazard increments, and
 each (competitor, cell) pair of nonzero mass becomes a branch, fired at
 the instant where the cell's mass reaches its middle. One further branch
 carries the survival mass `exp(-H)` to the window end, where the
-deterministic event or the watched crossing fires; at the horizon it is
+deterministic event or the boundary crossing fires; at the horizon it is
 dropped. Between branch points the engine runs deterministically, so the
 explorer never re-implements a guard, an effect or a policy.
-Instantaneous transitions, due delays and watched transitions whose
+Instantaneous transitions, due delays and boundary transitions whose
 guard holds fire first, as in exact exploration.
 
 Two numerical details keep the tree from growing on round-off. A window
@@ -374,7 +374,7 @@ against `0.3`), is treated as empty: its mass, of order
 `rate x 1e-10`, goes to the survival branch, and a deterministic end
 event fires in the same branch, so the tree is the one the two dates
 would give if they coincided exactly. A branch fired at a cell's middle
-instant that turns out to lie past a watched crossing (the crossing is
+instant that turns out to lie past a boundary crossing (the crossing is
 located to within the same tolerance) is fired just before the crossing
 instead. A competitor whose window hazard evaluates to NaN or to a
 negative value stops the exploration with an error naming the
@@ -765,7 +765,7 @@ dates.
 ## Limits
 
 - **Exact exploration covers the Markov family only.** A model with an
-  ODE, a reachable watched transition, time-dependent expressions, or a
+  ODE, a reachable boundary transition, time-dependent expressions, or a
   law other than instantaneous or constant-rate exponential that becomes
   armed, is refused by it; `algorithm="discretised"` explores such a
   model.

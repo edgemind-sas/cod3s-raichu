@@ -175,7 +175,7 @@ class _DiscreteFlowsMixin:
         So the shape is refused and the refusal says what to write: on a
         quantity that only rises, ``{"op": ">", "value": 0}`` says the same
         thing AND says which side it is entered from. The comparison it asks
-        for is then watched by the threshold automaton below, which a boolean
+        for is then boundary by the threshold automaton below, which a boolean
         read never got on either engine.
         """
         if isinstance(spec, dict):
@@ -221,7 +221,7 @@ class _DiscreteFlowsMixin:
                 raise ValueError(
                     f"{where} conditions on the continuous quantity "
                     f"`{operand.name}` with `{operand.op}`; the transition "
-                    "carrying it is watched, and a crossing is located on an "
+                    "carrying it is boundary, and a crossing is located on an "
                     f"ordering comparison ({', '.join(_ORDERING_OPS)})"
                 )
         return operand
@@ -229,7 +229,7 @@ class _DiscreteFlowsMixin:
     @staticmethod
     def _prod_cond_threshold(flow_name: str, row: int, column: int) -> tuple[str, str, str]:
         """The automaton one continuous comparison of a production condition
-        is watched by, and its two locations."""
+        is boundary by, and its two locations."""
         base = f"{flow_name}_cond_{row}_{column}"
         return f"{base}_threshold", f"{base}_below", f"{base}_above"
 
@@ -242,13 +242,13 @@ class _DiscreteFlowsMixin:
         An operand comparing a **continuously-evolving** quantity reads the
         LOCATION of its threshold automaton rather than the quantity itself,
         and that indirection is the whole mechanism rather than a detour. This
-        expression writes a variable through a sensitive function, and a
-        sensitive function is re-run by a *discrete* change: an attribute an
+        expression writes a variable through a propagation, and a
+        propagation is re-run by a *discrete* change: an attribute an
         ODE moves announces nothing of its own, so a condition reading the
         quantity directly is evaluated at t = 0 and never again -- measured,
         on a volume filling past its threshold with the condition left False
         for the whole mission. Reading the location subscribes the function to
-        the automaton (`state_triggers`), whose watched transitions fire AT the
+        the automaton (`state_triggers`), whose boundary transitions fire AT the
         crossing. muscadet wires the same thing the other way round, hanging a
         sensitive method on the same automaton
         (`add_prod_cond_threshold_automata`).
@@ -299,7 +299,7 @@ class _DiscreteFlowsMixin:
         integration step announces no change of its own, so nothing would
         re-evaluate the condition at the crossing and the output would start
         (or stop) producing at whatever event happened to come next. Declaring
-        the two transitions `watched` makes the solver stop AT the crossing,
+        the two transitions `boundary` makes the solver stop AT the crossing,
         which is what a rule set's mode buys on the other direction of the
         interoperation and what muscadet builds here under the same reasoning
         (``muscadet.flow.add_prod_cond_threshold_automata``).
@@ -323,7 +323,7 @@ class _DiscreteFlowsMixin:
                         "states": [below, above],
                         # The location the comparison designates cannot be
                         # known here: the initial fixpoint resolves the
-                        # quantity, and the watched transition settles the
+                        # quantity, and the boundary transition settles the
                         # automaton there. Exactly how a capacity's discharge
                         # gate enters its own.
                         "init": below,
@@ -333,14 +333,14 @@ class _DiscreteFlowsMixin:
                                 "source": below,
                                 "targets": [above],
                                 "guard": self._rule_operand_expr(operand),
-                                "distrib": "watched",
+                                "distrib": "boundary",
                             },
                             {
                                 "name": f"{automaton}_cross_down",
                                 "source": above,
                                 "targets": [below],
                                 "guard": self._rule_operand_negation(operand),
-                                "distrib": "watched",
+                                "distrib": "boundary",
                             },
                         ],
                     }
@@ -440,7 +440,7 @@ class _DiscreteFlowsMixin:
         functions: list[dict],
     ) -> None:
         """The boolean in-flows: one `{flow}_fed_in` per declaration, an
-        in port, and the sensitive function aggregating that port under
+        in port, and the propagation aggregating that port under
         the declared logic (any, all, or k of n).
 
         muscadet answers an in-flow nothing feeds with its declared
@@ -519,7 +519,7 @@ class _DiscreteFlowsMixin:
                 # of connection is the declaration, not the aggregate.
                 # The seed says the same thing, but the seed alone does
                 # not survive the initialization axiom, which runs every
-                # sensitive function once.
+                # propagation once.
                 agg = {
                     "op": "bool",
                     "bool_op": "or",

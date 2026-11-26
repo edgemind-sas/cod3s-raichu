@@ -29,7 +29,7 @@ def store(name: str) -> dict:
         "ports": [],
         "interfaces": [],
         "automata": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
 

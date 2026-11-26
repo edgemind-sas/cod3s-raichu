@@ -121,7 +121,7 @@
               "targets": [
                 "ON"
               ],
-              "distrib": "watched"
+              "distrib": "boundary"
             },
             {
               "name": "ON_to_OFF",
@@ -169,12 +169,12 @@
               "targets": [
                 "OFF"
               ],
-              "distrib": "watched"
+              "distrib": "boundary"
             }
           ]
         }
       ],
-      "sensitive_functions": [
+      "propagations": [
         {
           "name": "update_power",
           "effects": [
@@ -358,7 +358,7 @@
               "targets": [
                 "ON"
               ],
-              "distrib": "watched"
+              "distrib": "boundary"
             },
             {
               "name": "ON_to_OFF",
@@ -413,12 +413,12 @@
               "targets": [
                 "OFF"
               ],
-              "distrib": "watched"
+              "distrib": "boundary"
             }
           ]
         }
       ],
-      "sensitive_functions": [
+      "propagations": [
         {
           "name": "update_power",
           "effects": [
@@ -502,7 +502,7 @@
       ],
       "interfaces": [],
       "automata": [],
-      "sensitive_functions": [],
+      "propagations": [],
       "equations": [
         {
           "target": "temperature",

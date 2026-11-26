@@ -388,7 +388,7 @@ raises `SimulationError` without returning an estimate.
 
 Restarts draw fresh stochastic futures conditional on elapsed age for every
 native law, including Weibull and state-dependent hazards. A `resume` clock
-keeps its frozen age and is redrawn when rearmed. Deterministic and watched
+keeps its frozen age and is redrawn when rearmed. Deterministic and boundary
 dates remain fixed. Imported FMUs are refused because their snapshots cannot
 provide this restart contract. A constant score provides no useful graded
 progress and may go extinct; a numeric score alone does not ensure precision.

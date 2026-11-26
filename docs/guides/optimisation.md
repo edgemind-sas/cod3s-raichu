@@ -108,7 +108,7 @@ solver fault ends the trajectory with an error naming the program and date.
 
 The objective and constraints must be affine in the decisions. Coefficients
 and bounds may depend on discrete inputs, including state activity and
-sensitive-function outputs. Programs cannot read the simulation clock, ODE
+propagation outputs. Programs cannot read the simulation clock, ODE
 or explicit-equation outputs, or allocated channels. Such inputs need a
 separate integration design because they change outside the discrete
 fixpoint or are resolved after it.

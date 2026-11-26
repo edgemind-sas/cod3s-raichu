@@ -61,7 +61,7 @@ class Observer(mu.ObjFlow):
         self.add_measurement_in(name="room", flows=["H2", "O2"])
 
 
-def watched_room(content: dict[str, float]) -> mu.System:
+def boundary_room(content: dict[str, float]) -> mu.System:
     system = mu.System("mixture")
     system.add_component(Supply, "S")
     system.add_component(room(content), "R")
@@ -78,7 +78,7 @@ def test_a_ratio_is_the_fraction_of_the_mixture():
     The distinction is the whole point. `fill` divides by the declared
     volume and answers how full the room is; the ratio divides by what
     the room holds and answers what the mixture is."""
-    result = watched_room({"H2": 0.0, "O2": 90.0}).simulate(
+    result = boundary_room({"H2": 0.0, "O2": 90.0}).simulate(
         t_max=10.0, samples=[0.0, 5.0, 10.0]
     )
     for instant, expected in ((0.0, 0.0), (5.0, 5 / 95), (10.0, 10 / 100)):
@@ -92,7 +92,7 @@ def test_a_ratio_is_the_fraction_of_the_mixture():
 def test_the_ratios_of_a_volume_sum_to_one():
     """A conservation identity, and the reason there is no total ratio:
     it would be the constant 1."""
-    result = watched_room({"H2": 0.0, "O2": 90.0}).simulate(
+    result = boundary_room({"H2": 0.0, "O2": 90.0}).simulate(
         t_max=10.0, samples=[2.0, 6.0, 9.0]
     )
     for instant in (2.0, 6.0, 9.0):
@@ -117,7 +117,7 @@ def test_an_empty_volume_reads_zero_on_every_ratio():
 
 
 def test_the_observer_reads_the_same_number_the_volume_published():
-    result = watched_room({"H2": 0.0, "O2": 90.0}).simulate(
+    result = boundary_room({"H2": 0.0, "O2": 90.0}).simulate(
         t_max=10.0, samples=[0.0, 5.0, 10.0]
     )
     for instant in (0.0, 5.0, 10.0):
@@ -134,7 +134,7 @@ def test_the_ratios_are_swept_after_the_total_and_before_their_observer():
     being built."""
     order = [
         f"{entry['component']}.{entry['attribute']}"
-        for entry in watched_room({"H2": 0.0, "O2": 90.0})
+        for entry in boundary_room({"H2": 0.0, "O2": 90.0})
         .build_dict()["model"]["evaluation_order"]
     ]
     total = order.index("R.room_content")

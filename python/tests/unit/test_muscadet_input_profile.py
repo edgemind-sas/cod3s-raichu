@@ -147,7 +147,7 @@ def test_a_supply_short_of_the_profiled_demand_still_binds():
 
 def test_a_discontinuous_input_profile_is_refused_as_on_an_output():
     """The same refusal on both sides: continuity is an attestation this
-    layer cannot make for the modeller, and it derives no watched
+    layer cannot make for the modeller, and it derives no boundary
     transition from a callable's breakpoints."""
 
     class Wrong(mu.ObjFlow):
@@ -288,7 +288,7 @@ def test_a_profile_moves_with_nothing_to_integrate(side):
         ), hour
 
 
-def test_a_watched_guard_on_a_profile_is_located_with_nothing_to_integrate():
+def test_a_boundary_guard_on_a_profile_is_located_with_nothing_to_integrate():
     """The worse half of the same defect, and the reason it was worth
     fixing rather than documenting: a guard on a profiled quantity was
     never crossed, because the quantity never moved.
@@ -321,7 +321,7 @@ def test_a_watched_guard_on_a_profile_is_located_with_nothing_to_integrate():
         def add_flows(self):
             self.add_flow_continuous_in(name="alarm", var_demand_in_default=100.0)
 
-    system = mu.System("watched_profile")
+    system = mu.System("boundary_profile")
     system.add_component(Source, "S")
     system.add_component(Alarm, "A")
     system.add_component(Watcher, "W")

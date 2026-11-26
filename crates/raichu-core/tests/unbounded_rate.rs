@@ -213,7 +213,7 @@ fn the_stand_in_written_as_a_literal_is_found_too() {
 }
 
 /// A stock `x` drained at `u x 1e-25` while its automaton is `draining`,
-/// at zero once a watched transition has switched it to `empty` (`x <= 0`).
+/// at zero once a boundary transition has switched it to `empty` (`x <= 0`).
 /// `u` holds the stand-in, so the drain is set by it: 1e5 per unit time,
 /// a rate the solver follows without trouble.
 fn switched_drain(x0: f64) -> String {
@@ -236,7 +236,7 @@ fn switched_drain(x0: f64) -> String {
                 "otherwise": float(0.0)
             }}],
             "automata": [{"name": "stock", "states": ["draining", "empty"], "init": "draining", "transitions": [{
-                "name": "emptied", "source": "draining", "targets": ["empty"], "distrib": "watched",
+                "name": "emptied", "source": "draining", "targets": ["empty"], "distrib": "boundary",
                 "guard": {"op": "cmp", "cmp": "le", "lhs": attr("x"), "rhs": float(0.0)}
             }]}]
         }],
@@ -248,7 +248,7 @@ fn switched_drain(x0: f64) -> String {
 #[test]
 fn a_rate_the_stand_in_sets_is_refused_even_when_the_solver_follows_it() {
     // Without the test at the segment start, the solver empties the stock
-    // in 5e-5 time units, the watched transition switches the drain off,
+    // in 5e-5 time units, the boundary transition switches the drain off,
     // and the run completes: an instantaneous transfer, integrated.
     let error = run(&switched_drain(5.0)).expect_err("a rate set by the stand-in");
     let EngineError::UnboundedRate {
@@ -267,7 +267,7 @@ fn a_rate_the_stand_in_sets_is_refused_even_when_the_solver_follows_it() {
 
 #[test]
 fn an_event_at_the_segment_start_integrates_nothing_and_is_not_refused() {
-    // The stock starts empty: the watched transition fires at t = 0,
+    // The stock starts empty: the boundary transition fires at t = 0,
     // before any step, and the drain it switches off is never integrated.
     assert_eq!(final_x(&switched_drain(0.0)), 0.0);
 }

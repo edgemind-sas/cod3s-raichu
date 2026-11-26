@@ -17,7 +17,7 @@
 //!   from the transition's law (an exponential hazard threshold for a
 //!   state-dependent rate; no date in deferred-draw mode, where
 //!   `Engine::refresh_deferred` arms the transition without a draw);
-//! - watched transitions fired at located boundary crossings,
+//! - boundary transitions fired at located boundary crossings,
 //!   `schedule_boundary` (`schWT`): margin monitoring inside
 //!   `Engine::integrate_to`;
 //! - continuous evolution up to the next scheduled date,
@@ -25,7 +25,7 @@
 //!   `Engine::integrate_to`;
 //! - firing of the earliest transition, `fire_transition` (`evolT`):
 //!   [`Engine::step`];
-//! - sensitive-function propagation to fixpoint, `propagate_effects`
+//! - propagation propagation to fixpoint, `propagate_effects`
 //!   (`evolA`): `Engine::run_fixpoint`;
 //! - rescheduling of modifiable transitions whose rate changed,
 //!   `reschedule_modifiable` (`updateMT`): through the cumulative-hazard
@@ -39,10 +39,10 @@
 //!
 //! The functions written without a link are internal to this module.
 //!
-//! **Continuous/discrete coupling semantics:** sensitive functions
+//! **Continuous/discrete coupling semantics:** propagations
 //! react to *discrete* changes (transition firings and effect
 //! cascades); the continuous flow influences the discrete side only
-//! through **watched transitions** (the paper's mechanism) and through
+//! through **boundary transitions** (the paper's mechanism) and through
 //! guards re-evaluated at discrete epochs. Explicit equations are
 //! recomputed at every continuous evaluation point, in declaration
 //! order, before ODE right-hand sides.
@@ -61,13 +61,13 @@
 //! continuous system handed to the solver), `continuous` (integration and
 //! event location), `schedule` (scheduling), `run` (run loop, firing,
 //! fixpoint), `interactive` (interactive surface), `deferred`
-//! (deferred-draw mode), `notes` (change log, watched index, journal
+//! (deferred-draw mode), `notes` (change log, boundary index, journal
 //! notes) and `sampling` (indicators). Every public item is re-exported
 //! here, so its path is `raichu_core::engine::<name>`.
 
 use crate::compile::{
-    AutIdx, CAllocation, CExpr, CFlowMargins, CIndicatorTarget, CLaw, CProgramAffine,
-    CProgramTieBreak, CStep, CompiledModel, FnIdx, StateIdx, TransIdx, VarIdx, WatchedIdx,
+    AutIdx, BoundaryIdx, CAllocation, CExpr, CFlowMargins, CLaw, CProgramAffine, CProgramTieBreak,
+    CStep, CompiledIndicatorTarget, CompiledModel, FnIdx, StateIdx, TransIdx, VarIdx,
     STRICT_MARGIN_EPS,
 };
 use crate::flow::{allocate, classify, edge_margin, flow_band, EdgeClass, FLOW_TOLERANCE};
@@ -136,7 +136,7 @@ pub struct Engine<'m> {
     vars: Vec<Value>,
     states: Vec<StateIdx>,
     /// Pending firing date per transition (`None` = not scheduled;
-    /// watched transitions are monitored, never date-scheduled).
+    /// boundary transitions are monitored, never date-scheduled).
     pending: Vec<Option<f64>>,
     /// The firing wave in which each pending transition was armed (see
     /// [`Engine::next_pending`]): a counter of fired transitions, read
@@ -163,7 +163,7 @@ pub struct Engine<'m> {
     /// (`None` outside a probe): scratch, never part of the trajectory.
     hazard_trace: Option<Vec<HazardSample>>,
     /// Transitions whose state-dependent rate varies continuously
-    /// (monitored during `integrate_to`, like watched boundaries).
+    /// (monitored during `integrate_to`, like boundary boundaries).
     continuous_rates: Vec<TransIdx>,
     events: Vec<Event>,
     journal: Vec<JournalRecord>,
@@ -176,8 +176,8 @@ pub struct Engine<'m> {
     indicator_series: Vec<IndicatorSeries>,
     sampled: Vec<IndicatorSeries>,
     sample_cursor: usize,
-    /// Consecutive watched firings without time advancing (Zeno guard).
-    watched_streak: (f64, usize),
+    /// Consecutive boundary firings without time advancing (Zeno guard).
+    boundary_streak: (f64, usize),
     /// Set by [`Engine::step`] when it stopped before a held choice
     /// ([`EngineConfig::deferred_choices`]) instead of firing it.
     held_choice_due: bool,
@@ -228,26 +228,26 @@ pub struct Engine<'m> {
     active_set_budget: usize,
     /// Where the engine's own explicit passes report the attributes they
     /// moved (see [`ChangeLog`]). Drained into the stale marks of the
-    /// watched population; the buffer itself is scratch, reused.
+    /// boundary population; the buffer itself is scratch, reused.
     changed: ChangeLog,
-    /// **Indexed watched set**, arming half: whether each position of
-    /// `model.watched` sits in its source state. Maintained on state
-    /// changes through [`crate::MarginIndex::watched_by_owner`], never rebuilt
+    /// **Indexed boundary set**, arming half: whether each position of
+    /// `model.boundary` sits in its source state. Maintained on state
+    /// changes through [`crate::MarginIndex::boundary_by_owner`], never rebuilt
     /// by a full scan.
-    watched_armed: Vec<bool>,
-    /// **Indexed watched set**, ascending list of the armed positions:
+    boundary_armed: Vec<bool>,
+    /// **Indexed boundary set**, ascending list of the armed positions:
     /// the per-segment margin set, and the population the immediate-guard
     /// scan walks. Ascending by construction, which is what preserves the
     /// documented firing order of simultaneous crossings.
-    watched_active: Vec<WatchedIdx>,
-    /// **Indexed watched set**, cache half: the last evaluated verdict of
-    /// each watched guard.
-    watched_guard: Vec<bool>,
-    /// **Indexed watched set**, invalidation half: whether the cached
+    boundary_active: Vec<BoundaryIdx>,
+    /// **Indexed boundary set**, cache half: the last evaluated verdict of
+    /// each boundary guard.
+    boundary_guard: Vec<bool>,
+    /// **Indexed boundary set**, invalidation half: whether the cached
     /// verdict of each position still reflects the state. Set through
     /// [`crate::MarginIndex`] whenever an attribute, an automaton state or the
     /// clock a guard reads moves; cleared when the guard is re-evaluated.
-    watched_stale: Vec<bool>,
+    boundary_stale: Vec<bool>,
     /// Per-transition firing counts and nominal exposure, present exactly
     /// when [`EngineConfig::rate_factors`] is non-empty (see
     /// [`TransitionExposure`]). Trajectory state: part of the snapshot.
@@ -472,7 +472,7 @@ impl<'m> Engine<'m> {
                 })
                 .collect(),
             sample_cursor: 0,
-            watched_streak: (0.0, 0),
+            boundary_streak: (0.0, 0),
             held_choice_due: false,
             firings: vec![0; model.transitions.len()],
             first_firing: vec![f64::NAN; model.transitions.len()],
@@ -497,10 +497,10 @@ impl<'m> Engine<'m> {
             },
             // Pristine: nothing armed, nothing cached, everything stale.
             // `initialize` (or `restore`) derives the real arming.
-            watched_armed: vec![false; model.watched.len()],
-            watched_active: Vec::new(),
-            watched_guard: vec![false; model.watched.len()],
-            watched_stale: vec![true; model.watched.len()],
+            boundary_armed: vec![false; model.boundary.len()],
+            boundary_active: Vec::new(),
+            boundary_guard: vec![false; model.boundary.len()],
+            boundary_stale: vec![true; model.boundary.len()],
             exposure: (!config.rate_factors.is_empty()).then(|| ExposureTally::new(model)),
             solver,
             model,
@@ -509,14 +509,14 @@ impl<'m> Engine<'m> {
     }
 
     /// Initialization axiom (Desgeorges et al. 2021): run every
-    /// sensitive function once in declaration order to a fixpoint, solve
+    /// propagation once in declaration order to a fixpoint, solve
     /// the explicit equations, build the initial schedule, and record
     /// the t = 0 indicator/sample values. Shared by [`Engine::new`] and
     /// [`Engine::reset`] so a reset state is identical to a fresh build.
     fn initialize(&mut self) -> Result<(), EngineError> {
         // The state vectors have just been set wholesale (fresh build or
         // reset): derive the arming and discard every cached verdict.
-        self.rebuild_watched_index();
+        self.rebuild_boundary_index();
         self.worklist
             .extend(0..self.model.functions.len() + self.model.programs.len());
         self.run_fixpoint()?;

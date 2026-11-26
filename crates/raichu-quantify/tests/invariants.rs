@@ -91,7 +91,7 @@ fn component(name: &str, automaton: Automaton) -> Component {
         automata: vec![automaton],
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: vec![],
+        propagations: vec![],
     }
 }
 

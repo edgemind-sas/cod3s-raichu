@@ -36,7 +36,7 @@ def _target(name):
         "ports": [],
         "interfaces": [],
         "automata": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
 
@@ -49,7 +49,7 @@ def _clock():
         "ports": [],
         "interfaces": [],
         "equations": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "automata": [
             {
                 "name": "sig",

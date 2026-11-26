@@ -369,7 +369,7 @@ impl Group<'_> {
             ports: Vec::new(),
             interfaces: Vec::new(),
             automata,
-            sensitive_functions: Vec::new(),
+            propagations: Vec::new(),
             equations: Vec::new(),
             allocations: Vec::new(),
         };

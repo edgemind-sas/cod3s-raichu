@@ -1,6 +1,6 @@
 //! Continuous evolution up to the next scheduled date
 //! (`integrate_continuous`): integration of the ODE system, event location
-//! of watched boundary crossings (`schedule_boundary`) and of
+//! of boundary crossings (`schedule_boundary`) and of
 //! continuously-varying hazards (`reschedule_modifiable`), and the segment
 //! outcome handed back to the run loop.
 
@@ -9,7 +9,7 @@ use super::*;
 /// How one integration segment ended.
 ///
 /// Besides reaching the requested date and
-/// locating a watched transition, a segment can end because the **active
+/// locating a boundary transition, a segment can end because the **active
 /// set** it froze stopped holding. That third outcome fires no
 /// transition; it re-resolves the network at the crossing instant and
 /// integration continues from there. A discarded trial can also request
@@ -21,9 +21,9 @@ enum Segment {
     Retry { failed_at: f64, error: EngineError },
     /// The requested date was reached.
     Reached,
-    /// A watched boundary (or a continuously-varying hazard) was
+    /// A boundary (or a continuously-varying hazard) was
     /// located: this transition must fire.
-    Watched(TransIdx),
+    Boundary(TransIdx),
     /// An active-set boundary was located and the network was resolved
     /// again from the crossing state. Carries the global edge index that
     /// crossed, so a chattering boundary can be *named* rather than
@@ -35,7 +35,7 @@ enum Segment {
 /// its target date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Countdowns {
-    /// Stop there and hand it back to fire, as a watched crossing is.
+    /// Stop there and hand it back to fire, as a boundary crossing is.
     HandBack,
     /// Leave it overdue and go on: an interactive firing of a chosen
     /// transition passes over the dated firings before its own date.
@@ -45,10 +45,10 @@ pub(super) enum Countdowns {
 impl<'m> Engine<'m> {
     /// Advance continuous evolution to `t_target`, restarting a segment
     /// at every located active-set crossing until either the date is
-    /// reached or a watched transition must fire.
+    /// reached or a boundary transition must fire.
     ///
-    /// The loop is guarded the way [`Engine::note_watched_firing`] guards
-    /// watched transitions, and for the same reason: a crossing that
+    /// The loop is guarded the way [`Engine::note_boundary_firing`] guards
+    /// boundary transitions, and for the same reason: a crossing that
     /// fires no transition is invisible to that guard, so a boundary the
     /// network re-crosses on the spot would spin here forever. Restarts
     /// are counted **per instant** rather than per advance: an instant
@@ -79,7 +79,7 @@ impl<'m> Engine<'m> {
         let mut stuck: Vec<usize> = Vec::new();
         // The located transition whose countdown, armed during this advance,
         // falls due first and before `t_target`: integration stops there
-        // and hands it back to fire, as a watched crossing is handed back.
+        // and hands it back to fire, as a boundary crossing is handed back.
         // A countdown armed before the advance is the caller's to plan
         // (an interactive firing may deliberately pass it over), so the
         // ones pending on entry are set aside.
@@ -109,7 +109,7 @@ impl<'m> Engine<'m> {
                         .map(|(idx, _)| idx));
                 }
                 Segment::Reached => {}
-                Segment::Watched(trans_idx)
+                Segment::Boundary(trans_idx)
                     if self.model.transitions[trans_idx].located.is_some() =>
                 {
                     // A located transition's condition crossed: only the
@@ -121,9 +121,9 @@ impl<'m> Engine<'m> {
                     // one firing, so a condition re-crossing on the spot
                     // cannot spin here.
                     pending_error = None;
-                    self.note_watched_firing()?;
-                    for position in self.watched_active.clone() {
-                        let idx = self.model.watched[position];
+                    self.note_boundary_firing()?;
+                    for position in self.boundary_active.clone() {
+                        let idx = self.model.boundary[position];
                         if self.model.transitions[idx].located.is_some() {
                             self.refresh_transition(idx)?;
                         }
@@ -161,7 +161,7 @@ impl<'m> Engine<'m> {
                     segment_target = limit;
                     continue;
                 }
-                Segment::Watched(trans_idx) => return Ok(Some(trans_idx)),
+                Segment::Boundary(trans_idx) => return Ok(Some(trans_idx)),
                 Segment::Resolved(edge) => {
                     pending_error = None;
                     segment_target = limit;
@@ -209,7 +209,7 @@ impl<'m> Engine<'m> {
     /// Every located transition with a countdown running, with its date.
     fn located_pending(&self) -> Vec<(TransIdx, f64)> {
         self.model
-            .watched
+            .boundary
             .iter()
             .filter(|&&idx| self.model.transitions[idx].located.is_some())
             .filter_map(|&idx| self.pending[idx].map(|date| (idx, date)))
@@ -242,7 +242,7 @@ impl<'m> Engine<'m> {
     /// profile is an explicit equation over `time` and nothing else, so
     /// without this the engine would find nothing to advance, evaluate
     /// the sweep once at the initial instant, and report that value at
-    /// every sample instant and to every watched guard for the rest of
+    /// every sample instant and to every boundary guard for the rest of
     /// the run: a curve reported as a constant, with nothing to signal
     /// it.
     pub(super) fn needs_integration(&self) -> bool {
@@ -250,19 +250,19 @@ impl<'m> Engine<'m> {
             || self.model.explicit_reads_time
             || self.continuous_rates.iter().any(|&idx| self.is_armed(idx))
             // A boundary on the clock alone moves with nothing else to
-            // integrate: without this a watched `time >= c` is never
+            // integrate: without this a boundary `time >= c` is never
             // located and never fires.
             || self
                 .model
                 .margin_index
-                .watched_by_time
+                .boundary_by_time
                 .iter()
-                .filter(|position| self.watched_active.contains(*position))
-                .any(|&position| self.margin_sense(self.model.watched[position]).is_some())
+                .filter(|position| self.boundary_active.contains(*position))
+                .any(|&position| self.margin_sense(self.model.boundary[position]).is_some())
     }
 
     /// Which crossing of `idx`'s margin ends a segment, or `None` when no
-    /// crossing does. A watched transition and an idle located transition
+    /// crossing does. A boundary transition and an idle located transition
     /// wait for their condition to start holding; a located transition
     /// counting down waits for it to stop holding, which interrupts the
     /// countdown, unless its `continue` policy means nothing interrupts
@@ -283,22 +283,22 @@ impl<'m> Engine<'m> {
     }
 
     /// `integrate_continuous`: integrate the continuous state to `t_target`, monitoring
-    /// active watched boundaries. Returns the watched transition to fire
+    /// active boundary boundaries. Returns the boundary transition to fire
     /// if a crossing was located first (time/state already advanced).
     fn integrate_to(&mut self, t_target: f64) -> Result<Segment, EngineError> {
         // **Indexed.** The armed set is maintained on state changes, not
         // re-derived here: a segment restarted at a located active-set
         // crossing changes no automaton state, so the set it monitors is
         // the one the previous segment monitored, and rebuilding it would
-        // cost the model's whole watched population per restart.
+        // cost the model's whole boundary population per restart.
         //
         // A located transition is read in the sense its schedule calls for
         // (see [`Engine::margin_sense`]); one that nothing can interrupt
         // takes no event slot at all.
         let (margins, senses): (Vec<TransIdx>, Vec<MarginSense>) = self
-            .watched_active
+            .boundary_active
             .iter()
-            .map(|&position| self.model.watched[position])
+            .map(|&position| self.model.boundary[position])
             .filter_map(|idx| self.margin_sense(idx).map(|sense| (idx, sense)))
             .unzip();
 
@@ -368,7 +368,7 @@ impl<'m> Engine<'m> {
             .iter()
             .enumerate()
             .filter(|(_, indicator)| match indicator.target {
-                CIndicatorTarget::Predicate(var, cmp, _) => {
+                CompiledIndicatorTarget::Predicate(var, cmp, _) => {
                     !matches!(cmp, CmpOp::Eq | CmpOp::Ne)
                         && matches!(self.vars[var], Value::Float(_))
                 }
@@ -562,14 +562,14 @@ impl<'m> Engine<'m> {
             }
 
             // Commit the reached continuous state. Three families of
-            // event share one index space: watched transitions, then
+            // event share one index space: boundary transitions, then
             // continuously-varying hazards, then the active-set margins
             // of the frozen flows. The flows come last on purpose, so a
             // transition crossing at the same located date wins the tie.
-            let watched_and_hazards = system.margins.len() + system.hazards.len();
+            let boundary_and_hazards = system.margins.len() + system.hazards.len();
             let (t_reached, fired, crossed) = match outcome {
                 Outcome::Reached { t } => (t, None, None),
-                Outcome::Event { index, t } if index < watched_and_hazards => {
+                Outcome::Event { index, t } if index < boundary_and_hazards => {
                     let fired = if index < system.margins.len() {
                         system.margins[index]
                     } else {
@@ -577,13 +577,13 @@ impl<'m> Engine<'m> {
                     };
                     (t, Some(fired), None)
                 }
-                Outcome::Event { index, t } => (t, None, Some(index - watched_and_hazards)),
+                Outcome::Event { index, t } => (t, None, Some(index - boundary_and_hazards)),
             };
             self.time = t_reached;
             self.note_time_change();
             // Committing the reached continuous state. Compared
             // **exactly** here, unlike the explicit pass: an integrated
-            // attribute is the very thing a watched boundary is a
+            // attribute is the very thing a boundary is a
             // predicate on, and a tolerance band on it would let a
             // trajectory cross a boundary while the guard reading it kept
             // a cached verdict.
@@ -667,7 +667,7 @@ impl<'m> Engine<'m> {
                         .zip(values)
                     {
                         sampled.points.push((t, value));
-                        if matches!(indicator.target, CIndicatorTarget::Predicate(..))
+                        if matches!(indicator.target, CompiledIndicatorTarget::Predicate(..))
                             && series.points.last().is_none_or(|(_, last)| *last != value)
                         {
                             series.points.push((t, value));
@@ -689,7 +689,7 @@ impl<'m> Engine<'m> {
                 self.flush_samples_through(t_reached);
             }
             match crossed {
-                None => Ok(fired.map_or(Segment::Reached, Segment::Watched)),
+                None => Ok(fired.map_or(Segment::Reached, Segment::Boundary)),
                 Some(index) => {
                     // A located active-set crossing is a change point of
                     // the network like a fired transition is one of the

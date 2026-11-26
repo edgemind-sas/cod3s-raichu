@@ -255,7 +255,7 @@ class ClockedFan(mu.ObjFlow):
         )
 
 
-def test_a_watched_threshold_starts_the_fan_at_its_date():
+def test_a_boundary_threshold_starts_the_fan_at_its_date():
     system = mu.System("clocked_fan")
     system.add_component(source("AIR", Q), "S_AIR")
     system.add_component(source("H2", QH2), "S_H2")

@@ -148,12 +148,12 @@ fn run(model: &raichu_model::Model, t_max: f64) -> Vec<(String, f64)> {
         .collect()
 }
 
-/// The temperature crosses 10 at t = 5: a watched occurrence fires on that
+/// The temperature crosses 10 at t = 5: a boundary occurrence fires on that
 /// boundary.
 #[test]
-fn a_watched_occurrence_fires_on_its_boundary() {
+fn a_boundary_occurrence_fires_on_its_boundary() {
     let model = expand_with(json!({"modes": [{
-        "mode": "overheat", "instances": ["H"], "occurrence": {"distrib": "watched"}
+        "mode": "overheat", "instances": ["H"], "occurrence": {"distrib": "boundary"}
     }]}))
     .unwrap();
     let events = run(&model, 12.0);
@@ -169,11 +169,11 @@ fn a_watched_occurrence_fires_on_its_boundary() {
 /// Occurred at t = 1 by a delay, the mode is repaired when the temperature
 /// crosses 20, at t = 10.
 #[test]
-fn a_watched_repair_fires_on_its_repair_condition_boundary() {
+fn a_boundary_repair_fires_on_its_repair_condition_boundary() {
     let model = expand_with(json!({"modes": [{
         "mode": "stuck", "instances": ["H"],
         "occurrence": {"distrib": "delay", "time": 1.0},
-        "repair": {"distrib": "watched"},
+        "repair": {"distrib": "boundary"},
         "repair_condition": {"op": "cmp", "cmp": "gt",
             "lhs": {"op": "attr", "attr": {"component": "H", "attribute": "temp"}}, "rhs": float(20.0)}
     }]}))
@@ -190,15 +190,15 @@ fn a_watched_repair_fires_on_its_repair_condition_boundary() {
 }
 
 #[test]
-fn a_watched_repair_without_a_repair_condition_is_refused() {
+fn a_boundary_repair_without_a_repair_condition_is_refused() {
     let error = expand_with(json!({"modes": [{
         "mode": "overheat", "instances": ["H"],
         "occurrence": {"distrib": "exp", "rate": 0.1},
-        "repair": {"distrib": "watched"}
+        "repair": {"distrib": "boundary"}
     }], "feared_events": []}))
     .unwrap_err();
     assert!(
-        error.contains("watched repair") && error.contains("repair_condition"),
+        error.contains("boundary repair") && error.contains("repair_condition"),
         "{error}"
     );
 }
@@ -251,7 +251,7 @@ fn a_certain_repair_is_taken_when_its_discrete_condition_holds() {
 }
 
 #[test]
-fn a_certain_repair_on_a_continuous_condition_is_refused_pointing_to_watched() {
+fn a_certain_repair_on_a_continuous_condition_is_refused_pointing_to_boundary() {
     let error = expand_with(json!({"modes": [{
         "mode": "stuck", "instances": ["H"],
         "occurrence": {"distrib": "exp", "rate": 0.1},
@@ -261,7 +261,7 @@ fn a_certain_repair_on_a_continuous_condition_is_refused_pointing_to_watched() {
     }]}))
     .unwrap_err();
     assert!(
-        error.contains("`H.temp`") && error.contains("watched"),
+        error.contains("`H.temp`") && error.contains("boundary"),
         "{error}"
     );
 }
@@ -316,7 +316,7 @@ fn a_feared_event_refuses_an_untimed_confirmation_law() {
     let error = expand_with(json!({"modes": [], "feared_events": [{
         "name": "Hot", "condition": {"op": "cmp", "cmp": "gt",
             "lhs": {"op": "attr", "attr": {"component": "H", "attribute": "temp"}}, "rhs": float(10.0)},
-        "tempo_occ": {"distrib": "watched"}
+        "tempo_occ": {"distrib": "boundary"}
     }]}))
     .unwrap_err();
     assert!(
