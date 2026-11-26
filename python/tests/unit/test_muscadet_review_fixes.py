@@ -35,8 +35,10 @@ although what it reads is a published capacity level.
   level the component holds is refused.
 """
 
+import importlib
 import inspect
 import re
+from pathlib import Path
 
 import pytest
 
@@ -556,12 +558,28 @@ def test_the_clash_checks_run_again_when_the_document_is_written():
 # --- finding 8: a citation names a real identifier or none -------------
 
 
+def _authoring_source() -> str:
+    """The source of the authoring layer: the package ``__init__`` and the
+    private modules it is split into (``_*.py``), not the separate
+    declaration, conversion, plugin and engine modules beside them."""
+    package = Path(mu.__file__).parent
+    return "\n".join(inspect.getsource(module) for module in _authoring_modules(package))
+
+
+def _authoring_modules(package: Path) -> list:
+    names = sorted(path.stem for path in package.glob("_*.py"))
+    return [
+        mu if name == "__init__" else importlib.import_module(f"{mu.__name__}.{name}")
+        for name in names
+    ]
+
+
 def test_no_docstring_cites_an_identifier_no_plan_carries():
     """The governing plan numbers its requirements `R<n>` and its key
     technical decisions `KTD<n>`. Three passages cited a family that has
     never existed, so a reader chasing them found nothing and a reviewer
     could not check the claim against anything."""
-    source = inspect.getsource(mu)
+    source = _authoring_source()
     invented = re.findall(r"\bKD\d+\b", source)
     assert invented == []
 
@@ -570,7 +588,7 @@ def test_the_corrected_citations_name_what_the_passages_describe():
     """Each of the three now cites the requirement it actually states:
     the fold of deratings and profile on an output, twice, and the
     signed transfer quantity whose direction this layer routes."""
-    source = inspect.getsource(mu)
+    source = _authoring_source()
     assert "The two are separate channels on purpose (R6)" in source
     assert "derating this output (R6)" in source
     assert "The sign is the direction (R5)" in source
