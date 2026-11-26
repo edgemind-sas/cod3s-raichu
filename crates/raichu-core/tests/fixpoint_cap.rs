@@ -14,7 +14,7 @@
 use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError};
 use raichu_expr::{Assignment, AttrRef, BoolOp, Expr, StateRef, Value};
 use raichu_model::{
-    AttrKind, Attribute, Automaton, Component, Distrib, Model, SensitiveFunction, Transition,
+    AttrKind, Attribute, Automaton, Component, Distrib, Model, Propagation, Transition,
 };
 
 fn bool_attr(name: &str, init: bool) -> Attribute {
@@ -35,11 +35,7 @@ fn assign(component: &str, attribute: &str, value: Expr) -> Assignment {
     }
 }
 
-fn component(
-    name: &str,
-    attributes: Vec<Attribute>,
-    functions: Vec<SensitiveFunction>,
-) -> Component {
+fn component(name: &str, attributes: Vec<Attribute>, functions: Vec<Propagation>) -> Component {
     Component {
         name: name.into(),
         attributes,
@@ -48,7 +44,7 @@ fn component(
         automata: vec![],
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: functions,
+        propagations: functions,
     }
 }
 
@@ -78,7 +74,7 @@ fn settling_once(count: usize) -> Vec<Component> {
             component(
                 &name,
                 vec![bool_attr("ok", true)],
-                vec![SensitiveFunction {
+                vec![Propagation {
                     name: "apply".into(),
                     effects: vec![assign(
                         &name,
@@ -118,7 +114,7 @@ fn a_fan_in_reader_re_running_once_per_writer_is_not_a_loop() {
     let mut components = vec![component(
         "all",
         vec![bool_attr("up", true)],
-        vec![SensitiveFunction {
+        vec![Propagation {
             name: "collect".into(),
             effects: vec![assign(
                 "all",
@@ -139,7 +135,7 @@ fn a_fan_in_reader_re_running_once_per_writer_is_not_a_loop() {
         component(
             &name,
             vec![bool_attr("ok", false)],
-            vec![SensitiveFunction {
+            vec![Propagation {
                 name: "apply".into(),
                 effects: vec![assign(
                     &name,
@@ -170,7 +166,7 @@ fn a_loop_beside_a_large_settling_model_is_caught_and_named() {
         "osc",
         vec![bool_attr("x", false), bool_attr("y", false)],
         vec![
-            SensitiveFunction {
+            Propagation {
                 name: "lead".into(),
                 effects: vec![assign(
                     "osc",
@@ -181,7 +177,7 @@ fn a_loop_beside_a_large_settling_model_is_caught_and_named() {
                     },
                 )],
             },
-            SensitiveFunction {
+            Propagation {
                 name: "follow".into(),
                 effects: vec![assign("osc", "y", Expr::attr("osc", "x"))],
             },
@@ -223,7 +219,7 @@ fn diamond_chain(depth: usize) -> Vec<Component> {
         components.push(component(
             &format!("x{k}"),
             vec![int_attr("v")],
-            vec![SensitiveFunction {
+            vec![Propagation {
                 name: "sum".into(),
                 effects: vec![assign(
                     &format!("x{k}"),
@@ -241,7 +237,7 @@ fn diamond_chain(depth: usize) -> Vec<Component> {
             components.push(component(
                 &format!("{side}{}", k + 1),
                 vec![int_attr("v")],
-                vec![SensitiveFunction {
+                vec![Propagation {
                     name: "copy".into(),
                     effects: vec![assign(
                         &format!("{side}{}", k + 1),
@@ -255,7 +251,7 @@ fn diamond_chain(depth: usize) -> Vec<Component> {
     components.push(component(
         &format!("x{depth}"),
         vec![int_attr("v")],
-        vec![SensitiveFunction {
+        vec![Propagation {
             name: "source".into(),
             effects: vec![assign(
                 &format!("x{depth}"),
@@ -312,7 +308,7 @@ fn a_reset_after_a_loop_starts_from_fresh_counts() {
     let mut osc = component(
         "osc",
         vec![bool_attr("x", false)],
-        vec![SensitiveFunction {
+        vec![Propagation {
             name: "flip".into(),
             effects: vec![assign(
                 "osc",

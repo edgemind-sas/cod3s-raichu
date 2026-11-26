@@ -70,7 +70,7 @@ def _inst_spec(**over):
                 "ports": [],
                 "interfaces": [],
                 "automata": [],
-                "sensitive_functions": [],
+                "propagations": [],
                 "equations": [],
             }
         ],

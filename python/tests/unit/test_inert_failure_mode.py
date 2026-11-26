@@ -28,7 +28,7 @@ def _target(name):
         "ports": [],
         "interfaces": [],
         "automata": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
 
@@ -97,7 +97,7 @@ def test_an_inert_mode_leaves_the_others_alone():
         return sorted(
             function["name"]
             for component in expanded["components"]
-            for function in component.get("sensitive_functions", [])
+            for function in component.get("propagations", [])
         )
 
     with_inert = expand_model(_model([_inert("inert", ["A"]), _mode("live", ["A", "B"])]))

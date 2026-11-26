@@ -60,7 +60,7 @@ reserved for the templating grammar.
 | `name` | both | unique in the library |
 | `parameters` | both | declared parameters (below) |
 | `uses` | both | fragment applications: `{"fragment": "muscadet.bool_flow_in", "with": {"name": "power"}}` |
-| `body` | both | core constructs, templated: `attributes`, `ports`, `interfaces`, `automata`, `sensitive_functions`, `equations`, `allocations`, in the shapes of the model schema |
+| `body` | both | core constructs, templated: `attributes`, `ports`, `interfaces`, `automata`, `propagations`, `equations`, `allocations`, in the shapes of the model schema |
 | `targetable` | both | attributes a mode may target, each with its combination rule |
 | `modes` | type | the mode catalogue |
 
@@ -408,8 +408,8 @@ A study may carry `simulation`, `quantification` or both; with both,
 An activation names a catalogued `mode`, then either `instances` (a list of
 instance names) or `type` (every instance of that type), an `occurrence`
 law (required; a timed law, on demand: `{"distrib": "inst", "probs": [p]}`,
-or `{"distrib": "watched"}`), a `repair` law (absent: the mode stays occurred
-once it has occurred; a timed law, `watched`, or certain:
+or `{"distrib": "boundary"}`), a `repair` law (absent: the mode stays occurred
+once it has occurred; a timed law, `boundary`, or certain:
 `{"distrib": "inst", "probs": []}`), an `on_interruption` policy (default `reset`), an optional
 `condition` and an optional `repair_condition`. A repair condition holds
 the repair back while it is false: it guards the repair transition only,
@@ -433,14 +433,14 @@ are refused. A mode the type does not catalogue is refused, naming the
 catalogue.
 
 A mode has two states (`rep` and `occ`, plus `parked` for an on-demand
-draw). A `watched` law fires when the continuous boundary its condition
-states is crossed, so a watched occurrence needs a condition (catalogue or
-activation) and a watched repair a `repair_condition`. A watched law also
+draw). A `boundary` law fires when the continuous boundary its condition
+states is crossed, so a boundary occurrence needs a condition (catalogue or
+activation) and a boundary repair a `repair_condition`. A boundary law also
 fires on entry when its condition already holds, so a repaired mode whose
-watched occurrence condition still holds occurs again at once. A certain
+boundary occurrence condition still holds occurs again at once. A certain
 repair is taken when its `repair_condition` is found true at a discrete
 event, and needs one; a repair condition on a continuous attribute is
-refused for it (`watched` repairs on the boundary). A law with
+refused for it (`boundary` repairs on the boundary). A law with
 several branches has no second destination in a mode and is refused: a
 type-body automaton expresses it.
 
@@ -493,8 +493,8 @@ rather than part of the model.
 | `fmu_units` | the system's `fmu_units`, in the core form (loading needs `allow_fmu_import`) |
 | `unbounded_rate` | declared by the expander on a continuous network; the system's `unbounded_rate` otherwise |
 | `evaluation_order` | derived by the expander from what each step reads; not written (see below) |
-| `attributes`, `ports`, `interfaces`, `automata`, `sensitive_functions`, `equations`, `allocations` | a type's `body`, verbatim, or the fragments it applies; references to the instance itself are written `$self` |
-| transition laws (`delay`, `exp`, `weibull`, `lognormal`, `gamma`, `uniform`, `normal`, `empirical`, `inst`, `watched`) | written on a transition of a type body, or taken from a `law` parameter with `$law`; in a study, the laws of catalogued modes, common-cause orders and feared-event confirmation times |
+| `attributes`, `ports`, `interfaces`, `automata`, `propagations`, `equations`, `allocations` | a type's `body`, verbatim, or the fragments it applies; references to the instance itself are written `$self` |
+| transition laws (`delay`, `exp`, `weibull`, `lognormal`, `gamma`, `uniform`, `normal`, `empirical`, `inst`, `boundary`) | written on a transition of a type body, or taken from a `law` parameter with `$law`; in a study, the laws of catalogued modes, common-cause orders and feared-event confirmation times |
 | interruption policy (`on_interruption`) | a transition of a type body, or a mode activation |
 | run settings of `simulate` and `monte_carlo` | the study's `simulation` (`options` for confidence, quantiles, threads, solver tolerances and flow policy) |
 | sequence campaigns (`run_sequences`) | the study's `simulation` with `method: sequences` |
@@ -511,7 +511,7 @@ Left out on purpose:
   value, so what an instance computes is computed by the engine.
 - **A mode with more than two states**, or **effects written as
   expressions**, are not catalogue features: a type-body automaton and its
-  sensitive functions express them.
+  propagations express them.
 - **Interactive simulation, the causal journal and the confluence probe**
   are tools run on a loaded model from Python (`interactive`, `simulate`
   with `journal` or `confluence_check`), not study settings.
@@ -530,7 +530,7 @@ Left out on purpose:
   `rep` once the condition falls. Only the entry into `occ` is a sequence
   event; parking is what stops a lost draw from being drawn again within
   one solicitation.
-- Each targeted attribute gets one sensitive function `modes__<attribute>`
+- Each targeted attribute gets one propagation `modes__<attribute>`
   holding the combined value. An attribute written by edge effects gets
   none: its writes are the `effects` of the transitions that carry them.
 - Each feared event is a component named after it, with an automaton `ev`
@@ -554,7 +554,7 @@ The provenance maps every element path to its origin:
 | `component:C` | component (an instance or a feared event) |
 | `attribute:C.a`, `port:C.p`, `interface:C.i` | attribute, port, interface |
 | `automaton:C.a`, `transition:C.a.t` | automaton, transition |
-| `function:C.f`, `equation:C.a`, `allocation:C.n` | sensitive function, equation targeting `a`, allocation |
+| `function:C.f`, `equation:C.a`, `allocation:C.n` | propagation, equation targeting `a`, allocation |
 | `connection:E`, `indicator:N`, `target:N` | connection (by name, or `from->to`), indicator, target |
 
 An origin holds the document, the JSON Pointer of the node, and the

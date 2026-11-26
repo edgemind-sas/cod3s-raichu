@@ -413,7 +413,7 @@ fn singular_trial_model(protected: bool) -> Json {
             json!({"target":"y","kind":"ode","expr":number(1.0)}),
         ],
     );
-    c["automata"] = json!([{"name":"m","states":["closed","open"],"init":"closed","transitions":if protected {vec![json!({"name":"trip","source":"closed","targets":["open"],"distrib":"watched","guard":{"op":"cmp","cmp":"ge","lhs":attr("c","y"),"rhs":number(0.1)}})]} else {vec![]}}]);
+    c["automata"] = json!([{"name":"m","states":["closed","open"],"init":"closed","transitions":if protected {vec![json!({"name":"trip","source":"closed","targets":["open"],"distrib":"boundary","guard":{"op":"cmp","cmp":"ge","lhs":attr("c","y"),"rhs":number(0.1)}})]} else {vec![]}}]);
     document(vec![c], &[("x", "c", "x"), ("y", "c", "y")])
 }
 

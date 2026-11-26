@@ -228,7 +228,7 @@ fn program_dependencies_cannot_form_a_cycle() {
 
 /// A small but complete valid model: a source exporting a boolean flow to
 /// a target, a two-state failure automaton with delay transitions, an
-/// instantaneous branching, one sensitive function and two indicators.
+/// instantaneous branching, one propagation and two indicators.
 fn sample_model() -> Model {
     Model {
         programs: vec![],
@@ -303,7 +303,7 @@ fn sample_model() -> Model {
                 }],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![SensitiveFunction {
+                propagations: vec![Propagation {
                     // The muscadet pattern: the exported flow follows the
                     // failure automaton (fault ⇒ no flow).
                     name: "update_flow_out".into(),
@@ -340,7 +340,7 @@ fn sample_model() -> Model {
                 automata: vec![],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![SensitiveFunction {
+                propagations: vec![Propagation {
                     name: "update_fed".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -682,7 +682,7 @@ fn rejects_guard_on_unknown_variable() {
 #[test]
 fn rejects_port_agg_over_out_port() {
     let mut model = sample_model();
-    model.components[1].sensitive_functions[0].effects[0].value = Expr::PortAgg {
+    model.components[1].propagations[0].effects[0].value = Expr::PortAgg {
         port: PortRef {
             component: "source".into(),
             port: "out".into(),
@@ -712,7 +712,7 @@ fn rejects_not_with_two_arguments() {
 #[test]
 fn rejects_state_active_on_unknown_state() {
     let mut model = sample_model();
-    model.components[0].sensitive_functions[0].effects[0].value = Expr::StateActive {
+    model.components[0].propagations[0].effects[0].value = Expr::StateActive {
         state: StateRef {
             component: "source".into(),
             automaton: "failure".into(),
@@ -905,7 +905,7 @@ fn continuous_cycle_model(first: EquationKind, second: EquationKind) -> Model {
                 ports: vec![out_port("level_out", "level"), in_port("rate_in")],
                 interfaces: vec![],
                 automata: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
                 allocations: vec![],
                 equations: vec![Equation {
                     target: "level".into(),
@@ -919,7 +919,7 @@ fn continuous_cycle_model(first: EquationKind, second: EquationKind) -> Model {
                 ports: vec![out_port("rate_out", "rate"), in_port("level_in")],
                 interfaces: vec![],
                 automata: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
                 allocations: vec![],
                 equations: vec![Equation {
                     target: "rate".into(),
@@ -967,7 +967,7 @@ fn fan_in_model(second: AttrKind) -> Model {
                 ports: vec![out_port("pumping_out", "pumping")],
                 interfaces: vec![],
                 automata: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
                 allocations: vec![],
                 equations: vec![],
             },
@@ -981,7 +981,7 @@ fn fan_in_model(second: AttrKind) -> Model {
                 ports: vec![out_port("pumping_out", "pumping")],
                 interfaces: vec![],
                 automata: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
                 allocations: vec![],
                 equations: vec![],
             },
@@ -991,7 +991,7 @@ fn fan_in_model(second: AttrKind) -> Model {
                 ports: vec![in_port("pumping_in")],
                 interfaces: vec![],
                 automata: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
                 allocations: vec![],
                 equations: vec![Equation {
                     target: "temperature".into(),
@@ -1335,7 +1335,7 @@ fn allocation_cycle_model() -> Model {
                 ],
                 interfaces: vec![],
                 automata: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
                 allocations: vec![Allocation {
                     name: "share".into(),
                     port: "out".into(),
@@ -1358,7 +1358,7 @@ fn allocation_cycle_model() -> Model {
                 ports: vec![in_port("feed"), out_port("need_out", "need")],
                 interfaces: vec![],
                 automata: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
                 allocations: vec![],
                 equations: vec![Equation {
                     // The consumer's need is the share it was given.
@@ -1467,7 +1467,7 @@ fn ordered_model(order: Option<Vec<AttrRef>>) -> Model {
             ports: vec![],
             interfaces: vec![],
             automata: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
             allocations: vec![],
             equations: vec![
                 constant_equation("u", EquationKind::Explicit, 1.0),
@@ -1669,4 +1669,35 @@ fn sealing_an_authored_body_derives_its_feature_list() {
         Model::seal_json(&alien).unwrap_err(),
         LoadError::UnsupportedFeature { .. }
     ));
+}
+
+/// The spellings the schema used up to 0.145 are still read: a component
+/// key `sensitive_functions` and a `"distrib": "watched"` give the model
+/// their current names give, and the model is written back under the
+/// current names only.
+#[test]
+fn former_spellings_are_read_and_not_written() {
+    let model = sample_model();
+    let current = serde_json::to_string(&model).unwrap();
+    assert!(!current.contains("sensitive_functions"));
+    assert!(!current.contains("watched"));
+    let former = current
+        .replace("\"propagations\"", "\"sensitive_functions\"")
+        .replace("\"distrib\":\"boundary\"", "\"distrib\":\"watched\"");
+    let read: Model = serde_json::from_str(&former).unwrap();
+    assert_eq!(read, model);
+
+    let boundary: Distrib = serde_json::from_str(r#"{"distrib":"watched"}"#).unwrap();
+    assert_eq!(boundary, Distrib::Boundary);
+    assert_eq!(
+        serde_json::to_string(&boundary).unwrap(),
+        r#"{"distrib":"boundary"}"#
+    );
+    let component: Component =
+        serde_json::from_str(r#"{"name":"c","sensitive_functions":[{"name":"f","effects":[]}]}"#)
+            .unwrap();
+    assert_eq!(component.propagations.len(), 1);
+    assert!(serde_json::to_string(&component)
+        .unwrap()
+        .contains("\"propagations\""));
 }

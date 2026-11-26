@@ -89,7 +89,7 @@ translation carries each part onto a RAICHU construct:
 
 | Figaro 0 | RAICHU |
 |---|---|
-| attribute reset at each phase (the gates' `S`, `required`, `relevant_evt`) | attribute written by a sensitive function, its expression derived step by step |
+| attribute reset at each phase (the gates' `S`, `required`, `relevant_evt`) | attribute written by a propagation, its expression derived step by step |
 | attribute kept between phases (priority-AND memory, demand latches, repair queue) | attribute written by the edge effects of every transition, with the value the previous phase ended with |
 | failure or repair at a constant rate (`DIST EXP`) | exponential transition, guarded by the occurrence condition, declared `failure` or `repair` |
 | instantaneous draw (`DIST INS`, failure on demand) | instantaneous transition into a pending state; a phase controller commits the pending draws together, so the draws valid in one state are made simultaneously, as in FIGSEQ |

@@ -149,7 +149,7 @@ pub(super) fn fireable_kind(distrib: &CLaw) -> FireableKind {
     match distrib {
         CLaw::Delay(_) => FireableKind::Delay,
         CLaw::Inst(_) => FireableKind::Inst,
-        CLaw::Watched { .. } => FireableKind::Watched,
+        CLaw::Boundary { .. } => FireableKind::Boundary,
         CLaw::Exp(_)
         | CLaw::ExpVar { .. }
         | CLaw::Weibull(..)
@@ -187,7 +187,7 @@ impl<'m> Engine<'m> {
     /// `schedule_deterministic` + `drop_disabled`: (re)schedule fireable transitions and drop
     /// stale ones. Deterministic full scan (fine at fixture model
     /// sizes; the scan is index-ordered so the schedule is
-    /// reproducible). Watched transitions are never date-scheduled.
+    /// reproducible). Boundary transitions are never date-scheduled.
     /// Evaluate a state-dependent rate λ(x) on the current state and
     /// reject non-finite or negative values with a typed error.
     pub(super) fn eval_rate(&self, trans_idx: TransIdx, rate: &CExpr) -> Result<f64, EngineError> {
@@ -227,7 +227,7 @@ impl<'m> Engine<'m> {
     /// whose condition crossed, so no other guard is read at that instant.
     pub(super) fn refresh_transition(&mut self, trans_idx: TransIdx) -> Result<(), EngineError> {
         let transition = &self.model.transitions[trans_idx];
-        if matches!(transition.distrib, CLaw::Watched { .. }) {
+        if matches!(transition.distrib, CLaw::Boundary { .. }) {
             return Ok(());
         }
         let in_source = self.states[transition.automaton] == transition.source;
@@ -433,7 +433,7 @@ impl<'m> Engine<'m> {
                 let firing_at = match &self.model.transitions[trans_idx].distrib {
                     CLaw::Delay(delay) => self.time + delay,
                     CLaw::Inst(_) => self.time,
-                    CLaw::Watched { .. } => return Ok(()),
+                    CLaw::Boundary { .. } => return Ok(()),
                     // Armed by the dedicated block above.
                     CLaw::ExpVar { .. } => return Ok(()),
                     CLaw::Exp(rate) => {

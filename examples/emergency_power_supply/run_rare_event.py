@@ -7,8 +7,8 @@ over pilot campaigns and weights each history by its likelihood ratio.
 Splitting clones the histories that progress furthest towards the feared
 event; progress is read on a score this script adds to the model: the
 number of supply paths of the bus bars LHA and LHB currently lost
-(`PROGRESS_GATES`). The score is an observer, written by a sensitive
-function from the gates' `S` attributes: it changes no transition.
+(`PROGRESS_GATES`). The score is an observer, written by a
+propagation from the gates' `S` attributes: it changes no transition.
 
 Writes `results/<VARIANT>_<method>.json`.
 """
@@ -72,7 +72,7 @@ def with_progress_score(document: dict) -> dict:
                     "init": {"kind": "float", "value": 0.0},
                 }
             ],
-            "sensitive_functions": [
+            "propagations": [
                 {
                     "name": "count_lost_supplies",
                     "effects": [

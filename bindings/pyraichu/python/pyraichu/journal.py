@@ -2,7 +2,7 @@
 
 The engine records a structured causal journal when asked
 (``simulate(model, t_max=..., journal=True)``): transition firings,
-sensitive-function triggers, variable changes (with their writing
+propagation triggers, variable changes (with their writing
 function), schedulings, reschedulings (`reschedule_modifiable`) and drops
 (`drop_disabled` / source left). This module answers the three
 explainability questions, *from the journal alone*:
@@ -99,13 +99,13 @@ class AttributeChange:
     attribute: str
     old: Any
     new: Any
-    #: Sensitive function that wrote the value.
+    #: Propagation that wrote the value.
     cause: str
     #: Transition whose firing (directly or through the cascade)
     #: triggered the write, `"initialization"` for the t = 0 fixpoint.
     trigger: str
     #: Fixpoint iteration of the write: the index, counted from 1 and
-    #: restarted at every fixpoint, of the sensitive function application
+    #: restarted at every fixpoint, of the propagation application
     #: that made it; 0 for a write made before the fixpoint (a fired
     #: transition's own edge effects, an FMU output, an external input).
     iteration: int = 0
@@ -119,8 +119,8 @@ class AttributeChange:
 
 @dataclass
 class Cascade:
-    """Direct consequences of one transition firing: the sensitive
-    functions triggered, the variables rewritten and the schedule
+    """Direct consequences of one transition firing: the
+    propagations triggered, the variables rewritten and the schedule
     updates, up to the next firing."""
 
     transition: str

@@ -1351,7 +1351,7 @@ fn indicator_request(
 
 /// The static exact-domain report of a model, as a JSON array: every
 /// reason, found without exploring, that the model is outside the exact
-/// exploration domain (an ODE, a reachable watched transition, an
+/// exploration domain (an ODE, a reachable boundary transition, an
 /// expression reading time). Each entry is the tagged violation
 /// (`kind` plus its fields) with a readable `message`; empty when none
 /// is found. A law outside the domain is only found during a run.
@@ -1868,7 +1868,7 @@ fn law_json(law: &raichu::raichu_core::compile::CLaw) -> serde_json::Value {
     match law {
         CLaw::Delay(time) => serde_json::json!({"distrib": "delay", "time": time}),
         CLaw::Inst(probs) => serde_json::json!({"distrib": "inst", "probs": probs}),
-        CLaw::Watched { .. } => serde_json::json!({"distrib": "watched"}),
+        CLaw::Boundary { .. } => serde_json::json!({"distrib": "boundary"}),
         CLaw::Exp(rate) => serde_json::json!({"distrib": "exp", "rate": rate}),
         CLaw::ExpVar { .. } => serde_json::json!({"distrib": "exp", "rate_expr": true}),
         CLaw::Weibull(shape, scale) => {
@@ -1978,7 +1978,7 @@ impl Interactive {
     /// (`{index, transition, kind, date}`), earliest first.
     ///
     /// The only reader that needs a rebuilt engine: locating an armed
-    /// watched transition evaluates its guard against the live state.
+    /// boundary transition evaluates its guard against the live state.
     fn fireable(&mut self) -> PyResult<String> {
         Self::json(&self.engine()?.fireable())
     }

@@ -1,6 +1,6 @@
 //! The run loop and discrete evolution: stepping and running to the
 //! horizon, firing the earliest transition (`fire_transition`), and the
-//! sensitive-function propagation to fixpoint (`propagate_effects`) with
+//! propagation propagation to fixpoint (`propagate_effects`) with
 //! its optional confluence probe.
 
 use super::*;
@@ -115,7 +115,7 @@ impl<'m> Engine<'m> {
     ///
     /// Returns the fired event, or `None` when nothing remains before
     /// `t_max`. Scheduled transitions are ordered by date, arming wave,
-    /// observer priority within that wave, then transition index. Watched
+    /// observer priority within that wave, then transition index. Boundary
     /// transitions already past their boundary fire immediately.
     ///
     /// With held choices ([`EngineConfig::deferred_choices`]), a held
@@ -130,10 +130,10 @@ impl<'m> Engine<'m> {
                 policy: "advance_operator_to in operator mode",
             });
         }
-        // Watched transition already past its boundary (initial
+        // Boundary transition already past its boundary (initial
         // conditions or post-jump state): fires immediately.
-        if let Some(trans_idx) = self.immediate_watched()? {
-            self.note_watched_firing()?;
+        if let Some(trans_idx) = self.immediate_boundary()? {
+            self.note_boundary_firing()?;
             return self.fire(trans_idx, None).map(Some);
         }
 
@@ -171,7 +171,7 @@ impl<'m> Engine<'m> {
                     self.flush_samples_before(t_new);
                     self.time = t_new;
                     self.note_time_change();
-                    self.watched_streak = (t_new, 0);
+                    self.boundary_streak = (t_new, 0);
                     if self.held_choice(trans_idx) {
                         self.held_choice_due = true;
                         return Ok(None);
@@ -183,7 +183,7 @@ impl<'m> Engine<'m> {
                         self.flush_samples_before(point);
                         self.time = point;
                         self.note_time_change();
-                        self.watched_streak = (point, 0);
+                        self.boundary_streak = (point, 0);
                         self.process_fmu_point()?;
                         return Ok(Some(Event {
                             time: point,
@@ -234,8 +234,8 @@ impl<'m> Engine<'m> {
             // itself, including instantaneous choices and their weights.
             if self.config.stochastic_dates == StochasticDates::Drawn {
                 loop {
-                    if let Some(trans_idx) = self.immediate_watched()? {
-                        self.note_watched_firing()?;
+                    if let Some(trans_idx) = self.immediate_boundary()? {
+                        self.note_boundary_firing()?;
                         self.fire(trans_idx, None)?;
                     } else if let Some((trans_idx, _)) =
                         self.next_pending().filter(|(_, date)| *date <= self.time)
@@ -461,7 +461,7 @@ impl<'m> Engine<'m> {
         };
         let owner = transition.automaton;
         self.states[owner] = target;
-        // Indexed watched set: re-arm what this automaton owns and
+        // Indexed boundary set: re-arm what this automaton owns and
         // invalidate the guards that read its state.
         self.note_state_change(owner);
         let transition = &self.model.transitions[trans_idx];
@@ -552,18 +552,18 @@ impl<'m> Engine<'m> {
     /// Return the next transition automatic execution would fire without
     /// advancing time, or `None` when no transition is due yet.
     ///
-    /// Watched transitions already past their boundary retain their immediate
+    /// Boundary transitions already past their boundary retain their immediate
     /// precedence. Scheduled transitions use the same date, arming wave,
     /// observation priority and positional order as [`Engine::step`]. This
-    /// query evaluates watched guards but does not fire, draw randomness,
+    /// query evaluates boundary guards but does not fire, draw randomness,
     /// resample clocks, or alter the presentation order of [`Engine::fireable`].
     /// Deferred stochastic transitions without a date are not selected.
     ///
     /// # Errors
-    /// Returns a guard evaluation error for an active watched transition,
+    /// Returns a guard evaluation error for an active boundary transition,
     /// as automatic execution does.
     pub fn next_immediate_transition(&mut self) -> Result<Option<TransIdx>, EngineError> {
-        if let Some(index) = self.immediate_watched()? {
+        if let Some(index) = self.immediate_boundary()? {
             return Ok(Some(index));
         }
         Ok(self
@@ -607,7 +607,7 @@ impl<'m> Engine<'m> {
         let transition = &model.transitions[trans_idx];
         match &transition.distrib {
             CLaw::Delay(_)
-            | CLaw::Watched { .. }
+            | CLaw::Boundary { .. }
             | CLaw::Exp(_)
             | CLaw::ExpVar { .. }
             | CLaw::Weibull(..)
@@ -648,7 +648,7 @@ impl<'m> Engine<'m> {
         }
     }
 
-    /// `propagate_effects`: propagate sensitive functions to a fixpoint in the
+    /// `propagate_effects`: propagate propagations to a fixpoint in the
     /// documented deterministic order (ascending function index).
     pub(super) fn run_fixpoint(&mut self) -> Result<(), EngineError> {
         if self.config.confluence_check {
@@ -663,7 +663,7 @@ impl<'m> Engine<'m> {
     /// A transition's edge effects (`evolT`'s own writes): evaluated once,
     /// in declaration order, on the state the firing left, and never
     /// re-applied. Each change triggers what reads it, exactly as a
-    /// sensitive function's does.
+    /// propagation's does.
     fn apply_transition_effects(&mut self, trans_idx: TransIdx) -> Result<(), EngineError> {
         let transition = &self.model.transitions[trans_idx];
         for (target, value_expr) in &transition.effects {
@@ -724,8 +724,8 @@ impl<'m> Engine<'m> {
             let old = self.vars[*target];
             if old != new {
                 self.vars[*target] = new;
-                // Indexed watched set: invalidate the guards reading it.
-                // The comparison above is the sensitive functions' own,
+                // Indexed boundary set: invalidate the guards reading it.
+                // The comparison above is the propagations' own,
                 // older than the explicit pass's: this site was already a
                 // change *detector*, it only lacked a consumer.
                 self.note_var_change(*target);
@@ -981,11 +981,11 @@ impl<'m> Engine<'m> {
         let forward_vars = std::mem::replace(&mut self.vars, saved_vars);
         // The attribute vector has just been rewound wholesale, and it is
         // rewound again below whichever way the probe ends: discard every
-        // cached watched verdict here, once, rather than reason about the
+        // cached boundary verdict here, once, rather than reason about the
         // union of two passes on every exit path (the diverging one
         // included, which an interactive caller can catch and continue
         // from).
-        for stale in &mut self.watched_stale {
+        for stale in &mut self.boundary_stale {
             *stale = true;
         }
 
@@ -1005,7 +1005,7 @@ impl<'m> Engine<'m> {
                 .position(|(a, b)| a != b)
                 .unwrap_or(0);
             // The distribution operators are named alongside the
-            // sensitive functions, though they cannot themselves diverge:
+            // propagations, though they cannot themselves diverge:
             // they run in the explicit sweep, after the fixpoint, from
             // whatever state it converged to, so both replays recompute
             // them identically. A diverging allocated quantity therefore

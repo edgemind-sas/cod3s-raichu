@@ -616,7 +616,7 @@ def test_a_standalone_mode_with_no_effect_builds():
     built = declare.build_document(document)
     mode = next(c for c in built["components"] if c["name"] == "B__hw")
     assert [a["name"] for a in mode["automata"]] == ["fm"]
-    assert mode["sensitive_functions"] == [], "it writes nothing, and says so"
+    assert mode["propagations"] == [], "it writes nothing, and says so"
     # And the block keeps its output: nothing gates it.
     assert [round(t, 6) for t, _ in trajectory(document)] == [4.0]
 
@@ -646,7 +646,7 @@ def test_a_mode_watching_another_modes_state_reads_it_as_a_state():
     ]
 
 
-def test_a_state_a_watched_mode_has_not_is_refused_by_the_states_it_has():
+def test_a_state_a_boundary_mode_has_not_is_refused_by_the_states_it_has():
     with pytest.raises(declare.ComponentSpecError, match="only the states"):
         declare.mode_object(
             a_delay_mode(
@@ -956,18 +956,18 @@ def test_a_condition_on_an_EVENTS_state_reads_the_event_own_names():
     entering `MODE_CLASSES` puts it in the dictionary a condition leaf
     consults, and the mode vocabulary would answer `fm` for its automaton and
     refuse `not_occ` as a state it has not."""
-    watched = an_event("FIRST")
+    boundary = an_event("FIRST")
     watcher = an_event(
         "SECOND", cond=[[{"attr": "not_occ", "obj": "FIRST", "value": True}]]
     )
-    obj = declare.mode_object(watcher, {"FIRST": watched})
+    obj = declare.mode_object(watcher, {"FIRST": boundary})
     assert obj["cond"] == [
         [{"obj": "FIRST", "automaton": "ev", "state": "not_occ", "value": True}]
     ]
 
 
 def test_a_condition_on_a_RENAMED_events_state_follows_the_rename():
-    watched = an_event(
+    boundary = an_event(
         "FIRST",
         event_aut_name="alarm",
         occ_state_name="ringing",
@@ -976,7 +976,7 @@ def test_a_condition_on_a_RENAMED_events_state_follows_the_rename():
     watcher = an_event(
         "SECOND", cond=[[{"attr": "ringing", "obj": "FIRST", "value": True}]]
     )
-    obj = declare.mode_object(watcher, {"FIRST": watched})
+    obj = declare.mode_object(watcher, {"FIRST": boundary})
     assert obj["cond"] == [
         [{"obj": "FIRST", "automaton": "alarm", "state": "ringing", "value": True}]
     ]

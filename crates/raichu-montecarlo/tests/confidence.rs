@@ -73,7 +73,7 @@ fn exponential_model(rate: f64) -> Model {
             }],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![Indicator {

@@ -160,7 +160,7 @@ def test_gates_carry_their_identifier_and_origin():
                 {"name": "up", "kind": "bool", "init": {"kind": "bool", "value": True}}
             ],
             "automata": [health("h1"), health("h2")],
-            "sensitive_functions": [
+            "propagations": [
                 {
                     "name": "update",
                     "effects": [

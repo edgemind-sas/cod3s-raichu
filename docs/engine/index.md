@@ -24,7 +24,7 @@ delivers.
 | `P2` | `solicited`, `delivers` | `standby`, `running`, `failed` | fails to start on demand (10 %), or fails while running |
 | `Tank` | `fed` | (none in the first chapter) | (none) |
 
-Each component has one **sensitive function** that recomputes all of its
+Each component has one **propagation** that recomputes all of its
 attributes from what it reads: `P1` from its own state, `P2` from `P1`'s
 `delivers` and its own state, the tank from both pumps.
 
@@ -33,12 +33,12 @@ attributes from what it reads: `P1` from its own state, `P2` from `P1`'s
 | Term | Meaning on these pages |
 |---|---|
 | event | a transition firing: a state change of one automaton |
-| sensitive function | a function that recomputes some attributes; it runs again whenever something it reads changes |
-| iteration of the fixpoint | one application of one sensitive function: the engine applies the pending functions one at a time, lowest index first, until none is left |
+| propagation | a function that recomputes some attributes; it runs again whenever something it reads changes |
+| iteration of the fixpoint | one application of one propagation: the engine applies the pending functions one at a time, lowest index first, until none is left |
 | stable state | the state reached when no function is pending any more |
 | armed transition | a transition whose source state is active and whose guard holds: it is waiting for its date |
 | firing date | the date an armed stochastic transition will fire, sampled when it is armed |
-| watched transition | a transition whose guard reads a continuous quantity: it fires the instant the guard turns true |
+| boundary transition | a transition whose guard reads a continuous quantity: it fires the instant the guard turns true |
 
 ## The model
 
@@ -93,7 +93,7 @@ main_pump = {
     "automata": [{"name": "mode", "states": ["working", "failed"], "init": "working",
                   "transitions": [exp("fail", "working", "failed", FAIL_P1),
                                   exp("repair", "failed", "working", REPAIR_P1)]}],
-    "sensitive_functions": [{"name": "update_P1", "effects": [
+    "propagations": [{"name": "update_P1", "effects": [
         write("P1", "delivers", in_state("P1", "mode", "working"))]}],
 }
 
@@ -110,7 +110,7 @@ backup_pump = {
         exp("fail", "running", "failed", FAIL_P2),
         exp("repair", "failed", "standby", REPAIR_P2),
     ]}],
-    "sensitive_functions": [{"name": "update_P2", "effects": [
+    "propagations": [{"name": "update_P2", "effects": [
         write("P2", "solicited", negate(attr("P1", "delivers"))),
         write("P2", "delivers", in_state("P2", "mode", "running"))]}],
 }
@@ -118,7 +118,7 @@ backup_pump = {
 tank = {
     "name": "Tank",
     "attributes": [flag("fed", True)],
-    "sensitive_functions": [{"name": "update_Tank", "effects": [
+    "propagations": [{"name": "update_Tank", "effects": [
         write("Tank", "fed", either(attr("P1", "delivers"), attr("P2", "delivers")))]}],
 }
 
@@ -131,7 +131,7 @@ discrete_model = pyraichu.load_model({
 The [boundaries](boundaries.md) chapter gives the tank a level. The pumps
 are unchanged; the tank gains a `level` governed by a differential equation,
 an `inflow` its function computes, and a `regime` automaton whose
-transitions are **watched**: they fire the instant the level crosses a
+transitions are **boundary**: they fire the instant the level crosses a
 threshold.
 
 ```python
@@ -146,9 +146,9 @@ def cmp(op, lhs, rhs):
     return {"op": "cmp", "cmp": op, "lhs": lhs, "rhs": rhs}
 
 
-def watched(name, source, target, guard):
+def boundary(name, source, target, guard):
     return {"name": name, "source": source, "targets": [target],
-            "guard": guard, "distrib": "watched"}
+            "guard": guard, "distrib": "boundary"}
 
 
 def pick(cond, then, otherwise):
@@ -165,12 +165,12 @@ tank_with_level = {
                    {"name": "level", "kind": "float", "init": {"kind": "float", "value": LEVEL_0}}],
     "automata": [{"name": "regime", "states": ["normal", "full", "alarm"], "init": "normal",
                   "transitions": [
-        watched("reach_high", "normal", "full", cmp("ge", level, const(HIGH))),
-        watched("leave_high", "full", "normal", cmp("le", level, const(HIGH_RESET))),
-        watched("reach_low", "normal", "alarm", cmp("le", level, const(LOW))),
-        watched("leave_low", "alarm", "normal", cmp("ge", level, const(LOW_RESET))),
+        boundary("reach_high", "normal", "full", cmp("ge", level, const(HIGH))),
+        boundary("leave_high", "full", "normal", cmp("le", level, const(HIGH_RESET))),
+        boundary("reach_low", "normal", "alarm", cmp("le", level, const(LOW))),
+        boundary("leave_low", "alarm", "normal", cmp("ge", level, const(LOW_RESET))),
     ]}],
-    "sensitive_functions": [{"name": "update_Tank", "effects": [
+    "propagations": [{"name": "update_Tank", "effects": [
         write("Tank", "fed", either(attr("P1", "delivers"), attr("P2", "delivers"))),
         # Above HIGH the main pump is throttled to the consumption: the level holds.
         write("Tank", "inflow", pick(attr("P1", "delivers"),

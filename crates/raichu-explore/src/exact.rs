@@ -146,18 +146,18 @@ pub enum DomainViolation {
         /// The integrated attribute, `component.attribute`.
         attribute: String,
     },
-    /// A watched (boundary) transition sits in a state its automaton can
+    /// A boundary (boundary) transition sits in a state its automaton can
     /// reach from its initial state: its firing date is a boundary
     /// crossing, not an exponential draw.
-    Watched {
+    Boundary {
         /// Qualified transition name.
         transition: String,
     },
     /// An expression reads the simulation time, which the exact
     /// exploration never advances.
     ReadsTime {
-        /// Where: a transition guard, rate or effect, a sensitive
-        /// function, or an explicit equation, with its qualified name.
+        /// Where: a transition guard, rate or effect, a
+        /// propagation, or an explicit equation, with its qualified name.
         site: String,
     },
 }
@@ -174,9 +174,9 @@ impl std::fmt::Display for DomainViolation {
             DomainViolation::Ode { attribute } => {
                 write!(f, "`{attribute}` is integrated by an ODE")
             }
-            DomainViolation::Watched { transition } => write!(
+            DomainViolation::Boundary { transition } => write!(
                 f,
-                "watched transition `{transition}` can be armed (a boundary crossing)"
+                "boundary transition `{transition}` can be armed (a boundary crossing)"
             ),
             DomainViolation::ReadsTime { site } => {
                 write!(f, "{site} reads the simulation time")
@@ -189,7 +189,7 @@ impl std::fmt::Display for DomainViolation {
 /// without exploring, that `model` is outside the exact domain (empty
 /// when none is found).
 ///
-/// Reported: an ODE, a watched transition whose source state is reachable
+/// Reported: an ODE, a boundary transition whose source state is reachable
 /// from its automaton's initial state (ignoring guards), and any
 /// expression reading the simulation time. A model with an empty report
 /// can still stop an exploration when a law outside the domain (delay,
@@ -208,10 +208,10 @@ pub fn exact_domain_report(model: &CompiledModel) -> Vec<DomainViolation> {
             attribute: model.var_names[*var].clone(),
         });
     }
-    for &idx in &model.watched {
+    for &idx in &model.boundary {
         let transition = &model.transitions[idx];
         if reachable_states(model, transition.automaton)[transition.source] {
-            report.push(DomainViolation::Watched {
+            report.push(DomainViolation::Boundary {
                 transition: transition.name.clone(),
             });
         }
@@ -231,7 +231,7 @@ pub fn exact_domain_report(model: &CompiledModel) -> Vec<DomainViolation> {
     for function in &model.functions {
         if function.effects.iter().any(|(_, e)| reads_time(e)) {
             report.push(DomainViolation::ReadsTime {
-                site: format!("sensitive function `{}`", function.name),
+                site: format!("propagation `{}`", function.name),
             });
         }
     }
@@ -597,7 +597,7 @@ fn law_label(law: &CLaw) -> String {
     match law {
         CLaw::Delay(delay) => format!("delay {delay}"),
         CLaw::Inst(_) => "instantaneous".to_owned(),
-        CLaw::Watched { .. } => "watched boundary".to_owned(),
+        CLaw::Boundary { .. } => "boundary".to_owned(),
         CLaw::Exp(rate) => format!("exponential {rate}"),
         CLaw::ExpVar { continuous, .. } => {
             if *continuous {

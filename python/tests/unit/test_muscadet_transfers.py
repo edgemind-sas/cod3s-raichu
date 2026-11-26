@@ -286,7 +286,7 @@ def test_a_bespoke_transfer_function_is_refused():
         Bespoke("W")
     message = str(raised.value)
     assert "`W`" in message and "`wall`" in message
-    assert "watched" in message
+    assert "boundary" in message
 
 
 def test_a_potential_read_off_a_delivered_input_is_refused():
@@ -541,7 +541,7 @@ def test_a_bespoke_profile_function_is_refused():
         Wrong("P")
     message = str(raised.value)
     assert "`P`" in message and "`power`" in message
-    assert "watched" in message
+    assert "boundary" in message
 
 
 def test_a_profile_declared_without_a_shape_is_refused():

@@ -15,7 +15,7 @@ two-hour cycle, reproduced to the last digit the event location carries.
 
 Every date asserted here is an **analytic crossing instant**, never the
 declared nature of a transition. A structural assertion (`distrib` is
-`watched`) passes on a model that still never fires, which is exactly the
+`boundary`) passes on a model that still never fires, which is exactly the
 0.10.1 defect: a guard reading a level through a measurement link was
 emitted `inst`, and the crossing was never located.
 """
@@ -228,7 +228,7 @@ def test_a_band_activates_and_releases_at_its_two_levels():
     units later at -1, and 5 again two units after that.
 
     The assertion is the **date**. Asserting that the transitions were
-    emitted `watched` would pass on a montage that never fires, which is
+    emitted `boundary` would pass on a montage that never fires, which is
     precisely how a crossing goes missing."""
     result = pyraichu.simulate(pyraichu.load_model(a_banded_cistern()), t_max=10.0)
     fired = firings(result, "open_band")
@@ -693,7 +693,7 @@ def test_the_logical_combinations_reduce_the_same_operands():
 
 def a_lying_instrument() -> dict:
     """A cistern filling at one, read by an instrument that republishes
-    its level, watched in turn by a control that trips above 9.
+    its level, boundary in turn by a control that trips above 9.
 
     Left alone the trip would come at t = 9, the instant the true level
     reaches 9. A failure mode forces the instrument's publication to 20 at
@@ -954,9 +954,9 @@ def test_a_controller_on_a_bare_body_needs_no_evaluation_order():
     assert "evaluation_order" not in bare
 
 
-def test_the_band_transitions_are_declared_watched():
+def test_the_band_transitions_are_declared_boundary():
     """The cheap regression beside the located ones: a band's two edges
-    turn on a continuously-evolving reading, so both are watched and the
+    turn on a continuously-evolving reading, so both are boundary and the
     engine root-finds their dates.
 
     This assertion is worth exactly what it says and no more, which is why
@@ -964,7 +964,7 @@ def test_the_band_transitions_are_declared_watched():
     body = pyraichu.expand_model(the_heated_tank())
     low = next(c for c in body["components"] if c["name"] == "LOW")
     band = next(a for a in low["automata"] if a["name"] == "run_band")
-    assert {t["distrib"] for t in band["transitions"]} == {"watched"}
+    assert {t["distrib"] for t in band["transitions"]} == {"boundary"}
     assert [t["guard"]["cmp"] for t in band["transitions"]] == ["le", "gt"]
 
 
@@ -1497,7 +1497,7 @@ def a_toggling_source() -> dict:
                 ],
             }
         ],
-        "sensitive_functions": [
+        "propagations": [
             {
                 "name": "publish",
                 "effects": [

@@ -33,7 +33,7 @@ fn plant_library() -> Library {
             "body": {
                 "attributes": [{"name": "lit", "kind": "bool", "init": boolean(false)}],
                 "ports": [{"name": "power_in", "dir": "in"}],
-                "sensitive_functions": [{"name": "light", "effects": [{
+                "propagations": [{"name": "light", "effects": [{
                     "target": {"component": "$self", "attribute": "lit"},
                     "value": {"op": "port_agg", "port": {"component": "$self", "port": "power_in"}, "agg": "any"}}]}]
             }
@@ -55,7 +55,7 @@ fn plant_library() -> Library {
             {"name": "Faulty", "uses": [{"fragment": "broken"}]},
             {"name": "Clash",
              "body": {"attributes": [{"name": "on", "kind": "bool", "init": boolean(true)}],
-                      "sensitive_functions": [{"name": "modes__on", "effects": []}]},
+                      "propagations": [{"name": "modes__on", "effects": []}]},
              "targetable": [{"attribute": "on", "rule": "any_cuts"}],
              "modes": [{"name": "m", "nature": "failure", "effects": [{"attribute": "on", "value": false}]}]}
         ]
@@ -106,7 +106,7 @@ fn every_element_of_the_expansion_has_one_origin() {
                 port.name
             );
         }
-        for f in &c.sensitive_functions {
+        for f in &c.propagations {
             assert!(
                 p.contains_key(&format!("function:{}.{}", c.name, f.name)),
                 "{}.{}",

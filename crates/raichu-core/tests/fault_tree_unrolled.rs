@@ -1,5 +1,5 @@
-//! Fault-tree generation over computed attributes: what a sensitive
-//! function writes is unrolled into the states that govern it, an observer
+//! Fault-tree generation over computed attributes: what a
+//! propagation writes is unrolled into the states that govern it, an observer
 //! is crossed as its condition, and a top over the model's declared
 //! targets is explained down to the failures. Each case is the smallest
 //! model in the shape a flow layer emits (a flow variable computed from a
@@ -43,7 +43,7 @@ fn block(name: &str, rate: f64, repair: Option<f64>) -> Json {
         "attributes": [{"name": "up", "kind": "bool", "init": boolean(false)}],
         "automata": [{"name": "health", "states": ["ok", "nok"], "init": "ok",
                       "transitions": transitions}],
-        "sensitive_functions": [{"name": "update_up", "effects": [
+        "propagations": [{"name": "update_up", "effects": [
             {"target": {"component": name, "attribute": "up"},
              "value": state(name, "health", "ok")}
         ]}]
@@ -57,7 +57,7 @@ fn sink(logic: &str) -> Json {
         "name": "T",
         "attributes": [{"name": "fed", "kind": "bool", "init": boolean(false)}],
         "ports": [{"name": "in", "dir": "in"}],
-        "sensitive_functions": [{"name": "update_fed", "effects": [
+        "propagations": [{"name": "update_fed", "effects": [
             {"target": {"component": "T", "attribute": "fed"},
              "value": {"op": "port_agg", "port": {"component": "T", "port": "in"}, "agg": logic}}
         ]}]
@@ -212,7 +212,7 @@ fn a_count_below_a_threshold_is_a_vote_on_the_failures() {
         .collect();
     let sum = json!({"op": "port_agg", "port": {"component": "T", "port": "in"}, "agg": "sum"});
     let mut t = sink("any");
-    t["sensitive_functions"][0]["effects"][0]["value"] = json!({"op": "cmp", "cmp": "ge",
+    t["propagations"][0]["effects"][0]["value"] = json!({"op": "cmp", "cmp": "ge",
         "lhs": sum, "rhs": {"op": "const", "value": {"kind": "int", "value": 2}}});
     components.push(t);
     let cond = json!({"op": "cmp", "cmp": "eq", "lhs": attr("T", "fed"),
@@ -311,7 +311,7 @@ fn a_ring_of_attributes_is_refused_by_name() {
         "automata": [{"name": "health", "states": ["ok", "nok"], "init": "ok",
             "transitions": [{"name": "fail", "source": "ok", "targets": ["nok"],
                              "distrib": "exp", "rate": 1e-3}]}],
-        "sensitive_functions": [
+        "propagations": [
             {"name": "set_a", "effects": [{"target": {"component": "R", "attribute": "a"},
                 "value": {"op": "bool", "bool_op": "or", "args": [attr("R", "b"), state("R", "health", "nok")]}}]},
             {"name": "set_b", "effects": [{"target": {"component": "R", "attribute": "b"},
@@ -445,7 +445,7 @@ fn external_block(name: &str, rate: f64, repair: f64, others: &[&str]) -> Json {
         "attributes": [{"name": "up", "kind": "bool", "init": boolean(true)},
                        {"name": "ctrl", "kind": "bool", "init": boolean(false)}],
         "automata": automata,
-        "sensitive_functions": [
+        "propagations": [
             {"name": "update_ctrl", "effects": [
                 {"target": {"component": name, "attribute": "ctrl"},
                  "value": {"op": "bool", "bool_op": "or", "args": raised}}]},
@@ -637,7 +637,7 @@ fn a_follower_probe_that_cannot_unroll_leaves_no_false_ring() {
                       "effects": [{"target": {"component": "M", "attribute": "b"},
                                    "value": {"op": "const", "value": boolean(true)}}]}]}
              ],
-             "sensitive_functions": [{"name": "update_a", "effects": [
+             "propagations": [{"name": "update_a", "effects": [
                  {"target": {"component": "M", "attribute": "a"}, "value": attr("M", "b")}]}]}
         ]
     }));
@@ -777,7 +777,7 @@ fn batterie(value: Json) -> CompiledModel {
         "name": "Batterie",
         "attributes": [{"name": "out_elec", "kind": "bool", "init": boolean(true)}],
         "automata": [cell("cell1"), cell("cell2")],
-        "sensitive_functions": [{"name": "update", "effects": [
+        "propagations": [{"name": "update", "effects": [
             {"target": {"component": "Batterie", "attribute": "out_elec"}, "value": value}
         ]}]
     }]}))
@@ -859,7 +859,7 @@ fn twin_block(name: &str) -> Json {
         "name": name,
         "attributes": [{"name": "up", "kind": "bool", "init": boolean(false)}],
         "automata": [health("h1"), health("h2")],
-        "sensitive_functions": [{"name": "update_up", "effects": [
+        "propagations": [{"name": "update_up", "effects": [
             {"target": {"component": name, "attribute": "up"},
              "value": {"op": "bool", "bool_op": "and",
                        "args": [state(name, "h1", "ok"), state(name, "h2", "ok")]}}

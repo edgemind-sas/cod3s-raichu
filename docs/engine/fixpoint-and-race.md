@@ -28,7 +28,7 @@ introduction.
   "stable": {"rule": "updateMT, updateIT", "text": "After the fixpoint the engine reschedules the armed transitions whose rate changed and drops those whose guard turned false. A transition still armed with the same law keeps the date it already had.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/schedule.rs"},
   "race": {"rule": "schST, evolT", "text": "A stochastic transition gets its firing date from its law when it is armed. The engine always fires the earliest pending date: there is no random choice among transitions.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/schedule.rs"},
   "fired": {"rule": "evolT", "text": "Firing changes the state of one automaton and applies the transition's own edge effects, if it has any, before the fixpoint starts.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"},
-  "iteration": {"rule": "evolA", "text": "The engine keeps a set of pending sensitive functions and always applies the one with the lowest index. Each application is one iteration; the fixpoint ends when the set is empty.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"},
+  "iteration": {"rule": "evolA", "text": "The engine keeps a set of pending propagations and always applies the one with the lowest index. Each application is one iteration; the fixpoint ends when the set is empty.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"},
   "branch": {"rule": "evolT (instantaneous transition)", "text": "An instantaneous transition fires as soon as its guard holds; its law draws which target it reaches. Here the draw is replaced by your choice.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"}
  },
  "labels": {
@@ -51,7 +51,7 @@ transition fires: it fires the one whose date comes first. At the start only
 `P1 fails` is armed; after the backup starts, `P1 repaired` and `P2 fails`
 race each other.
 
-**Event.** One automaton changes state. Every sensitive function that reads
+**Event.** One automaton changes state. Every propagation that reads
 that state becomes pending.
 
 **Iteration of the fixpoint.** The engine applies the pending functions one

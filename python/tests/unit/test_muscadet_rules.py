@@ -16,7 +16,7 @@ What the generated model must hold, and what these tests pin:
   scale serves the whole rule;
 - ordered selection: the guarded rules are tried in order and the
   unguarded one is the fallback, through a mode automaton whose
-  transitions are **watched** when a guard reads a continuous quantity,
+  transitions are **boundary** when a guard reads a continuous quantity,
   so a threshold is crossed at its instant rather than at the following
   step;
 - the three build-time refusals the rule vocabulary makes sayable: a
@@ -388,13 +388,13 @@ def test_a_guard_on_a_capacity_level_fires_at_the_crossing_instant():
     assert abs(sampled(result, "K_x_fed_in", 10.1) - 10.0) < TOL
 
 
-def test_a_guard_on_a_continuous_quantity_is_a_watched_transition():
-    """The mode transition is declared `watched`: the intent cannot be
+def test_a_guard_on_a_continuous_quantity_is_a_boundary_transition():
+    """The mode transition is declared `boundary`: the intent cannot be
     inferred from the guard, so the layer declares it."""
     document = pyraichu.model_body(batching_system().build_dict())
     batcher = next(c for c in document["components"] if c["name"] == "R")
     mode = next(a for a in batcher["automata"] if a["name"] == "batch_mode")
-    assert {t["distrib"] for t in mode["transitions"]} == {"watched"}
+    assert {t["distrib"] for t in mode["transitions"]} == {"boundary"}
 
 
 def test_a_continuous_guard_and_a_default_cross_once():

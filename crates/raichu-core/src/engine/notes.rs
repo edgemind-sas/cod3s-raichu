@@ -1,4 +1,4 @@
-//! Change notes: the change log of the explicit sweep, the indexed watched
+//! Change notes: the change log of the explicit sweep, the indexed boundary
 //! set kept current by the `note_*` methods, and the causal-journal notes
 //! of flow restarts and active-set crossings.
 
@@ -15,7 +15,7 @@ use super::*;
 /// before writing is what turns the rewrite into a signal.
 ///
 /// **The comparison is unconditional**, paid by every model, including
-/// the discrete-only ones that carry no watched transition and receive
+/// the discrete-only ones that carry no boundary transition and receive
 /// nothing in exchange. Only the *recording* is optional: the passes
 /// whose result is thrown away (the solver callbacks, the dense-sample
 /// callback, the active-set probe) run against a copied attribute vector
@@ -140,7 +140,7 @@ impl<'m> Engine<'m> {
     }
 
     /// Account for a transition [`Engine::advance_continuous`] handed
-    /// back. A watched boundary is a firing of the streak; a located
+    /// back. A boundary is a firing of the streak; a located
     /// observer's countdown falling due is a dated firing, as the
     /// deferred probe classes it, and its crossing was already counted
     /// when the advance located it.
@@ -148,25 +148,25 @@ impl<'m> Engine<'m> {
         if self.model.transitions[trans_idx].located.is_some() {
             Ok(())
         } else {
-            self.note_watched_firing()
+            self.note_boundary_firing()
         }
     }
 
-    /// Zeno guard: watched transitions must not keep firing without
+    /// Zeno guard: boundary transitions must not keep firing without
     /// time advancing.
-    pub(super) fn note_watched_firing(&mut self) -> Result<(), EngineError> {
-        if self.watched_streak.0 == self.time {
-            self.watched_streak.1 += 1;
-            if self.watched_streak.1 > 1_000 {
-                return Err(EngineError::WatchedLoop { time: self.time });
+    pub(super) fn note_boundary_firing(&mut self) -> Result<(), EngineError> {
+        if self.boundary_streak.0 == self.time {
+            self.boundary_streak.1 += 1;
+            if self.boundary_streak.1 > 1_000 {
+                return Err(EngineError::BoundaryLoop { time: self.time });
             }
         } else {
-            self.watched_streak = (self.time, 1);
+            self.boundary_streak = (self.time, 1);
         }
         Ok(())
     }
 
-    // ---- the indexed watched set -------------------------------------
+    // ---- the indexed boundary set -------------------------------------
     //
     // Three pieces of bookkeeping keep the two scan sites proportional to
     // what moved: which positions are *armed* (their automaton sits in
@@ -182,18 +182,18 @@ impl<'m> Engine<'m> {
     /// from the automaton states, every cached verdict discarded.
     ///
     /// The reinstatement path of a wholesale state change. It is the only
-    /// place the watched population is walked in full, and it is
+    /// place the boundary population is walked in full, and it is
     /// deliberately not on the simulation cycle.
-    pub(super) fn rebuild_watched_index(&mut self) {
+    pub(super) fn rebuild_boundary_index(&mut self) {
         let model = self.model;
-        self.watched_active.clear();
-        for (position, &trans_idx) in model.watched.iter().enumerate() {
+        self.boundary_active.clear();
+        for (position, &trans_idx) in model.boundary.iter().enumerate() {
             let transition = &model.transitions[trans_idx];
             let armed = self.states[transition.automaton] == transition.source;
-            self.watched_armed[position] = armed;
-            self.watched_stale[position] = true;
+            self.boundary_armed[position] = armed;
+            self.boundary_stale[position] = true;
             if armed {
-                self.watched_active.push(position);
+                self.boundary_active.push(position);
             }
         }
     }
@@ -202,8 +202,8 @@ impl<'m> Engine<'m> {
     #[inline]
     pub(super) fn note_var_change(&mut self, var: VarIdx) {
         let model = self.model;
-        for &position in &model.margin_index.watched_by_var[var] {
-            self.watched_stale[position] = true;
+        for &position in &model.margin_index.boundary_by_var[var] {
+            self.boundary_stale[position] = true;
         }
     }
 
@@ -212,36 +212,36 @@ impl<'m> Engine<'m> {
     #[inline]
     pub(super) fn note_time_change(&mut self) {
         let model = self.model;
-        for &position in &model.margin_index.watched_by_time {
-            self.watched_stale[position] = true;
+        for &position in &model.margin_index.boundary_by_time {
+            self.boundary_stale[position] = true;
         }
     }
 
     /// An automaton changed state: invalidate the guards that read that
     /// state, and re-arm the transitions the automaton owns.
     ///
-    /// The arming update keeps `watched_active` **ascending**, inserting
+    /// The arming update keeps `boundary_active` **ascending**, inserting
     /// and removing by binary search rather than re-deriving the list, so
-    /// the per-segment margin set and the guard scan visit the watched
+    /// the per-segment margin set and the guard scan visit the boundary
     /// transitions in the order the full scan visited them.
     pub(super) fn note_state_change(&mut self, automaton: AutIdx) {
         let model = self.model;
-        for &position in &model.margin_index.watched_by_state[automaton] {
-            self.watched_stale[position] = true;
+        for &position in &model.margin_index.boundary_by_state[automaton] {
+            self.boundary_stale[position] = true;
         }
         let state = self.states[automaton];
-        for &position in &model.margin_index.watched_by_owner[automaton] {
-            let armed = model.transitions[model.watched[position]].source == state;
-            if armed == self.watched_armed[position] {
+        for &position in &model.margin_index.boundary_by_owner[automaton] {
+            let armed = model.transitions[model.boundary[position]].source == state;
+            if armed == self.boundary_armed[position] {
                 continue;
             }
-            self.watched_armed[position] = armed;
-            match self.watched_active.binary_search(&position) {
+            self.boundary_armed[position] = armed;
+            match self.boundary_active.binary_search(&position) {
                 Ok(at) if !armed => {
-                    self.watched_active.remove(at);
+                    self.boundary_active.remove(at);
                 }
                 Err(at) if armed => {
-                    self.watched_active.insert(at, position);
+                    self.boundary_active.insert(at, position);
                 }
                 _ => {}
             }
@@ -256,15 +256,15 @@ impl<'m> Engine<'m> {
         };
         let model = self.model;
         for &var in &moved {
-            for &position in &model.margin_index.watched_by_var[var] {
-                self.watched_stale[position] = true;
+            for &position in &model.margin_index.boundary_by_var[var] {
+                self.boundary_stale[position] = true;
             }
         }
         moved.clear();
         self.changed.moved = Some(moved);
     }
 
-    /// A watched transition whose *guard* already holds while its
+    /// A boundary transition whose *guard* already holds while its
     /// automaton sits in the source state fires immediately.
     ///
     /// The guard is evaluated exactly (boolean), not through the
@@ -282,25 +282,25 @@ impl<'m> Engine<'m> {
     /// it is neither evaluated nor cleared, and a guard that would raise
     /// on a state the model never reaches stays unevaluated exactly as
     /// before.
-    pub(super) fn immediate_watched(&mut self) -> Result<Option<TransIdx>, EngineError> {
+    pub(super) fn immediate_boundary(&mut self) -> Result<Option<TransIdx>, EngineError> {
         let model = self.model;
-        for index in 0..self.watched_active.len() {
-            let position = self.watched_active[index];
-            let trans_idx = model.watched[position];
+        for index in 0..self.boundary_active.len() {
+            let position = self.boundary_active[index];
+            let trans_idx = model.boundary[position];
             // A located transition is armed by the schedule, which ranks it
             // in the same-date waves and counts its delay: firing it here
             // would jump both.
-            if !matches!(model.transitions[trans_idx].distrib, CLaw::Watched { .. }) {
+            if !matches!(model.transitions[trans_idx].distrib, CLaw::Boundary { .. }) {
                 continue;
             }
             let Some(guard) = &model.transitions[trans_idx].guard else {
                 continue;
             };
-            if self.watched_stale[position] {
+            if self.boundary_stale[position] {
                 // Counted work: this scan is one of the two sites the
                 // index narrows, so its cost is measured here.
                 self.work.immediate_guard_scans += 1;
-                self.watched_guard[position] = eval_bool(
+                self.boundary_guard[position] = eval_bool(
                     model,
                     &self.vars,
                     &self.states,
@@ -308,9 +308,9 @@ impl<'m> Engine<'m> {
                     self.noise_seed,
                     guard,
                 )?;
-                self.watched_stale[position] = false;
+                self.boundary_stale[position] = false;
             }
-            if self.watched_guard[position] {
+            if self.boundary_guard[position] {
                 return Ok(Some(trans_idx));
             }
         }

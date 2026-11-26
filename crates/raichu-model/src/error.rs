@@ -445,12 +445,12 @@ pub enum ModelError {
         /// The port named.
         port: String,
     },
-    /// A sensitive function writes through a port ([`PORT`]).
+    /// A propagation writes through a port ([`PORT`]).
     #[error(
-        "sensitive function `{function}` writes through a port: only a transition's edge \
+        "propagation `{function}` writes through a port: only a transition's edge \
          effects may write through a port"
     )]
-    PortEffectInSensitiveFunction {
+    PortEffectInPropagation {
         /// The function, as `component.function`.
         function: String,
     },
@@ -462,12 +462,12 @@ pub enum ModelError {
         /// The doubly-defined attribute.
         target: String,
     },
-    /// A watched transition needs a guard (its boundary predicate).
+    /// A boundary transition needs a guard (its boundary predicate).
     #[error(
-        "watched transition `{transition}` of `{component}.{automaton}` has no \
+        "boundary transition `{transition}` of `{component}.{automaton}` has no \
          guard (the guard is the boundary predicate)"
     )]
-    WatchedGuardMissing {
+    BoundaryGuardMissing {
         /// The owning component.
         component: String,
         /// The automaton.
@@ -475,15 +475,15 @@ pub enum ModelError {
         /// The transition.
         transition: String,
     },
-    /// A watched guard needs a locatable continuous boundary: at least
+    /// A boundary guard needs a locatable continuous boundary: at least
     /// one ordering comparison, possibly composed with and/or/not and
     /// discrete gates (margins combine as min/max/negation).
     #[error(
-        "watched transition `{transition}` of `{component}.{automaton}`: the \
+        "boundary transition `{transition}` of `{component}.{automaton}`: the \
          guard must contain at least one ordering comparison (<, <=, >, >=), \
          possibly composed with and/or/not and discrete gates"
     )]
-    WatchedGuardNotComparison {
+    BoundaryGuardNotComparison {
         /// The owning component.
         component: String,
         /// The automaton.
@@ -590,12 +590,12 @@ pub enum ModelError {
         /// Number of targets found.
         targets: usize,
     },
-    /// A watched transition must have exactly one target.
+    /// A boundary transition must have exactly one target.
     #[error(
-        "watched transition `{transition}` of `{component}.{automaton}` must \
+        "boundary transition `{transition}` of `{component}.{automaton}` must \
          have exactly one target (got {targets})"
     )]
-    WatchedTargetCount {
+    BoundaryTargetCount {
         /// The owning component.
         component: String,
         /// The automaton.
@@ -867,7 +867,7 @@ pub enum ModelError {
         value: f64,
     },
     /// A transition's edge effect writes an attribute that an explicit
-    /// equation or a sensitive function also writes: the next evaluation
+    /// equation or a propagation also writes: the next evaluation
     /// would erase the one-shot write. (On an ODE target an edge effect is
     /// a reset map, and accepted.)
     #[error(
@@ -1038,7 +1038,7 @@ pub enum ModelError {
         allocation: String,
         /// The doubly-written attribute.
         attribute: String,
-        /// The other writer (an equation, a sensitive function or
+        /// The other writer (an equation, a propagation or
         /// another operator).
         writer: String,
     },

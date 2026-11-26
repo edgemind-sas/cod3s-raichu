@@ -155,7 +155,7 @@ fn repeated_trajectories_reuse_exact_programs() {
 #[test]
 fn confluence_probe_and_parallel_runs_keep_the_dispatch() {
     use raichu_expr::{Assignment, AttrRef, Expr};
-    use raichu_model::{AttrKind, Attribute, SensitiveFunction};
+    use raichu_model::{AttrKind, Attribute, Propagation};
 
     let mut model = model();
     model.components[0].attributes.push(Attribute {
@@ -163,18 +163,16 @@ fn confluence_probe_and_parallel_runs_keep_the_dispatch() {
         kind: AttrKind::Bool,
         init: Value::Bool(false),
     });
-    model.components[0]
-        .sensitive_functions
-        .push(SensitiveFunction {
-            name: "observe_dispatch".into(),
-            effects: vec![Assignment {
-                target: AttrRef {
-                    component: "dispatch".into(),
-                    attribute: "ready".into(),
-                },
-                value: Expr::attr("dispatch", "feasible"),
-            }],
-        });
+    model.components[0].propagations.push(Propagation {
+        name: "observe_dispatch".into(),
+        effects: vec![Assignment {
+            target: AttrRef {
+                component: "dispatch".into(),
+                attribute: "ready".into(),
+            },
+            value: Expr::attr("dispatch", "feasible"),
+        }],
+    });
     let compiled = CompiledModel::compile(&model).unwrap();
     let config = EngineConfig {
         t_max: 16.0,

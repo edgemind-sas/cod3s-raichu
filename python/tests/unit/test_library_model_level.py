@@ -24,7 +24,7 @@ from test_interface_connections import BY_INTERFACE, two_way
 from test_program import dispatch_model
 
 LIBRARY = {"name": "flat", "version": "1.0.0"}
-BODY_KEYS = ("attributes", "ports", "interfaces", "automata", "sensitive_functions", "equations", "allocations")
+BODY_KEYS = ("attributes", "ports", "interfaces", "automata", "propagations", "equations", "allocations")
 FIXTURES = Path(__file__).resolve().parents[3] / "crates/raichu-fmi/tests/fixtures/reference-fmus/3.0"
 
 

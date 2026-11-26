@@ -1,4 +1,4 @@
-//! A watched boundary reached at an exactly-representable instant must
+//! A boundary reached at an exactly-representable instant must
 //! still be located.
 //!
 //! Regression gate for a silent miss: the event scan brackets a crossing
@@ -15,7 +15,7 @@
 //!
 //! The models below are the smallest shape that exhibits it: a constant
 //! slope whose crossing lands on a step boundary of the integrator, and a
-//! single watched transition, with no scheduled date to end the segment
+//! single boundary transition, with no scheduled date to end the segment
 //! early and hand the crossing to the discrete-fixpoint guard scan.
 //!
 //! Both orientations are covered on purpose. `le` and `ge` compile to
@@ -36,7 +36,7 @@ use raichu_model::{
 /// missed crossing shows up as "no event at all" rather than a late one.
 const T_MAX: f64 = 40.0;
 
-/// `x(0) = x0`, `dx/dt = slope`, one watched transition on `x <cmp> rhs`.
+/// `x(0) = x0`, `dx/dt = slope`, one boundary transition on `x <cmp> rhs`.
 fn ramp_model(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Model {
     Model {
         programs: vec![],
@@ -72,7 +72,7 @@ fn ramp_model(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Model {
                     cycle_cancellation: Default::default(),
                     kind: None,
                     effects: vec![],
-                    distrib: Distrib::Watched,
+                    distrib: Distrib::Boundary,
                 }],
             }],
             allocations: vec![],
@@ -83,7 +83,7 @@ fn ramp_model(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Model {
                     value: Value::Float(slope),
                 },
             }],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![],
@@ -96,7 +96,7 @@ fn ramp_model(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Model {
     }
 }
 
-/// Firing date of the single watched transition, or `None` if it never
+/// Firing date of the single boundary transition, or `None` if it never
 /// fired within the horizon.
 fn crossing_date(x0: f64, slope: f64, cmp: CmpOp, rhs: f64) -> Option<f64> {
     let model = ramp_model(x0, slope, cmp, rhs);

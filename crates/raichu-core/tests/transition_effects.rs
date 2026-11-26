@@ -1,6 +1,6 @@
 //! Edge effects: a transition writes once, when it fires.
 //!
-//! A sensitive function's effects are a LEVEL, re-evaluated whenever what
+//! A propagation's effects are a LEVEL, re-evaluated whenever what
 //! they read changes. A failure mode on the reference engine can also write
 //! on the firing EDGE only (`occ_effects_trans` / `not_occ_effects_trans` in
 //! cod3s, a sensitive method on the transition): the value is written once
@@ -16,7 +16,7 @@ use raichu_model::{Model, ModelError};
 
 /// A rail cracking at 1 and repaired at 3. The crack latches `detected`
 /// on its firing edge and the repair clears it; `alarm` follows `detected`
-/// through a sensitive function. `extra` is appended to the component.
+/// through a propagation. `extra` is appended to the component.
 fn rail(fail_guard: &str, extra: &str) -> String {
     format!(
         r#"{{
@@ -39,7 +39,7 @@ fn rail(fail_guard: &str, extra: &str) -> String {
                       "value": {{"op": "const", "value": {{"kind": "bool", "value": false}}}}}}]}}]}},
       {{"name": "disarm", "states": ["on", "off"], "init": "on",
        "transitions": [{{"name": "cut", "source": "on", "targets": ["off"], "distrib": "delay", "time": 0.5}}]}}],
-    "sensitive_functions": [{{"name": "follow", "effects": [
+    "propagations": [{{"name": "follow", "effects": [
       {{"target": {{"component": "r", "attribute": "alarm"}},
        "value": {{"op": "attr", "attr": {{"component": "r", "attribute": "detected"}}}}}}]}}]
     {extra}
@@ -125,7 +125,7 @@ fn the_edge_effects_are_a_feature_a_bare_body_cannot_carry() {
 
 /// A tank draining at 1 per unit of time from `level = 10`. Its `refill`
 /// automaton fires `refill` (law `refill_law`, guard `refill_guard`) with
-/// the edge effect `level := value`; a watched `dry` transition records
+/// the edge effect `level := value`; a boundary `dry` transition records
 /// when the level reaches 0. The level is an ODE target: the edge effect
 /// is a reset map, and integration restarts from the written value.
 fn tank(refill_law: &str, refill_source: &str, value: &str, extra_equation: &str) -> String {
@@ -145,7 +145,7 @@ fn tank(refill_law: &str, refill_source: &str, value: &str, extra_equation: &str
        "transitions": [{{"name": "refill", "source": "wait", "targets": ["{refill_source}"], {refill_law},
          "effects": [{{"target": {{"component": "t", "attribute": "level"}}, "value": {value}}}]}}]}},
       {{"name": "status", "states": ["wet", "dry"], "init": "wet",
-       "transitions": [{{"name": "dry", "source": "wet", "targets": ["dry"], "distrib": "watched",
+       "transitions": [{{"name": "dry", "source": "wet", "targets": ["dry"], "distrib": "boundary",
          "guard": {{"op": "cmp", "cmp": "le",
                    "lhs": {{"op": "attr", "attr": {{"component": "t", "attribute": "level"}}}},
                    "rhs": {{"op": "const", "value": {{"kind": "float", "value": 0.0}}}}}}}}]}}]
@@ -216,10 +216,10 @@ fn an_edge_effect_on_an_ode_target_resets_it_and_integration_restarts_from_there
 }
 
 #[test]
-fn a_watched_transition_can_reset_the_variable_its_guard_reads() {
-    // The refill is watched at level <= 2 and puts it back to 10, looping
+fn a_boundary_transition_can_reset_the_variable_its_guard_reads() {
+    // The refill is boundary at level <= 2 and puts it back to 10, looping
     // on itself: 10 -> 2 in 8, then every 8 units. The tank never runs dry.
-    let guard = r#""distrib": "watched", "guard": {"op": "cmp", "cmp": "le",
+    let guard = r#""distrib": "boundary", "guard": {"op": "cmp", "cmp": "le",
         "lhs": {"op": "attr", "attr": {"component": "t", "attribute": "level"}},
         "rhs": {"op": "const", "value": {"kind": "float", "value": 2.0}}}"#;
     let json = tank(guard, "wait", TEN, "");

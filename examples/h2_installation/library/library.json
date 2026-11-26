@@ -292,7 +292,7 @@
                   "targets": [
                     "full"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "bool",
                     "bool_op": "and",
@@ -356,7 +356,7 @@
                   "targets": [
                     "charging"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "cmp",
                     "cmp": "lt",
@@ -637,7 +637,7 @@
                   "targets": [
                     "running"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "bool",
                     "bool_op": "and",
@@ -720,7 +720,7 @@
                   "targets": [
                     "stopped"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "bool",
                     "bool_op": "or",
@@ -1105,7 +1105,7 @@
                   "targets": [
                     "unsupplied"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "bool",
                     "bool_op": "or",
@@ -1159,7 +1159,7 @@
                   "targets": [
                     "supplied"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "bool",
                     "bool_op": "and",

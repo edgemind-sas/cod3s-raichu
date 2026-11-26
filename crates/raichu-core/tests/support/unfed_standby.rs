@@ -79,7 +79,7 @@ pub fn standby(logic: &str, connected: bool, init: &str) -> Model {
                 automata: vec![],
                 equations: vec![],
                 allocations: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
             },
             Component {
                 name: "Backup".into(),
@@ -157,7 +157,7 @@ pub fn standby(logic: &str, connected: bool, init: &str) -> Model {
                     },
                 }],
                 allocations: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
             },
         ],
         connections: if connected {

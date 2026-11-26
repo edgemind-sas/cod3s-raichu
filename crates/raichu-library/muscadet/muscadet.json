@@ -59,7 +59,7 @@
               "dir": "in"
             }
           ],
-          "sensitive_functions": [
+          "propagations": [
             {
               "name": "update_${name}_fed_in",
               "effects": [
@@ -358,7 +358,7 @@
               "attr": "${name}_fed_out"
             }
           ],
-          "sensitive_functions": [
+          "propagations": [
             {
               "name": "update_${name}_prod_available",
               "effects": [
@@ -544,7 +544,7 @@
               "attr": "${name}_fed_out"
             }
           ],
-          "sensitive_functions": [
+          "propagations": [
             {
               "name": "update_${name}_fed_out",
               "effects": [
@@ -957,7 +957,7 @@
               ]
             }
           ],
-          "sensitive_functions": [
+          "propagations": [
             {
               "$when": "conditioned",
               "items": [
@@ -1360,7 +1360,7 @@
               ]
             }
           ],
-          "sensitive_functions": [
+          "propagations": [
             {
               "$when": "conditioned",
               "items": [
@@ -4093,7 +4093,7 @@
                   "targets": [
                     "stocked"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "cmp",
                     "cmp": "ge",
@@ -4143,7 +4143,7 @@
                   "targets": [
                     "empty"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "cmp",
                     "cmp": "le",
@@ -4406,7 +4406,7 @@
                   "targets": [
                     "partial"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "cmp",
                     "cmp": "ge",
@@ -4455,7 +4455,7 @@
                   "targets": [
                     "empty"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "cmp",
                     "cmp": "le",
@@ -4504,7 +4504,7 @@
                   "targets": [
                     "full"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "cmp",
                     "cmp": "ge",
@@ -4553,7 +4553,7 @@
                   "targets": [
                     "partial"
                   ],
-                  "distrib": "watched",
+                  "distrib": "boundary",
                   "guard": {
                     "op": "cmp",
                     "cmp": "le",
@@ -7308,7 +7308,7 @@
                           "targets": [
                             "${idle}"
                           ],
-                          "distrib": "watched",
+                          "distrib": "boundary",
                           "guard": {
                             "op": "bool",
                             "bool_op": "or",
@@ -7394,7 +7394,7 @@
                           "targets": [
                             "${active}"
                           ],
-                          "distrib": "watched",
+                          "distrib": "boundary",
                           "guard": {
                             "op": "bool",
                             "bool_op": "and",

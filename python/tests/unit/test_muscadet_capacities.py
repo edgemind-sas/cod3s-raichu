@@ -8,7 +8,7 @@ What the generated model must hold, and what these tests pin:
 
 - one ODE content per held flow plus a total, and the explicit weighted
   fills that report them;
-- the two bounds as **automaton locations** entered by watched
+- the two bounds as **automaton locations** entered by boundary
   transitions, so a crossing is located rather than stepped over and the
   derivative never has to re-decide saturation for itself;
 - the two bound effects: a full capacity asks upstream only for what it
@@ -367,13 +367,13 @@ def test_a_reader_exchanges_no_quantity():
         if connection["to"]["component"] == "G":
             assert "name" not in connection or "alloc" not in connection["name"]
 
-    watched = observed_tank().simulate(t_max=30.0, samples=[10.0, 25.0])
+    boundary = observed_tank().simulate(t_max=30.0, samples=[10.0, 25.0])
     alone = filling_tank().simulate(t_max=30.0, samples=[10.0, 25.0])
     for instant in (10.0, 25.0):
-        assert sampled(watched, "T_reservoir_content", instant) == sampled(
+        assert sampled(boundary, "T_reservoir_content", instant) == sampled(
             alone, "T_reservoir_content", instant
         )
-        assert sampled(watched, "S_water_fed_out", instant) == sampled(
+        assert sampled(boundary, "S_water_fed_out", instant) == sampled(
             alone, "S_water_fed_out", instant
         )
 
@@ -381,7 +381,7 @@ def test_a_reader_exchanges_no_quantity():
 # --- generated-model shape ---------------------------------------------
 
 
-def test_the_bounds_are_watched_transitions_not_a_branch_in_the_derivative():
+def test_the_bounds_are_boundary_transitions_not_a_branch_in_the_derivative():
     """KTD6: re-deciding saturation inside the derivative makes it
     discontinuous without telling the solver, so the bounds are automaton
     locations entered by located crossings."""
@@ -390,7 +390,7 @@ def test_the_bounds_are_watched_transitions_not_a_branch_in_the_derivative():
     bounds = next(a for a in tank["automata"] if a["name"] == "reservoir_bounds")
     assert [state for state in bounds["states"]] == ["empty", "partial", "full"]
     assert bounds["init"] == "empty"
-    assert all(t["distrib"] == "watched" for t in bounds["transitions"])
+    assert all(t["distrib"] == "boundary" for t in bounds["transitions"])
 
     ode = [e for e in tank["equations"] if e["kind"] == "ode"]
     assert [e["target"] for e in ode] == ["reservoir_content_water"]

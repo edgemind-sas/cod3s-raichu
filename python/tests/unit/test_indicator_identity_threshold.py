@@ -101,7 +101,7 @@ def test_observation_is_unchanged_for_what_it_already_returned():
 # --- the engine agrees that the two are one observation --------------------
 
 #: A component that fails and is repaired at random, with `up` following its
-#: state through a sensitive function: a boolean that actually moves.
+#: state through a propagation: a boolean that actually moves.
 FLICKER = {
     "name": "flicker",
     "components": [
@@ -122,7 +122,7 @@ FLICKER = {
                     ],
                 }
             ],
-            "sensitive_functions": [
+            "propagations": [
                 {
                     "name": "follow",
                     "effects": [

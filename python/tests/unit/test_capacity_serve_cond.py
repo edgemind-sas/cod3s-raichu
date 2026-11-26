@@ -832,7 +832,7 @@ def test_a_refused_command_leaves_the_component_as_it_was():
 
 
 def test_an_equality_on_a_level_is_refused_as_it_is_in_a_rule_guard():
-    """The gate transition is watched, and a crossing is located on an
+    """The gate transition is boundary, and a crossing is located on an
     ordering comparison: an equality has no side to be located from."""
     with pytest.raises(ValueError, match="ordering comparison"):
         tank_class(
@@ -851,10 +851,10 @@ def test_a_command_may_read_the_volume_it_commands():
     assert component.capacities[0].serve_cond[0][0].name == "tank_content"
 
 
-def test_the_gate_is_a_watched_crossing_when_it_reads_a_level():
+def test_the_gate_is_a_boundary_crossing_when_it_reads_a_level():
     """A level moves inside an integration step and announces nothing, so
-    the transition carrying its threshold is watched: a reserve floor
-    nothing watched would be crossed late by up to one step.
+    the transition carrying its threshold is boundary: a reserve floor
+    nothing boundary would be crossed late by up to one step.
 
     A command on a boolean port moves only at an event, and its transition
     is instantaneous. The distinction is the rule mode's own."""
@@ -871,7 +871,7 @@ def test_the_gate_is_a_watched_crossing_when_it_reads_a_level():
             if entry["name"] == "tank_serve"
         )
         kinds[name] = {t["distrib"] for t in automaton["transitions"]}
-    assert kinds == {"level": {"watched"}, "port": {"inst"}}
+    assert kinds == {"level": {"boundary"}, "port": {"inst"}}
 
 
 def test_the_gate_is_published_as_an_automaton_a_rule_may_read():

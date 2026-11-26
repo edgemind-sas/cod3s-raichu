@@ -3,7 +3,7 @@
 Real systems are made of parts that influence each other. In RAICHU a
 component exposes **ports** and you wire an **out-port** to an
 **in-port** with a **connection**. A component reads its inputs through
-**port aggregations** and reacts through **sensitive functions**:
+**port aggregations** and reacts through **propagations**:
 declarative rules that recompute an attribute whenever something it
 depends on changes.
 
@@ -30,13 +30,13 @@ source = {
 }
 ```
 
-## Reading inputs: port aggregation and sensitive functions
+## Reading inputs: port aggregation and propagations
 
 Each block has an internal `health` automaton (as in chapter 1) and a
 boolean `delivering`. A block delivers when it is **fed** *and*
 **working**. "Fed" means *any* connected source is true: a **port
 aggregation** with the `any` operator over the in-port. The rule that
-keeps `delivering` up to date is a **sensitive function**: you declare
+keeps `delivering` up to date is a **propagation**: you declare
 the effect (an assignment whose value is an expression), and the engine
 figures out *when* to run it from the attributes and states that
 expression reads: no manual wiring, and no callback runs during the
@@ -59,7 +59,7 @@ def block(name):
                  "distrib": "exp", "rate": 0.1},
             ],
         }],
-        "sensitive_functions": [{
+        "propagations": [{
             "name": "update_delivering",
             "effects": [{
                 "target": {"component": name, "attribute": "delivering"},
@@ -90,7 +90,7 @@ target = {
     "attributes": [{"name": "supplied", "kind": "bool",
                    "init": {"kind": "bool", "value": False}}],
     "ports": [{"name": "in", "dir": "in"}],
-    "sensitive_functions": [{
+    "propagations": [{
         "name": "update_supplied",
         "effects": [{
             "target": {"component": "T", "attribute": "supplied"},

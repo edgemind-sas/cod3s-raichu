@@ -8,7 +8,7 @@ Two things are measured here, and they are different claims.
 campaign that already had to run, so on a model whose cost is the
 simulation, asking for them adds a fraction and not a factor. The
 reference used is the project's own hybrid benchmark (room-temperature
-ODE, watched thermostats, stochastic failures), annotated for sequence
+ODE, boundary thermostats, stochastic failures), annotated for sequence
 analysis.
 
 **Linear in the replicas.** A study grows by running more replicas, so
@@ -103,7 +103,7 @@ def hybrid_model():
                     ],
                 }
             ],
-            "sensitive_functions": [],
+            "propagations": [],
             "equations": [],
         }
     )

@@ -596,7 +596,7 @@ fn the_relaxation_state_does_not_survive_a_resolution() {
 
 /// A flow whose available quantity is unusable only inside a window
 /// narrower than the event scan grid: `1/0` while the level sits within
-/// 1e-7 of the boundary the watched transition is located at, and a
+/// 1e-7 of the boundary the boundary transition is located at, and a
 /// perfectly ordinary 5 everywhere else.
 ///
 /// Nothing on the interior scan grid (a sixteenth of a step of at most
@@ -642,7 +642,7 @@ const MID_BISECTION: &str = r#"
       "automata": [
         {"name": "watch", "states": ["run", "done"], "init": "run",
          "transitions": [
-           {"name": "hit", "source": "run", "targets": ["done"], "distrib": "watched",
+           {"name": "hit", "source": "run", "targets": ["done"], "distrib": "boundary",
             "guard": {"op": "cmp", "cmp": "le",
               "lhs": {"op": "attr", "attr": {"component": "tank", "attribute": "level"}},
               "rhs": {"op": "const", "value": {"kind": "float", "value": 0.473}}}}]}
@@ -719,7 +719,7 @@ fn a_flow_failing_mid_bisection_reports_through_the_error_stash() {
     );
 }
 
-/// The same tank with **no watched transition**, so nothing is ever
+/// The same tank with **no boundary transition**, so nothing is ever
 /// bisected, and a failing window centred on a dense-sample instant that
 /// no scan point can reach: `t = 1.2345678` is not a multiple of the
 /// interior scan spacing, and the window is 2e-7 wide.
@@ -738,14 +738,14 @@ fn sample_instant_failure() -> String {
         )
         .replace("0.4730001", "0.7655322")
         .replace("0.4729999", "0.7653322")
-        // Drop the watched automaton: with nothing to locate there is no
+        // Drop the boundary automaton: with nothing to locate there is no
         // bisection, and the sample callback is the only thing that can
         // land inside the window.
         .replace(
             r#""automata": [
         {"name": "watch", "states": ["run", "done"], "init": "run",
          "transitions": [
-           {"name": "hit", "source": "run", "targets": ["done"], "distrib": "watched",
+           {"name": "hit", "source": "run", "targets": ["done"], "distrib": "boundary",
             "guard": {"op": "cmp", "cmp": "le",
               "lhs": {"op": "attr", "attr": {"component": "tank", "attribute": "level"}},
               "rhs": {"op": "const", "value": {"kind": "float", "value": 0.473}}}}]}

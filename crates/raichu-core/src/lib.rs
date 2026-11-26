@@ -8,7 +8,7 @@
 //!
 //! Standing requirements:
 //!
-//! - **Fixpoint semantics:** sensitive-function propagation runs to a
+//! - **Fixpoint semantics:** propagation propagation runs to a
 //!   fixpoint in a documented deterministic order (global declaration
 //!   order); cross-validation compares the *converged state*, never the
 //!   propagation path. The confluence probe flags models whose result
@@ -35,7 +35,8 @@ pub mod loops;
 pub mod triggers;
 
 pub use compile::{
-    CIndicator, CIndicatorTarget, CompileError, CompiledModel, MarginIndex, WatchedIdx,
+    BoundaryIdx, CompileError, CompiledIndicator, CompiledIndicatorTarget, CompiledModel,
+    MarginIndex,
 };
 pub use cycle_groups::{cycle_groups, CycleGroupDecision, DecisionOrigin, TargetDecision};
 pub use engine::{

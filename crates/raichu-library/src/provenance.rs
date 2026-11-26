@@ -10,7 +10,7 @@
 //! | `attribute:C.a` | attribute `a` of `C` |
 //! | `port:C.p`, `interface:C.i` | port, interface |
 //! | `automaton:C.a`, `transition:C.a.t` | automaton, transition |
-//! | `function:C.f` | sensitive function |
+//! | `function:C.f` | propagation |
 //! | `equation:C.a` | equation targeting `a` |
 //! | `allocation:C.n` | allocation |
 //! | `connection:E` | connection named `E` (or `from->to`) |

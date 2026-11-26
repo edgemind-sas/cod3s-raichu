@@ -47,7 +47,7 @@ def _flag(name):
         "ports": [],
         "interfaces": [],
         "equations": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "automata": [],
     }
 
@@ -61,7 +61,7 @@ def _clock(name, automaton, rises_at):
         "ports": [],
         "interfaces": [],
         "equations": [],
-        "sensitive_functions": [],
+        "propagations": [],
         "automata": [
             {
                 "name": automaton,

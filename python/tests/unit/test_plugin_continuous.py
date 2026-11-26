@@ -535,7 +535,7 @@ def test_a_plugin_without_a_finalisation_hook_is_unaffected():
                     "ports": [],
                     "interfaces": [],
                     "automata": [],
-                    "sensitive_functions": [],
+                    "propagations": [],
                     "equations": [],
                 }
             ], [], []
@@ -596,7 +596,7 @@ def test_a_continuous_flow_leaving_the_plugin_is_refused():
                 "ports": [{"name": "w_out", "dir": "out"}],
                 "interfaces": [],
                 "automata": [],
-                "sensitive_functions": [],
+                "propagations": [],
                 "equations": [],
             }
         ],
@@ -787,7 +787,7 @@ def test_a_graft_survives_the_continuous_rebuild():
             f"the ObjFM mirror automaton was dropped from `{name}`"
         )
         assert "apply_ccf" in [
-            function["name"] for function in pump["sensitive_functions"]
+            function["name"] for function in pump["propagations"]
         ]
         # And the component's own continuous material is there too: the
         # carry-over adds, it does not replace.

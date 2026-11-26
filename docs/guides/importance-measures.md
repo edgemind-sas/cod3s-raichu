@@ -275,7 +275,7 @@ are reduced as they are produced: each one adds the configuration of
 basic events it is in at every instant to a histogram, and is dropped.
 The cut structure, only known once the campaign is over, is then applied
 once per distinct configuration. On the project's
-hybrid benchmark (room-temperature ODE, watched thermostats, stochastic
+hybrid benchmark (room-temperature ODE, boundary thermostats, stochastic
 failures) the measures cost **the campaign and nothing measurable on top**:
 1.04 s against 1.04 s for a bare Monte-Carlo run of the same size. On a
 purely discrete model, where a trajectory is almost free and the

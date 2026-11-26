@@ -24,7 +24,7 @@ import pyraichu
 from pyraichu.plugins import expand_model
 
 
-def _watched_component(expression):
+def _boundary_component(expression):
     """The `component` of the single leaf a one-leaf condition tree reads.
 
     The tree is `OR(AND(cmp))`, so the comparison sits two boolean levels
@@ -63,7 +63,7 @@ def _target(name, automaton=None):
         "ports": [],
         "interfaces": [],
         "automata": [automaton] if automaton else [],
-        "sensitive_functions": [],
+        "propagations": [],
         "equations": [],
     }
 
@@ -122,7 +122,7 @@ def test_an_attr_leaf_with_no_object_reads_the_modes_target():
         )
     )
     guard = _transitions(expanded, "crack", "fm")["failure"]["guard"]
-    assert _watched_component(guard) == "A"
+    assert _boundary_component(guard) == "A"
 
 
 def test_a_state_leaf_with_no_object_reads_the_modes_target():
@@ -160,7 +160,7 @@ def test_a_leaf_that_names_its_object_keeps_naming_it():
         )
     )
     guard = _transitions(expanded, "crack", "fm")["failure"]["guard"]
-    assert _watched_component(guard) == "B"
+    assert _boundary_component(guard) == "B"
 
 
 def test_an_on_demand_mode_resolves_the_leaf_the_same_way():
@@ -183,7 +183,7 @@ def test_an_on_demand_mode_resolves_the_leaf_the_same_way():
         )
     )
     draw = _transitions(expanded, "crack", "fm")["occ"]
-    assert _watched_component(draw["guard"]) == "A"
+    assert _boundary_component(draw["guard"]) == "A"
 
 
 # --- common cause: one carrier per combination --------------------------------

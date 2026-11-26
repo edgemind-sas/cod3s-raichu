@@ -330,9 +330,9 @@ fn dahlquist_initial_output_and_first_step_reach_the_model() {
     );
 }
 
-fn watched_input_model(choice: bool) -> CompiledModel {
+fn boundary_input_model(choice: bool) -> CompiledModel {
     let mut document = json!({
-        "name": "fmi_watched_input",
+        "name": "fmi_boundary_input",
         "components": [{
             "name": "plant",
             "attributes": [
@@ -344,7 +344,7 @@ fn watched_input_model(choice: bool) -> CompiledModel {
                 "name": "watch", "states": ["off", "on"], "init": "off",
                 "transitions": [{
                     "name": "switch", "source": "off", "targets": ["on"],
-                    "distrib": "watched",
+                    "distrib": "boundary",
                     "guard": {
                         "op": "cmp", "cmp": "le",
                         "lhs": {"op": "attr", "attr": {"component": "plant", "attribute": "x"}},
@@ -382,8 +382,8 @@ fn watched_input_model(choice: bool) -> CompiledModel {
 }
 
 #[test]
-fn watched_reaction_to_fmu_output_precedes_next_input_sample() {
-    let compiled = watched_input_model(false);
+fn boundary_reaction_to_fmu_output_precedes_next_input_sample() {
+    let compiled = boundary_input_model(false);
     let mut host = CoSimulationHost::prepare_authorized(&compiled, &base_dir(), true).unwrap();
     let config = EngineConfig {
         t_max: 0.2,
@@ -565,7 +565,7 @@ fn operator_fmu_inputs_follow_converged_grid_events_and_budget_continuations() {
 
 #[test]
 fn operator_fmu_inputs_follow_explicit_branch_resolution() {
-    let compiled = watched_input_model(true);
+    let compiled = boundary_input_model(true);
     let mut host = CoSimulationHost::prepare_authorized(&compiled, &base_dir(), true).unwrap();
     let mut engine = Engine::new_with_host(
         &compiled,

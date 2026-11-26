@@ -7,7 +7,7 @@ use raichu_core::{CompiledModel, Engine, EngineConfig, EngineError, JournalRecor
 use raichu_expr::{AggOp, Assignment, AttrRef, Expr, PortRef, StateRef, Value};
 use raichu_model::{
     AttrKind, Attribute, Automaton, Component, Connection, Distrib, Indicator, IndicatorTarget,
-    Interface, Model, Port, PortDir, SensitiveFunction, Transition,
+    Interface, Model, Port, PortDir, Propagation, Transition,
 };
 
 /// The `delay_001` fixture shape (muscadet
@@ -74,7 +74,7 @@ fn delay_model() -> Model {
                 }],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![SensitiveFunction {
+                propagations: vec![Propagation {
                     name: "update_flow_out".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -109,7 +109,7 @@ fn delay_model() -> Model {
                 automata: vec![],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![SensitiveFunction {
+                propagations: vec![Propagation {
                     name: "update_fed".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -397,7 +397,7 @@ fn instantaneous_loop_is_detected() {
             automata: vec![],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![SensitiveFunction {
+            propagations: vec![Propagation {
                 name: "flip".into(),
                 effects: vec![Assignment {
                     target: AttrRef {
@@ -455,8 +455,8 @@ fn non_confluence_is_diagnosed() {
             automata: vec![],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![
-                SensitiveFunction {
+            propagations: vec![
+                Propagation {
                     name: "writer_identity".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -466,7 +466,7 @@ fn non_confluence_is_diagnosed() {
                         value: Expr::attr("c", "a"),
                     }],
                 },
-                SensitiveFunction {
+                Propagation {
                     name: "writer_negation".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -530,8 +530,8 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
             automata: vec![],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![
-                SensitiveFunction {
+            propagations: vec![
+                Propagation {
                     name: "writer_identity".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -541,7 +541,7 @@ fn non_confluent_model_is_order_deterministic_without_probe() {
                         value: Expr::attr("c", "a"),
                     }],
                 },
-                SensitiveFunction {
+                Propagation {
                     name: "writer_negation".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -621,7 +621,7 @@ fn inst_transition_fires_immediately_on_certain_branch() {
             }],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![],
@@ -651,10 +651,10 @@ fn provenance_is_recorded() {
     assert!(!result.provenance.engine_version.is_empty());
 }
 
-// --- Hybrid tank (ODE + watched transitions) -------------------------------
+// --- Hybrid tank (ODE + boundary transitions) -------------------------------
 
 /// Reduced heated-tank-class model: constant inflow 1.5,
-/// pump automaton toggling outflow 2.0 through watched thresholds
+/// pump automaton toggling outflow 2.0 through boundary thresholds
 /// content ≥ 8 (start) and content ≤ 2 (stop), content₀ = 0.
 /// Closed-form event dates: 16/3, 52/3, 64/3, 100/3, 112/3 …
 fn tank_model() -> Model {
@@ -695,7 +695,7 @@ fn tank_model() -> Model {
                         cycle_cancellation: Default::default(),
                         kind: None,
                         effects: vec![],
-                        distrib: Distrib::Watched,
+                        distrib: Distrib::Boundary,
                     },
                     Transition {
                         name: "stop".into(),
@@ -715,7 +715,7 @@ fn tank_model() -> Model {
                         cycle_cancellation: Default::default(),
                         kind: None,
                         effects: vec![],
-                        distrib: Distrib::Watched,
+                        distrib: Distrib::Boundary,
                     },
                 ],
             }],
@@ -744,7 +744,7 @@ fn tank_model() -> Model {
                     }),
                 },
             }],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![
@@ -776,7 +776,7 @@ fn tank_model() -> Model {
 }
 
 #[test]
-fn tank_watched_events_match_closed_form() {
+fn tank_boundary_events_match_closed_form() {
     let model = tank_model();
     let compiled = CompiledModel::compile(&model).unwrap();
     let config = EngineConfig {
@@ -922,7 +922,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                 }],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![SensitiveFunction {
+                propagations: vec![Propagation {
                     name: "update_open".into(),
                     effects: vec![Assignment {
                         target: AttrRef {
@@ -977,7 +977,7 @@ fn gate_worker_model(on_interruption: raichu_model::InterruptionPolicy) -> Model
                 }],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![],
+                propagations: vec![],
             },
         ],
         connections: vec![],
@@ -1107,7 +1107,7 @@ fn expvar_rate_change_is_rescheduled_and_journaled() {
             ],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![],
@@ -1170,7 +1170,7 @@ fn port_mean_and_median_aggregations() {
         automata: vec![],
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: vec![],
+        propagations: vec![],
     };
     let model = Model {
         programs: vec![],
@@ -1204,7 +1204,7 @@ fn port_mean_and_median_aggregations() {
                 automata: vec![],
                 allocations: vec![],
                 equations: vec![],
-                sensitive_functions: vec![SensitiveFunction {
+                propagations: vec![Propagation {
                     name: "aggregate".into(),
                     effects: vec![
                         Assignment {

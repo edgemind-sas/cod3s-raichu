@@ -2,7 +2,7 @@
 //! mass of one law falling in its cells, a delay racing an exponential,
 //! each interruption policy), then the agreement with the exact driver on
 //! the Markov family, Monte-Carlo witnesses (a lognormal repair, a hybrid
-//! model with an ODE and a watched threshold, the interruption policies),
+//! model with an ODE and a boundary threshold, the interruption policies),
 //! the refinement estimate, cut-offs and determinism across thread counts.
 //!
 //! Monte-Carlo witnesses drive replicas on the engine directly (drawn
@@ -498,7 +498,7 @@ fn a_lognormal_repair_race_agrees_with_monte_carlo() {
     assert_meets(interval, &result, "lognormal repair");
 }
 
-/// `x' = 1` from 0; `W` switches to `hi` when `x >= 1` (watched); `F`
+/// `x' = 1` from 0; `W` switches to `hi` when `x >= 1` (boundary); `F`
 /// fails at the continuously varying rate `k x`, doubled once `W` is
 /// `hi`; `G` fails at rate `g`, armed once `W` is `hi`. Target: F or G
 /// down.
@@ -514,7 +514,7 @@ fn hybrid(k: f64, g: f64) -> CompiledModel {
             "watch",
             &["lo", "hi"],
             vec![with(
-                tr("hit", "lo", &["hi"], json!({"distrib": "watched"})),
+                tr("hit", "lo", &["hi"], json!({"distrib": "boundary"})),
                 "guard",
                 ge(attr("X", "x"), c(1.0)),
             )],
@@ -540,14 +540,14 @@ fn hybrid(k: f64, g: f64) -> CompiledModel {
 
 /// Covers AE6.
 #[test]
-fn a_hybrid_model_with_an_ode_and_a_watched_threshold_meets_monte_carlo() {
+fn a_hybrid_model_with_an_ode_and_a_boundary_threshold_meets_monte_carlo() {
     let (k, g, t) = (0.3, 0.2, 2.0);
     let model = hybrid(k, g);
     let result = explore_discretised(&model, &settings("sys_down", t, 4)).unwrap();
     // Closed form: H_F(t) = k/2 + k (t^2 - 1), H_G(t) = g (t - 1).
     let expected = -(-(k / 2.0 + k * (t * t - 1.0) + g * (t - 1.0))).exp_m1();
     assert_rel(result.lower, expected, 1e-6, "hybrid closed form");
-    // Both failure modes appear, G only after the watched crossing.
+    // Both failure modes appear, G only after the boundary crossing.
     let all: Vec<Vec<String>> = (0..result.sequences.len())
         .map(|k| names(&result, k))
         .collect();
@@ -826,11 +826,11 @@ fn a_discretised_result_is_written_at_format_version_2_and_checked_on_reading() 
     assert!(read_exploration(&document.to_string()).is_ok());
 }
 
-/// `x' = 1` from 0; `W` switches to `hi` at the watched crossing `x >= 1`,
+/// `x' = 1` from 0; `W` switches to `hi` at the boundary crossing `x >= 1`,
 /// which disarms `U`, whose failure law is uniform on `[1, 2]`. `U` can
 /// only fire inside the event-location bracket of the crossing, so every
 /// cell median of the window lies past the true crossing instant.
-fn uniform_at_a_watched_crossing() -> CompiledModel {
+fn uniform_at_a_boundary_crossing() -> CompiledModel {
     let x = json!({"name": "X", "ports": [],
         "attributes": [{"name": "x", "kind": "float", "init": {"kind": "float", "value": 0.0}}],
         "automata": [],
@@ -841,7 +841,7 @@ fn uniform_at_a_watched_crossing() -> CompiledModel {
             "watch",
             &["lo", "hi"],
             vec![with(
-                tr("hit", "lo", &["hi"], json!({"distrib": "watched"})),
+                tr("hit", "lo", &["hi"], json!({"distrib": "boundary"})),
                 "guard",
                 ge(attr("X", "x"), c(1.0)),
             )],
@@ -863,8 +863,8 @@ fn uniform_at_a_watched_crossing() -> CompiledModel {
 }
 
 #[test]
-fn a_firing_past_a_watched_crossing_falls_back_before_it() {
-    let model = uniform_at_a_watched_crossing();
+fn a_firing_past_a_boundary_crossing_falls_back_before_it() {
+    let model = uniform_at_a_boundary_crossing();
     let mut s = settings("u_down", 1.5, 4);
     s.refine = false;
     let result = explore_discretised(&model, &s).unwrap();

@@ -3170,7 +3170,7 @@ def _snapshot(session, attributes: list[str], states: list[str]) -> dict[str, An
 
 
 #: Laws that fire without a random date.
-_DATED_LAWS = frozenset({"delay", "watched", "inst"})
+_DATED_LAWS = frozenset({"delay", "boundary", "inst"})
 
 
 def _is_choice(transition: dict) -> bool:

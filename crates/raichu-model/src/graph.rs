@@ -9,8 +9,8 @@
 /// order; a singleton without a self-edge is a node of its own and is
 /// still emitted, letting the caller decide what a component means.
 ///
-/// Shared with the engine, which reads the cycles of its sensitive
-/// functions with it: one implementation of the graph pass for the two
+/// Shared with the engine, which reads the cycles of its
+/// propagations with it: one implementation of the graph pass for the two
 /// layers that need one.
 pub fn strongly_connected_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
     #[derive(Clone, Copy)]

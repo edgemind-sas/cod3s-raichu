@@ -133,10 +133,10 @@ impl Model {
                     }
                 }
             }
-            for function in &component.sensitive_functions {
+            for function in &component.propagations {
                 for (index, assignment) in function.effects.iter().enumerate() {
                     let context = format!(
-                        "effect #{index} of sensitive function `{}.{}`",
+                        "effect #{index} of propagation `{}.{}`",
                         component.name, function.name
                     );
                     Self::check_attr_ref(scopes, &assignment.target, &context)?;

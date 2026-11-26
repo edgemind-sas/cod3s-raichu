@@ -1,6 +1,6 @@
 //! # raichu-expr: serializable expression trees
 //!
-//! Guards, sensitive-function effects, equation right-hand sides
+//! Guards, propagation effects, equation right-hand sides
 //! (explicit and ODE) and state-dependent rates are **pure data**:
 //! expression trees serialized inside the model file and
 //! evaluated/compiled on the Rust side (SymPy/CasADi style). This is what keeps the engine free of Python callbacks on the
@@ -292,7 +292,7 @@ pub enum Expr {
     },
     /// Current simulation time, as a float in the model's time unit.
     /// Meaningful in continuously evaluated expressions (equations,
-    /// watched margins, guards); sensitive functions are *not*
+    /// boundary margins, guards); propagations are *not*
     /// re-triggered by the passage of time alone.
     Time,
     /// Periodic piecewise-linear shape of `arg` (usually `time`): the
@@ -599,8 +599,8 @@ impl Expr {
     }
 }
 
-/// A direct assignment `target := value`: the *effect* of a sensitive
-/// function, as declarative data (the mutation is not a callback).
+/// A direct assignment `target := value`: the *effect* of a
+/// propagation, as declarative data (the mutation is not a callback).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Assignment {

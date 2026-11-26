@@ -84,7 +84,7 @@ def attribute(component: dict, name: str) -> dict | None:
 
 def function(component: dict, name: str) -> dict | None:
     return next(
-        (entry for entry in component["sensitive_functions"] if entry["name"] == name),
+        (entry for entry in component["propagations"] if entry["name"] == name),
         None,
     )
 

@@ -1017,7 +1017,7 @@ def test_an_internal_on_demand_mode_converts_and_matches():
 # --- a complete comparison, and every blocking construct of a mode -----------
 
 
-def _watched_pump() -> dict:
+def _boundary_pump() -> dict:
     """`two_pumps` with an event that does fire: the loss of P1's output."""
     doc = two_pumps()
     lost = event("p1_down", [[{"obj": "P1", "attr": "water_fed_out", "ope": "==", "value": False}]])
@@ -1029,7 +1029,7 @@ def test_a_fired_declaration_transition_left_out_of_the_rename_fails_the_compari
     """The event histories are compared over the renamed transitions, so a
     fired transition missing from the rename used to drop out of the
     comparison without a word."""
-    declaration = _watched_pump()
+    declaration = _boundary_pump()
     conversion = convert(declaration)
     for state in ("occ", "not_occ"):
         del conversion.rename[f"p1_down.ev.{state}"]
@@ -1039,11 +1039,11 @@ def test_a_fired_declaration_transition_left_out_of_the_rename_fails_the_compari
 
 
 def test_a_library_transition_with_no_declaration_counterpart_fails_the_comparison():
-    declaration = _watched_pump()
+    declaration = _boundary_pump()
     conversion = convert(declaration)
     feared = conversion.study["study"]["feared_events"]
-    (watched,) = [e for e in feared if e["name"] == "p1_down"]
-    feared.append({**watched, "name": "p1_twin"})
+    (boundary,) = [e for e in feared if e["name"] == "p1_down"]
+    feared.append({**boundary, "name": "p1_twin"})
     comparison = compare_routes(declaration, conversion, t_max=5000.0, seeds=range(6))
     assert not comparison.identical
     assert "p1_twin.ev." in comparison.detail and "library route" in comparison.detail

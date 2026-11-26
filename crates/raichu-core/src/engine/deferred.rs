@@ -59,7 +59,7 @@ impl<'m> Engine<'m> {
     }
 
     /// **Deferred draws**: advance deterministically, firing nothing, up
-    /// to the first of the next date-scheduled transition, a watched
+    /// to the first of the next date-scheduled transition, a boundary
     /// boundary crossing, the horizon `t_max`, and `limit`, and record
     /// along the way the cumulative hazard of every running deferred
     /// transition whose rate varies continuously.
@@ -113,8 +113,8 @@ impl<'m> Engine<'m> {
 
     /// The deterministic advance of [`Engine::probe_deferred`].
     pub(super) fn probe_inner(&mut self, limit: f64) -> Result<(f64, ProbeStop), EngineError> {
-        if let Some(watched) = self.immediate_watched()? {
-            return Ok((self.time, ProbeStop::Watched { index: watched }));
+        if let Some(boundary) = self.immediate_boundary()? {
+            return Ok((self.time, ProbeStop::Boundary { index: boundary }));
         }
         let t_max = self.config.t_max;
         loop {
@@ -133,7 +133,7 @@ impl<'m> Engine<'m> {
                     let stop = if self.model.transitions[index].located.is_some() {
                         ProbeStop::Deterministic { index }
                     } else {
-                        ProbeStop::Watched { index }
+                        ProbeStop::Boundary { index }
                     };
                     return Ok((self.time, stop));
                 }
@@ -172,7 +172,7 @@ impl<'m> Engine<'m> {
     ///
     /// `t` must not come after an event the engine would have to process
     /// first: the next date-scheduled transition (firing exactly at its
-    /// date is allowed, and happens before it), a watched boundary
+    /// date is allowed, and happens before it), a boundary
     /// crossing located on the way (or already holding), or the horizon.
     /// Such a request is refused with
     /// [`EngineError::DeferredFiringTooLate`], naming that event and its
@@ -258,10 +258,10 @@ impl<'m> Engine<'m> {
             return Err(too_late(self.config.t_max, "the horizon".to_owned()));
         }
         if t > self.time {
-            if let Some(watched) = self.immediate_watched()? {
+            if let Some(boundary) = self.immediate_boundary()? {
                 let cause = format!(
-                    "the watched transition `{}`",
-                    self.model.transitions[watched].name
+                    "the boundary transition `{}`",
+                    self.model.transitions[boundary].name
                 );
                 return Err(too_late(self.time, cause));
             }
@@ -271,10 +271,10 @@ impl<'m> Engine<'m> {
                 let before = self.try_snapshot()?;
                 match self.advance_continuous(t) {
                     Ok(None) => {}
-                    Ok(Some(watched)) => {
+                    Ok(Some(boundary)) => {
                         let at = self.time;
                         self.try_restore(&before)?;
-                        return Err(too_late(at, self.crossing_cause(watched)));
+                        return Err(too_late(at, self.crossing_cause(boundary)));
                     }
                     Err(error) => {
                         self.try_restore(&before)?;
@@ -285,13 +285,13 @@ impl<'m> Engine<'m> {
             self.flush_samples_before(t);
             self.time = t;
             self.note_time_change();
-            self.watched_streak = (t, 0);
+            self.boundary_streak = (t, 0);
         }
         self.fire(trans_idx, forced)
     }
 
     /// What the integration towards a deferred firing date stopped on,
-    /// in words: a watched transition whose boundary was crossed, or a
+    /// in words: a boundary transition whose boundary was crossed, or a
     /// located transition whose date, set at a crossing, fell due.
     fn crossing_cause(&self, trans_idx: TransIdx) -> String {
         let transition = &self.model.transitions[trans_idx];
@@ -305,7 +305,7 @@ impl<'m> Engine<'m> {
             };
             format!("the located {role} `{}`", transition.name)
         } else {
-            format!("the watched transition `{}`", transition.name)
+            format!("the boundary transition `{}`", transition.name)
         }
     }
 

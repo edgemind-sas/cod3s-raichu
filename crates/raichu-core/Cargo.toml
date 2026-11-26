@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Simulation cycle: scheduler, discrete evolution, sensitive-function fixpoint, continuous evolution, causal journal"
+description = "Simulation cycle: scheduler, discrete evolution, propagation fixpoint, continuous evolution, causal journal"
 
 [dependencies]
 raichu-expr.workspace = true

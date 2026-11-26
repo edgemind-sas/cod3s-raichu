@@ -461,7 +461,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nwatched margins, guards); sensitive functions are *not*\nre-triggered by the passage of time alone.",
+          "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nboundary margins, guards); propagations are *not*\nre-triggered by the passage of time alone.",
           "properties": {
             "op": {
               "const": "time",
@@ -1182,7 +1182,7 @@
     },
     "Target": {
       "additionalProperties": false,
-      "description": "A **sequence-analysis target** (feared event / événement redouté): a\nnamed automaton state whose activation ends and labels a trajectory's\nrecorded sequence (mirrors cod3s `endCause`). Empty `targets` = no early\nstop and no `end_cause` (the trajectory runs to `t_max`).",
+      "description": "A **sequence-analysis target** (feared event / événement redouté): a\nnamed automaton state whose activation ends and labels a trajectory's\nrecorded sequence (the end cause a cod3s study reads). Empty `targets` = no early\nstop and no `end_cause` (the trajectory runs to `t_max`).",
       "properties": {
         "automaton": {
           "description": "The automaton.",

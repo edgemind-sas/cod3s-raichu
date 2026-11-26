@@ -414,7 +414,7 @@ fn law_label(law: &CLaw) -> &'static str {
     match law {
         CLaw::Delay(_) => "delay",
         CLaw::Inst(_) => "instantaneous",
-        CLaw::Watched { .. } => "watched",
+        CLaw::Boundary { .. } => "boundary",
         CLaw::Exp(_) => "exponential",
         CLaw::ExpVar { .. } => "exponential with a rate expression",
         CLaw::Weibull(..) => "weibull",

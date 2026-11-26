@@ -27,7 +27,7 @@ the next section.
 
 ## Detection and location
 
-A watched guard (or an observed threshold) is found in two stages. They
+A boundary guard (or an observed threshold) is found in two stages. They
 answer two different questions, and each has its own knobs.
 
 **Detection: is the crossing seen at all?** On each accepted step of
@@ -139,7 +139,7 @@ episode = pyraichu.load_model({
                       "init": "waiting",
                       "transitions": [{"name": "cross", "source": "waiting",
                                        "targets": ["seen"],
-                                       "distrib": "watched", "guard": apex}]}]}],
+                                       "distrib": "boundary", "guard": apex}]}]}],
 })
 
 def fired(**knobs):
@@ -206,7 +206,7 @@ margin still reports an immediate event).
 ## A fast profile
 
 Consider a deterministic thermostat: a heater cycles on a room whose
-temperature follows an ODE, switching at watched thresholds (the
+temperature follows an ODE, switching at boundary thresholds (the
 [hybrid tutorial](../tutorial/04-going-hybrid.md) builds this model).
 
 <!-- skip -->
@@ -232,10 +232,10 @@ heater = {
     "automata": [{"name": "functional", "states": ["ON", "OFF"], "init": "ON",
         "transitions": [
             {"name": "off", "source": "ON", "targets": ["OFF"],
-             "distrib": "watched", "guard": threshold("gt", 20.0)},
+             "distrib": "boundary", "guard": threshold("gt", 20.0)},
             {"name": "on", "source": "OFF", "targets": ["ON"],
-             "distrib": "watched", "guard": threshold("lt", 15.0)}]}],
-    "sensitive_functions": [{"name": "p", "effects": [{
+             "distrib": "boundary", "guard": threshold("lt", 15.0)}]}],
+    "propagations": [{"name": "p", "effects": [{
         "target": {"component": "H", "attribute": "power"},
         "value": {"op": "if",
             "cond": {"op": "state_active",
@@ -400,7 +400,7 @@ reads correctly at every sample instant while it happens, so the only
 symptom is the wall clock.
 
 Two Zeno guards have always caught a loop that does **not** advance time
-(`WatchedLoop` for transitions, `FlowChattering` for the flow active
+(`BoundaryLoop` for transitions, `FlowChattering` for the flow active
 set). Neither can see a **limit cycle**, where the clock does move, by a
 little, every turn. Two budgets close that:
 
@@ -530,7 +530,7 @@ it has no run-time counterpart to fall back on: see
   accuracy is ample.
 - **Raise `max_step` on piecewise-linear dynamics over long horizons.**
   Between two events a level filled or drained at constant rates is
-  integrated exactly whatever the step, and watched crossings are still
+  integrated exactly whatever the step, and boundary crossings are still
   located by root finding; only the default cap of `0.1` multiplies the
   steps (a million for a history of `1e5` hours). On the
   [gas production example](../examples/gas-production.md), `max_step=100`

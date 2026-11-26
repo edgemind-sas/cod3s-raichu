@@ -22,7 +22,7 @@ fn demand_model(ok_prob: f64) -> Model {
             interfaces: vec![],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
             automata: vec![Automaton {
                 name: "req".into(),
                 states: vec!["pending".into(), "ok".into(), "ko".into()],
@@ -125,7 +125,7 @@ fn three_way_branching_covers_every_target() {
             interfaces: vec![],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
             automata: vec![Automaton {
                 name: "req".into(),
                 states: vec!["p".into(), "a".into(), "b".into(), "c".into()],

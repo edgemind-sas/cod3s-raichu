@@ -39,8 +39,8 @@
 //! non-target state: until the target is reached, that automaton sits in
 //! its one other state, constant, and so carries nothing.
 //!
-//! What it does not see: a latch or counter written by a sensitive
-//! function (level semantics), which `cycle_cancellation: never` covers.
+//! What it does not see: a latch or counter written by a
+//! propagation (level semantics), which `cycle_cancellation: never` covers.
 //! The echo exemption narrows that blind spot rather than widening it: a
 //! variable between an echoed automaton and its follower may not read the
 //! follower, the one shape in which such a function would latch it.
@@ -52,7 +52,7 @@ use raichu_expr::{BoolOp, CmpOp, Value};
 use raichu_model::{CycleCancellation, InterruptionPolicy, TransitionKind};
 use serde::{Deserialize, Serialize};
 
-use crate::compile::{CExpr, CLaw, CTransition, CompiledModel};
+use crate::compile::{CExpr, CLaw, CompiledModel, CompiledTransition};
 use crate::dependency::{self, EdgeSet, Node};
 
 /// Who decided whether a cycle group may be cancelled.
@@ -292,7 +292,8 @@ impl Facts {
             })
             .map(|t| t.automaton)
             .collect();
-        let mut by_automaton: Vec<Vec<&CTransition>> = vec![Vec::new(); model.automata.len()];
+        let mut by_automaton: Vec<Vec<&CompiledTransition>> =
+            vec![Vec::new(); model.automata.len()];
         for transition in &model.transitions {
             by_automaton[transition.automaton].push(transition);
         }
@@ -571,7 +572,7 @@ fn same_value(a: &Value, b: &Value) -> bool {
 fn two_state_switch<'a>(
     model: &CompiledModel,
     a: usize,
-    transitions: &[&'a CTransition],
+    transitions: &[&'a CompiledTransition],
 ) -> Option<(&'a CExpr, &'a CExpr)> {
     if model.automata[a].states.len() != 2 {
         return None;
@@ -579,13 +580,13 @@ fn two_state_switch<'a>(
     let [first, second] = transitions else {
         return None;
     };
-    let instant = |t: &&CTransition| {
+    let instant = |t: &&CompiledTransition| {
         t.effects.is_empty()
             && t.targets.len() == 1
             && match &t.distrib {
                 CLaw::Delay(delay) => *delay == 0.0,
                 CLaw::Inst(probs) => probs.len() == 1,
-                CLaw::Watched { .. } => true,
+                CLaw::Boundary { .. } => true,
                 _ => false,
             }
     };
@@ -604,7 +605,7 @@ fn two_state_switch<'a>(
 /// Whether automaton `a` is a switch on a condition and its syntactic
 /// negation: its state is then a function of what the guards read, and
 /// remembers nothing.
-fn is_memoryless(model: &CompiledModel, a: usize, transitions: &[&CTransition]) -> bool {
+fn is_memoryless(model: &CompiledModel, a: usize, transitions: &[&CompiledTransition]) -> bool {
     two_state_switch(model, a, transitions)
         .is_some_and(|(g1, g2)| negates(g1, g2) || negates(g2, g1))
 }

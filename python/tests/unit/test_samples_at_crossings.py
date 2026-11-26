@@ -1,6 +1,6 @@
-"""Dense samples requested at the very instant of a watched crossing.
+"""Dense samples requested at the very instant of a boundary crossing.
 
-Asking for a sample exactly at the date a watched transition fires must
+Asking for a sample exactly at the date a boundary transition fires must
 record it, once, in time order, and must not shift the samples after it.
 """
 
@@ -16,7 +16,7 @@ def _level():
 
 
 def _model():
-    """The level rises at 1 m/h from 0; a watched transition fires at 2 m,
+    """The level rises at 1 m/h from 0; a boundary transition fires at 2 m,
     which stops the filling."""
     filling = {"op": "state_active",
                "state": {"component": "T", "automaton": "mode", "state": "filling"}}
@@ -28,7 +28,7 @@ def _model():
                             "init": {"kind": "float", "value": 0.0}}],
             "automata": [{"name": "mode", "states": ["filling", "full"], "init": "filling",
                           "transitions": [{"name": "stop", "source": "filling", "targets": ["full"],
-                                           "distrib": "watched",
+                                           "distrib": "boundary",
                                            "guard": {"op": "cmp", "cmp": "ge",
                                                      "lhs": _level(), "rhs": _num(2.0)}}]}],
             "equations": [{"target": "level", "kind": "ode",

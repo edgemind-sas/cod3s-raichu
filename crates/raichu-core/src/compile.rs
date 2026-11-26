@@ -16,12 +16,12 @@ use raichu_numeric::LuFactorization;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use thiserror::Error;
 
-/// Margin tightening applied to *strict* watched comparisons (`<`,
+/// Margin tightening applied to *strict* boundary comparisons (`<`,
 /// `>`): the engine fires at margin ≥ 0, so a strict boundary is
 /// shifted inward by this amount: a trajectory resting exactly on it
 /// does not fire, and a genuine crossing date shifts by ε/slope. Must
 /// sit *below* the event-location tolerance (`tol_event` = 1e-10):
-/// when two watched guards share one crossing, the located state
+/// when two boundary guards share one crossing, the located state
 /// overshoots by ~tol_event and the sibling must still read a
 /// non-negative margin to fire immediately.
 pub const STRICT_MARGIN_EPS: f64 = 1e-12;
@@ -34,11 +34,11 @@ pub type AutIdx = usize;
 pub type StateIdx = usize;
 /// Dense index of a transition (global).
 pub type TransIdx = usize;
-/// Dense index of a sensitive function (global).
+/// Dense index of a propagation (global).
 pub type FnIdx = usize;
-/// Position of a watched transition *within* [`CompiledModel::watched`],
-/// which is the order the engine scans the watched population in.
-pub type WatchedIdx = usize;
+/// Position of a boundary transition *within* [`CompiledModel::boundary`],
+/// which is the order the engine scans the boundary population in.
+pub type BoundaryIdx = usize;
 
 /// Errors raised while compiling a model.
 #[derive(Debug, Error)]
@@ -183,11 +183,11 @@ pub enum CLaw {
     /// Instantaneous branching; probabilities include the reconstructed
     /// complement (length == number of targets).
     Inst(Vec<f64>),
-    /// Watched transition: fires when `margin` crosses from
+    /// Boundary transition: fires when `margin` crosses from
     /// negative to non-negative during continuous evolution (`schedule_boundary`).
     /// The margin is the signed boundary distance derived from the
     /// guard comparison: guard true ⇔ margin ≥ 0.
-    Watched {
+    Boundary {
         /// Signed boundary margin.
         margin: CExpr,
     },
@@ -235,7 +235,7 @@ pub enum CLaw {
 
 /// A compiled transition.
 #[derive(Debug, Clone)]
-pub struct CTransition {
+pub struct CompiledTransition {
     /// Qualified name `component.automaton.transition` (journal only).
     pub name: String,
     /// Owning component name (the `obj` of a recorded `SeqEvent`).
@@ -264,7 +264,7 @@ pub struct CTransition {
     pub cycle_cancellation: CycleCancellation,
     /// Declared reliability role, if any
     /// ([`raichu_model::Transition::kind`]): it applies to the first entry
-    /// of [`CTransition::targets`] only, the declared order being kept.
+    /// of [`CompiledTransition::targets`] only, the declared order being kept.
     pub kind: Option<TransitionKind>,
     /// Edge effects `target := value`, applied once when the transition
     /// fires, after its state change ([`raichu_model::Transition::effects`]).
@@ -279,15 +279,15 @@ pub struct CTransition {
     /// (a delay counts from there, a stochastic date is drawn there), and
     /// a located fall interrupts it under its interruption policy,
     /// instead of both waiting for the next discrete event. `None`
-    /// otherwise; a [`CLaw::Watched`] transition carries its margin in
+    /// otherwise; a [`CLaw::Boundary`] transition carries its margin in
     /// its law.
     pub located: Option<CExpr>,
 }
 
-impl CTransition {
+impl CompiledTransition {
     /// Whether firing this transition into `target` records a sequence
     /// event: it is monitored, and `target` is one of the states it
-    /// records ([`CTransition::monitored_states`], every target when
+    /// records ([`CompiledTransition::monitored_states`], every target when
     /// absent).
     #[must_use]
     pub fn records(&self, target: StateIdx) -> bool {
@@ -298,18 +298,18 @@ impl CTransition {
                 .is_none_or(|states| states.contains(&target))
     }
 
-    /// The boundary margin monitored during integration: a watched
-    /// transition's, or the [`CTransition::located`] guard's. `None` for a
+    /// The boundary margin monitored during integration: a boundary
+    /// transition's, or the [`CompiledTransition::located`] guard's. `None` for a
     /// transition whose guard is evaluated at discrete events only.
     #[must_use]
     pub fn boundary_margin(&self) -> Option<&CExpr> {
         match &self.distrib {
-            CLaw::Watched { margin } => Some(margin),
+            CLaw::Boundary { margin } => Some(margin),
             _ => self.located.as_ref(),
         }
     }
 
-    /// The declared kind of an entry into `target`: [`CTransition::kind`]
+    /// The declared kind of an entry into `target`: [`CompiledTransition::kind`]
     /// when `target` is the first declared target, which is the only entry
     /// the declaration speaks for, `None` for any other branch.
     #[must_use]
@@ -368,11 +368,11 @@ pub struct CAllocation {
 }
 
 /// The **active-set margins** of one conservative distribution operator:
-/// the compiled watched guards that tell the engine when the frozen
+/// the compiled boundary guards that tell the engine when the frozen
 /// saturation pattern of that operator is about to change.
 ///
 /// One margin per outgoing connection, evaluated inside the solver
-/// callbacks exactly like the margin of a watched transition. What each
+/// callbacks exactly like the margin of a boundary transition. What each
 /// margin *measures* depends on the class the edge currently sits in, so
 /// the expression is not fixed at compile time; what is fixed here is the
 /// operator it belongs to and the attributes it reads.
@@ -386,7 +386,7 @@ pub struct CAllocation {
 ///
 /// Minima are deliberately **not** given a margin. A limiting reagent
 /// written as a minimum keeps a kink rather than a jump, so the
-/// integrator handles it without help, and one watched guard per input
+/// integrator handles it without help, and one boundary guard per input
 /// pair would add a quadratic population for accuracy the kink already
 /// provides. The branch a minimum takes still enters the *termination
 /// test* of the resolution, where it is free.
@@ -409,18 +409,18 @@ pub struct CFlowMargins {
 /// change to a given attribute, automaton state or to the clock can move.
 ///
 /// It is the same inversion [`CompiledModel::var_triggers`] performs for
-/// the sensitive functions, applied to the watched population instead:
+/// the propagations, applied to the boundary population instead:
 /// the compiler already knows what every guard reads, so the engine can
 /// be told which guards a change reaches rather than re-deriving it by
 /// scanning all of them. Every list is **ascending and deduplicated**, so
-/// an engine walking one visits the watched transitions in the order it
+/// an engine walking one visits the boundary transitions in the order it
 /// would have scanned them, and a run replays identically. That
 /// ordering is a requirement, not a convenience: a hash-set iteration
 /// would reorder simultaneous firings from one process to the next,
 /// because the default hasher is seeded per process.
 ///
 /// **What it narrows and what it does not.** It narrows the two sites
-/// that scan the *whole* watched population: the immediate-guard check
+/// that scan the *whole* boundary population: the immediate-guard check
 /// after every discrete fixpoint, and the active-margin set the engine
 /// hands the solver at every integration segment. It does **not** narrow
 /// the event evaluation inside the solver callbacks: that one is already
@@ -429,24 +429,24 @@ pub struct CFlowMargins {
 /// finder brackets.
 #[derive(Debug, Clone, Default)]
 pub struct MarginIndex {
-    /// attribute index → positions in [`CompiledModel::watched`] whose
+    /// attribute index → positions in [`CompiledModel::boundary`] whose
     /// guard (hence whose margin, compiled from that same guard) reads
     /// it.
-    pub watched_by_var: Vec<Vec<WatchedIdx>>,
-    /// automaton index → positions in [`CompiledModel::watched`] whose
+    pub boundary_by_var: Vec<Vec<BoundaryIdx>>,
+    /// automaton index → positions in [`CompiledModel::boundary`] whose
     /// guard reads that automaton's current state.
-    pub watched_by_state: Vec<Vec<WatchedIdx>>,
-    /// Positions in [`CompiledModel::watched`] whose guard reads the
+    pub boundary_by_state: Vec<Vec<BoundaryIdx>>,
+    /// Positions in [`CompiledModel::boundary`] whose guard reads the
     /// clock, and which therefore move whenever time does. Usually
     /// empty: a boundary is normally a predicate on the continuous
     /// state.
-    pub watched_by_time: Vec<WatchedIdx>,
-    /// automaton index → positions in [`CompiledModel::watched`] that
+    pub boundary_by_time: Vec<BoundaryIdx>,
+    /// automaton index → positions in [`CompiledModel::boundary`] that
     /// automaton **owns**. This is the dependency of the *arming*
-    /// filter (a watched transition is monitored only while its
+    /// filter (a boundary transition is monitored only while its
     /// automaton sits in its source state), which is what lets the
     /// per-segment margin set be maintained instead of rebuilt.
-    pub watched_by_owner: Vec<Vec<WatchedIdx>>,
+    pub boundary_by_owner: Vec<Vec<BoundaryIdx>>,
     /// attribute index → indices into [`CompiledModel::flow_margins`]
     /// whose margins read it, inverting [`CFlowMargins::deps`].
     ///
@@ -495,9 +495,9 @@ pub struct CBlock {
 ///
 /// An equation writes one attribute; a distribution operator writes one
 /// per outgoing connection, which is why it is a step of its own rather
-/// than a sensitive-function effect. Both live in one table because both
+/// than a propagation effect. Both live in one table because both
 /// must run inside the solver callbacks: a quantity written outside that
-/// table stays frozen through an integration segment, and a watched
+/// table stays frozen through an integration segment, and a boundary
 /// margin reading it would be polled rather than located. A block
 /// writes all of its members at once (it is one step, not `n`).
 #[derive(Debug, Clone)]
@@ -568,7 +568,7 @@ fn fixpoint_cycles(
     cyclic
 }
 
-/// A compiled sensitive function.
+/// A compiled propagation.
 #[derive(Debug, Clone)]
 pub struct CFunction {
     /// Qualified name `component.function`.
@@ -664,16 +664,16 @@ fn program_sense(sense: ProgramSense) -> raichu_milp::Sense {
 
 /// A compiled indicator.
 #[derive(Debug, Clone)]
-pub struct CIndicator {
+pub struct CompiledIndicator {
     /// Indicator name.
     pub name: String,
     /// What it observes.
-    pub target: CIndicatorTarget,
+    pub target: CompiledIndicatorTarget,
 }
 
 /// Compiled indicator target.
 #[derive(Debug, Clone)]
-pub enum CIndicatorTarget {
+pub enum CompiledIndicatorTarget {
     /// A attribute's value.
     Var(VarIdx),
     /// 1.0 while the automaton is in the state, else 0.0.
@@ -706,11 +706,11 @@ pub struct CompiledModel {
     /// Automata.
     pub automata: Vec<CAutomaton>,
     /// All transitions (global order = declaration order).
-    pub transitions: Vec<CTransition>,
-    /// All sensitive functions (global order = declaration order: this
+    pub transitions: Vec<CompiledTransition>,
+    /// All propagations (global order = declaration order: this
     /// *is* the documented deterministic fixpoint order).
     pub functions: Vec<CFunction>,
-    /// Model-level programs, executed after sensitive functions in the
+    /// Model-level programs, executed after propagations in the
     /// same discrete fixpoint worklist.
     pub programs: Vec<CProgram>,
     /// var index → functions to re-evaluate when it changes.
@@ -723,7 +723,7 @@ pub struct CompiledModel {
     /// counts ([`crate::EngineConfig::max_fixpoint_iterations`]).
     pub(crate) on_fixpoint_cycle: Vec<bool>,
     /// Indicators.
-    pub indicators: Vec<CIndicator>,
+    pub indicators: Vec<CompiledIndicator>,
     /// Sequence-analysis targets (feared events), resolved to indices.
     pub targets: Vec<CTarget>,
     /// ODE attributes and right-hand sides, declaration order (CEvol).
@@ -797,9 +797,9 @@ pub struct CompiledModel {
     /// applies it without reading the model again. Never a refusal: a
     /// kept group is the right answer for a failure whose effect lasts.
     pub cycle_groups: Vec<crate::cycle_groups::CycleGroupDecision>,
-    /// Indices of watched transitions (monitored during continuous
+    /// Indices of boundary transitions (monitored during continuous
     /// evolution, never date-scheduled).
-    pub watched: Vec<TransIdx>,
+    pub boundary: Vec<TransIdx>,
     /// Active-set margins, one entry per conservative distribution
     /// operator of the explicit sweep, in sweep order. Empty for a model
     /// carrying no operator, which is what lets such a model skip the
@@ -991,7 +991,7 @@ impl Resolver {
         args.iter().map(|a| self.compile_expr(a)).collect()
     }
 
-    /// Signed boundary margin of a watched guard (guard true ⇔ margin
+    /// Signed boundary margin of a boundary guard (guard true ⇔ margin
     /// ≥ 0). Validation guarantees one of three shapes:
     ///
     /// - a single ordering comparison → `lhs − rhs` (or reversed);
@@ -1001,8 +1001,8 @@ impl Resolver {
     /// The gate expressions are *discrete* (they only change at
     /// discrete events), so the margin stays continuous within every
     /// integration segment; a gate flip is caught by the
-    /// immediate-watched check right after the discrete fixpoint.
-    fn compile_watched_margin(&self, guard: &Expr) -> Result<CExpr, CompileError> {
+    /// immediate-boundary check right after the discrete fixpoint.
+    fn compile_boundary_margin(&self, guard: &Expr) -> Result<CExpr, CompileError> {
         match guard {
             Expr::Cmp {
                 cmp: cmp @ (CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge),
@@ -1044,7 +1044,7 @@ impl Resolver {
             } => {
                 let margins = args
                     .iter()
-                    .map(|arg| self.compile_watched_margin(arg))
+                    .map(|arg| self.compile_boundary_margin(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(match bool_op {
                     BoolOp::And => CExpr::Min { args: margins },
@@ -1055,14 +1055,14 @@ impl Resolver {
             // sign, and the complement of `m >= 0` is the STRICT `m < 0`:
             // negate it and tighten it by STRICT_MARGIN_EPS, as a strict
             // comparison is. Without the shift a guard and its negation
-            // both hold on the boundary, so a two-state automaton watched
+            // both hold on the boundary, so a two-state automaton boundary
             // on `c` and `not(c)` would fire back and forth at the
             // crossing without time advancing.
             Expr::Bool {
                 bool_op: BoolOp::Not,
                 args,
             } if args.len() == 1 => {
-                let inner = self.compile_watched_margin(&args[0])?;
+                let inner = self.compile_boundary_margin(&args[0])?;
                 Ok(CExpr::Sub {
                     lhs: Box::new(CExpr::Sub {
                         lhs: Box::new(CExpr::Const(Value::Float(0.0))),
@@ -1987,18 +1987,18 @@ impl CompiledModel {
                             full.push(complement);
                             CLaw::Inst(full)
                         }
-                        Distrib::Watched => {
+                        Distrib::Boundary => {
                             let Some(guard) = &transition.guard else {
                                 return Err(CompileError::Unresolved {
-                                    what: "watched guard",
+                                    what: "boundary guard",
                                     name: format!(
                                         "{}.{}.{}",
                                         component.name, automaton.name, transition.name
                                     ),
                                 });
                             };
-                            let margin = resolver.compile_watched_margin(guard)?;
-                            CLaw::Watched { margin }
+                            let margin = resolver.compile_boundary_margin(guard)?;
+                            CLaw::Boundary { margin }
                         }
                     };
                     let effects = transition
@@ -2013,13 +2013,13 @@ impl CompiledModel {
                         .collect::<Result<Vec<_>, CompileError>>()?;
                     let trans_idx = transitions.len();
                     if let (false, Some(guard)) = (
-                        matches!(distribution, CLaw::Watched { .. }),
+                        matches!(distribution, CLaw::Boundary { .. }),
                         &transition.guard,
                     ) {
                         guarded.push((trans_idx, guard));
                     }
                     automata[aut_idx].transitions.push(trans_idx);
-                    transitions.push(CTransition {
+                    transitions.push(CompiledTransition {
                         name: format!("{}.{}.{}", component.name, automaton.name, transition.name),
                         component: component.name.clone(),
                         automaton: aut_idx,
@@ -2038,7 +2038,7 @@ impl CompiledModel {
                     });
                 }
             }
-            for function in &component.sensitive_functions {
+            for function in &component.propagations {
                 let effects = function
                     .effects
                     .iter()
@@ -2225,7 +2225,7 @@ impl CompiledModel {
         // countdown; the same holds for a failure drawn while a
         // temperature is above its limit). Such a transition keeps its law
         // and has the crossing of its guard located during integration
-        // ([`CTransition::located`]). Its arming stays the schedule's, so
+        // ([`CompiledTransition::located`]). Its arming stays the schedule's, so
         // a zero delay keeps its same-date wave rank. A transition whose
         // guard only moves at discrete events is left as declared.
         for (trans_idx, declared) in guarded {
@@ -2235,13 +2235,13 @@ impl CompiledModel {
                 .as_ref()
                 .is_some_and(|guard| expr_is_continuous(guard, &continuous_vars))
             {
-                transition.located = Some(resolver.compile_watched_margin(declared)?);
+                transition.located = Some(resolver.compile_boundary_margin(declared)?);
             }
         }
-        // The monitored population: watched transitions and located
+        // The monitored population: boundary transitions and located
         // observers, which share the arming filter, the margin index and
         // the solver's event slots.
-        let watched: Vec<TransIdx> = transitions
+        let boundary: Vec<TransIdx> = transitions
             .iter()
             .enumerate()
             .filter(|(_, t)| t.boundary_margin().is_some())
@@ -2255,7 +2255,7 @@ impl CompiledModel {
         // Compiling them here rather than deriving them at each segment
         // start is what registers their variable dependencies once: a
         // later index inverting `deps` sees every margin the operators
-        // contribute, exactly as it sees the margins of the watched
+        // contribute, exactly as it sees the margins of the boundary
         // transitions.
         let flow_margins: Vec<CFlowMargins> = explicit
             .iter()
@@ -2287,24 +2287,24 @@ impl CompiledModel {
             .collect();
 
         // Pass 3-quinquies: **invert** the margin dependencies, exactly
-        // as pass 4 below inverts the sensitive functions'. Both scan
-        // sites of the watched population then cost what moved instead of
+        // as pass 4 below inverts the propagations'. Both scan
+        // sites of the boundary population then cost what moved instead of
         // what exists.
         //
         // The guard is the only expression consulted: the margin is
-        // compiled *from* the guard (`compile_watched_margin`), so the
+        // compiled *from* the guard (`compile_boundary_margin`), so the
         // two read the same attributes and one dependency set answers for
         // both the immediate-guard check and the located crossing.
         let mut margin_index = MarginIndex {
-            watched_by_var: vec![Vec::new(); var_names.len()],
-            watched_by_state: vec![Vec::new(); automata.len()],
-            watched_by_time: Vec::new(),
-            watched_by_owner: vec![Vec::new(); automata.len()],
+            boundary_by_var: vec![Vec::new(); var_names.len()],
+            boundary_by_state: vec![Vec::new(); automata.len()],
+            boundary_by_time: Vec::new(),
+            boundary_by_owner: vec![Vec::new(); automata.len()],
             flow_by_var: vec![Vec::new(); var_names.len()],
         };
-        for (position, &trans_idx) in watched.iter().enumerate() {
+        for (position, &trans_idx) in boundary.iter().enumerate() {
             let transition = &transitions[trans_idx];
-            margin_index.watched_by_owner[transition.automaton].push(position);
+            margin_index.boundary_by_owner[transition.automaton].push(position);
             let Some(guard) = &transition.guard else {
                 continue;
             };
@@ -2316,13 +2316,13 @@ impl CompiledModel {
             auts.sort_unstable();
             auts.dedup();
             for var in vars {
-                margin_index.watched_by_var[var].push(position);
+                margin_index.boundary_by_var[var].push(position);
             }
             for aut in auts {
-                margin_index.watched_by_state[aut].push(position);
+                margin_index.boundary_by_state[aut].push(position);
             }
             if guard.reads_time() {
-                margin_index.watched_by_time.push(position);
+                margin_index.boundary_by_time.push(position);
             }
         }
         for (operator, margins) in flow_margins.iter().enumerate() {
@@ -2504,24 +2504,26 @@ impl CompiledModel {
             .iter()
             .map(|indicator| {
                 let target = match &indicator.target {
-                    IndicatorTarget::Attribute { attr } => {
-                        CIndicatorTarget::Var(resolver.var(&attr.component, &attr.attribute)?)
-                    }
+                    IndicatorTarget::Attribute { attr } => CompiledIndicatorTarget::Var(
+                        resolver.var(&attr.component, &attr.attribute)?,
+                    ),
                     IndicatorTarget::State {
                         component,
                         automaton,
                         state,
                     } => {
                         let (aut, st) = resolver.state(component, automaton, state)?;
-                        CIndicatorTarget::State(aut, st)
+                        CompiledIndicatorTarget::State(aut, st)
                     }
-                    IndicatorTarget::Predicate { attr, cmp, value } => CIndicatorTarget::Predicate(
-                        resolver.var(&attr.component, &attr.attribute)?,
-                        *cmp,
-                        *value,
-                    ),
+                    IndicatorTarget::Predicate { attr, cmp, value } => {
+                        CompiledIndicatorTarget::Predicate(
+                            resolver.var(&attr.component, &attr.attribute)?,
+                            *cmp,
+                            *value,
+                        )
+                    }
                 };
-                Ok(CIndicator {
+                Ok(CompiledIndicator {
                     name: indicator.name.clone(),
                     target,
                 })
@@ -2597,7 +2599,7 @@ impl CompiledModel {
             }),
             torn_reads: torn,
             explicit,
-            watched,
+            boundary,
             flow_margins,
             margin_index,
             var_index,

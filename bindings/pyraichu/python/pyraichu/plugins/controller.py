@@ -49,14 +49,14 @@ Two sections.
   ``{name}_level_out``, which is what lets the output of one controller be
   the input of another, and what an instrument publishes to a voter.
 
-**Why an input is not read by a sensitive function.** RAICHU derives *when*
-to run a sensitive function from the attributes and states its expressions
+**Why an input is not read by a propagation.** RAICHU derives *when*
+to run a propagation from the attributes and states its expressions
 read, and it runs no callback during numerical integration: a continuous
-quantity moving inside an integration step announces nothing. A sensitive
-function reading a level would therefore never re-evaluate between discrete
+quantity moving inside an integration step announces nothing. A
+propagation reading a level would therefore never re-evaluate between discrete
 events, and the failure would be silent. A controller re-evaluates on the
 **notification of the automata its grammar compiles to**, whose transitions
-are ``watched``, so a crossing is located by root-finding rather than
+are ``boundary``, so a crossing is located by root-finding rather than
 noticed at whatever event happens to come next.
 
 **What an output carries: a closed grammar, never a function.** An output
@@ -74,8 +74,8 @@ nothing muscadet declares.
 The reason is the one the whole module turns on. The engine dates a crossing
 exactly only on a form it **recognises**: a threshold it can root-find, an
 edge it can watch. Nothing can read a threshold out of arbitrary Python, so
-nothing could compile one to a watched transition, and the fallback (a
-sensitive function on the reading) is precisely the silent failure above. A
+nothing could compile one to a boundary transition, and the fallback (a
+propagation on the reading) is precisely the silent failure above. A
 closed grammar is what makes every form compilable.
 
 **Every number the grammar carries is an attribute of the model.** A
@@ -101,7 +101,7 @@ differently, none of them a weakening.
 1. **A comparison reads its automaton's state, not the comparison again.**
    muscadet's compare closure recomputes the comparison live and uses the
    automaton only for the stop and the notification. Here the emission is a
-   sensitive function whose triggers RAICHU derives from what it reads, so
+   propagation whose triggers RAICHU derives from what it reads, so
    recomputing the comparison would make it trigger on the *reading*, which
    announces nothing between events. Reading the state instead makes the
    located crossing the notification, exactly as it already is for a band.
@@ -208,7 +208,7 @@ CONTROL_AGGREGATION_OPS = {"sum": "sum", "mean": "mean", "median": "median"}
 #: changes argument, a median changes representative. With ``min`` and
 #: ``max`` refused, ``median`` is the only one that reaches the engine.
 #:
-#: muscadet declares one watched two-state automaton per **pair** of sources
+#: muscadet declares one boundary two-state automaton per **pair** of sources
 #: so the solver stops at the crossing. That is deliberately **not ported**:
 #: the pair count is a function of how many connections reach the input, and
 #: a per-object plugin expansion does not know it (the model's connections
@@ -231,12 +231,12 @@ CTRL_OUT_VALUE = "value"
 #: Every nature a controller output may be declared with.
 CTRL_OUT_KINDS = (CTRL_OUT_BOOL, CTRL_OUT_VALUE)
 
-#: A reading compared to a threshold. Compiles to a watched two-state
+#: A reading compared to a threshold. Compiles to a boundary two-state
 #: automaton.
 CTRL_OP_COMPARE = "compare"
 
 #: Two thresholds and a direction: a hysteresis band. Compiles to one
-#: watched two-state automaton whose two edges are the two thresholds.
+#: boundary two-state automaton whose two edges are the two thresholds.
 CTRL_OP_BAND = "band"
 
 #: Booleans reduced by ``and``, ``or``, ``not`` or k-of-n. The one operator
@@ -296,14 +296,14 @@ CTRL_BAND_EDGE_OPERATORS = {
 #: ``eq`` and ``ne`` are **absent**, and the omission is the same one the
 #: authoring layer makes on a rule guard: a controller input reads a
 #: continuously-evolving quantity, an equality on such a quantity brackets
-#: no crossing, and a watched transition needs an ordering comparison to
+#: no crossing, and a boundary transition needs an ordering comparison to
 #: root-find. A model that means "has reached" writes ``ge`` or ``le``.
 COMPARISON_OPERATORS = ("<", "<=", ">", ">=")
 
 #: Comparison spelling to the engine's, and the ordering comparison that is
 #: its exact negation: an edge out of a state is the complement of the edge
 #: into it, and emitting the complement directly keeps both edges an
-#: ordering comparison, which is what ``watched`` requires.
+#: ordering comparison, which is what ``boundary`` requires.
 _CMP = {"<": "lt", "<=": "le", ">": "gt", ">=": "ge"}
 _NEGATED = {"lt": "ge", "le": "gt", "gt": "le", "ge": "lt"}
 
@@ -574,7 +574,7 @@ class CtrlTernary(CtrlNode):
     so both holding at once publishes 0, their difference.
 
     It adds no arithmetic on a reading. The two operands are conditions,
-    each already compiled to a watched automaton, and the number changes
+    each already compiled to a boundary automaton, and the number changes
     only when one of them turns: a downstream threshold on it is crossed at
     a date some upstream automaton has located, which is the property the
     closed grammar exists for.
@@ -637,8 +637,8 @@ def build_ctrl_node(where: str, spec: Any) -> CtrlNode | None:
             f"operators {operators}, written as a mapping carrying an 'op' "
             f"key, and {spec!r} is not one. A Python callable is refused here "
             "whatever it attests: nothing can read a threshold out of "
-            "arbitrary Python, so nothing could compile one to a watched "
-            "transition, and the fallback would be a sensitive function on a "
+            "arbitrary Python, so nothing could compile one to a boundary "
+            "transition, and the fallback would be a propagation on a "
             "reading, which never re-evaluates between discrete events"
         )
 
@@ -1092,13 +1092,13 @@ class _Compiler:
         states: tuple[str, str],
         guards: tuple[dict[str, Any], dict[str, Any]],
     ) -> str:
-        """The **watched** two-state automaton one grammar node compiles to,
+        """The **boundary** two-state automaton one grammar node compiles to,
         and the name of its far state.
 
-        Two transitions, both watched, so the engine root-finds the date the
+        Two transitions, both boundary, so the engine root-finds the date the
         condition turns and stops the integration there instead of picking
         the change up at the following discrete event. The automaton starts
-        in its resting state whatever the reading is: a watched transition
+        in its resting state whatever the reading is: a boundary transition
         whose guard already holds fires at the current instant, so the
         automaton settles at t = 0 rather than sitting on the wrong side of
         its own threshold until the reading came back and crossed it again.
@@ -1115,14 +1115,14 @@ class _Compiler:
                         "source": rest,
                         "targets": [far],
                         "guard": guards[0],
-                        "distrib": "watched",
+                        "distrib": "boundary",
                     },
                     {
                         "name": f"{base}_down",
                         "source": far,
                         "targets": [rest],
                         "guard": guards[1],
-                        "distrib": "watched",
+                        "distrib": "boundary",
                     },
                 ],
             }
@@ -1287,7 +1287,7 @@ def expand_objctrl(spec: dict[str, Any], model: dict[str, Any]) -> tuple:
     for channel in inputs.values():
         if channel.is_service:
             # A condition, not a quantity: a boolean attribute and the
-            # sensitive function a flow component's discrete input uses,
+            # propagation a flow component's discrete input uses,
             # `any` over the port. Unwired, `any` reads false, which is the
             # declared reading of a service input nothing feeds.
             attributes.append(_bool_attribute(channel.attribute, False))
@@ -1406,7 +1406,7 @@ def expand_objctrl(spec: dict[str, Any], model: dict[str, Any]) -> tuple:
         "ports": ports,
         "interfaces": [],
         "automata": compiler.automata,
-        "sensitive_functions": functions,
+        "propagations": functions,
         "equations": equations,
     }
 

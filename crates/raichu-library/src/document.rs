@@ -135,7 +135,7 @@ pub struct Fragment {
     #[serde(default)]
     pub uses: Vec<Use>,
     /// Body in core constructs, templated (attributes, ports, interfaces,
-    /// automata, sensitive_functions, equations, allocations).
+    /// automata, propagations, equations, allocations).
     #[serde(default = "empty_object")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::instantiate::BodyParts"))]
     pub body: Value,

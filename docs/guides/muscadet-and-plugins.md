@@ -52,8 +52,8 @@ print("load powered:", [round(v, 3) for v in
 ```
 
 The two redundant lines keep the load powered ~97 % of the time. The
-builder created, under the hood, exactly the kind of ports, sensitive
-functions and automata the tutorial wrote by hand: you can inspect them
+builder created, under the hood, exactly the kind of ports,
+propagations and automata the tutorial wrote by hand: you can inspect them
 with `system.build_dict()`. An `add_flow_in(name=…, logic="and")` (or an
 integer *k* for k-out-of-n) changes the aggregation; `add_flow_out_tempo`
 and `add_flow_out_on_trigger` add delayed and inhibition-driven flows. A
@@ -146,10 +146,10 @@ so costs no warning at every compilation.
 
     Crossing a definition needs it to be the **only** one: exactly one
     explicit equation writing the attribute, and nothing else. An
-    attribute an ODE integrates, a sensitive function assigns or two
+    attribute an ODE integrates, a propagation assigns or two
     writers share moves, and the fold stops at it rather than guess. So
     a rule condition on a **boolean** input (`add_flow_in`) is *not*
-    reported: `{flow}_fed_in` is assigned by a sensitive function.
+    reported: `{flow}_fed_in` is assigned by a propagation.
 
     There is nothing there to report, either. A boolean input nothing
     feeds reads its declared `var_in_default`, `False` unless you say
@@ -1052,7 +1052,7 @@ not through a muscadet declaration.
                                     "operator": "<", "threshold": 6.0}}}]}
 ```
 
-Every threshold compiles to a **watched** two-state automaton, so a
+Every threshold compiles to a **boundary** two-state automaton, so a
 crossing is located by root-finding rather than noticed at the next
 discrete event. `band` is the operator that carries memory: a comparison
 switches back the instant its condition stops holding, so a montage gated
@@ -1090,7 +1090,7 @@ see [Running a COD3S-platform study](platform-import.md).
   and a muscadet declaration converts into them
   (`pyraichu.muscadet.convert`).
 - **Native data** (the tutorial): full generality: any automaton, ODE
-  or watched transition.
+  or boundary transition.
 - **muscadet builder**: flow/reliability networks in a fraction of the
   code.
 - **Plugins**: the same high-level objects when your model comes from a

@@ -74,7 +74,7 @@ pub enum PortDir {
 /// declare a channel with no matching connection.
 ///
 /// Materialised attributes are ordinary float attributes: equations and
-/// sensitive functions write them, the causal journal records them, the
+/// propagations write them, the causal journal records them, the
 /// snapshot carries them, and indicators observe them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -157,7 +157,7 @@ pub const EDGE: &str = "$edge";
 /// lowers it to one ordinary edge effect per connection, in connection
 /// declaration order, so the engine never sees it. An in port nothing is
 /// connected to writes nothing. Only edge effects may write through a
-/// port: a sensitive function is a level re-evaluated to a fixpoint, and
+/// port: a propagation is a level re-evaluated to a fixpoint, and
 /// one writing a neighbour is refused. Non-baseline construct: a document
 /// carrying it must declare [`Feature::PortEffects`].
 pub const PORT: &str = "$port";
@@ -295,7 +295,7 @@ pub struct EvaluationStepReads {
 /// for an instantaneous branching, which target it reaches.
 ///
 /// Four families: a deterministic delay (`Delay`), an instantaneous
-/// branching (`Inst`), a watched boundary crossing (`Watched`), and seven
+/// branching (`Inst`), a boundary crossing (`Boundary`), and seven
 /// laws of a random delay (`Exp`, `Weibull`, `Lognormal`, `Gamma`,
 /// `Uniform`, `Normal`, `Empirical`). Every law except `Inst` has exactly
 /// one target state.
@@ -317,14 +317,15 @@ pub enum Distrib {
         /// First N−1 branch probabilities, each in [0, 1], Σ ≤ 1.
         probs: Vec<f64>,
     },
-    /// Watched transition (paper rule `schedule_boundary`): fires exactly when
+    /// Boundary transition (paper rule `schedule_boundary`): fires exactly when
     /// the continuous trajectory makes its guard become true. The guard
     /// is the boundary predicate: it must contain at least one ordering
     /// comparison (`<`, `≤`, `>`, `≥`) between float expressions,
     /// possibly composed with and/or/not and discrete gates, so the
     /// engine can locate the crossing by root-finding on the signed
     /// margin. Exactly one target state.
-    Watched,
+    #[serde(alias = "watched")]
+    Boundary,
     /// Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a
     /// spontaneous PDMP jump with survival
     /// `P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,
@@ -342,7 +343,7 @@ pub enum Distrib {
     ///   discrete change (`reschedule_modifiable`); when it depends on
     ///   ODE-integrated attributes (or time), the hazard is integrated
     ///   alongside the continuous state and the firing time is located
-    ///   like a watched boundary crossing. λ must evaluate ≥ 0.
+    ///   like a boundary crossing. λ must evaluate ≥ 0.
     Exp {
         /// Fixed occurrence rate λ ≥ 0 (events per time unit). At 0 the
         /// transition is armed and never fires.
@@ -541,9 +542,9 @@ pub enum AllocationPolicy {
 /// writes one allocated quantity per outgoing connection under a declared
 /// policy.
 ///
-/// # Why it is not a sensitive function
+/// # Why it is not a propagation
 ///
-/// A [`SensitiveFunction`] effect writes **one** target. A split cannot be
+/// A [`Propagation`] effect writes **one** target. A split cannot be
 /// written that way: the share handed to one consumer depends on what
 /// every other consumer asked for, so the operator writes the whole vector
 /// at once, as a single indivisible step.
@@ -553,7 +554,7 @@ pub enum AllocationPolicy {
 /// The engine runs only the explicit pass inside its solver callbacks; a
 /// trigger-driven entity never runs during integration. Quantities written
 /// from a trigger would stay frozen across an integration segment, every
-/// watched margin reading them would freeze with them, and a boundary
+/// boundary margin reading them would freeze with them, and a boundary
 /// crossing would degrade silently from *located* to *polled*. The
 /// operator is therefore an ordinary step of the explicit sweep, named in
 /// [`Model::evaluation_order`] like an explicit equation, and evaluated at
@@ -653,7 +654,7 @@ pub enum CycleCancellation {
     Auto,
     /// The group is never cancelled: its failures stay in the sequences,
     /// repaired or not. For an effect the analysis cannot see, such as a
-    /// counter a sensitive function keeps.
+    /// counter a propagation keeps.
     Never,
     /// The group is always cancelled, whatever the analysis finds: the
     /// analyst asserts that the effect of a repaired failure is gone.
@@ -674,7 +675,7 @@ impl CycleCancellation {
 /// dest-distribution⟩. The occurrence law ([`Distrib`]) selects the
 /// scheduling rule: a deterministic delay or an instantaneous branching
 /// (`schedule_deterministic`), a random delay (`schedule_stochastic`), or a
-/// watched boundary crossing (`schedule_boundary`).
+/// boundary crossing (`schedule_boundary`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Transition {
@@ -745,7 +746,7 @@ pub struct Transition {
     pub kind: Option<TransitionKind>,
     /// **Edge effects**: assignments evaluated ONCE, when the transition
     /// fires, after its state change, in declaration order. Unlike a
-    /// sensitive function's effects (a level, re-evaluated whenever what it
+    /// propagation's effects (a level, re-evaluated whenever what it
     /// reads changes), nothing re-applies them and nothing restores the
     /// value: the attribute keeps what was written until something else
     /// writes it. That is a one-shot effect, and on an attribute nothing
@@ -759,7 +760,7 @@ pub struct Transition {
     ///
     /// Non-baseline construct: a document carrying it must declare
     /// [`Feature::TransitionEffects`]. An effect on an attribute an explicit
-    /// equation or a sensitive function writes is refused
+    /// equation or a propagation writes is refused
     /// ([`ModelError::TransitionEffectOverwritten`]): the next evaluation
     /// would erase it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -786,14 +787,13 @@ pub struct Automaton {
     pub transitions: Vec<Transition>,
 }
 
-/// A sensitive function: declarative effects re-evaluated whenever one of
+/// A propagation: declarative effects re-evaluated whenever one of
 /// the attributes read by its expressions changes (the sensitivity set is
-/// *derived* from the expressions: no manual `addSensitiveMethod`
-/// bookkeeping). Effects run to a fixpoint during the discrete-evolution
-/// phase (paper rule `propagate_effects`).
+/// *derived* from the expressions: no trigger is registered by hand).
+/// Effects run to a fixpoint during the discrete-evolution phase (paper rule `propagate_effects`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct SensitiveFunction {
+pub struct Propagation {
     /// Function name, unique inside its component.
     pub name: String,
     /// Ordered assignments applied when the function fires.
@@ -860,8 +860,8 @@ pub struct Indicator {
     pub target: IndicatorTarget,
 }
 
-/// A component: typed state, ports/interfaces, automata and sensitive
-/// functions (the 7-tuple of Desgeorges et al., with the paper's
+/// A component: typed state, ports/interfaces, automata and
+/// propagations (the 7-tuple of Desgeorges et al., with the paper's
 /// connection receptacles expressed through the native port notion).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Component {
@@ -879,9 +879,9 @@ pub struct Component {
     /// Component-level automata.
     #[serde(default)]
     pub automata: Vec<Automaton>,
-    /// Declarative sensitive functions.
-    #[serde(default)]
-    pub sensitive_functions: Vec<SensitiveFunction>,
+    /// Declarative propagations.
+    #[serde(default, alias = "sensitive_functions")]
+    pub propagations: Vec<Propagation>,
     /// Continuous evolution: explicit equations and ODEs (declaration
     /// order = solving order).
     #[serde(default)]
@@ -896,7 +896,7 @@ pub struct Component {
 
 /// A **sequence-analysis target** (feared event / événement redouté): a
 /// named automaton state whose activation ends and labels a trajectory's
-/// recorded sequence (mirrors cod3s `endCause`). Empty `targets` = no early
+/// recorded sequence (the end cause a cod3s study reads). Empty `targets` = no early
 /// stop and no `end_cause` (the trajectory runs to `t_max`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

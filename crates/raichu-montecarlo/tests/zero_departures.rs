@@ -1,12 +1,12 @@
 //! The **zero-departure** pair: `zero_departures` and `nonzero_reached`.
 //!
-//! The reference engine's `nb_visits` and `realized` computations, measured
+//! The reference engine's visit count and has-been-non-zero flag, measured
 //! on PyCATSHOO 1.3.8.0 (2026-10-02) on a float attribute stepping through
 //! five levels, one per time unit, sampled at 0.5, 1.5, 2.5, 3.5, 4.5 and 6:
 //!
-//! - `nb_visits` counts the moves from exactly 0 to any non-zero value,
+//! - the visit count counts the moves from exactly 0 to any non-zero value,
 //!   sign ignored, a non-zero initial value not counted;
-//! - `realized` is 1 once the value has been non-zero, the initial value
+//! - the flag is 1 once the value has been non-zero, the initial value
 //!   included.
 //!
 //! Every expected figure below is the reference engine's own output on
@@ -24,7 +24,7 @@ const INSTANTS: [f64; 6] = [0.5, 1.5, 2.5, 3.5, 4.5, 6.0];
 
 /// A float attribute `v` holding `levels[i]` on `[i, i + 1)`, the last level
 /// held to the horizon: an automaton steps through one state per level on
-/// unit delays, and one sensitive function writes the level of the active
+/// unit delays, and one propagation writes the level of the active
 /// state.
 fn stepping(levels: &[f64]) -> Model {
     let states: Vec<String> = (0..levels.len()).map(|i| format!("\"s{i}\"")).collect();
@@ -53,7 +53,7 @@ fn stepping(levels: &[f64]) -> Model {
     "attributes": [{{"name": "v", "kind": "float", "init": {{"kind": "float", "value": {init:?}}}}}],
     "ports": [],
     "automata": [{{"name": "aut", "states": [{states}], "init": "s0", "transitions": [{transitions}]}}],
-    "sensitive_functions": [{{"name": "upd", "effects": [
+    "propagations": [{{"name": "upd", "effects": [
       {{"target": {{"component": "c", "attribute": "v"}}, "value": {level}}}]}}]}}],
   "indicators": [{{"name": "v", "target": "attribute", "attr": {{"component": "c", "attribute": "v"}}}}]
 }}"#,
@@ -122,8 +122,8 @@ fn check(case: &Case) {
 
 #[test]
 fn a_negative_level_departs_from_zero_and_a_nonzero_to_nonzero_move_does_not() {
-    // Measured: res_time [0, 1, 0.5, -0.75, -0.5, -0.5],
-    // nb_visits [0, 1, 1, 1, 1, 1], realized [0, 1, 1, 1, 1, 1].
+    // Measured: time integral [0, 1, 0.5, -0.75, -0.5, -0.5],
+    // visit count [0, 1, 1, 1, 1, 1], flag [0, 1, 1, 1, 1, 1].
     let case = Case {
         levels: [0.0, 2.0, -3.0, 0.5, 0.0],
         zero_departures: [0.0, 1.0, 1.0, 1.0, 1.0, 1.0],
@@ -133,14 +133,14 @@ fn a_negative_level_departs_from_zero_and_a_nonzero_to_nonzero_move_does_not() {
         reached: [0.0, 1.0, 1.0, 1.0, 1.0, 1.0],
     };
     check(&case);
-    // The signed time-integral is the reference engine's `res_time`.
+    // The signed time-integral is the reference engine's residence time.
     let est = estimate(&stepping(&case.levels), &INSTANTS);
     assert_eq!(est.sojourn_mean, [0.0, 1.0, 0.5, -0.75, -0.5, -0.5]);
 }
 
 #[test]
 fn a_departure_to_a_negative_value_counts() {
-    // Measured: nb_visits [0, 1, 1, 2, 2, 2], realized [0, 1, 1, 1, 1, 1].
+    // Measured: visit count [0, 1, 1, 2, 2, 2], flag [0, 1, 1, 1, 1, 1].
     check(&Case {
         levels: [0.0, -3.0, 0.0, 2.0, 0.0],
         zero_departures: [0.0, 1.0, 1.0, 2.0, 2.0, 2.0],
@@ -153,7 +153,7 @@ fn a_departure_to_a_negative_value_counts() {
 
 #[test]
 fn a_return_to_zero_then_a_new_departure_counts_twice() {
-    // Measured: nb_visits [0, 1, 1, 1, 2, 2].
+    // Measured: visit count [0, 1, 1, 1, 2, 2].
     check(&Case {
         levels: [0.0, 2.0, 5.0, 0.0, 1.0],
         zero_departures: [0.0, 1.0, 1.0, 1.0, 2.0, 2.0],
@@ -165,7 +165,7 @@ fn a_return_to_zero_then_a_new_departure_counts_twice() {
 
 #[test]
 fn a_nonzero_initial_value_is_reached_but_not_a_departure() {
-    // Measured: nb_visits [0, 0, 1, 1, 1, 1], realized [1, 1, 1, 1, 1, 1].
+    // Measured: visit count [0, 0, 1, 1, 1, 1], flag [1, 1, 1, 1, 1, 1].
     check(&Case {
         levels: [1.0, 0.0, -1.0, 1.0, 0.0],
         zero_departures: [0.0, 0.0, 1.0, 1.0, 1.0, 1.0],

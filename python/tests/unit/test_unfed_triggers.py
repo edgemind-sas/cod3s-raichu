@@ -145,8 +145,8 @@ def test_an_unconnected_boolean_flow_input_is_out_of_reach():
 
     Silent, and it is worth being exact about why, because the reason
     changed and only half of it did. It is **still** out of reach by the
-    route: `power_fed_in` is written by a *sensitive function*, and an
-    attribute a sensitive function assigns is not one the fold crosses.
+    route: `power_fed_in` is written by a *propagation*, and an
+    attribute a propagation assigns is not one the fold crosses.
     Two writers of one attribute are ordinary there, so the fold abstains.
     That half is unmoved, and it is a frontier of reach rather than of
     intent.
@@ -407,7 +407,7 @@ def reachable_port_aggregates(system: mu.System) -> list[str]:
                 writers[key] += 1
                 if equation.get("kind", "explicit") == "explicit":
                     solved[key] = equation["expr"]
-        for function in component.get("sensitive_functions", []):
+        for function in component.get("propagations", []):
             for effect in function["effects"]:
                 key = (effect["target"]["component"], effect["target"]["attribute"])
                 if key in writers:
@@ -452,8 +452,8 @@ def test_what_a_guard_reaches_through_its_definitions():
     Everything else stays out of reach, and one of them deserves to be
     named, though no longer for the reason it once was: `add_rule_set` on
     a **boolean** condition. Its guard reads `{flow}_fed_in`, which a
-    *sensitive function* assigns, and the fold does not cross a sensitive
-    function -- two writers of one attribute are ordinary there. That is
+    *propagation* assigns, and the fold does not cross a
+    propagation -- two writers of one attribute are ordinary there. That is
     where the frontier sits, and it will move the day the fold crosses
     that route.
 

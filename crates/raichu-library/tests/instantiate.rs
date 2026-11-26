@@ -256,7 +256,7 @@ fn gate_library(extra_fragment: Value) -> Library {
             {"name": "Twice", "uses": [{"fragment": "ready"}, {"fragment": "ready_too"}]},
             {"name": "Loop", "uses": [{"fragment": "a"}]},
             {"name": "Nosy", "body": {"attributes": [{"name": "x", "kind": "bool", "init": {"kind": "bool", "value": true}}],
-                "sensitive_functions": [{"name": "peek", "effects": [{
+                "propagations": [{"name": "peek", "effects": [{
                     "target": {"component": "$self", "attribute": "x"},
                     "value": {"op": "attr", "attr": {"component": "Other", "attribute": "y"}}}]}]}}
         ]
@@ -314,7 +314,7 @@ fn lamp_library() -> Library {
             {"name": "Lamp", "body": {
                 "attributes": [{"name": "lit", "kind": "bool", "init": {"kind": "bool", "value": false}}],
                 "ports": [{"name": "power_in", "dir": "in"}],
-                "sensitive_functions": [{"name": "light", "effects": [{
+                "propagations": [{"name": "light", "effects": [{
                     "target": {"component": "$self", "attribute": "lit"},
                     "value": {"op": "port_agg", "port": {"component": "$self", "port": "power_in"}, "agg": "any"}}]}]}}
         ]
@@ -338,7 +338,7 @@ fn three_instances_expand_connect_validate_and_compile() {
     let model = &expansion.model;
     assert_eq!(model.components.len(), 3);
     for lamp in &model.components[1..] {
-        let effect = &lamp.sensitive_functions[0].effects[0];
+        let effect = &lamp.propagations[0].effects[0];
         assert_eq!(effect.target.component, lamp.name);
     }
     model.validate().unwrap();

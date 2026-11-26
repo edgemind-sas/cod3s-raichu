@@ -245,12 +245,12 @@ def test_a_declared_default_says_nothing_once_a_wire_is_there(logic):
 
 
 def aggregation_of(system: mu.System, component: str, flow: str) -> dict:
-    """The expression the sensitive function of `{flow}_fed_in` assigns."""
+    """The expression the propagation of `{flow}_fed_in` assigns."""
     body = system.build_dict()
     entry = next(c for c in body["components"] if c["name"] == component)
     function = next(
         f
-        for f in entry["sensitive_functions"]
+        for f in entry["propagations"]
         if f["name"] == f"update_{flow}_fed_in"
     )
     return function["effects"][0]["value"]

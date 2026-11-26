@@ -331,7 +331,7 @@ fn cyber_library() -> Library {
                     {"name": "f_service_fed_in", "kind": "bool", "init": boolean(false)},
                     {"name": "F1_fed_available_out", "kind": "bool", "init": boolean(true)}],
                   "ports": [{"name": "f_service_in", "dir": "in"}],
-                  "sensitive_functions": [{"name": "fed", "effects": [{
+                  "propagations": [{"name": "fed", "effects": [{
                     "target": {"component": "$self", "attribute": "f_service_fed_in"},
                     "value": {"op": "port_agg", "port": {"component": "$self", "port": "f_service_in"}, "agg": "any"}}]}]},
          "targetable": [{"attribute": "F1_fed_available_out", "rule": "any_cuts"}],

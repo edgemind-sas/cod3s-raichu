@@ -282,7 +282,7 @@ def a_document(*components):
     }
 
 
-def watched(obj):
+def boundary(obj):
     """Every `(object, attribute)` the conditions of one plugin object name."""
     return sorted(
         (leaf["obj"], leaf["attr"])
@@ -305,7 +305,7 @@ def test_an_event_condition_reads_the_level_under_muscadets_spelling(
     muscadet writes it, and resolved to the attribute this layer carries."""
     event = a_watching_event(spelling)
     obj = declare.mode_object(event, {"TANK": a_tank(), "WATCH": event})
-    assert watched(obj) == [("TANK", carried)]
+    assert boundary(obj) == [("TANK", carried)]
 
 
 def test_both_directions_of_a_standalone_mode_read_it_too():
@@ -314,7 +314,7 @@ def test_both_directions_of_a_standalone_mode_read_it_too():
     direction is more of a reading than the other."""
     mode = a_watching_mode("tank_qty_q", "tank_qty")
     obj = declare.mode_object(mode, {"TANK": a_tank(), mode["name"]: mode})
-    assert watched(obj) == [("TANK", "tank_content"), ("TANK", "tank_content_q")]
+    assert boundary(obj) == [("TANK", "tank_content"), ("TANK", "tank_content_q")]
 
 
 @pytest.mark.parametrize(
@@ -334,7 +334,7 @@ def test_the_translation_is_the_one_the_indicators_go_through():
     the layer names the attribute otherwise both consumers follow at once."""
     event = a_watching_event("tank_qty_q")
     obj = declare.mode_object(event, {"TANK": a_tank(), "WATCH": event})
-    assert watched(obj) == [
+    assert boundary(obj) == [
         ("TANK", declare.capacity_content_variables(a_tank())["tank_qty_q"])
     ]
 
@@ -415,7 +415,7 @@ def test_a_condition_on_a_demand_reads_the_side_muscadet_means(spelling, carried
     this layer carries as `q_demand_in`, and the other way round."""
     event = a_watching_event(spelling)
     obj = declare.mode_object(event, {"TANK": a_pass_through_tank(), "WATCH": event})
-    assert watched(obj) == [("TANK", carried)]
+    assert boundary(obj) == [("TANK", carried)]
 
 
 def test_a_demand_condition_goes_through_the_indicators_translation():
@@ -441,7 +441,7 @@ def test_a_logic_gate_condition_on_a_demand_is_translated_too():
         "out_elements": ["g"],
     }
     obj = declare.logic_gate_object(gate, components={"TANK": a_pass_through_tank()})
-    assert watched(obj) == [("TANK", "q_demand_in")]
+    assert boundary(obj) == [("TANK", "q_demand_in")]
 
 
 def test_the_document_carrying_a_demand_condition_builds():

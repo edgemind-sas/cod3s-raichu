@@ -106,7 +106,7 @@ def test_an_output_that_is_not_negated_is_unchanged():
     component = next(c for c in body["components"] if c["name"] == "P")
     function = next(
         f
-        for f in component["sensitive_functions"]
+        for f in component["propagations"]
         if f["name"] == "update_signal_fed_out"
     )
     assert function["effects"][0]["value"]["bool_op"] == "and"

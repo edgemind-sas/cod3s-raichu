@@ -13,9 +13,9 @@
 //! - **How much** each edge carries is a continuous function of the
 //!   state. It is recomputed by the ordinary explicit pass at every
 //!   solver stage, which costs what the engine already pays and is what
-//!   lets a watched guard reading a flow be *located* rather than polled.
+//!   lets a boundary guard reading a flow be *located* rather than polled.
 //!
-//! The bridge between the two is a **watched guard per active-set
+//! The bridge between the two is a **boundary guard per active-set
 //! margin**: while the segment runs, the engine monitors the distance to
 //! every saturation boundary of the frozen active set. Crossing one ends
 //! the segment at the crossing instant and resolves the network again.
@@ -730,7 +730,7 @@ fn a_residual_below_the_flow_tolerance_does_not_re_cross() {
 
 /// The compiled margin index inverts [`CFlowMargins::deps`] entry for
 /// entry, so it is a complete answer to "which margins read this
-/// attribute" and not merely the watched half of one.
+/// attribute" and not merely the boundary half of one.
 ///
 /// It has no scan site of its own to narrow: every operator of the sweep
 /// contributes its edges to every segment (there is no arming filter to

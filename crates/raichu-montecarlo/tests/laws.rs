@@ -45,7 +45,7 @@ fn single_law_model(distrib: Distrib) -> Model {
             }],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![Indicator {
@@ -306,7 +306,7 @@ fn expvar_switch_model(cold_rate: f64, hot_rate: f64) -> Model {
             ],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![Indicator {
@@ -397,7 +397,7 @@ fn expvar_continuous_rate_matches_closed_form() {
                     value: Value::Float(1.0),
                 },
             }],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         connections: vec![],
         indicators: vec![Indicator {

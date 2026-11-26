@@ -1,7 +1,7 @@
 # Boundaries
 
 The tank now has a level. Between two events the engine integrates the
-level's differential equation; a **watched** transition fires the instant
+level's differential equation; a **boundary** transition fires the instant
 the level crosses one of its thresholds. This chapter shows how that
 crossing takes its place among the dates of the
 [race](fixpoint-and-race.md). The model is the second one of the
@@ -18,16 +18,16 @@ crossing takes its place among the dates of the
  "captions": {
   "stable": "Stable state at {time}: no function is pending. {armed} stochastic transition(s) are armed.",
   "integrate": "The engine integrates the level from {from} toward the next clock date, {next_date}. No threshold is crossed on the way, so the dated transition fires at {to}.",
-  "integrate_threshold": "The engine integrates the level from {from} toward the next clock date, {next_date}. The level reaches a threshold first: integration stops at {to}, where the watched transition fires. The clock date stays in the race.",
+  "integrate_threshold": "The engine integrates the level from {from} toward the next clock date, {next_date}. The level reaches a threshold first: integration stops at {to}, where the boundary transition fires. The clock date stays in the race.",
   "race": "Next event: {winner}. The armed dates still waiting are kept.",
   "fired": "Event at {time}: {transition} fires, {from} -> {to}.",
   "iteration": "Iteration {index} of the fixpoint: {function} runs and writes {count} attribute(s)."
  },
  "going_further": {
   "integrate": {"rule": "evolC", "text": "Between events the continuous state follows its differential equation, integrated with an adaptive Dormand-Prince method up to the next scheduled date.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/continuous.rs"},
-  "integrate_threshold": {"rule": "schWT", "text": "A watched transition has no sampled date. While integrating, the engine watches its guard and, when a scan of the step's dense output finds the guard flipped, locates the crossing by bisection. The crossing date is never predicted in advance.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/continuous.rs"},
+  "integrate_threshold": {"rule": "schWT", "text": "A boundary transition has no sampled date. While integrating, the engine watches its guard and, when a scan of the step's dense output finds the guard flipped, locates the crossing by bisection. The crossing date is never predicted in advance.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/continuous.rs"},
   "race": {"rule": "schST, evolT", "text": "Dated transitions keep their sampled dates while the level evolves; only a change of state or rate reschedules them.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/schedule.rs"},
-  "fired": {"rule": "evolT", "text": "A watched transition fires like any other: one automaton changes state, then the fixpoint runs.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"},
+  "fired": {"rule": "evolT", "text": "A boundary transition fires like any other: one automaton changes state, then the fixpoint runs.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"},
   "iteration": {"rule": "evolA", "text": "The same fixpoint as in the discrete chapter: one function application per iteration, lowest index first.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/run.rs"},
   "stable": {"rule": "updateMT, updateIT", "text": "The schedule is updated after the fixpoint, exactly as in the discrete chapter.", "code": "https://github.com/edgemind-sas/cod3s-raichu/blob/main/crates/raichu-core/src/engine/schedule.rs"}
  },

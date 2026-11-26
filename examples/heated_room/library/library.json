@@ -117,7 +117,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 },
                 {
                   "name": "switch_on",
@@ -146,7 +146,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 }
               ]
             },
@@ -187,7 +187,7 @@
               ]
             }
           ],
-          "sensitive_functions": [
+          "propagations": [
             {
               "name": "update_power",
               "effects": [
@@ -352,7 +352,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 },
                 {
                   "name": "thaw",
@@ -380,7 +380,7 @@
                       }
                     }
                   },
-                  "distrib": "watched"
+                  "distrib": "boundary"
                 }
               ]
             }

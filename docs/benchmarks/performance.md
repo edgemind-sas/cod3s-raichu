@@ -31,7 +31,7 @@ campaign, on RAICHU 0.63.4 (2026-09-28, same machine), stays in
 |---|---|
 | `pure_exp` | a two-state exponential component: discrete-stochastic only |
 | `heaters_s1` | a thermostatic heater: conditional switching and failures |
-| `heated_room_s3` | a room-temperature ODE, watched thermostats and failures: hybrid |
+| `heated_room_s3` | a room-temperature ODE, boundary thermostats and failures: hybrid |
 
 Every point also carries a consistency check. The RAICHU estimates agree
 statistically with PyCATSHOO's: the largest z-score over the 11 schedule

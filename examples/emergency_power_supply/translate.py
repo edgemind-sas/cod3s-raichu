@@ -28,8 +28,8 @@ README points to).
   here symbolically, step by step, in static single assignment: a rule
   reading an attribute a later step writes reads its reset value, one
   reading an attribute an earlier (or the same) step writes reads that
-  step's value. Each becomes a RAICHU attribute written by a sensitive
-  function, whose fixpoint is the step's fixpoint because the dependency
+  step's value. Each becomes a RAICHU attribute written by a
+  propagation, whose fixpoint is the step's fixpoint because the dependency
   graph is acyclic (checked).
 - **Memory attributes**, declared with an initial value but written by
   interaction rules (`already_S`, read by the priority-AND gates; the
@@ -1256,7 +1256,7 @@ class Emitter:
                     "name": name,
                     "attributes": [],
                     "automata": [],
-                    "sensitive_functions": [],
+                    "propagations": [],
                 }
             return components[name]
 
@@ -1286,7 +1286,7 @@ class Emitter:
                     "init": _value(False if is_bool else 0.0),
                 }
             )
-            home["sensitive_functions"].append(
+            home["propagations"].append(
                 {
                     "name": f"set_{attr}",
                     "effects": [
@@ -1512,7 +1512,7 @@ class Emitter:
 
 
 def _check_acyclic(tr, nodes):
-    """The sensitive functions must form a DAG: their fixpoint is then the
+    """The propagations must form a DAG: their fixpoint is then the
     stepwise value, reached whatever the propagation order."""
     state = {}
 

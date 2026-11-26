@@ -20,7 +20,7 @@ use crate::strict::typed;
 use raichu_expr::{Assignment, AttrRef, BoolOp, Expr, Value};
 use raichu_model::{
     AttrKind, Automaton, Component, CycleCancellation, Distrib, Indicator, IndicatorTarget,
-    InterruptionPolicy, SensitiveFunction, Target, Transition, TransitionKind,
+    InterruptionPolicy, Propagation, Target, Transition, TransitionKind,
 };
 use serde_json::Value as Json;
 
@@ -521,7 +521,7 @@ fn emit_mode(
             return Err(err(
                 pointer.clone(),
                 format!(
-                    "{context}: a certain repair is taken when its repair condition is found true at a discrete event, and this condition reads `{read}`, which evolves continuously, so the repair would wait for an unrelated event; use `{{\"distrib\": \"watched\"}}` to repair on the boundary"
+                    "{context}: a certain repair is taken when its repair condition is found true at a discrete event, and this condition reads `{read}`, which evolves continuously, so the repair would wait for an unrelated event; use `{{\"distrib\": \"boundary\"}}` to repair on the boundary"
                 ),
             ));
         }
@@ -602,11 +602,11 @@ pub(crate) fn writers(component: &Component) -> Vec<(String, String)> {
             format!("equation of `{}`", equation.target),
         ));
     }
-    for function in &component.sensitive_functions {
+    for function in &component.propagations {
         for effect in &function.effects {
             out.push((
                 effect.target.attribute.clone(),
-                format!("sensitive function `{}`", function.name),
+                format!("propagation `{}`", function.name),
             ));
         }
     }
@@ -760,30 +760,27 @@ fn combine_effects(
             let function_name = format!("modes__{attribute}");
             if instance
                 .component
-                .sensitive_functions
+                .propagations
                 .iter()
                 .any(|f| f.name == function_name)
             {
                 return Err(ExpandError::new(
                     origin.document,
                     origin.pointer.clone(),
-                    format!("instance `{name}`: the type already has a sensitive function `{function_name}`, the name the mode combination of `{attribute}` takes"),
+                    format!("instance `{name}`: the type already has a propagation `{function_name}`, the name the mode combination of `{attribute}` takes"),
                 ));
             }
             let value = combined(rule, &holders, init);
-            instance
-                .component
-                .sensitive_functions
-                .push(SensitiveFunction {
-                    name: function_name.clone(),
-                    effects: vec![Assignment {
-                        target: AttrRef {
-                            component: name.clone(),
-                            attribute: attribute.clone(),
-                        },
-                        value,
-                    }],
-                });
+            instance.component.propagations.push(Propagation {
+                name: function_name.clone(),
+                effects: vec![Assignment {
+                    target: AttrRef {
+                        component: name.clone(),
+                        attribute: attribute.clone(),
+                    },
+                    value,
+                }],
+            });
             let mut combination_origin = origin.clone();
             combination_origin.mode = Some(
                 holders
@@ -843,10 +840,10 @@ fn emit_feared_events(
                 Tempo::Law(value) => {
                     let here = pointer_key(&pointer, key);
                     let distrib: Distrib = typed(value, DocumentKind::Study, &here, &context)?;
-                    if matches!(distrib, Distrib::Inst { .. } | Distrib::Watched) {
+                    if matches!(distrib, Distrib::Inst { .. } | Distrib::Boundary) {
                         return Err(err(
                             here,
-                            format!("{context}: a confirmation time is a delay or a timed law, not `inst` or `watched`"),
+                            format!("{context}: a confirmation time is a delay or a timed law, not `inst` or `boundary`"),
                         ));
                     }
                     Ok(distrib)
@@ -887,7 +884,7 @@ fn emit_feared_events(
                     edge(NOT_OCC, OCC, not_condition, not_occ_law),
                 ],
             }],
-            sensitive_functions: Vec::new(),
+            propagations: Vec::new(),
             equations: Vec::new(),
             allocations: Vec::new(),
         };

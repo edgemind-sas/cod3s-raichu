@@ -497,7 +497,7 @@ mod tests {
 
     fn document(distribution: &str) -> String {
         let model = format!(
-            r#"{{"name":"Delay","components":[{{"name":"C","attributes":[{{"name":"out","kind":"bool","init":{{"kind":"bool","value":false}}}}],"automata":[{{"name":"A","states":["off","on"],"init":"off","transitions":[{{"name":"go","source":"off","targets":["on"],{distribution}}}]}}],"sensitive_functions":[{{"name":"reflect","effects":[{{"target":{{"component":"C","attribute":"out"}},"value":{{"op":"state_active","state":{{"component":"C","automaton":"A","state":"on"}}}}}}]}}]}}]}}"#
+            r#"{{"name":"Delay","components":[{{"name":"C","attributes":[{{"name":"out","kind":"bool","init":{{"kind":"bool","value":false}}}}],"automata":[{{"name":"A","states":["off","on"],"init":"off","transitions":[{{"name":"go","source":"off","targets":["on"],{distribution}}}]}}],"propagations":[{{"name":"reflect","effects":[{{"target":{{"component":"C","attribute":"out"}},"value":{{"op":"state_active","state":{{"component":"C","automaton":"A","state":"on"}}}}}}]}}]}}]}}"#
         );
         prepare_document(
             &model,

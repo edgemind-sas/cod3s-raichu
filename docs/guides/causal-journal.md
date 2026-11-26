@@ -23,14 +23,14 @@ What one event sets off, as the journal records it:
 
 ```mermaid
 flowchart LR
-    E["transition fired"] --> F["sensitive functions"]
+    E["transition fired"] --> F["propagations"]
     F --> V["attribute writes"]
     V -->|trigger| F
     V --> R["transitions scheduled,<br/>rescheduled or dropped"]
 ```
 
 The writes of one event are numbered by **fixpoint iteration**. After a
-transition fires, the engine applies the pending sensitive functions one at
+transition fires, the engine applies the pending propagations one at
 a time, always the one with the lowest index first, until none is left
 (the `evolA` rule). Each `function_triggered`, `program_solved` and
 `attribute_changed` record carries the `iteration` that applied it,
@@ -90,7 +90,7 @@ at t = 4** when its guard turned false. No guesswork.
 ## "What followed this event?"
 
 `cascade_after` returns the full consequence chain of an event: the
-sensitive functions it ran, the attributes it changed, and the
+propagations it ran, the attributes it changed, and the
 transitions it (re)scheduled or dropped:
 
 ```python
@@ -102,8 +102,8 @@ worker's `finish` countdown: linking cause to effect directly.
 
 ## "Who changed this attribute?"
 
-`who_changed` lists every write to an attribute, each with the sensitive
-function that wrote it and the event that triggered it:
+`who_changed` lists every write to an attribute, each with the
+propagation that wrote it and the event that triggered it:
 
 ```python
 lamp = pyraichu.load_model({
@@ -115,7 +115,7 @@ lamp = pyraichu.load_model({
         "automata": [{"name": "sw", "states": ["off", "on"], "init": "off",
             "transitions": [{"name": "flip", "source": "off", "targets": ["on"],
                              "distrib": "delay", "time": 3.0}]}],
-        "sensitive_functions": [{"name": "update_light", "effects": [{
+        "propagations": [{"name": "update_light", "effects": [{
             "target": {"component": "Lamp", "attribute": "light"},
             "value": {"op": "state_active",
                       "state": {"component": "Lamp", "automaton": "sw",

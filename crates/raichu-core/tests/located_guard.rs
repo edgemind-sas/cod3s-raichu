@@ -198,7 +198,7 @@ fn a_guard_moving_only_at_discrete_events_is_not_located() {
         &["ko"],
     );
     let compiled = CompiledModel::compile(&model).unwrap();
-    assert!(compiled.watched.is_empty(), "{:?}", compiled.watched);
+    assert!(compiled.boundary.is_empty(), "{:?}", compiled.boundary);
     assert_events(&run_events(&model, 10.0, 0), &[(2.0, "p.health.fail")]);
 }
 

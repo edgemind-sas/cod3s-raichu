@@ -635,7 +635,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nwatched margins, guards); sensitive functions are *not*\nre-triggered by the passage of time alone.",
+          "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nboundary margins, guards); propagations are *not*\nre-triggered by the passage of time alone.",
           "properties": {
             "op": {
               "const": "time",
@@ -751,7 +751,7 @@
       ]
     },
     "Distrib": {
-      "description": "Occurrence distribution of a transition: when it fires once armed, and,\nfor an instantaneous branching, which target it reaches.\n\nFour families: a deterministic delay (`Delay`), an instantaneous\nbranching (`Inst`), a watched boundary crossing (`Watched`), and seven\nlaws of a random delay (`Exp`, `Weibull`, `Lognormal`, `Gamma`,\n`Uniform`, `Normal`, `Empirical`). Every law except `Inst` has exactly\none target state.",
+      "description": "Occurrence distribution of a transition: when it fires once armed, and,\nfor an instantaneous branching, which target it reaches.\n\nFour families: a deterministic delay (`Delay`), an instantaneous\nbranching (`Inst`), a boundary crossing (`Boundary`), and seven\nlaws of a random delay (`Exp`, `Weibull`, `Lognormal`, `Gamma`,\n`Uniform`, `Normal`, `Empirical`). Every law except `Inst` has exactly\none target state.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -798,10 +798,10 @@
         },
         {
           "additionalProperties": false,
-          "description": "Watched transition (paper rule `schedule_boundary`): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
+          "description": "Boundary transition (paper rule `schedule_boundary`): fires exactly when\nthe continuous trajectory makes its guard become true. The guard\nis the boundary predicate: it must contain at least one ordering\ncomparison (`<`, `≤`, `>`, `≥`) between float expressions,\npossibly composed with and/or/not and discrete gates, so the\nengine can locate the crossing by root-finding on the signed\nmargin. Exactly one target state.",
           "properties": {
             "distrib": {
-              "const": "watched",
+              "const": "boundary",
               "type": "string"
             }
           },
@@ -812,7 +812,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a\nspontaneous PDMP jump with survival\n`P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,\nand exactly one of the two rate forms:\n\n- `rate`: fixed λ ≥ 0; the firing date is sampled as\n  `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a\n  guard turning true re-arms with a fresh draw.\n- `rate_expr`: **state-dependent** λ(x) as an expression. The\n  engine realises the survival integral with a cumulative\n  hazard: a threshold `E ~ Exp(1)` is drawn at source-state\n  entry and the transition fires when `∫ λ dt` reaches `E`.\n  When λ depends only on discretely-updated state the hazard is\n  piecewise-constant and the firing date is rescheduled at each\n  discrete change (`reschedule_modifiable`); when it depends on\n  ODE-integrated attributes (or time), the hazard is integrated\n  alongside the continuous state and the firing time is located\n  like a watched boundary crossing. λ must evaluate ≥ 0.",
+          "description": "Exponential distribution (paper rules `schedule_stochastic` and `reschedule_modifiable`): a\nspontaneous PDMP jump with survival\n`P(T > t) = exp(−∫₀ᵗ λ(x(u)) du)`. Exactly one target state,\nand exactly one of the two rate forms:\n\n- `rate`: fixed λ ≥ 0; the firing date is sampled as\n  `t + Exp(λ)` at source-state entry (`schedule_stochastic`). Memoryless: a\n  guard turning true re-arms with a fresh draw.\n- `rate_expr`: **state-dependent** λ(x) as an expression. The\n  engine realises the survival integral with a cumulative\n  hazard: a threshold `E ~ Exp(1)` is drawn at source-state\n  entry and the transition fires when `∫ λ dt` reaches `E`.\n  When λ depends only on discretely-updated state the hazard is\n  piecewise-constant and the firing date is rescheduled at each\n  discrete change (`reschedule_modifiable`); when it depends on\n  ODE-integrated attributes (or time), the hazard is integrated\n  alongside the continuous state and the firing time is located\n  like a boundary crossing. λ must evaluate ≥ 0.",
           "properties": {
             "distrib": {
               "const": "exp",
@@ -1411,7 +1411,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nwatched margins, guards); sensitive functions are *not*\nre-triggered by the passage of time alone.",
+          "description": "Current simulation time, as a float in the model's time unit.\nMeaningful in continuously evaluated expressions (equations,\nboundary margins, guards); propagations are *not*\nre-triggered by the passage of time alone.",
           "properties": {
             "op": {
               "const": "time",
@@ -2115,7 +2115,7 @@
     },
     "Target": {
       "additionalProperties": false,
-      "description": "A **sequence-analysis target** (feared event / événement redouté): a\nnamed automaton state whose activation ends and labels a trajectory's\nrecorded sequence (mirrors cod3s `endCause`). Empty `targets` = no early\nstop and no `end_cause` (the trajectory runs to `t_max`).",
+      "description": "A **sequence-analysis target** (feared event / événement redouté): a\nnamed automaton state whose activation ends and labels a trajectory's\nrecorded sequence (the end cause a cod3s study reads). Empty `targets` = no early\nstop and no `end_cause` (the trajectory runs to `t_max`).",
       "properties": {
         "automaton": {
           "description": "The automaton.",

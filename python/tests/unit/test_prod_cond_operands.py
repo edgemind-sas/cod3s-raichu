@@ -331,12 +331,12 @@ def _filling_tank(operand) -> mu.System:
 def test_a_threshold_on_a_moving_quantity_is_read_at_its_own_date():
     """The measurement the whole indirection exists for.
 
-    The condition writes a variable through a sensitive function, and a
-    sensitive function is re-run by a DISCRETE change: an attribute an ODE
+    The condition writes a variable through a propagation, and a
+    propagation is re-run by a DISCRETE change: an attribute an ODE
     moves announces nothing of its own. Read straight off the quantity, this
     condition is evaluated at t = 0 and never again -- measured, the output
     stayed unfed for the whole mission with the volume at 16 against a
-    threshold of 10. It reads the location of a watched threshold automaton
+    threshold of 10. It reads the location of a boundary threshold automaton
     instead, which is what muscadet hangs a sensitive method on for the same
     reason.
     """
@@ -363,7 +363,7 @@ def test_the_reverse_threshold_falls_at_the_same_date():
 
 
 def test_a_threshold_a_moving_quantity_cannot_be_located_on_is_refused():
-    """An equality has no side a crossing is entered from, so the watched
+    """An equality has no side a crossing is entered from, so the boundary
     transition carrying it would hold only where a float landed exactly on the
     threshold. The refusal a capacity's discharge command already makes, for
     the same reason and in the same words."""

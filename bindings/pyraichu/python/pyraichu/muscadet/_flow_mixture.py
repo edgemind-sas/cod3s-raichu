@@ -162,7 +162,7 @@ class _MixturesMixin:
         The same two diagnostics a rule guard gets, for the same reasons:
         an operand naming nothing is refused, and an EQUALITY on a
         continuously-evolving quantity is refused because the transition
-        carrying it is watched and a crossing is located on an ordering
+        carrying it is boundary and a crossing is located on an ordering
         comparison.
         """
         where = f"ObjFlow `{self.name}`: {carrier.command_owner}"
@@ -178,7 +178,7 @@ class _MixturesMixin:
                         f"{where} commands its {carrier.command_noun} on the "
                         f"continuous quantity `{operand.name}` with "
                         f"`{operand.op}`; the gate transition carrying it is "
-                        "watched, and a crossing is located on an ordering "
+                        "boundary, and a crossing is located on an ordering "
                         f"comparison ({', '.join(_ORDERING_OPS)})"
                     )
 
@@ -254,7 +254,7 @@ class _MixturesMixin:
         An automaton rather than a branch inside the served quantity, and
         for the two reasons a rule set's mode is one: the decision is
         frozen between crossings, and a transition carrying a continuous
-        threshold is declared **watched**, so the solver stops AT the
+        threshold is declared **boundary**, so the solver stops AT the
         crossing instead of noticing it at the following step. muscadet
         compiles the same condition the same way, under the same
         ``{capacity}_serve`` tag (`Capacity.add_serve_cond_automata`).
@@ -275,7 +275,7 @@ class _MixturesMixin:
                 "guard": guard,
             }
             if located:
-                entry["distrib"] = "watched"
+                entry["distrib"] = "boundary"
             else:
                 entry["distrib"] = "inst"
                 entry["probs"] = []

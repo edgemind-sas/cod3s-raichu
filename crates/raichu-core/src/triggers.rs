@@ -35,8 +35,8 @@
 //! the fold crosses a definition to reach the port, on one condition
 //! that is the whole of its caution: the attribute must have **exactly
 //! one writer**, and that writer must be an explicit equation. An
-//! attribute an ODE integrates, an allocation distributes, a sensitive
-//! function assigns, or two writers share, moves, and the fold abstains
+//! attribute an ODE integrates, an allocation distributes, a
+//! propagation assigns, or two writers share, moves, and the fold abstains
 //! on it as it abstains on a clock. An attribute **nothing** writes is
 //! the opposite case and is a constant: it holds its declared initial
 //! value for the whole run.
@@ -81,7 +81,7 @@
 //! inside a guard, and `add_rule_set` reaches one through the explicit
 //! equation of the input it thresholds. What stays out of reach is the
 //! **boolean** half of the same layer, which derives `{flow}_fed_in`
-//! through a *sensitive function*: two writers of the same attribute are
+//! through a *propagation*: two writers of the same attribute are
 //! ordinary there, so the fold does not cross it. The measurement lives
 //! with the authoring layer it is about, in
 //! `python/tests/unit/test_unfed_triggers.py::test_what_a_guard_reaches_through_its_definitions`.
@@ -95,8 +95,8 @@
 //! it is therefore sealed SHUT for ever, not armed for ever: the
 //! component starves, produces nothing, and a reader of the results sees
 //! it. That is the pessimistic direction, the one this diagnostic is
-//! deliberately silent on, so widening the fold to cross a sensitive
-//! function would buy nothing here. It stays a frontier of reach, and
+//! deliberately silent on, so widening the fold to cross a
+//! propagation would buy nothing here. It stays a frontier of reach, and
 //! what lies beyond it has stopped flattering the campaign.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -336,7 +336,7 @@ enum Definition<'m> {
     /// One explicit equation writes it and nothing else: the attribute
     /// *is* that expression, re-solved at every evaluation point.
     Solved(&'m Expr),
-    /// An ODE integrates it, a sensitive function assigns it, or two
+    /// An ODE integrates it, a propagation assigns it, or two
     /// writers share it: it moves, and the fold has nothing to say.
     Moving,
 }
@@ -368,7 +368,7 @@ fn definitions(model: &Model) -> HashMap<(&str, &str), Definition<'_>> {
                 },
             );
         }
-        for function in &component.sensitive_functions {
+        for function in &component.propagations {
             for effect in &function.effects {
                 claim(
                     &mut definitions,
@@ -813,13 +813,13 @@ fn seal_starves(
 }
 
 /// Every expression the model uses to give a quantity its value: the
-/// equations, the sensitive-function effects and what an allocation has
+/// equations, the propagation effects and what an allocation has
 /// to distribute.
 ///
 /// Wider than what the fold crosses, and on purpose. Crossing an
 /// attribute asks "can this decide a guard", where two writers make the
 /// answer no; asking what a mode is worth only needs the places a mode
-/// is read, and a sensitive function is one of them: on the boolean half
+/// is read, and a propagation is one of them: on the boolean half
 /// of muscadet it is *the* one.
 fn quantities(model: &Model) -> impl Iterator<Item = &Expr> {
     model.components.iter().flat_map(|component| {
@@ -829,7 +829,7 @@ fn quantities(model: &Model) -> impl Iterator<Item = &Expr> {
             .map(|equation| &equation.expr)
             .chain(
                 component
-                    .sensitive_functions
+                    .propagations
                     .iter()
                     .flat_map(|function| function.effects.iter().map(|effect| &effect.value)),
             )

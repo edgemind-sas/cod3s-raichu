@@ -10,7 +10,7 @@
 //! stochastic transition `j` is a competitor with a conditional
 //! cumulative hazard `H_j(t)` over the window `[t0, t_end]`, where
 //! `t_end` is the first of the next deterministic event, the next located
-//! watched crossing and the horizon:
+//! boundary crossing and the horizon:
 //!
 //! - a fixed law (exponential, Weibull, lognormal, gamma, uniform,
 //!   empirical) contributes `H(a + t - t0) - H(a)`, conditional on the age
@@ -30,7 +30,7 @@
 //! **mass-median** instant (where `1 - exp(-H)` reaches the middle of the
 //! cell's mass) with [`Engine::fire_deferred_at`]. One more child carries
 //! the survival mass `exp(-H(t_end))`: it lets time run to `t_end`, where
-//! the deterministic event or the watched crossing fires next. At the
+//! the deterministic event or the boundary crossing fires next. At the
 //! horizon it is dropped: a sequence that has not reached the target by
 //! the horizon contributes nothing. Children are visited competitor by
 //! competitor (transition index order), cell by cell, then the survival
@@ -38,7 +38,7 @@
 //! explorer never re-implements a guard, an effect or a policy.
 //!
 //! An instantaneous transition, a deterministic delay that is due, or a
-//! watched transition whose guard holds fires first, exactly as in the
+//! boundary transition whose guard holds fires first, exactly as in the
 //! exact driver (branching over its destinations).
 //!
 //! A window no wider than the event-location tolerance
@@ -47,9 +47,9 @@
 //! round-off, is treated as empty: its mass, of order `rate x tol_event`,
 //! goes to the survival branch, which then carries probability 1: a
 //! deterministic end event fires at its date in the same child (the node
-//! branches as if the dates coincided exactly), a watched one is reached
+//! branches as if the dates coincided exactly), a boundary one is reached
 //! by letting time run, and at the horizon the node is a leaf. Firing at a cell's median can locate
-//! a watched crossing earlier than the probe did, when the median lies
+//! a boundary crossing earlier than the probe did, when the median lies
 //! inside the crossing's location bracket: the firing is then retried
 //! `2 tol_event` before each newly located crossing, a bounded number of
 //! times. A competitor's window hazard that is NaN or negative is a typed
@@ -362,7 +362,7 @@ struct Child {
     cells: u32,
 }
 
-/// How many times a firing refused for coming after a located watched
+/// How many times a firing refused for coming after a located boundary
 /// crossing is retried before the crossing ([`DiscretisedStrategy::fire`]).
 const MAX_CROSSING_RETRIES: u32 = 8;
 
@@ -374,7 +374,7 @@ struct DiscretisedStrategy<'m> {
     /// The engine's event-location tolerance
     /// ([`raichu_numeric::SolverParams::tol_event`]), in time units: the
     /// width below which a window is treated as empty, and the step back
-    /// of a firing retried before a watched crossing.
+    /// of a firing retried before a boundary crossing.
     tol_event: f64,
 }
 
@@ -457,7 +457,7 @@ impl DiscretisedStrategy<'_> {
     /// Fire the deferred `transition` before the event located at `limit`
     /// by a firing that came too late.
     ///
-    /// The flow integrated to a cell's median can locate a watched
+    /// The flow integrated to a cell's median can locate a boundary
     /// crossing earlier than the probe did (the probe's crossing is the
     /// upper end of a bracket `tol_event` wide, and a cell median can lie
     /// inside that bracket past the true crossing). The located `limit` is
@@ -677,7 +677,7 @@ impl Strategy for DiscretisedStrategy<'_> {
         let communication_at_end = next_fmu
             .is_some_and(|point| point == t_end && matches!(probe.reason, ProbeStop::Limit));
         let end_event = match probe.reason {
-            ProbeStop::Deterministic { index } | ProbeStop::Watched { index } => Some(index),
+            ProbeStop::Deterministic { index } | ProbeStop::Boundary { index } => Some(index),
             ProbeStop::Limit | ProbeStop::Horizon => None,
         };
         if t_end <= t0 {
@@ -699,7 +699,7 @@ impl Strategy for DiscretisedStrategy<'_> {
             // end event happens with probability 1. A deterministic end
             // event fires at its date in the same child, so the node
             // branches as it would had the two dates coincided exactly; a
-            // watched one is reached by letting time run. With no end
+            // boundary one is reached by letting time run. With no end
             // event (the horizon), the node is a leaf, as the survival
             // child is at the horizon.
             let children = match probe.reason {
@@ -715,7 +715,7 @@ impl Strategy for DiscretisedStrategy<'_> {
                         cells,
                     })
                     .collect(),
-                ProbeStop::Watched { .. } => vec![Child {
+                ProbeStop::Boundary { .. } => vec![Child {
                     action: Action::Advance { time: t_end },
                     factor: 1.0,
                     cells,

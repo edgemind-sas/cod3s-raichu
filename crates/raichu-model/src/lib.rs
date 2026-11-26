@@ -10,7 +10,7 @@
 //!   group ports so an [`InterfaceConnection`] joins two groups at once.
 //! - The model layer is pure data (serde), side-effect-free, validated at
 //!   build time with **typed errors: never a crash on bad input**.
-//! - Behaviour (guards, sensitive-function effects) is expressed as
+//! - Behaviour (guards, propagation effects) is expressed as
 //!   serializable expression trees from `raichu-expr`. Sensitivity sets
 //!   (which attribute change re-triggers which function) are *derived*
 //!   from the expressions, not declared by hand: one modeller error
@@ -40,7 +40,7 @@ pub use schema::{
     EquationKind, EvaluationStepReads, FmuBinding, FmuParameter, FmuUnit, Indicator,
     IndicatorTarget, Interface, InterfaceConnection, InterfaceRef, InterruptionPolicy, Model,
     ModelSource, Port, PortDir, PortEquation, Program, ProgramConstraint, ProgramSense,
-    ProgramTieBreak, ProgramTieObjective, ProgramVariable, SensitiveFunction, Target, Transition,
+    ProgramTieBreak, ProgramTieObjective, ProgramVariable, Propagation, Target, Transition,
     TransitionKind, EDGE, PORT,
 };
 

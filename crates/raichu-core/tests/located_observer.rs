@@ -158,7 +158,7 @@ fn an_event_on_a_discrete_threshold_is_not_located() {
     }))
     .expect("model");
     let compiled = CompiledModel::compile(&model).unwrap();
-    assert!(compiled.watched.is_empty(), "{:?}", compiled.watched);
+    assert!(compiled.boundary.is_empty(), "{:?}", compiled.boundary);
     assert_events(
         &events(&model, 5.0),
         &[(2.0, "c.a.go"), (2.0, "ev_c.ev.occ")],
@@ -252,7 +252,7 @@ fn a_located_event_keeps_its_place_in_the_same_date_waves() {
     .expect("model");
     let compiled = CompiledModel::compile(&model).unwrap();
     assert_eq!(
-        compiled.watched.len(),
+        compiled.boundary.len(),
         2,
         "both edges of the event are located"
     );
@@ -546,7 +546,7 @@ fn a_refused_firing_leaves_the_engine_where_it_was() {
 #[test]
 fn an_idle_located_observer_is_listed_with_the_kind_of_its_own_law() {
     // Before x reaches 1 the event waits for a crossing, with no date; it
-    // is a delay after that crossing, not a watched boundary.
+    // is a delay after that crossing, not a boundary.
     let compiled = CompiledModel::compile(&ramp_with_event("ge", 1.0, None, 0.5)).unwrap();
     let engine = Engine::new(
         &compiled,
@@ -568,7 +568,7 @@ fn an_idle_located_observer_is_listed_with_the_kind_of_its_own_law() {
 fn a_deferred_firing_past_a_located_countdown_names_the_observer() {
     // x = t reaches 1 at t = 1 and the event falls due 0.5 later: a
     // deferred failure asked for at 2.0 is refused at 1.5, and the cause
-    // names the observer as such, not as a watched transition.
+    // names the observer as such, not as a boundary transition.
     let cond = json!({"op": "cmp", "cmp": "ge", "lhs": x(),
                       "rhs": {"op": "const", "value": float(1.0)}});
     let model: Model = serde_json::from_value(json!({

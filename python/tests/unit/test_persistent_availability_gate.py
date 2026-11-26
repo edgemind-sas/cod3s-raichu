@@ -102,7 +102,7 @@ class TestAPersistentGateNoModeWritesIsBuilt:
             f
             for c in model["components"]
             if c["name"] == "M"
-            for f in c["sensitive_functions"]
+            for f in c["propagations"]
             if f["name"] == "apply_effects"
         )
         assert writer["effects"][0]["target"] == {
@@ -214,7 +214,7 @@ class TestAHeldWriteOnAPersistentGateLatches:
         writers = [
             effect
             for component in body["components"]
-            for function in component.get("sensitive_functions") or []
+            for function in component.get("propagations") or []
             for effect in function.get("effects") or []
             if effect["target"] == {"component": "SRC", "attribute": GATE}
         ]
@@ -315,7 +315,7 @@ class TestAGateTheComponentsOwnModeDerivesIsRefused:
             source = _src(model)
             assert any(
                 f["name"] == "update_power_fed_available_out"
-                for f in source["sensitive_functions"]
+                for f in source["propagations"]
             )
 
 

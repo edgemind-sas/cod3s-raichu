@@ -123,13 +123,13 @@ fn repeated_order_queries_do_not_draw_or_resample_stochastic_clocks() {
 }
 
 #[test]
-fn an_immediate_watched_boundary_keeps_its_automatic_precedence() {
+fn an_immediate_boundary_boundary_keeps_its_automatic_precedence() {
     let model: Model = serde_json::from_value(json!({
-        "name": "watched_order", "components": [{"name": "c", "automata": [
+        "name": "boundary_order", "components": [{"name": "c", "automata": [
             {"name": "scheduled", "states": ["off", "on"], "init": "off", "transitions": [
                 {"name": "go", "source": "off", "targets": ["on"], "distrib": "delay", "time": 0.0}]},
             {"name": "boundary", "states": ["off", "on"], "init": "off", "transitions": [
-                {"name": "go", "source": "off", "targets": ["on"], "distrib": "watched",
+                {"name": "go", "source": "off", "targets": ["on"], "distrib": "boundary",
                  "guard": {"op": "cmp", "cmp": "ge", "lhs": {"op": "time"},
                     "rhs": {"op": "const", "value": {"kind": "float", "value": 0.0}}}}]}
         ]}]

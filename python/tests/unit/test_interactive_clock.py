@@ -30,7 +30,7 @@ def test_advance_and_declared_input():
                     "time": 2.0,
                 }],
             }],
-            "sensitive_functions": [],
+            "propagations": [],
         }],
         "connections": [],
         "indicators": [],
@@ -95,7 +95,7 @@ def _operator_model():
                                 "name": "empty",
                                 "source": "full",
                                 "targets": ["empty"],
-                                "distrib": "watched",
+                                "distrib": "boundary",
                                 "guard": {
                                     "op": "cmp",
                                     "cmp": "le",

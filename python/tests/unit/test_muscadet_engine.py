@@ -345,7 +345,7 @@ def test_a_state_indicator_on_an_event_names_the_automaton_the_event_declares():
 
 def test_a_state_indicator_follows_the_names_the_event_renamed():
     """Read through the event's own declaration, not through the defaults: an
-    event that renamed its automaton is watched under the new name."""
+    event that renamed its automaton is boundary under the new name."""
     spec = rbd_declaration()
     spec["components"]["DEGRADED"] = an_event(
         event_aut_name="alarm", occ_state_name="ringing", not_occ_state_name="silent"
@@ -427,7 +427,7 @@ def test_the_two_spellings_of_a_state_indicator_give_one_observation():
     def document(indicator):
         spec = rbd_declaration()
         spec["components"]["DEGRADED"] = an_event()
-        spec["indicators"] = [dict(indicator, name="watched", component="DEGRADED")]
+        spec["indicators"] = [dict(indicator, name="boundary", component="DEGRADED")]
         return pyraichu.model_body(json.loads(engine.build_model(spec).json))[
             "indicators"
         ]
@@ -1190,7 +1190,7 @@ def campaign_declaration(occ_state_name=None):
     """The running example, as `muscadet.declare.system_spec` writes it.
 
     A source, one repairable block, a target that needs it, and an event on
-    the loss of the flow at the far end -- watched by a STATE indicator, an
+    the loss of the flow at the far end -- boundary by a STATE indicator, an
     event holding no variable to watch. Written out field for field, like
     every other document in this module: a test that built it from muscadet
     would need muscadet installed to say anything at all. Dumped from the real

@@ -1346,7 +1346,7 @@ def test_the_fragment_agrees_with_its_plugin_counterpart(bench):
 #: The last three joined when the split came to weigh each claim as
 #: declared (muscadet 5.24.0). A supply overtaking the demand it serves is
 #: then a located change of the split's active set, where a claim truncated
-#: at the supply followed it and crossed nothing. A watched crossing next
+#: at the supply followed it and crossed nothing. A boundary crossing next
 #: to it (a volume leaving empty, a band released) is located by each
 #: route within the event tolerance, and no longer on the same bit. Measured
 #: before the change, the two routes of `stock_fills_and_drains` already

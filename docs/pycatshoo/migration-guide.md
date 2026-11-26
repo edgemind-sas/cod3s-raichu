@@ -39,7 +39,7 @@ class Master(Pyc.CComponent):
 
 The same model in RAICHU. The **message box → ports**, the exported
 state becomes an **out-port on a boolean attribute** (kept in sync by a
-sensitive function), and the automaton is plain data:
+propagation), and the automaton is plain data:
 
 ```python
 import pyraichu
@@ -55,7 +55,7 @@ master = {
              "distrib": "exp", "rate": 0.05},
             {"name": "repair", "source": "KO", "targets": ["OK"],
              "distrib": "exp", "rate": 0.1}]}],
-    "sensitive_functions": [{"name": "update_ko", "effects": [{
+    "propagations": [{"name": "update_ko", "effects": [{
         "target": {"component": "Master", "attribute": "ko"},
         "value": {"op": "state_active",
                   "state": {"component": "Master", "automaton": "health",
@@ -101,7 +101,7 @@ slave = {
                  {"op": "port_agg",
                   "port": {"component": "Slave", "port": "request_in"},
                   "agg": "any"}]}}]}],
-    "sensitive_functions": [{"name": "update_power", "effects": [{
+    "propagations": [{"name": "update_power", "effects": [{
         "target": {"component": "Slave", "attribute": "power"},
         "value": {"op": "if",
             "cond": {"op": "state_active",
@@ -140,7 +140,7 @@ The slave runs ~33 % of the time: exactly the master's unavailability
 | `addReference` + `addImport` | in-port |
 | `reference.orValue(...)` | `port_agg … "agg": "any"` |
 | condition method | transition `guard` (expression) |
-| sensitive method | sensitive function (`effects`) |
+| sensitive method | propagation (`effects`) |
 | `system.connect(...)` | a `connections` entry |
 
 ## Thread B: the hybrid heated room
@@ -162,7 +162,7 @@ pdmp.addWatchedTransition(self.on_to_off)   # guarded by a boundary condition
 ```
 
 In RAICHU the PDMP manager disappears: a component simply declares an
-**`ode` equation**, and the thermostat is a **`watched` transition**
+**`ode` equation**, and the thermostat is a **`boundary` transition**
 whose guard is a boundary comparison. Both are data:
 
 ```python
@@ -199,10 +199,10 @@ heater = {
     "automata": [{"name": "functional", "states": ["ON", "OFF"], "init": "ON",
         "transitions": [
             {"name": "off", "source": "ON", "targets": ["OFF"],
-             "distrib": "watched", "guard": threshold("gt", 20.0)},
+             "distrib": "boundary", "guard": threshold("gt", 20.0)},
             {"name": "on", "source": "OFF", "targets": ["ON"],
-             "distrib": "watched", "guard": threshold("lt", 15.0)}]}],
-    "sensitive_functions": [{"name": "p", "effects": [{
+             "distrib": "boundary", "guard": threshold("lt", 15.0)}]}],
+    "propagations": [{"name": "p", "effects": [{
         "target": {"component": "H", "attribute": "power"},
         "value": {"op": "if",
             "cond": {"op": "state_active",
@@ -237,7 +237,7 @@ The thermostat holds the room in its 15-20 band.
 | `addPDMPManager` | *(none: declare equations directly)* |
 | `addODEVariable` + `setDvdtODE` | `equations: [{kind: "ode", …}]` |
 | `sumValue` on a power reference | `port_agg … "agg": "sum"` |
-| boundary checker / `addWatchedTransition` | `"distrib": "watched"` + a `guard` comparison |
+| boundary checker / `addWatchedTransition` | `"distrib": "boundary"` + a `guard` comparison |
 | `setDtCond` | `tol_event` (and the other [tolerances](../guides/numerical-tuning.md)) |
 
 ## What changes, beyond syntax

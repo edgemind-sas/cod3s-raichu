@@ -54,7 +54,7 @@ fn component(name: &str, occ_law: Distrib) -> Component {
         }],
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: vec![],
+        propagations: vec![],
     }
 }
 
@@ -270,10 +270,10 @@ fn fire_now_of_an_unarmed_transition_is_not_fireable() {
     assert!(matches!(err, EngineError::NotFireable { .. }), "{err:?}");
 }
 
-/// A protection `P.protection` (`closed`, `open`) opened by a watched
+/// A protection `P.protection` (`closed`, `open`) opened by a boundary
 /// transition when the constant attribute `P.level` is at most 0.5.
 fn protection(level: f64) -> Component {
-    let mut open = transition("open", "closed", &["open"], Distrib::Watched);
+    let mut open = transition("open", "closed", &["open"], Distrib::Boundary);
     open.guard = Some(Expr::Cmp {
         cmp: CmpOp::Le,
         lhs: Box::new(Expr::attr("P", "level")),
@@ -296,13 +296,13 @@ fn protection(level: f64) -> Component {
         }],
         allocations: vec![],
         equations: vec![],
-        sensitive_functions: vec![],
+        propagations: vec![],
     }
 }
 
 #[test]
-fn fire_now_fires_a_watched_transition_whose_guard_already_holds() {
-    // A watched transition is never scheduled: `fire_now` takes its own
+fn fire_now_fires_a_boundary_transition_whose_guard_already_holds() {
+    // A boundary transition is never scheduled: `fire_now` takes its own
     // branch for one whose boundary is already crossed at t = 0.
     let compiled = compile(&model(vec![protection(0.0)], vec![]));
     let mut engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
@@ -318,7 +318,7 @@ fn fire_now_fires_a_watched_transition_whose_guard_already_holds() {
 }
 
 #[test]
-fn fire_now_of_a_watched_transition_whose_guard_fails_is_not_fireable() {
+fn fire_now_of_a_boundary_transition_whose_guard_fails_is_not_fireable() {
     let compiled = compile(&model(vec![protection(1.0)], vec![]));
     let mut engine = Engine::new(&compiled, EngineConfig::default()).unwrap();
     let err = engine
@@ -398,7 +398,7 @@ fn demand_model(ok_prob: f64) -> Model {
             }],
             allocations: vec![],
             equations: vec![],
-            sensitive_functions: vec![],
+            propagations: vec![],
         }],
         vec![],
     )
